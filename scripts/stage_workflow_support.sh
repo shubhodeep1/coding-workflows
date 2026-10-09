@@ -54,7 +54,7 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh dependency_registry_proxy.py review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_post_commit_retrigger.sh review_autofix_step_changes_lost_redispatch.sh review_single_issue_security_pass.sh security_pass_skip.py review_rb_judge_security_pass.sh review_autofix_step_count_iterations.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh review_head_gate.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh dependency_registry_proxy.py review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_post_commit_retrigger.sh review_autofix_step_changes_lost_redispatch.sh review_single_issue_security_pass.sh security_pass_skip.py review_rb_judge_security_pass.sh review_autofix_step_count_iterations.sh workflow_failure_heal.py"
 # Keep this registry for compatibility, but all runtime files now come from
 # the same verified workflow commit as the required bootstrap scripts.
 #
@@ -85,7 +85,11 @@ MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_confli
 # review/autofix failure reporter (README "Workflow Failure Heal"). Optional so
 # a consumer pinned to a release that predates them still bootstraps; the
 # reporting step skips with a stable log line when they are absent.
-OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"
+# ai_engine.sh + claude_engine.py + claude_anthropic_relay.py +
+# claude_settings.json.tmpl: the Claude engine of the review write roles
+# (replace-claude-sessions plan Phase 5c). Optional: without them every review
+# role runs its unchanged OpenCode path (plan D1).
+OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
@@ -525,6 +529,8 @@ bootstrap_support_roots()
 {
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
+	SELF_REPO_TRUSTED_TEMPLATE_ROOT=""
+	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=0
 
 	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
@@ -727,6 +733,72 @@ stage_optional_copy_entry()
 	copy_from_ref_or_local "${repo_path}" "${repo_path}" "false" "true" || true
 }
 
+# Issue #6578: in this repository the validation checkout (an integration
+# branch) is the primary support root, so copy_from_ref_or_local left its
+# possibly stale validation-harness templates in place. Runs 37315007990 and
+# 37492941663 rendered an older 20_import_audit.sh.j2 that ran the import audit
+# with the runner's Python (ModuleNotFoundError: yaml) instead of the app
+# container's. Templates become host-executed tests, so stage them from the
+# verified support commit and fail closed when that commit is unavailable.
+ensure_self_repo_trusted_template_root()
+{
+	if [ -n "${SELF_REPO_TRUSTED_TEMPLATE_ROOT:-}" ] && [ -d "${SELF_REPO_TRUSTED_TEMPLATE_ROOT}" ]; then
+		return 0
+	fi
+	if [ -n "${ORIGINAL_SCRIPT_REF}" ] &&
+	   checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/trusted-templates"; then
+		SELF_REPO_TRUSTED_TEMPLATE_ROOT="${SUPPORT_STAGE_ROOT}/trusted-templates"
+		return 0
+	fi
+	echo "::error::Trusted validation-harness templates are unavailable from ${WORKFLOW_SOURCE_REPO}@${ORIGINAL_SCRIPT_REF}; refusing to render templates from the validation checkout." >&2
+	exit 1
+}
+
+stage_self_repo_validation_template_entry()
+{
+	local repo_path="$1"
+	local trusted_path inspected_template_path
+
+	case "${repo_path}" in
+		/*|..|../*|*/..|*/../*)
+			echo "::error::Refusing unsafe validation-harness template path '${repo_path}'." >&2
+			exit 1
+			;;
+		workflow-templates/validation-harness/*)
+			;;
+		*)
+			echo "::error::Path '${repo_path}' is not a validation-harness template." >&2
+			exit 1
+			;;
+	esac
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ]; then
+		echo "::error::Required trusted validation-harness template ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	inspected_template_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_template_path}" ]; then
+			echo "::error::Refusing symlinked validation-harness template path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_template_path}" == */* ]] || break
+		inspected_template_path="${inspected_template_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file validation-harness template path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=$((SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT + 1))
+}
+
 stage_copy_if_missing_silent_entry()
 {
 	local repo_path="$1"
@@ -877,10 +949,21 @@ stage_validate_support()
 		stage_optional_preserve_entry "${repo_path}" "false" "" "true"
 	done < <(json_array_lines "optional_preserve_files_before_templates")
 
+	# Self-repo runs without an explicit target take validation-harness
+	# templates from the verified support commit (issue #6578); consumers and
+	# explicit targets keep the existing path.
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
-		stage_optional_copy_entry "${repo_path}"
+		if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+		   [[ "${repo_path}" == workflow-templates/validation-harness/* ]]; then
+			stage_self_repo_validation_template_entry "${repo_path}"
+		else
+			stage_optional_copy_entry "${repo_path}"
+		fi
 	done < <(json_array_lines "optional_copy_files")
+	if [ "${SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT}" -gt 0 ]; then
+		echo "VALIDATE_TRUSTED_TEMPLATES staged=${SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+	fi
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue

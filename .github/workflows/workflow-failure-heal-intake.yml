@@ -29,6 +29,9 @@ name: Workflow Failure Heal Intake
       - "Promote main to stable"
       - "Auto release stable"
       - "Forward-merge stable to main"
+      # CI on pushes to main (Q51); the job skips CI runs for pull requests
+      # and other branches, which check-failure triage covers.
+      - "CI"
     types:
       - completed
   workflow_dispatch:
@@ -60,7 +63,10 @@ jobs:
     if: >-
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       (github.event_name != 'workflow_run' ||
-       contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion))
+       (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
+        (github.event.workflow_run.name != 'CI' ||
+         (github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch))))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -77,10 +83,28 @@ jobs:
       WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
       WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
       WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
+      # Report authentication (issue #6559): 'true' skips repository_dispatch
+      # reports that carry no OIDC identity; 'false' (transition default)
+      # accepts them after the binding checks. An identity is always verified.
+      WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
+      WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
     steps:
+      - name: Record GH_PAT budget at intake start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=intake remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -101,9 +125,11 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           # TRUST BOUNDARY: all three sources are external to this run. They are
-          # bound as env (never interpolated into the script) and re-validated
-          # by scripts/workflow_failure_heal.py before any field is used.
-          CLIENT_PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
+          # bound as env or read from the event file (never interpolated into
+          # the script) and re-validated by scripts/workflow_failure_heal.py
+          # before any field is used. client_payload is read from
+          # GITHUB_EVENT_PATH, not env, so the report's OIDC identity is never
+          # echoed in this step's env block (issue #6559).
           WORKFLOW_RUN_JSON: ${{ toJson(github.event.workflow_run) }}
           DISPATCH_PAYLOAD_JSON: ${{ inputs.payload_json }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -111,16 +137,29 @@ jobs:
           set -euo pipefail
           case "${EVENT_NAME}" in
             repository_dispatch)
-              # Reporters envelope the report as {schema_version, report}
-              # (GitHub caps client_payload at 10 top-level properties);
-              # unwrap-dispatch also passes the legacy flat shape through.
-              printf '%s' "${CLIENT_PAYLOAD_JSON}" > "${RUNTIME_DIR}/client_payload.json"
+              # Reporters envelope the report as {schema_version, report,
+              # report_identity?} (GitHub caps client_payload at 10 top-level
+              # properties); unwrap-dispatch also passes the legacy flat shape
+              # through. The OIDC identity goes to a 0600 file only; GITHUB_ENV
+              # gets its state (present / absent / malformed), never the token.
+              umask 077
+              jq '.client_payload // {}' "${GITHUB_EVENT_PATH}" > "${RUNTIME_DIR}/client_payload.json"
+              identity_state="$(python3 scripts/workflow_failure_heal.py extract-report-identity \
+                --client-payload-json "${RUNTIME_DIR}/client_payload.json" \
+                --out "${RUNTIME_DIR}/report_identity.jwt" 2>/dev/null || echo malformed)"
+              case "${identity_state}" in
+                present|absent|malformed) ;;
+                *) identity_state="malformed" ;;
+              esac
+              echo "WORKFLOW_HEAL_REPORT_IDENTITY_STATE=${identity_state}" >> "${GITHUB_ENV:-/dev/null}"
               if ! python3 scripts/workflow_failure_heal.py unwrap-dispatch \
                 --payload-json "${RUNTIME_DIR}/client_payload.json" \
                 > "${WORKFLOW_HEAL_PAYLOAD_FILE}" 2> "${RUNTIME_DIR}/unwrap_error.txt"; then
+                rm -f "${RUNTIME_DIR}/client_payload.json"
                 echo "::error::client_payload could not be unwrapped or parsed: $(head -c 300 "${RUNTIME_DIR}/unwrap_error.txt" | tr '\n' ' ')"
                 exit 1
               fi
+              rm -f "${RUNTIME_DIR}/client_payload.json"
               ;;
             workflow_run)
               printf '%s' "${WORKFLOW_RUN_JSON}" > "${RUNTIME_DIR}/workflow_run.json"
@@ -173,3 +212,15 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           notification="Workflow Failure Heal Intake workflow itself failed (report from '${SOURCE_REPO:-unknown}')."
           tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+
+      - name: Record GH_PAT budget at intake end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+          fi

@@ -22,6 +22,34 @@
 # SEMBLE_*_AVAILABLE env keys this script writes to GITHUB_ENV.
 
 set -euo pipefail
+SEMBLE_BUILD_START_MS="$(date +%s%3N)"
+SEMBLE_BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh" ]; then
+	source "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh"
+fi
+
+semble_bootstrap_event()
+{
+	local state="$1" reason="${2:-}" line run_field="" event_mode index_ms
+	event_mode="$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')"
+	case "${event_mode}" in lazy|eager) ;; *) event_mode=eager ;; esac
+	index_ms="$(( $(date +%s%3N) - SEMBLE_BUILD_START_MS ))"
+	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] && [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]+$ ]]; then
+		run_field=" run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+	fi
+	line="SEMBLE_BOOTSTRAP mode=${event_mode} state=${state} install_ms=${SEMBLE_INSTALL_MS:-0} index_ms=${index_ms}${run_field}"
+	if [ -n "${reason}" ]; then
+		reason="$(printf '%s' "${reason%%:*}" | tr -c '[:alnum:]._-' '-')"
+		line="${line} reason=${reason}"
+	fi
+	printf '%s\n' "${line}" >&2
+	if declare -F emit_event >/dev/null 2>&1; then
+		local -a event_fields=("mode=${event_mode}" "state=${state}" "install_ms=${SEMBLE_INSTALL_MS:-0}" "index_ms=${index_ms}")
+		[ -z "${run_field}" ] || event_fields+=("${run_field# }")
+		[ -z "${reason}" ] || event_fields+=("reason=${reason}")
+		emit_event SEMBLE_BOOTSTRAP "${event_fields[@]}" || true
+	fi
+}
 
 semble_neutral_dir=""
 
@@ -105,6 +133,7 @@ mark_unavailable()
 	write_env_kv "SEMBLE_AVAILABLE" "false"
 	write_env_kv "SEMBLE_INDEX_AVAILABLE" "false"
 	write_env_kv "SEMBLE_INDEX_PATH" "${index_path}"
+	semble_bootstrap_event failed "${reason}"
 	exit 0
 }
 
@@ -337,6 +366,7 @@ main()
 	write_env_kv "SEMBLE_INDEX_PATH" "${index_path}"
 	write_env_kv "SEMBLE_BIN" "${wrapper_path}"
 	log "Semble wrapper ready at ${wrapper_path} (index=${index_path})."
+	semble_bootstrap_event ready
 }
 
 main "$@"

@@ -78,6 +78,12 @@ def test_missing_files_touched_skips() -> None:
 	assert oos == []
 
 
+def test_heal_strict_allowlist_does_not_auto_allow_lockfiles() -> None:
+	status, _allow, out_of_scope = guard.evaluate_allowlist(["scripts/fix.py", "tests/**", "changelog.d/*.md"], ["package-lock.json"], allow_lockfiles=False)
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert out_of_scope == ["package-lock.json"]
+
+
 def test_empty_files_touched_block_skips() -> None:
 	# A `files_touched:` header with no entries must skip, never enforce-empty.
 	status, _allow, _oos = guard.evaluate("files_touched:\n\nNext paragraph.\n", ["anything.ts"])
@@ -270,6 +276,58 @@ def test_cli_explicit_allowlist_file_supports_scope_lock_glob() -> None:
 		assert allowlist_out.read_text(encoding="utf-8").strip() == "scripts/**/*.sh"
 
 
+def test_automation_grant_requires_trusted_author_and_exact_paths() -> None:
+	assert all(guard.is_automation_path(path) for path in (
+		"scripts", "scripts/x.sh", ".github/actions/a.yml", ".GitHub/workflows/x.yml"))
+	assert not any(guard.is_automation_path(path) for path in ("docs/scripts/x.md", "src/prompts.py"))
+	meta = {"number": 42, "user": {"login": "maintainer"}, "author_association": "OWNER",
+		"body": _body("./scripts/x.sh", ".GitHub/workflows/x.yml", "scripts/**", "prompts/",
+			"scripts/../bad.sh", "docs/readme.md")}
+	grant = guard.build_automation_grant(meta, "pipeline[bot]")
+	assert grant["trusted"] and grant["paths"] == ["scripts/x.sh", ".GitHub/workflows/x.yml"]
+	assert guard.check_automation_paths(["scripts/x.sh"], grant, "true", "42") == ("in-scope", [], "granted")
+	assert guard.check_automation_paths(["scripts/y.sh"], grant, "true", "42") == (
+		"out-of-scope", ["scripts/y.sh"], "path_not_granted")
+	assert guard.check_automation_paths(["scripts/x.sh"], grant, "false", "42")[2] == "workflow_edits_disabled"
+	assert guard.check_automation_paths(["scripts/x.sh"], grant, "true", "43")[2] == "grant_issue_mismatch"
+	assert guard.check_automation_paths(["scripts/x.sh"], None, "true", "42")[2] == "grant_unavailable"
+	assert guard.check_automation_paths(["docs/readme.md"], None, "false", "42")[0] == "in-scope"
+	meta["author_association"] = "CONTRIBUTOR"
+	assert guard.build_automation_grant(meta, "pipeline[bot]")["reason"] == "untrusted_author"
+	meta["user"]["login"] = "pipeline[bot]"
+	assert guard.build_automation_grant(meta, "pipeline[bot]")["trusted"]
+	meta["author_association"] = "OWNER"
+	assert guard.build_automation_grant(meta, "")["reason"] == "identity_unavailable"
+	meta["user"]["login"] = ""
+	assert guard.build_automation_grant(meta, "pipeline[bot]")["reason"] == "untrusted_author"
+	meta["user"]["login"] = "maintainer"
+	meta["body"] = "missing"
+	assert guard.build_automation_grant(meta, "pipeline[bot]")["reason"] == "no_allowlist"
+	meta["body"] = "files_touched:\n  not an item\n"
+	assert guard.build_automation_grant(meta, "pipeline[bot]")["reason"] == "malformed_allowlist"
+
+
+def test_automation_grant_cli_denies_invalid_file_and_preserves_old_exit_codes() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		meta = tdp / "meta.json"
+		meta.write_text(json.dumps({"number": 42, "user": {"login": "bot"},
+			"author_association": "NONE", "body": _body("scripts/a.sh")}), encoding="utf-8")
+		grant_file = tdp / "grant.json"
+		staged = tdp / "staged.txt"
+		staged.write_text("scripts/a.sh\n", encoding="utf-8")
+		base = [sys.executable, str(GUARD_SCRIPT)]
+		assert subprocess.run(base + ["--emit-automation-grant", str(grant_file),
+			"--issue-meta-file", str(meta), "--pipeline-login", "bot"], check=False).returncode == 0
+		cmd = base + ["--check-automation-paths", "--automation-grant-file", str(grant_file),
+			"--staged-file", str(staged), "--allow-workflow-edits", "true", "--issue-number", "42"]
+		assert subprocess.run(cmd, capture_output=True).returncode == 0
+		grant_file.write_text("not json", encoding="utf-8")
+		proc = subprocess.run(cmd, capture_output=True, text=True)
+		assert proc.returncode == 30 and proc.stdout.strip() == "scripts/a.sh"
+		assert proc.stderr.splitlines()[0] == "reason=grant_unavailable"
+
+
 # --------------------------------------------------------------------------
 # Layer 2 — extract-and-run the real guard fragments
 # --------------------------------------------------------------------------
@@ -389,6 +447,68 @@ def test_preflight_and_commit_fragments_share_logic() -> None:
 	assert _strip_comments(_scope_fragment("preflight")) == _strip_comments(_scope_fragment("commit"))
 
 
+def _automation_fragment(label: str) -> str:
+	source = IMPLEMENT_COMMIT_SCRIPT if label == "commit" else IMPLEMENT
+	lines = source.read_text(encoding="utf-8").splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip() == f"# >>> automation-path grant guard ({label}) >>>")
+	end = next(i for i, line in enumerate(lines) if line.strip() == f"# <<< automation-path grant guard ({label}) <<<")
+	base = len(lines[start]) - len(lines[start].lstrip(" "))
+	return "\n".join(line[base:] for line in lines[start : end + 1])
+
+
+def _run_automation_fragment(label: str, body: str, staged: str, *, association: str = "OWNER",
+	login: str = "maintainer", pipeline_login: str = "pipeline[bot]", allow_edits: str = "true",
+	grant_present: bool = True, helper_present: bool = True, rename: bool = False) -> tuple[int, str]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		(tdp / "scripts").mkdir()
+		if helper_present:
+			shutil.copy(GUARD_SCRIPT, tdp / "scripts" / GUARD_SCRIPT.name)
+		git_env = {key: value for key, value in os.environ.items() if key not in {
+			"BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR"}}
+		for command in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+			["git", "config", "user.name", "t"]):
+			subprocess.run(command, cwd=tdp, check=True, env=git_env)
+		path = tdp / staged
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text("x\n", encoding="utf-8")
+		subprocess.run(["git", "add", "--", staged], cwd=tdp, check=True, env=git_env)
+		if rename:
+			subprocess.run(["git", "commit", "-qm", "base"], cwd=tdp, check=True, env=git_env)
+			path.rename(tdp / "renamed.txt")
+			subprocess.run(["git", "add", "-A"], cwd=tdp, check=True, env=git_env)
+		grant_file = tdp / "grant.json"
+		if grant_present:
+			grant_file.write_text(json.dumps(guard.build_automation_grant({"number": 42,
+				"user": {"login": login}, "author_association": association, "body": body}, pipeline_login)), encoding="utf-8")
+		output = tdp / "output.txt"
+		output.write_text("", encoding="utf-8")
+		env = dict(git_env, GITHUB_OUTPUT=str(output), ISSUE_NUMBER="42", TMPDIR=str(tdp),
+			AUTOMATION_PATH_GRANT_FILE=str(grant_file), ALLOW_WORKFLOW_EDITS=allow_edits,
+			RUNTIME_DIR=str(tdp), ENFORCE_FILES_TOUCHED="false", ALLOW_OUT_OF_SCOPE_FILES="true")
+		proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + _automation_fragment(label)],
+			cwd=tdp, env=env, capture_output=True, text=True)
+		return proc.returncode, output.read_text(encoding="utf-8")
+
+
+def test_automation_fragments_share_logic_and_fail_closed() -> None:
+	assert _strip_comments(_automation_fragment("preflight")) == _strip_comments(_automation_fragment("commit"))
+	for label in ("preflight", "commit"):
+		for options in ({"association": "CONTRIBUTOR"}, {"body": "missing"},
+			{"pipeline_login": ""}, {"allow_edits": "false"}, {"grant_present": False},
+			{"helper_present": False}, {"rename": True, "body": _body("docs/renamed.txt")},
+			{"staged": "scripts/a\nb.sh"}):
+			inputs = {"body": _body("scripts/a.sh"), "staged": "scripts/a.sh", **options}
+			rc, output = _run_automation_fragment(label, **inputs)
+			assert rc == 1 and "scope_violation_blocked=automation-path" in output, (label, options, output)
+		rc, output = _run_automation_fragment(label, _body("scripts/a.sh"), "scripts/a.sh")
+		assert rc == 0 and "scope_violation_blocked" not in output
+		rc, output = _run_automation_fragment(label, _body("scripts/\u00e9.sh"), "scripts/\u00e9.sh")
+		assert rc == 0 and "scope_violation_blocked" not in output, (label, output)
+		rc, output = _run_automation_fragment(label, "missing", "docs/x.md", grant_present=False)
+		assert rc == 0 and "scope_violation_blocked" not in output
+
+
 # --------------------------------------------------------------------------
 # Layer 3 — static wiring assertions
 # --------------------------------------------------------------------------
@@ -425,9 +545,21 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	combined_text = text + "\n" + commit_text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 3
+	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 6
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
+
+
+def test_automation_grant_wiring() -> None:
+	workflow = _implement_text()
+	commit = _implement_commit_text()
+	metadata = workflow.split("- name: Fetch issue metadata", 1)[1].split("- name: Detect smoke test", 1)[0]
+	assert 'gh api user --jq .login' in metadata
+	assert '--emit-automation-grant' in metadata and 'AUTOMATION_PATH_GRANT_FILE=' in metadata
+	assert workflow.index("# >>> automation-path grant guard (preflight)") < workflow.index("# >>> files_touched scope-enforcement guard (preflight)")
+	assert workflow.index('done < "${STAGED_SUPPORT_LEDGER}"', workflow.index("- name: Preflight destructive-commit guard")) < workflow.index("# >>> automation-path grant guard (preflight)")
+	assert commit.index("# >>> automation-path grant guard (commit)") < commit.index("# >>> files_touched scope-enforcement guard (commit)")
+	assert 'guard_rejection_marker automation-path' in _implement_guard_handler_text()
 
 
 def test_alert_step_handles_scope() -> None:

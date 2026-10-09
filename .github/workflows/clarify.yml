@@ -54,6 +54,20 @@ jobs:
             echo "Note: If a previous clarify run was in progress, it has been cancelled by this run (cancel-in-progress: true)."
           fi
 
+      - name: Record GH_PAT budget at clarify start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=clarify job=clarify remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve integration ref
         id: refctx
         env:
@@ -221,7 +235,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -700,43 +714,6 @@ jobs:
             fi
           fi
 
-      - name: Setup uv
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
-        continue-on-error: true
-        uses: astral-sh/setup-uv@v7
-
-      - name: Install semble
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
-        # Defense-in-depth: install_semble.sh is fail-soft already (writes
-        # SEMBLE_AVAILABLE=false on any error), but the step-level guard
-        # ensures a syntax regression / filesystem error / missing-script
-        # condition still degrades to SEMBLE_AVAILABLE=false instead of
-        # hard-failing under set -euo pipefail.
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          bash scripts/install_semble.sh
-
-      - name: Build semble index
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
-        # Defense-in-depth: the shared script is fail-soft already, but the
-        # step-level guard ensures a future wrapper regression still
-        # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
-          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
-          # for the rationale (semble 0.1.3 lacks the index/query CLI).
-          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
-          # exits 0; missing-script case is handled the same way.
-          if [ -f scripts/build_semble_wrapper.sh ]; then
-            bash scripts/build_semble_wrapper.sh
-          else
-            echo "::notice::scripts/build_semble_wrapper.sh not staged; continuing without Semble index."
-            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
-          fi
-
       - name: Create Codex config
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
         run: |
@@ -859,6 +836,22 @@ jobs:
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Collect verified heal evidence
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
+        run: |
+          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then
+            echo '::error::Heal route classification failed' >&2
+            exit 1
+          fi
+          if [ "${heal_route}" = true ]; then
+            echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"
+            bash scripts/workflow_failure_heal_evidence.sh
+          fi
 
       - name: Run Codex
         id: run_codex
@@ -1048,6 +1041,10 @@ jobs:
             echo "=== ISSUE CONTEXT ==="
             cat "${ISSUE_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          if [ "${HEAL_ROUTE:-false}" = true ]; then
+            cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"
+          fi
 
           if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
             sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
@@ -1427,6 +1424,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
+        id: post_clear
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1579,6 +1577,42 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="${REASON}"
 
+      # A token-created marker does not start a new workflow; the scheduled
+      # poller replays this command with the PAT once the budget recovers.
+      - name: Queue failed reclarify for poller
+        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+          SOURCE_COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_ASSOCIATION: ${{ github.event.comment.author_association }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ && "${SOURCE_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "${SOURCE_COMMENT_BODY}" == /reclarify* ]] || exit 1
+          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
+          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
+          # The marker alone is undiscoverable by the poller. Retry transient
+          # label failures with the independent job token before failing visibly.
+          for requeue_label_attempt in 1 2 3; do
+            if gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+              -f 'labels[]=ai:reclarify-requeue' >/dev/null; then
+              exit 0
+            fi
+            if [ "${requeue_label_attempt}" -eq 1 ]; then
+              # A newly deployed consumer may not have synced this label yet.
+              gh label create 'ai:reclarify-requeue' --repo "${REPOSITORY}" \
+                --color fbca04 \
+                --description 'Trusted /reclarify failed before routing; poller will retry after PAT budget recovers' \
+                >/dev/null 2>&1 || true
+            fi
+            [ "${requeue_label_attempt}" -eq 3 ] || sleep 2
+          done
+          echo '::error::Failed to label reclarify request for poller replay.'
+          exit 1
+
       - name: Telegram failure notification
         if: failure() || cancelled()
         env:
@@ -1601,3 +1635,103 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+
+      - name: Record GH_PAT budget at clarify end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+  heal-report:
+    # Workflow failure heal (README "Workflow Failure Heal"): report a failed
+    # clarify run to coding-workflows' heal intake, which diagnoses it and opens
+    # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
+    # clarify job has finished and the intake reads its complete log. Only a
+    # `failure` result is reported: a cancelled run was superseded or timed
+    # out. `permissions: {}` keeps the job inside any caller's grant;
+    # GH_PAT does the work. The reporter always exits 0.
+    needs: clarify
+    if: >-
+      always() && needs.clarify.result == 'failure' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}
+      WORKFLOW_HEAL_PHASE: clarify
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Record GH_PAT budget at heal-report start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the failed run to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
+            bash "${reporter}"
+
+      - name: Record GH_PAT budget at heal-report end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=${used}"
