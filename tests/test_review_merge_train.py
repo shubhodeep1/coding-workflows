@@ -1812,7 +1812,7 @@ def _git_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 	_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
 	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
 	work = tmp_path / "work"
-	_git(tmp_path, "clone", "-q", "--single-branch", "-b", "main", str(origin), str(work))
+	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
 	return work, shas
 
 
