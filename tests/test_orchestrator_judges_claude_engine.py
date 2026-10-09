@@ -892,7 +892,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	assert opencode["if"] == "steps.find_tracking.outputs.has_work == 'true'"
 	assert opencode["continue-on-error"] is True
 	assert opencode["uses"] == (
-		"shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde"
+		"shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f"
 	)
 	assert opencode["with"]["opencode_version"] == "${{ vars.OPENCODE_VERSION || '1.18.23' }}"
 	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Process each tracking issue")
