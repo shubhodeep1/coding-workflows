@@ -76,7 +76,8 @@
             ],
             "properties": {
               "path": {
-                "$ref": "#/$defs/path"
+                "type": "string",
+                "const": "workflow-templates/CLAUDE.md"
               },
               "sha256": {
                 "$ref": "#/$defs/sha256"
@@ -91,7 +92,7 @@
               },
               "link_target": {
                 "type": "string",
-                "minLength": 1
+                "const": "../CLAUDE.md"
               }
             }
           }
