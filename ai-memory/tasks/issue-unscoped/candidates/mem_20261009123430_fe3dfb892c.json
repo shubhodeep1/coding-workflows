@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:6261\u20136334 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `orchestrate-poll (3)` CI shard fails despite the visible shard log showing 33 passed and 0 failed, leaving the aggregate `lint` check failing and the cause unidentified.\n  WHY: The available CI evidence does not identify the failing test or its error; severity is critical, the highest reported, although Gemini rated it MAJOR and the other reviewers rated it BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Restore the pre-#6549 behavior so the `orchestrate-poll (3)` shard, which has been red since #6741, returns to green.\n  expected_change_site: `tests/test_orchestrate_poll_process.py` `test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories` and `scripts/orchestrate_poll_process.sh` `security_pass_exhaustion_judge`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `pr_check_runs_context.txt` shows `orchestrate-poll (3)` still failing on head `8fce032e21b5ce5d251281c773c58c97c4da8487`; the visible tail ends with \"33 passed, 0 failed, 33 total\" yet the shard still reports `##[error]1 orchestrate-poll shard(s) failed.`; the renamed `test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories` is not in the visible passing list, and the failing test name is not in the truncated `log_tail` (the failure predates `CHECK_RUNS_LOG_TAIL_BYTES` cutoff); the PR description claims 17 passed for the targeted `-k` selection; the orchestrator-poll matrix shards the test module across 4 groups, so the targeted pytest run does not exercise the same partitioning as the CI shard that is currently red.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CI / LINT CHECK-RUN FAILURES | severity=MAJOR | confidence=4\n  PROBLEM: The `orchestrate-poll (3)` CI run exited with code 1 despite all tests in the provided shard log passing (33 passed, 0 failed).\n  WHY: This suggests an infrastructure or environment failure in the CI runner rather than a logic bug in the PR, but it prevents the aggregate `lint` check from passing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR is supposed to restore the pre-#6549 behavior so the `orchestrate-poll (3)` shard (which has been red since #6741) returns to green; the PR description explicitly states \"Main CI has been red since #6741 merged at 08:42 UTC... and its new test...ran green on a head built on 2026-10-08 06:26, before #6549... changed the poller.\"\n  Expected change site: `tests/test_orchestrate_poll_process.py` `test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories` (and the supporting poller logic in `scripts/orchestrate_poll_process.sh` `security_pass_exhaustion_judge`).\n  Evidence of absence: `pr_check_runs_context.txt` shows `orchestrate-poll (3)` still failing on head `8fce032e21b5ce5d251281c773c58c97c4da8487` (the current PR head); the visible tail ends with \"33 passed, 0 failed, 33 total\" yet the shard still reports `##[error]1 orchestrate-poll shard(s) failed.` The renamed `test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories` is not in the visible passing list, and the failing test name is not in the truncated `log_tail` (the failure predates `CHECK_RUNS_LOG_TAIL_BYTES` cutoff). The PR description claims 17 passed for the targeted `-k` selection; the orchestrator-poll matrix shards the test module across 4 groups, so the targeted pytest run does not exercise the same partitioning as the CI shard that is currently red.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:6261\u20136334; CI check `orchestrate-poll (3)` on the reviewed head | severity=BLOCKER | confidence=4\n  PROBLEM: The required CI run failed with one orchestrate-poll shard failure, so the changed test suite has not been verified green. The supplied log tail does not identify the failing test or its error.\n  WHY: The failed shard makes the aggregate `lint` check fail. The failure remains unresolved in the available CI evidence.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py (CI check-run) | severity=BLOCKER | confidence=5\n  PROBLEM: The `orchestrate-poll (3)` CI matrix job failed (1 of 4 local shards returned nonzero), which also fails the aggregate `lint` check. The visible shard log shows 33 passed / 0 failed, meaning the failing test is in a different local shard whose output is not in the log tail. The PR description states \"17 passed\" for the cap-related test filter, but the full shard that failed is not identified.\n  WHY: A test in the failing shard returns nonzero. Given the PR changes the cap conversion from `fail` to `accept_with_followup` and removes the `drop_note` rewrite of existing `accept_with_followup` rows, any test that still asserts on the old terminalization text (`\"N finding(s) cannot be accepted\"`, `\"no finding is accepted by the cap\"`, or `\"converted to \\`fail\\`\"`) or that expects `status == \"failed\"` when only low/medium keep_fixing findings remain at the cap would fail. I verified no test in the file asserts on those old strings, so the failing test may be in a different part of the shard's slice or a flaky test. Either way, the red CI blocks merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7e6ec9475ef7cb520b709e54216d892455be66e4fe9573079eed244d2d65afd1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6906,
+    "run_id": "37924106228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37924106228",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009123430_fe3dfb892c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6906,
+    "run_id": "37924106228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T12:34:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
