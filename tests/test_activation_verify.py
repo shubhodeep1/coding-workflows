@@ -592,7 +592,9 @@ def test_tracked_symlinks_reach_model_context(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, LIVE)
 	assert "outcome=posted" in result.stdout
 	context = _context(tmp_path)
-	assert context["tracked_symlinks"] == [{"path": "workflow-templates/CLAUDE.md", "target": "../CLAUDE.md"}]
+	assert context["tracked_symlinks"] == [
+		{"path": "workflow-templates/CLAUDE.md", "target": "../CLAUDE.md", "target_exists": True}
+	]
 	assert context["tracked_symlinks_truncated"] is False
 	assert context["changed_files"] == ["README.md"]
 	assert state["comments"]
@@ -619,7 +621,7 @@ def test_tracked_symlinks_cap_and_filters(tmp_path: Path) -> None:
 	context = _context(tmp_path)
 	links = context["tracked_symlinks"]
 	assert len(links) == 200 and context["tracked_symlinks_truncated"] is True
-	assert links[0] == {"path": "link-000", "target": "CLAUDE.md"}
+	assert links[0] == {"path": "link-000", "target": "CLAUDE.md", "target_exists": True}
 	assert all("\n" not in link["target"] and link["path"] != "aa-bad" for link in links)
 
 
@@ -629,3 +631,16 @@ def test_prompt_tells_model_snapshot_omits_symlinks() -> None:
 	for text in (runtime, template):
 		assert "tracked_symlinks" in text and "Never report a listed path" in text
 	assert runtime.split("</compaction-rules>\n", 1)[1] == template.split("\n", 1)[1]
+
+
+def test_tracked_symlinks_flag_dangling_targets(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	(target / "docs").mkdir(parents=True)
+	(target / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+	os.symlink("docs", target / "dir-link")
+	os.symlink("missing.md", target / "dangling")
+	os.symlink("../outside.md", target / "escape")
+	_git_commit_all(target)
+	_verify(tmp_path, LIVE)
+	exists = {link["path"]: link["target_exists"] for link in _context(tmp_path)["tracked_symlinks"]}
+	assert exists == {"dangling": False, "dir-link": True, "escape": False}

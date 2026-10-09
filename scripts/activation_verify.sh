@@ -114,13 +114,13 @@ PY
 # host (never following a link). The read-only model sandbox leaves symlinks
 # out of both its file snapshot and its synthetic git tree, so without this
 # list the verifier reports a tracked link as missing.
-# Prints {"tracked_symlinks": [{path, target}], "tracked_symlinks_truncated": bool};
+# Prints {"tracked_symlinks": [{path, target, target_exists}], "tracked_symlinks_truncated": bool};
 # on any git or parse failure prints an empty list and one ::warning:: line.
 activation_tracked_symlinks_json()
 {
 	local activation_symlinks_out activation_symlinks_rc=0 activation_symlinks_reason
 	activation_symlinks_out="$(python3 -I -B - "$1" <<'PY'
-import json, subprocess, sys
+import json, posixpath, subprocess, sys
 MAX_ENTRIES = 200
 MAX_FIELD_BYTES = 1024
 target = sys.argv[1]
@@ -130,6 +130,7 @@ try:
 except Exception:
 	sys.exit(2)
 links = []
+tracked = set()
 try:
 	for record in listing.split(b"\0"):
 		if not record:
@@ -138,6 +139,7 @@ try:
 		mode, _otype, oid = meta.split(b" ")
 		if not sep:
 			raise ValueError("missing path")
+		tracked.add(path)
 		if mode == b"120000":
 			links.append((path, oid.decode("ascii")))
 except ValueError:
@@ -172,11 +174,20 @@ def clean(raw):
 	if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
 		return None
 	return text
+def resolves(path, raw_target):
+	# True when the target names a tracked file or directory inside the repo.
+	if raw_target.startswith(b"/"):
+		return False
+	resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), raw_target))
+	if resolved == b"." or resolved.startswith(b"../") or resolved == b"..":
+		return False
+	return resolved in tracked or any(name.startswith(resolved + b"/") for name in tracked)
 entries = []
 for path, oid in links:
 	path_text, target_text = clean(path), clean(blobs.get(oid, b""))
 	if path_text and target_text:
-		entries.append({"path": path_text, "target": target_text})
+		entries.append({"path": path_text, "target": target_text,
+			"target_exists": resolves(path, blobs.get(oid, b""))})
 entries.sort(key=lambda entry: entry["path"])
 print(json.dumps({"tracked_symlinks": entries[:MAX_ENTRIES], "tracked_symlinks_truncated": len(entries) > MAX_ENTRIES}))
 PY
