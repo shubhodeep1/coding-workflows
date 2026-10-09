@@ -106,7 +106,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `conflict_resolver_sandbox_support_missing`) trips the cap on its first
    marker (`non_retryable=true` in `AUTOFIX_FINGERPRINT_CAP_TRIPPED`); the cap
    comment is then titled "non-retryable failure" and quotes the failed run's
-   **First error** line (PR #6438: ~28 identical resolver runs on one head). The poller's noop-suspicious
+   **First error** line (PR #6438: ~28 identical resolver runs on one head). A `force_rb_judge` dispatch
+   whose newest `GH_PAT`-authored marker on the current head has reason
+   `conflict_resolver_sandbox_path_host_only` skips conflict detection and both resolver steps so the
+   review-blocked judge runs (`AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP`, kill switch
+   `REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED`; any unverifiable state keeps the steps, #6743). The poller's noop-suspicious
    recovery sweep (`scripts/orchestrate_poll_process.sh`) does not
    re-dispatch a PR whose current head already has a
    `review-autofix-failure-cap:v1` comment by the `GH_PAT` account, because
@@ -2075,6 +2079,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
+- `AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP`
 - `REVIEW_EDITOR_PREFLIGHT`
 - `IMPLEMENT_AUTOMATION_PATH_GUARD`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
@@ -2309,6 +2314,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
+LOG_PREFIX.name=AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=IMPLEMENT_AUTOMATION_PATH_GUARD
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE

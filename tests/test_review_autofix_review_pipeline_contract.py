@@ -9561,3 +9561,38 @@ def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def _step_if_line(step_name: str) -> str:
+	return next(line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:"))
+
+
+def test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge() -> None:
+	"""Issue #6743 (#6733): the gate's trusted same-head host-only decision
+	skips conflict detection and both resolver halves; the judge and the
+	review-blocked handoff keep their conditions."""
+	text = _workflow_text()
+	gate = _job_block("gate")
+	assert "force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}" in gate
+	assert "REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}" in gate
+	assert 'echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"' in gate
+	assert '[ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]' in gate
+	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=" in gate
+	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}" in _job_block("codex-agent")
+	skip_condition = "env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'"
+	for step_name in (
+		"Detect merge conflicts",
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+	):
+		assert skip_condition in _step_if_line(step_name), step_name
+	assert _step_if_line("Prepare merge-conflict resolver prompt and pre-snapshot") == _step_if_line("Run Codex resolver, validate, stage, commit")
+	for step_name in (
+		"Review-blocked judge decision",
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+	):
+		assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP" not in _step_block(step_name), step_name
+	# The sandbox refusal itself is unchanged.
+	assert "_resolver_fail_closed sandbox_path_host_only" in (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert text.count(skip_condition) == 3

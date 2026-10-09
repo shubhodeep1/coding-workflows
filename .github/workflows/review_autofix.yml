@@ -316,6 +316,7 @@ jobs:
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
       fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
+      force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}
     steps:
       - name: Record GH_PAT budget at review gate start
         env:
@@ -545,6 +546,7 @@ jobs:
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).
           FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
+          REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
           # Skip the reviewer panel + editor cycle when:
           #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
@@ -1150,6 +1152,7 @@ jobs:
           FINGERPRINT_CAP_ALREADY_APPLIED="false"
           FINGERPRINT_CAP_NON_RETRYABLE="false"
           FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
+          FORCE_RB_JUDGE_CONFLICT_SKIP="false"
           case "${FINGERPRINT_CAP_MAX}" in
             ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
           esac
@@ -1167,6 +1170,43 @@ jobs:
             done
             if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
               echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
+              # Issue #6743 (#6733): the newest trusted same-head marker with
+              # reason conflict_resolver_sandbox_path_host_only means the
+              # resolver will refuse again; skip it so the judge can run.
+              # Anything unverifiable keeps the conflict steps.
+              frj_skip_reason=""
+              frj_marker_reason="none"
+              if [ "${REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED:-true}" = "false" ]; then
+                frj_skip_reason="disabled"
+              elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+                frj_skip_reason="head_sha_unavailable"
+              elif [ -z "${fingerprint_cap_helper}" ]; then
+                frj_skip_reason="helper_missing"
+              else
+                gate_fetch_marker_comments
+                if [ "${gate_marker_fetch_state}" != "ok" ]; then
+                  frj_skip_reason="${gate_marker_fetch_state}"
+                else
+                  frj_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
+                    --comments-json "${gate_marker_comments_file}" \
+                    --head-sha "${pr_head_sha_gate}" \
+                    --author-login "${gate_marker_author_login}" 2>/dev/null)" || frj_decision=""
+                  frj_count="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
+                  frj_marker_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+                  [ -n "${frj_marker_reason}" ] || frj_marker_reason="none"
+                  if ! [[ "${frj_count}" =~ ^[0-9]+$ ]]; then
+                    frj_skip_reason="parse_error"
+                  elif [ "${frj_count}" -eq 0 ]; then
+                    frj_skip_reason="no_trusted_marker"
+                  elif [ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+                    frj_skip_reason="reason_mismatch"
+                  else
+                    frj_skip_reason="host_only_marker"
+                    FORCE_RB_JUDGE_CONFLICT_SKIP="true"
+                  fi
+                fi
+              fi
+              echo "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} outcome=$([ "${FORCE_RB_JUDGE_CONFLICT_SKIP}" = "true" ] && echo skip || echo run) reason=${frj_skip_reason} marker_reason=${frj_marker_reason}"
             elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
               echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
             elif [ -z "${fingerprint_cap_helper}" ]; then
@@ -1717,6 +1757,7 @@ jobs:
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+          echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"
 
       - name: Withdraw stale auto-merge and publish head-gate status
         id: head_gate
@@ -2732,6 +2773,8 @@ jobs:
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
       AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Issue #6743: skip conflict detection + resolver on force_rb_judge runs.
+      AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}
       REVIEW_CHECKOUT_SHA: ${{ needs.gate.outputs.review_checkout_sha }}
       RETARGETED_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       RETARGETED_BASE_UPDATED_AT: ${{ needs.gate.outputs.retargeted_base_updated_at }}
@@ -5764,6 +5807,8 @@ jobs:
           echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
+        # Skipped on force_rb_judge runs after a trusted same-head host-only
+        # resolver refusal (#6743, #6733): the resolver would refuse again.
         # The pre-review gate above only short-circuits deterministic stale/
         # structurally-unmergeable cases before reviewer spend. This late step
         # remains the authoritative MERGE_CONFLICT + resolver entry point for
@@ -5794,7 +5839,7 @@ jobs:
         # conflict sweep re-dispatched a no-op run every tick. The editor and
         # "Commit changes" still skip on terminal resume, so the only commit a
         # terminal run can push is a resolved merge.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -5827,7 +5872,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # Kill switch for deterministic resolution of conflicts on the generated
@@ -5867,7 +5912,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
