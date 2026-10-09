@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The only real fix is to copy the template into the live `.claude/hooks/pr_merge_status_guard.py`. This heal issue's scope marker (`paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md`) does not cover that file. The existing sync path is built to carry this change: `scripts/sync_claude_live_copies.py` treats `hooks/` as a security path (`SECURITY_LIVE_PREFIXES = (\"hooks/\",)`), and when it cannot verify who made a template change it puts the change on a `-held` branch for human approval (`HELD_BRANCH_SUFFIX`, lines 680-690). The GitHub facts show `ai/sync-claude-live-copies-held` exists at `8c8184635771`, so a reviewed path is already open. Option B would weaken the deliberate rule that keeps automated writers out of merged-PR safety hooks. Option C would add the hook to the divergence allowlist, which weakens the parity check and is forbidden by the issue's fix constraints.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot required: Q1 is a lettered decision. Notes for the planner on carrying out A:\n- No change to the repository from this issue's pipeline. Do not edit `.claude/**`, `.github/ai/claude_template_divergence.json`, the parity tests, or the heal-scope exclusion.\n- The plan output records this as an operator step:\n  1. A maintainer reviews the held sync PR from `ai/sync-claude-live-copies-held` into `main`. They confirm that its `.claude/hooks/pr_merge_status_guard.py` matches `workflow-templates/.claude/hooks/pr_merge_status_guard.py` byte for byte, including the executable bit and the live push lookup.\n  2. If that PR is stale or does not contain the hook, the maintainer instead copies the template over the live hook by hand, keeping the same mode, and opens a reviewed PR.\n  3. After the merge, the maintainer runs `scripts/sync_claude_live_copies.py check`, `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` and `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical`, then re-runs the stable gate (`test-and-mark-stable.yml`).\n  4. This issue closes once the gate passes, as an operator step rather than a pipeline-authored fix.\n- Reversibility: no code from this issue changes. If a maintainer later prefers a different fix, nothing needs reverting.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None. No placeholder is introduced. The one manual action is a maintainer reviewing and merging the held sync PR, or making the equivalent hand-made copy.\n\nAssumptions: the held branch is assumed to carry the hook's template change. If it does not, the maintainer makes the hand copy in step 2.\n\nMissing context: whether a PR is open for the held branch, and its contents, were not in the GitHub facts. Only the branch's existence and tip SHA were. Neither guard file was read.",
+  "fingerprint": "58133b6264052e46d629a8246a1b03ceafc54b23468d08e76d9d1621b1a5f935",
+  "lineage": {
+    "issue_number": 6840,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37875289084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37875289084",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6840"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009024241_b026b3f479",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6840,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37875289084"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6840",
+  "timestamps": {
+    "created_at": "2026-10-09T02:42:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
