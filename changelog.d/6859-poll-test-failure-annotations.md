@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- Name the failing test when an orchestrate-poll CI shard fails. On GitHub Actions, the `tests/test_orchestrate_poll_process.py` runner now prints an `::error` annotation, titled `orchestrate-poll test failed`, after each `FAIL` line and for each unknown test name. The annotation's message is limited to 500 characters and escaped, so failure text cannot start another workflow command. Local runs print the same output as before.
