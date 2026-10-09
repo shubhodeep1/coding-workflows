@@ -2439,6 +2439,11 @@ try:
     manifest = yaml.safe_load(raw.decode("utf-8"))
 except (UnicodeDecodeError, yaml.YAMLError):
     raise SystemExit(0)
+except RecursionError:
+    # Same message as validation_refresh_runner.manifest_shell_safety_violations.
+    print("Manifest validation failed (shell-unsafe values in shell-reachable fields):")
+    print("- $: manifest nesting too deep")
+    raise SystemExit(1)
 if not isinstance(manifest, dict):
     raise SystemExit(0)
 stack = []

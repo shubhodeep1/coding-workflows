@@ -282,3 +282,21 @@ def test_refresh_pipeline_refuses_unsafe_manifest_before_render(tmp_path: Path) 
 	assert diagnostics == [
 		"manifest_shell_safety_failed: /slots/project_name: contains shell-unsafe character class dollar"
 	]
+
+
+def test_deeply_nested_manifest_reports_clean_violation(tmp_path: Path) -> None:
+	# yaml.safe_load recurses per nesting level; a deep flow sequence exceeds
+	# Python's recursion limit before the walk's depth check runs. Both gate
+	# copies must report a clean violation instead of a traceback.
+	text = "slots:\n  project_name: " + "[" * 5000 + "]" * 5000 + "\n"
+	result = _run_gate(tmp_path, text)
+	log_text = (tmp_path / "renderer.log").read_text(encoding="utf-8")
+	assert result.returncode == 14, result.stdout + result.stderr + log_text
+	assert "- $: manifest nesting too deep" in log_text
+	assert "Traceback" not in log_text
+	assert not (tmp_path / "renderer-invoked").exists()
+
+	runner = _load_refresh_runner()
+	manifest_path = tmp_path / "deep.yml"
+	manifest_path.write_text(text, encoding="utf-8")
+	assert runner.manifest_shell_safety_violations(manifest_path) == ["$: manifest nesting too deep"]
