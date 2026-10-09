@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What part of the repository should this issue change?\nChoices:\nA) Review/autofix pipeline (`review_autofix.yml`, `scripts/review_*.sh`)\nB) Orchestrator poller and judges (`scripts/orchestrate_poll_process.sh`, `orchestrate*.yml`)\nC) Clarify, plan and implement phases (`clarify.yml`, `plan.yml`, `implement.yml`)\nD) Documentation only (`README.md`, `agents.md`, `docs/`)\nE) Something else: name the file, workflow or behaviour in your answer (RECOMMENDED)\nQ2: What is the specific problem or goal?\nChoices:\nA) Fix a bug: give the failing run ID, log line or wrong behaviour you saw (RECOMMENDED)\nB) Reduce cost or runtime: name the phase and the current versus target figure\nC) Make it more reliable: name the failure mode that keeps recurring\nD) Add a capability: describe the new behaviour you expect\nE) Something else: describe it in your answer\nQ3: How will we know the change is done?\nChoices:\nA) A named failing run or test now passes, and a regression test covers it (RECOMMENDED)\nB) A measurable figure (cost, duration, failure rate) reaches a stated target\nC) The behaviour you described in Q2 can be seen in a new contract test\nD) Other: state the acceptance criterion in your answer",
+  "fingerprint": "0a9ba50e01a36933caa7acbe910e8b27245e6e407b50cc5f0bcb9d77fda80e2d",
+  "lineage": {
+    "issue_number": 6847,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37880833780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37880833780",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009035226_43019dee72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6847,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37880833780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6847 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T03:52:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
