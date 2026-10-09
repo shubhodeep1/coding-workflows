@@ -958,7 +958,8 @@ def test_rb_judge_never_runs_opencode_on_host_and_defers_before_retry():
 	assert verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true') < verdict.index('break', verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true')) < verdict.index('sleep 10')
 	assert 'judge_skip_reason=isolation_unavailable' in verdict
 	assert 'rb_fix_claude_rc}" -ne 75 ] &&' not in text
-	step = AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
+	# The step body lives in scripts/; read it with the body inlined.
+	step = _steps(yaml.safe_load(expanded_review_autofix_text()), "codex-agent")["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
 	assert 'isolation_unavailable)' in step
 	assert 'AI review/autofix — judge deferred: isolation unavailable' in step
 

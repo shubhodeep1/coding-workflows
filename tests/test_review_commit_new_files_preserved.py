@@ -37,9 +37,13 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
@@ -198,7 +202,7 @@ def test_consumer_cleanup_exports_removed_list_path_to_github_env() -> None:
 
 
 def test_workflow_captures_pre_editor_untracked_snapshot_for_both_repo_kinds() -> None:
-	text = WORKFLOW.read_text(encoding="utf-8")
+	text = expanded_review_autofix_text()
 	snapshot_start = text.index('          PRE_EDITOR_UNTRACKED_FILE="${RUNTIME_DIR}/pre_editor_untracked.txt"')
 	# The snapshot must sit outside the source-repo-only block so consumer
 	# repos get it too; the source-repo block starts right after it.
