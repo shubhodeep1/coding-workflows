@@ -2052,6 +2052,10 @@ PY
 #     (any URL/path followed by a `#fragment` points at a comment or
 #     event on the issue, not at the issue as the PR's subject;
 #     #5776 / PR #5649 relabelled an issue `ai:merged` from such a link)
+#   https://github.com/owner/repo/issues/78?view=plain#issuecomment-1
+#     (a `?query` after the number is not a boundary either, so a query
+#     string cannot hide a following `#fragment`; a bare URL with only a
+#     query string is conservatively not counted as a link)
 #
 # Fail-open:
 #   empty text or malformed repository input emits no matches
@@ -2068,7 +2072,7 @@ extract_repo_scoped_issue_refs_from_text()
 
 	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
 	printf '%s\n' "${_text}" \
-		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
+		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }

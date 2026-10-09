@@ -211,6 +211,10 @@ jobs:
           # into the default branch, or an orchestrator-managed child merged
           # into its integration branch). Only these get lineage finalized.
           LINEAGE_FINALIZE_ISSUE_NUMBERS=""
+          # "<issue> <branch>" lines: the `Integration branch:` each managed
+          # child declares in its body (absent when the body has none).
+          MANAGED_INTEGRATION_BRANCHES=""
+          JQ_INTEGRATION_BRANCH_DEF='def integration_branch: [ (.body // "") | split("\n")[] | capture("^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*(?<b>[^`\\s]+)\\s*`?\\s*$")? | .b ] | first // "";'
 
           export_orchestrator_issue_classification() {
             echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
@@ -252,6 +256,10 @@ jobs:
                 or ((.body // "") | contains("Managed by: AI Orchestrator"))
               ) |
               .number
+            ' 2>/dev/null || echo '')"
+            MANAGED_INTEGRATION_BRANCHES="$(printf '%s' "${payload}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF}"'
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              (integration_branch) as $b | select($b != "") | "\(.number) \($b)"
             ' 2>/dev/null || echo '')"
           }
 
@@ -411,6 +419,11 @@ jobs:
                   ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ) | .number
               ' 2>/dev/null || echo '')"
+              _managed_branches="$(printf '%s' "${ORCH_RESP}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF}"'
+                .data.repository | to_entries[] | .value | select(. != null) |
+                (integration_branch) as $b | select($b != "") | "\(.number) \($b)"
+              ' 2>/dev/null || echo '')"
+              MANAGED_INTEGRATION_BRANCHES="$(printf '%s\n%s\n' "${MANAGED_INTEGRATION_BRANCHES}" "${_managed_branches}" | awk 'NF')"
               TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
               MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
               ORCH_BATCH_FAILED=false
@@ -442,6 +455,10 @@ jobs:
                   or ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ' >/dev/null 2>&1; then
                   MANAGED_ISSUES+="${_orch_num}"$'\n'
+                  _orch_branch="$(printf '%s' "${_orch_meta}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF} integration_branch" 2>/dev/null || echo '')"
+                  if [ -n "${_orch_branch}" ]; then
+                    MANAGED_INTEGRATION_BRANCHES+=$'\n'"${_orch_num} ${_orch_branch}"
+                  fi
                 fi
               done <<< "${LOOKUP_ISSUE_NUMBERS}"
             fi
@@ -465,11 +482,22 @@ jobs:
 
             # A real completion is a close without merge (ai:closed), a merge
             # into the default branch, or an orchestrator-managed child merged
-            # into its integration branch. A merge into any other branch must
-            # not mark the issue ai:merged or finalize its lineage (#5776:
-            # PR #5649 merged into a claude/* project branch relabelled #4867).
+            # into its integration branch: the `Integration branch:` its body
+            # declares, or an `orchestrator/project-*` branch. A merge into any
+            # other branch must not mark the issue ai:merged or finalize its
+            # lineage (#5776: PR #5649 merged into a claude/* project branch
+            # relabelled #4867). The poller's reconcile/close sweeps remain the
+            # backstop for managed children.
+            managed_integration_merge=false
+            if [ "${is_managed_child}" = "true" ]; then
+              declared_integration_branch="$(printf '%s\n' "${MANAGED_INTEGRATION_BRANCHES}" | awk -v n="${issue_number}" '$1 == n { print $2; exit }')"
+              if [[ "${PR_BASE_REF}" == orchestrator/project-* ]] \
+                || { [ -n "${declared_integration_branch}" ] && [ "${PR_BASE_REF}" = "${declared_integration_branch}" ]; }; then
+                managed_integration_merge=true
+              fi
+            fi
             issue_is_completion=false
-            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${is_managed_child}" = "true" ]; then
+            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${managed_integration_merge}" = "true" ]; then
               issue_is_completion=true
               LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
             fi

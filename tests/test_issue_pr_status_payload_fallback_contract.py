@@ -365,11 +365,13 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	# Close gate must include the managed-child branch — closing the
 	# issue when its PR merges into orchestrator/project-N (base != main).
 	assert (
-		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${is_managed_child}" = "true" ]; then'
+		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${managed_integration_merge}" = "true" ]; then'
 	) in text, (
 		"Completion gate must hold on PR_MERGED!=true, PR_BASE_REF==default branch, "
-		"OR is_managed_child==true"
+		"OR a managed child merged into its integration branch"
 	)
+	assert 'if [ "${is_managed_child}" = "true" ]; then' in text
+	assert '[[ "${PR_BASE_REF}" == orchestrator/project-* ]]' in text
 	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (
 		"Managed-child close path must emit a distinguishing log line"
 	)
@@ -621,6 +623,51 @@ def test_managed_child_integration_merge_still_labels_closes_and_finalizes() -> 
 	assert "--final-state merged" in finalize[0], finalize
 
 
+def test_managed_child_non_integration_merge_leaves_issue_untouched() -> None:
+	"""A managed child merged into a branch that is not its integration branch is no completion."""
+	if _jq_missing("test_managed_child_non_integration_merge_leaves_issue_untouched"):
+		return
+	managed = _issue_node(
+		35,
+		labels=["ai:orchestrator-managed"],
+		body="- Integration branch: `orchestrator/project-9`",
+	)
+	result = _run_status_sync(
+		merged=True,
+		base_ref="claude/implement-plan-x",
+		default_branch="main",
+		head_ref="ai/issue-35",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
+
+
+def test_managed_child_declared_custom_integration_merge_completes() -> None:
+	"""A managed child merged into the custom integration branch its body declares completes."""
+	if _jq_missing("test_managed_child_declared_custom_integration_merge_completes"):
+		return
+	managed = _issue_node(
+		36,
+		labels=["ai:orchestrator-managed"],
+		body="**Orchestrator metadata**\n- Integration branch: `release/integration-2`\n",
+	)
+	result = _run_status_sync(
+		merged=True,
+		base_ref="release/integration-2",
+		default_branch="main",
+		head_ref="ai/issue-36",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == ["label 36 ai:merged"], result
+	assert _close_calls(result) == ["close 36"], result
+	assert len(_finalize_calls(result)) == 1, result
+
+
 def test_default_branch_merge_with_fixes_labels_closes_and_finalizes() -> None:
 	if _jq_missing("test_default_branch_merge_with_fixes_labels_closes_and_finalizes"):
 		return
@@ -697,6 +744,7 @@ def test_extract_helper_ignores_fragment_urls_but_keeps_issue_links() -> None:
 	cases = {
 		"https://github.com/o/r/issues/4867#issuecomment-5908534539": "",
 		"o/r/issues/9#discussion_r1": "",
+		"https://github.com/o/r/issues/9?view=plain#issuecomment-1": "",
 		"[x](https://github.com/o/r/issues/9#issuecomment-1)": "",
 		"https://github.com/o/r/issues/9": "9",
 		"o/r/issues/9.": "9",
@@ -738,6 +786,8 @@ if __name__ == "__main__":
 	test_non_default_merge_with_refs_and_comment_url_leaves_issue_untouched()
 	test_non_default_merge_with_closing_ref_does_not_label_or_finalize()
 	test_managed_child_integration_merge_still_labels_closes_and_finalizes()
+	test_managed_child_non_integration_merge_leaves_issue_untouched()
+	test_managed_child_declared_custom_integration_merge_completes()
 	test_default_branch_merge_with_fixes_labels_closes_and_finalizes()
 	test_unmerged_close_keeps_closed_label_close_and_lineage()
 	test_tracking_issue_never_labelled_closed_or_lineage_finalized()
