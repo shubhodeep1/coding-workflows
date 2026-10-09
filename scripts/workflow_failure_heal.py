@@ -1651,6 +1651,8 @@ def _strip_step_env_values(text: str) -> str:
 	without a timestamp inside the env block is a multi-line value
 	continuation, so it is redacted whole even if it looks like
 	``##[endgroup]`` or ``##[group]Run``; only a timestamped marker ends it.
+	A timestamped marker inside the env block that is followed by an
+	unstamped non-empty line is itself part of a value and is redacted too.
 	"""
 	kept: list[str] = []
 	header_lines: list[str] = []
@@ -1658,7 +1660,8 @@ def _strip_step_env_values(text: str) -> str:
 	in_env = False
 	env_seen = False
 	header_stamped = False
-	for line in text.split("\n"):
+	all_lines = text.split("\n")
+	for index, line in enumerate(all_lines):
 		content = _LOG_TIMESTAMP_RE.sub("", line)
 		stamp = line[: len(line) - len(content)]
 		if not in_header:
@@ -1675,6 +1678,20 @@ def _strip_step_env_values(text: str) -> str:
 			# The runner timestamps every line it writes; an unstamped line in
 			# the env block of a stamped header continues a multi-line value.
 			header_lines.append(f"{_STEP_ENV_REDACTED_LINE}" if content.strip() else line)
+			continue
+		if (
+			in_env
+			and header_stamped
+			and (_STEP_HEADER_CLOSE_RE.match(content) or _STEP_HEADER_OPEN_RE.match(content))
+			and index + 1 < len(all_lines)
+			and all_lines[index + 1].strip()
+			and not _LOG_TIMESTAMP_RE.match(all_lines[index + 1])
+		):
+			# A marker followed by an unstamped value continuation is itself a
+			# value line that starts with a timestamp-shaped string: the runner
+			# never writes an unstamped line after a real marker. Redact it whole
+			# and stay in the env block (fail closed).
+			header_lines.append(_STEP_ENV_REDACTED_LINE)
 			continue
 		if _STEP_HEADER_CLOSE_RE.match(content):
 			kept.extend(header_lines)
