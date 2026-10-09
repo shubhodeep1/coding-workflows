@@ -304,7 +304,7 @@ def _verify_regular(target: Path, entry: dict, st: os.stat_result) -> None:
 		raise VerifyError("symlink_mismatch", path)
 	if not stat.S_ISREG(st.st_mode):
 		raise VerifyError("non_regular_file", path)
-	flags =os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+	flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 	try:
 		fd = os.open(target, flags)
 	except OSError as exc:

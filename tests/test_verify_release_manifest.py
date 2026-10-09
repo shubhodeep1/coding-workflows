@@ -234,9 +234,7 @@ def test_tampered_tree_is_rejected(release, mutate, reason: str, path: str) -> N
 def test_symlinked_parent_directory_is_rejected(release) -> None:
 	root, manifest = release
 	_symlinked_parent(root)
-	match = _parse(*_verify(manifest, root))
-	assert match.group(1) == "rejected"
-	assert match.group(2) in ("symlink_mismatch", "path_escape")
+	match = _assert_rejected(_verify(manifest, root), "symlink_mismatch")
 	assert match.group(5).startswith("workflow-templates/.claude/")
 
 
@@ -458,6 +456,37 @@ def test_internal_error_is_structured(release, monkeypatch, capsys) -> None:
 	assert "secret detail" not in captured.out
 	assert "Traceback" not in captured.out
 	_assert_rejected((rc, captured.out, captured.err), "internal_error")
+
+
+def _run_in_process(module, manifest: Path, root: Path, capsys) -> tuple[int, str, str]:
+	rc = module.main(["verify", "--manifest", str(manifest), "--release-root", str(root), "--expected-sha", GOOD_SHA])
+	captured = capsys.readouterr()
+	return rc, captured.out, captured.err
+
+
+def test_unreadable_symlink_is_read_failed(release, monkeypatch, capsys) -> None:
+	root, manifest = release
+	module = _load_module()
+
+	def deny(*_args, **_kwargs):
+		raise PermissionError("denied")
+
+	monkeypatch.setattr(module.os, "readlink", deny)
+	match = _assert_rejected(_run_in_process(module, manifest, root, capsys), "read_failed")
+	assert match.group(5) == "workflow-templates/CLAUDE.md"
+
+
+def test_safe_rel_path_escape_maps_to_path_escape(release, monkeypatch, capsys) -> None:
+	root, manifest = release
+	module = _load_module()
+	module._load_deps()
+
+	def escape(*_args, **_kwargs):
+		raise module._rm.ManifestError("path_escape")
+
+	monkeypatch.setattr(module._rm, "_safe_rel", escape)
+	match = _assert_rejected(_run_in_process(module, manifest, root, capsys), "path_escape")
+	assert match.group(5) is not None
 
 
 def test_reason_tokens_are_the_documented_set() -> None:
