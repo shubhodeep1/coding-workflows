@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -27,6 +31,8 @@ OPENCODE_REVIEWER_EVENTS_FIXTURE = (
 
 
 def _read(path: Path) -> str:
+	if path == WORKFLOW:
+		return expanded_review_autofix_text()
 	return path.read_text(encoding="utf-8")
 
 

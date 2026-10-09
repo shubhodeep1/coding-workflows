@@ -37,15 +37,19 @@ Four invariants must hold for the OSCILLATION GUARD not to false-trip:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 
 def _review_autofix_text() -> str:
-	return REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _generate_diff_block(text: str) -> str:

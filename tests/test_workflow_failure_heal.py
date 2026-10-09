@@ -3617,12 +3617,18 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 
 
 def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
-	"""Issue #6625: the gate and all four failure-marker sites use the verified support SHA."""
-	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	"""Issue #6625: the gate and all four failure-marker sites use the verified support SHA.
+
+	Three jobs export the gate's support SHA: the codex-agent and the
+	fingerprint-cap jobs (failure markers), and the deterministic-skip-merge
+	job, which compares its `.codex-freshness-src` checkout against it before
+	running the merge-base freshness helper (issue #6967).
+	"""
+	wf = expanded_review_autofix_text()
 	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
 	assert wf.count("autofix-failure-fingerprint \\\n") == 4
 	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
-	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 2
+	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 3
 	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 
 

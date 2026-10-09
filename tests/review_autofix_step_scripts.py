@@ -40,6 +40,13 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Re-trigger review via workflow_dispatch": ("review_autofix_step_post_commit_retrigger.sh", "error"),
 	"Re-dispatch review on editor-changes-lost": ("review_autofix_step_changes_lost_redispatch.sh", "error"),
 	"Count autofix iterations": ("review_autofix_step_count_iterations.sh", "error"),
+	"Restore same-head partial resume state": ("review_autofix_step_restore_partial_resume.sh", "error"),
+	"Generate diff context": ("review_autofix_step_generate_diff_context.sh", "error"),
+	"Preflight: Verify required files before reviewer invocation": ("review_autofix_step_reviewer_preflight.sh", "error"),
+	"Apply fixes with editor model": ("review_autofix_step_apply_fixes.sh", "error"),
+	"Validate editor no-op disposition": ("review_autofix_step_validate_editor_noop.sh", "error"),
+	"Post editor summary comment": ("review_autofix_step_post_editor_summary.sh", "error"),
+	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_post_review_blocked_comment.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(
