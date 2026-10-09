@@ -184,7 +184,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     merge: <paths>` line and fails closed with `sandbox_path_host_only`;
     symlinks and odd names keep the nameless `sandbox_path_unsupported`. No
     model runs in either case, because a merge commit needs every path
-    resolved. Outside integration-sync PRs every fail-closed reason is
+    resolved. The one exception is the merged-PR guard hook: before
+    dispatch, `scripts/review_conflict_prepare.sh` stages
+    `.claude/hooks/pr_merge_status_guard.py` from its
+    `workflow-templates/` twin's clean merge when each side's live copy
+    equals that side's template (blob and mode) and the twin itself did
+    not conflict (`CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED`, #6882);
+    any other shape is left for the refusal above. Outside integration-sync PRs every fail-closed reason is
     exported as `AUTOFIX_FAILURE_REASON=conflict_resolver_<reason>`, so the
     failure marker names it; integration-sync PRs keep the generic reason so
     their failures still reach the retry-state escape threshold that drives
@@ -2471,6 +2477,7 @@ depend on it.
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
 | `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) and gitignored one-sided delete/modify conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]`. Other manifest conflicts, including disabled cases and integration-sync branches with further unmerged paths (a manifest-only conflict on `orchestrator/project-*` is resolved like any other branch, but committed only after the integration fingerprint check passes on the merged tree; an unavailable check or a violation fails with `reason=integration_sync detail=fingerprint_unverified|fingerprint_violations`), fail preparation with `Manifest union-merge: unhandled reason=...` instead of dispatching a resolver whose sandbox excludes `.ai/`. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
+| `CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED` | `true` | Defaulted inside `scripts/review_conflict_prepare.sh`; `review_autofix.yml` does not forward it from a repository variable. Before resolver dispatch, a conflict on `.claude/hooks/pr_merge_status_guard.py` is resolved to the clean merge of `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, but only for content conflicts (stages `1 2 3` or `2 3`) where each side's live copy equals that side's template in blob and mode and the template has a single regular stage-0 entry. A hook-only conflict is committed as `[ai-merge-resolve]` (on `orchestrator/project-*`, only after the integration fingerprint check passes). Any other shape logs `Guard-hook template merge: skipped reason=<disabled\|no_merge_head\|stage_shape\|template_unmerged\|template_missing\|template_not_regular\|ours_mismatch\|theirs_mismatch\|unsafe_path>` and keeps the `sandbox_path_host_only` refusal. |
 | `MERGE_TRAIN_IGNORE_PATHS` | `.ai/.workspace_source_manifest.txt` | Exact repo-relative paths excluded from merge-train overlap checks in gate and release. Comma/newline-separated; `none` (or an empty helper env value) restores legacy behavior. Glob entries are rejected. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |

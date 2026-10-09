@@ -201,6 +201,162 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
+# Deterministic resolution for the merged-PR guard hook (heal #6800,
+# PR #6555, activation gap of PR #6803).
+# .claude/hooks/pr_merge_status_guard.py is a host-executed safety hook:
+# review_untrusted_workspace.py keeps it out of the resolver sandbox, so
+# a conflict on it used to fail the resolver closed with
+# sandbox_path_host_only on every run.  The live copy must stay byte- and
+# mode-identical to its workflow-templates/ twin
+# (tests/test_claude_template_live_parity.py).  When each side's live copy
+# equals that side's template (same blob, same mode) and the template
+# itself merged cleanly, the template's merged stage-0 entry is the only
+# result that keeps parity, so stage it for the live path here, on the
+# trusted runner, before resolver dispatch.  Every other shape is left
+# unmerged and keeps the existing fail-closed path.  Comparisons use git
+# object IDs and index modes, never worktree reads, so a symlink cannot
+# redirect them.  CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED (default
+# true, defaulted here: review_autofix.yml does not forward it) is the
+# kill switch.
+# Return codes: 0 resolved and staged; 1 refused, path untouched;
+# 2 staged result failed verification (fatal).
+GUARD_HOOK_LIVE_PATH=".claude/hooks/pr_merge_status_guard.py"
+GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+_conflict_prepare_guard_hook_template_merge()
+{
+  local ghm_live="${GUARD_HOOK_LIVE_PATH}" ghm_tpl="${GUARD_HOOK_TEMPLATE_PATH}"
+  local ghm_stages="" ghm_tpl_entry="" ghm_tpl_mode="" ghm_tpl_oid="" ghm_tpl_stage="" ghm_tpl_path=""
+  local ghm_side_ref="" ghm_side_stage="" ghm_side_reason="" ghm_tree_entry="" ghm_t_mode="" ghm_t_type="" ghm_t_oid="" ghm_t_path=""
+  local ghm_live_entry="" ghm_staged="" ghm_wt_oid=""
+
+  if [ "${CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED:-true}" != "true" ]; then
+    echo "Guard-hook template merge: skipped reason=disabled"
+    return 1
+  fi
+  if ! git rev-parse -q --verify 'MERGE_HEAD^{commit}' >/dev/null 2>&1; then
+    echo "Guard-hook template merge: skipped reason=no_merge_head"
+    return 1
+  fi
+  ghm_stages="$(git ls-files -u -- "${ghm_live}" 2>/dev/null | awk '{print $3}' | sort -u | tr '\n' ' ' || true)"
+  case " ${ghm_stages}" in
+    ' 1 2 3 '|' 2 3 ') ;;
+    *)
+      echo "Guard-hook template merge: skipped reason=stage_shape"
+      return 1
+      ;;
+  esac
+  if [ -n "$(git ls-files -u -- "${ghm_tpl}" 2>/dev/null || echo error)" ]; then
+    echo "Guard-hook template merge: skipped reason=template_unmerged"
+    return 1
+  fi
+  ghm_tpl_entry="$(git ls-files -s -- "${ghm_tpl}" 2>/dev/null || true)"
+  if [ -z "${ghm_tpl_entry}" ]; then
+    echo "Guard-hook template merge: skipped reason=template_missing"
+    return 1
+  fi
+  read -r ghm_tpl_mode ghm_tpl_oid ghm_tpl_stage ghm_tpl_path <<< "${ghm_tpl_entry}" || true
+  if [[ "${ghm_tpl_entry}" == *$'\n'* ]] || [ "${ghm_tpl_stage}" != "0" ] || [ "${ghm_tpl_path}" != "${ghm_tpl}" ] \
+     || ! [[ "${ghm_tpl_oid}" =~ ^[0-9a-f]{40,64}$ ]]; then
+    echo "Guard-hook template merge: skipped reason=template_not_regular"
+    return 1
+  fi
+  case "${ghm_tpl_mode}" in
+    100644|100755) ;;
+    *)
+      echo "Guard-hook template merge: skipped reason=template_not_regular"
+      return 1
+      ;;
+  esac
+  for ghm_side_ref in HEAD MERGE_HEAD; do
+    if [ "${ghm_side_ref}" = "HEAD" ]; then
+      ghm_side_stage=2
+      ghm_side_reason=ours_mismatch
+    else
+      ghm_side_stage=3
+      ghm_side_reason=theirs_mismatch
+    fi
+    ghm_tree_entry="$(git ls-tree --full-tree "${ghm_side_ref}" -- "${ghm_tpl}" 2>/dev/null || true)"
+    ghm_t_mode="" ghm_t_type="" ghm_t_oid="" ghm_t_path=""
+    read -r ghm_t_mode ghm_t_type ghm_t_oid ghm_t_path <<< "${ghm_tree_entry}" || true
+    ghm_live_entry="$(git ls-files -u -- "${ghm_live}" 2>/dev/null | awk -v s="${ghm_side_stage}" '$3 == s {print $1 " " $2}' || true)"
+    if [ -z "${ghm_tree_entry}" ] || [[ "${ghm_tree_entry}" == *$'\n'* ]] || [ "${ghm_t_type}" != "blob" ] \
+       || [ "${ghm_t_path}" != "${ghm_tpl}" ] || [ -z "${ghm_live_entry}" ] \
+       || [ "${ghm_live_entry}" != "${ghm_t_mode} ${ghm_t_oid}" ]; then
+      echo "Guard-hook template merge: skipped reason=${ghm_side_reason}"
+      return 1
+    fi
+    case "${ghm_t_mode}" in
+      100644|100755) ;;
+      *)
+        echo "Guard-hook template merge: skipped reason=${ghm_side_reason}"
+        return 1
+        ;;
+    esac
+  done
+  if [ -L ".claude" ] || [ -L ".claude/hooks" ] || [ -L "${ghm_live}" ] || [ ! -f "${ghm_live}" ]; then
+    echo "Guard-hook template merge: skipped reason=unsafe_path"
+    return 1
+  fi
+
+  # Collapse stages 1-3 into the template's merged stage-0 entry.
+  git update-index --cacheinfo "${ghm_tpl_mode},${ghm_tpl_oid},${ghm_live}" || return 2
+  git checkout-index -f -- "${ghm_live}" || return 2
+
+  ghm_staged="$(git ls-files -s -- "${ghm_live}" 2>/dev/null || true)"
+  if [ "${ghm_staged}" != "${ghm_tpl_mode} ${ghm_tpl_oid} 0"$'\t'"${ghm_live}" ]; then
+    return 2
+  fi
+  if [ -n "$(git ls-files -u -- "${ghm_live}" 2>/dev/null || echo error)" ]; then
+    return 2
+  fi
+  if [ -L "${ghm_live}" ] || [ ! -f "${ghm_live}" ]; then
+    return 2
+  fi
+  ghm_wt_oid="$(git hash-object --no-filters -- "${ghm_live}" 2>/dev/null || true)"
+  if [ "${ghm_wt_oid}" != "${ghm_tpl_oid}" ]; then
+    return 2
+  fi
+  if [ "${ghm_tpl_mode}" = "100755" ]; then
+    [ -x "${ghm_live}" ] || return 2
+  else
+    [ ! -x "${ghm_live}" ] || return 2
+  fi
+  echo "Guard-hook template merge: resolved ${ghm_live} from ${ghm_tpl} (mode=${ghm_tpl_mode} blob=${ghm_tpl_oid:0:12})"
+  return 0
+}
+
+_ghm_resolved=false
+_ghm_defer_commit=false
+if [ "${_resolver_allowlist_count}" -gt 0 ] \
+   && grep -Fxq "${GUARD_HOOK_LIVE_PATH}" "${RESOLVER_ALLOWLIST_FILE}"; then
+  _ghm_rc=0
+  _conflict_prepare_guard_hook_template_merge || _ghm_rc=$?
+  case "${_ghm_rc}" in
+    0)
+      git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+      _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+      _ghm_resolved=true
+      echo "Guard-hook template merge: ${_resolver_allowlist_count} unmerged path(s) remain."
+      if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+        # Same rule as a manifest-only conflict on integration-sync
+        # branches: commit only after the fingerprint check below.
+        case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+          orchestrator/project-*) _ghm_defer_commit=true ;;
+        esac
+      fi
+      ;;
+    1)
+      # Refused: the hook stays unmerged and the resolver's existing
+      # sandbox_path_host_only fail-closed path applies.
+      ;;
+    *)
+      echo "::error::Guard-hook template merge: staged result failed verification; refusing to dispatch resolver."
+      exit 1
+      ;;
+  esac
+  unset _ghm_rc
+fi
+
 # Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
@@ -254,6 +410,30 @@ fi
 # materialize_source_tree() (bytewise over UTF-8 == code-point order),
 # so the merged file satisfies the manifest-sorting contract.
 MANIFEST_UNION_PATH=".ai/.workspace_source_manifest.txt"
+# Shared tail for a deterministic resolution that left no unmerged path
+# (manifest union-merge, guard-hook template merge): commit the two-parent
+# [ai-merge-resolve] merge while MERGE_HEAD is still in place, restore the
+# stashed workflow dirs, signal CONFLICT_RESOLVED=true and exit 0.
+_conflict_prepare_commit_deterministic_merge()
+{
+  local det_label="$1" d=""
+  git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+    git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+    git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+  fi
+  git commit -m "[ai-merge-resolve] resolve merge conflicts"
+  for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+    if [ -d "${RESOLVE_STASH}/${d}" ]; then
+      cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+    fi
+  done
+  rm -rf "${RESOLVE_STASH}"
+  rm -f "${_merge_stderr_file}"
+  echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+  echo "${det_label}: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+  exit 0
+}
 _mu_resolved=false
 _mu_defer_commit=false
 _mu_unhandled_reason=""
@@ -357,22 +537,7 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
       # step's if: gate still passes, so
       # review_conflict_resolve.sh short-circuits on
       # CONFLICT_RESOLVED=true before any model invocation.
-      git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
-      if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-        git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
-        git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
-      fi
-      git commit -m "[ai-merge-resolve] resolve merge conflicts"
-      for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
-        if [ -d "${RESOLVE_STASH}/${d}" ]; then
-          cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
-        fi
-      done
-      rm -rf "${RESOLVE_STASH}"
-      rm -f "${_merge_stderr_file}"
-      echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
-      echo "Manifest union-merge: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
-      exit 0
+      _conflict_prepare_commit_deterministic_merge "Manifest union-merge"
     fi
   elif [ -n "${_mu_unhandled_reason}" ]; then
     _mu_stages_trimmed="${_mu_stages% }"
@@ -415,6 +580,26 @@ fi
 #      the workflow silently continue as if the conflict were
 #      resolved.  Fail loudly with an error annotation and
 #      dump diagnostics so the root cause is visible.
+#
+# First, a guard-hook-only conflict (resolved above, before the manifest
+# block) is not a failed merge replay: nothing is left for the resolver,
+# so commit through the shared tail, or on an integration-sync branch defer the commit until the integration
+# fingerprint check below has run on the merged tree.
+_det_commit_label="${_det_commit_label:-Manifest union-merge}"
+_det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
+if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
+   && [ "${_mu_resolved}" != "true" ]; then
+  if [ "${_ghm_defer_commit:-false}" = "true" ]; then
+    _mu_defer_commit=true
+    _det_commit_label="Guard-hook template merge"
+    _det_commit_path="${GUARD_HOOK_LIVE_PATH}"
+    _det_commit_scope="hook-only"
+    echo "Guard-hook template merge: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+  else
+    _conflict_prepare_commit_deterministic_merge "Guard-hook template merge"
+  fi
+fi
+
 if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ]; then
   if [ "${_merge_exit}" -eq 0 ]; then
     echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
@@ -717,9 +902,10 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
   rm -f "${_fp_violated_tmp}"
 fi
 
-# Deferred manifest-only commit on integration-sync branches.
-# The manifest union block above resolved the manifest (the only
-# unmerged path) but left the merge in progress so the fingerprint
+# Deferred manifest-only (or guard-hook-only) commit on integration-sync
+# branches.
+# The manifest union block (or the guard-hook template merge) above
+# resolved the only unmerged path but left the merge in progress so the fingerprint
 # check could run against the merged tree.  Commit only when that
 # check ran and found no violation; otherwise fail closed exactly as
 # integration-sync branches did before (reason=integration_sync), so
@@ -728,17 +914,17 @@ fi
 if [ "${_mu_defer_commit}" = "true" ]; then
   _mu_remaining_unmerged="$(git diff --name-only --diff-filter=U | sed '/^$/d' | wc -l | tr -d '[:space:]')"
   if [ "${_fp_check_ok}" != "true" ]; then
-    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}."
+    echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
     exit 1
   fi
   if [ -n "${FP_VIOLATED_FILES_LIST}" ] || [ "${_mu_remaining_unmerged}" -ne 0 ]; then
-    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}."
+    echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
     exit 1
   fi
   git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
-  echo "Manifest union-merge: integration fingerprints verified on the merged tree — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+  echo "${_det_commit_label:-Manifest union-merge}: integration fingerprints verified on the merged tree — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
   exit 0
 fi
 
