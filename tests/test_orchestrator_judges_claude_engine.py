@@ -978,7 +978,7 @@ def test_poll_preflight_covers_standalone_stall_judge_contract() -> None:
 	assert resolve["env"]["ENABLE_STALL_JUDGE"] == "${{ vars.ENABLE_STALL_JUDGE || 'true' }}"
 	run = resolve["run"]
 	assert "AI_ENGINE_LABELS='[]' ai_engine_for_role STALL_JUDGE" in run
-	assert '--label "ai:engine-claude" --state open --json number,labels --limit 100' in run
+	assert '--label "ai:engine-claude" --state open --json number,labels --limit 1000' in run
 	assert (
 		'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not)'
 		' and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))'
@@ -1053,7 +1053,7 @@ def test_poll_preflight_fetches_pool_for_standalone_stall_judge(
 	assert output == f"any_claude={expected}"
 	assert bool(calls) is gh_called
 	if gh_called:
-		assert all('--label ai:engine-claude --state open --json number,labels --limit 100' in call for call in calls)
+		assert all('--label ai:engine-claude --state open --json number,labels --limit 1000' in call for call in calls)
 		assert all("--repo owner/repo" in call for call in calls)
 	if kwargs.get("gh_rc"):
 		assert "::warning::Could not list open ai:engine-claude issues" in result.stderr
