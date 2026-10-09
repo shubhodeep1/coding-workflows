@@ -474,5 +474,118 @@ class ShardJudgeTest(unittest.TestCase):
 				self.assertIn("orchestrate-poll shard 1 failed (exit 1)", result.stdout)
 
 
+FAIL_ANNOTATION_RE = re.compile(r"^::error::orchestrate-poll shard \d+: FAIL", re.MULTILINE)
+
+
+class ShardFailAnnotationTest(unittest.TestCase):
+	"""A failed shard names its failing tests (#6883, run 37906796258).
+
+	The judgment loop used to raise only `shard N failed (exit N)`, so a log
+	tail or the run annotations never named the failing test. Each failed
+	shard's runner `  FAIL  ` lines now become escaped `::error::`
+	annotations (at most 5 per step) and a plain-text list before the tally.
+	"""
+
+	def step_runs(self) -> dict[str, str]:
+		return ShardJudgeTest.step_runs(self)  # type: ignore[arg-type]
+
+	@staticmethod
+	def green(shards: int = 4) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"test_{n}\n", "log": "  PASS  ok\n", "rc": "0\n"} for n in range(shards)}
+
+	def test_every_copy_carries_the_extraction_and_escaping(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				self.assertIn("LC_ALL=C awk '/^  FAIL  / && c < 20", step_run)
+				self.assertIn('gsub(/%/, "%25", line)', step_run)
+				self.assertIn('gsub(/\\r/, "%0D", line)', step_run)
+				self.assertLess(step_run.index("shard_failures=0"), step_run.index("fail_annotations=0"))
+				self.assertLess(step_run.index("shard_failures=0"), step_run.index("failed_test_lines=()"))
+
+	def test_failing_shard_annotates_its_fail_line_escaped(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = self.green()
+				shard_files[1] = {
+					"txt": "test_a\ntest_b\n",
+					"log": "  PASS  test_a\n  FAIL  test_b: boom 100% done\r\nTraceback...\n",
+					"rc": "1\n",
+				}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				lines = result.stdout.splitlines()
+				self.assertIn("::error::orchestrate-poll shard 1 failed (exit 1)", lines)
+				self.assertIn("::error::orchestrate-poll shard 1: FAIL  test_b: boom 100%25 done%0D", lines)
+				listing = lines.index("orchestrate-poll failing tests:")
+				self.assertEqual(lines[listing + 1], "  orchestrate-poll shard 1: FAIL  test_b: boom 100%25 done%0D")
+				self.assertEqual(lines[-1], "::error::1 orchestrate-poll shard(s) failed.")
+
+	def test_failing_shard_without_fail_line_gets_fallback(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = self.green()
+				shard_files[3] = {"txt": "test_3\n", "log": "Traceback: fixture died\n", "rc": "2\n"}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertIn(
+					"::error::orchestrate-poll shard 3: no FAIL line in log (runner or fixture error); see the shard log group",
+					result.stdout.splitlines(),
+				)
+
+	def test_annotations_are_capped_but_every_failure_is_listed(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = {
+					n: {
+						"txt": "x\n",
+						"log": "".join(f"  FAIL  test_{n}_{i}: err\n" for i in range(3)),
+						"rc": "1\n",
+					}
+					for n in range(4)
+				}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertEqual(len(FAIL_ANNOTATION_RE.findall(result.stdout)), 5)
+				for n in range(4):
+					self.assertIn(f"::error::orchestrate-poll shard {n} failed (exit 1)", result.stdout)
+					for i in range(3):
+						self.assertIn(f"  orchestrate-poll shard {n}: FAIL  test_{n}_{i}: err\n", result.stdout)
+				self.assertIn("::error::4 orchestrate-poll shard(s) failed.", result.stdout)
+
+	def test_long_fail_line_is_truncated(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = self.green()
+				shard_files[0] = {"txt": "x\n", "log": "  FAIL  test_long: " + "y" * 2000 + "\n", "rc": "1\n"}
+				result = run_shard_judge(step_run, shard_files)
+				prefix = "::error::orchestrate-poll shard 0: "
+				annotations = [line for line in result.stdout.splitlines() if line.startswith(prefix + "FAIL")]
+				self.assertEqual(len(annotations), 1)
+				self.assertEqual(len(annotations[0]) - len(prefix), 500)
+
+	def test_per_shard_collection_is_capped_at_twenty(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = self.green()
+				shard_files[2] = {
+					"txt": "x\n",
+					"log": "".join(f"  FAIL  test_{i}: err\n" for i in range(30)),
+					"rc": "1\n",
+				}
+				result = run_shard_judge(step_run, shard_files)
+				listed = [line for line in result.stdout.splitlines() if line.startswith("  orchestrate-poll shard 2: FAIL")]
+				self.assertEqual(len(listed), 20)
+
+	def test_green_shard_with_fail_text_adds_nothing(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = self.green()
+				shard_files[0]["log"] = "  FAIL  test_expected_fail_text: shown by a passing test\n"
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertNotIn("::error::", result.stdout)
+				self.assertNotIn("orchestrate-poll failing tests:", result.stdout)
+
+
 if __name__ == "__main__":
 	unittest.main()
