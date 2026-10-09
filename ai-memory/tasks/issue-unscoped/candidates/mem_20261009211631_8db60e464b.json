@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  expected_change_site: PR description for PR #6961\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: PR description omits the plan-unreadable caveat and provisional names (`UPDATER_VERIFY_RELEASE_MANIFEST`, `release-manifest.v1.json`, `UPDATER_MANIFEST_VERIFY`); the code-comment requirement is satisfied in .github/workflows/update_workflows.yml, with citations `.github/workflows/update_workflows.yml:107-120` and `.github/workflows/update_workflows.yml` lines 107-120; the PR-body requirement remains unmet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\n  Expected change site: PR description.\n  Evidence of absence: The PR description lacks the required assumption text: \"The authoritative plan (docs/plans/safeguarded-consumer-updater-plan.md on branch claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be read from the implementation sandbox, so the provisional names from issue #6960 are used: `UPDATER_VERIFY_RELEASE_MANIFEST`, `release-manifest.v1.json`, `UPDATER_MANIFEST_VERIFY`.\" While the code-comment half of the requirement is satisfied in .github/workflows/update_workflows.yml, the PR description requirement is not.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\" (issue #6960 Scope section, last bullet)\n  Expected change site: PR description on PR #6961 (GitHub-side metadata, not a repo file)\n  Evidence of absence: PR description reads only \"AI implementation for issue #6960 / Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6960 / Refs #6902\". It does not name the provisional identifiers (`UPDATER_VERIFY_RELEASE_MANIFEST`, `release-manifest.v1.json`, `UPDATER_MANIFEST_VERIFY`) or the \"plan could not be read\" caveat. The code-comment half is satisfied in `.github/workflows/update_workflows.yml:107-120`; the PR-body half remains unmet. Previous editor runs (issue comments 6086454967, 6086952119, 6087390046, 6087678736, 6088155205) deferred this same gap because GitHub metadata sits outside the editor workspace.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cIf the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\u201d\n  Expected change site: PR description for PR #6961.\n  Evidence of absence: The provided PR description says only \u201cAutomated implementation,\u201d \u201cCloses \u2026/issues/6960,\u201d and \u201cRefs #6902.\u201d It does not state that the plan could not be read or identify the provisional names used. The code-comment requirement is satisfied in `.github/workflows/update_workflows.yml`; the PR-body requirement remains unmet.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\" (issue #6960, Scope section)\n  Expected change site: PR description (GitHub-side metadata) on PR #6961\n  Evidence of absence: The PR description says only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6960 / Refs #6902\". It does not record that the authoritative plan could not be read or that provisional names were used. The code-comment half of the requirement is satisfied in `.github/workflows/update_workflows.yml` lines 107-120. The editor cannot edit the PR description because it is GitHub metadata outside the workspace; this gap has been deferred across six prior autofix rounds (issue comments 6086454967, 6086952119, 6087390046, 6087678736, 6088155205, and this round). The assumption text the issue asks for: \"The authoritative plan (docs/plans/safeguarded-consumer-updater-plan.md on branch claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be read from the planning/implementation sandbox, so the provisional names from issue #6960 are used: `UPDATER_VERIFY_RELEASE_MANIFEST`, `release-manifest.v1.json`, `UPDATER_MANIFEST_VERIFY`.\"\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4a0d5e5c60d55664027e96d0652c055227966fa68e73c1f3cafda153db168ecb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6961,
+    "run_id": "37990759616",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37990759616",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009211631_8db60e464b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6961,
+    "run_id": "37990759616"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T21:16:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
