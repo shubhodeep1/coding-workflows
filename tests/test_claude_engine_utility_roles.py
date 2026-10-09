@@ -663,9 +663,9 @@ def test_review_sandbox_admits_utility_roles_read_only() -> None:
 	text = REVIEW_SANDBOX.read_text(encoding="utf-8")
 	allow = re.search(r'case "\$\{claude_role\}" in ([A-Z_|]+)\) ;; \*\) exit 2 ;; esac', text)
 	assert allow and {"SUMMARISER", "BEHAVIOURAL_SMOKE"} <= set(allow.group(1).split("|"))
-	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE)\n\t\t[ \"${claude_access}\" = read ] || exit 2 ;;" in text
-	assert '"SUMMARISER", "BEHAVIOURAL_SMOKE"}' in text
-	assert "RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE)" in text
+	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)\n\t\t[ \"${claude_access}\" = read ] || exit 2 ;;" in text
+	assert '"SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}' in text
+	assert "RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)" in text
 	engine = AI_ENGINE.read_text(encoding="utf-8")
 	sandbox_only = re.search(r"_AI_ENGINE_SANDBOX_ONLY_ROLES=\(([^)]*)\)", engine)
 	assert sandbox_only and "SUMMARISER" not in sandbox_only.group(1)

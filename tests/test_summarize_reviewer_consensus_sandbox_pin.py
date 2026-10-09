@@ -61,6 +61,28 @@ def test_summariser_never_falls_back_to_the_host() -> None:
 	assert "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_unavailable" not in src
 
 
+def test_review_utility_roles_never_start_host_opencode() -> None:
+	# Findings review-summarizer-host-fallback / review-smoke-host-opencode and
+	# the interim-judge sibling: PR-derived text reaches OpenCode only through
+	# the review sandbox's read-only utility roles.
+	scripts_dir = REPO_ROOT / "scripts"
+	for name, role in (
+		("summarize_reviewer_consensus.sh", "SUMMARISER"),
+		("review_synthesise_smoke.sh", "BEHAVIOURAL_SMOKE"),
+		("review_run_judge_interim.sh", "JUDGE_INTERIM"),
+	):
+		src = (scripts_dir / name).read_text(encoding="utf-8")
+		assert "opencode_run_cmd" not in src, name
+		assert role in src, name
+	sandbox = (scripts_dir / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	allowlist = next(line for line in sandbox.splitlines() if line.startswith('case "${claude_role}" in REVIEW_EDITOR|'))
+	for role in ("SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"):
+		assert f"|{role}" in allowlist, role
+	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)" in sandbox
+	assert '"SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}' in sandbox
+	assert 'if [ "${claude_role}" = JUDGE_INTERIM ] && [ "${engine}" != codex ]; then' in sandbox
+
+
 def main() -> int:
 	test_summariser_uses_isolated_reviewer_opencode_config()
 	test_summariser_does_not_mutate_shared_codex_config()
