@@ -483,7 +483,7 @@ jobs:
             # A real completion is a close without merge (ai:closed), a merge
             # into the default branch, or an orchestrator-managed child merged
             # into its integration branch: the `Integration branch:` its body
-            # declares, or an `orchestrator/project-*` branch. A merge into any
+            # declares, else an `orchestrator/project-*` branch. A merge into any
             # other branch must not mark the issue ai:merged or finalize its
             # lineage (#5776: PR #5649 merged into a claude/* project branch
             # relabelled #4867). The poller's reconcile/close sweeps remain the
@@ -491,8 +491,14 @@ jobs:
             managed_integration_merge=false
             if [ "${is_managed_child}" = "true" ]; then
               declared_integration_branch="$(printf '%s\n' "${MANAGED_INTEGRATION_BRANCHES}" | awk -v n="${issue_number}" '$1 == n { print $2; exit }')"
-              if [[ "${PR_BASE_REF}" == orchestrator/project-* ]] \
-                || { [ -n "${declared_integration_branch}" ] && [ "${PR_BASE_REF}" = "${declared_integration_branch}" ]; }; then
+              # A declared branch is authoritative: a merge into another
+              # project's orchestrator/project-* branch is not this child's
+              # completion. The prefix rule applies only when none is declared.
+              if [ -n "${declared_integration_branch}" ]; then
+                if [ "${PR_BASE_REF}" = "${declared_integration_branch}" ]; then
+                  managed_integration_merge=true
+                fi
+              elif [[ "${PR_BASE_REF}" == orchestrator/project-* ]]; then
                 managed_integration_merge=true
               fi
             fi

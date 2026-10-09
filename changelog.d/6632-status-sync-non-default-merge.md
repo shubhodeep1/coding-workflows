@@ -7,7 +7,7 @@ The workflow now changes a linked issue only for a real completion:
 
 - the PR was closed without merging (`ai:closed`, unchanged);
 - the PR was merged into the repository's default branch, read from the event payload instead of the literal `main`;
-- the issue is an orchestrator-managed child and the PR was merged into its integration branch (the `Integration branch:` its body declares, or an `orchestrator/project-*` branch).
+- the issue is an orchestrator-managed child and the PR was merged into its integration branch (the `Integration branch:` its body declares, or any `orchestrator/project-*` branch when the body declares none).
 
 For any other merge, it logs that the issue was left unchanged. The body/title fallback also stops treating `…/issues/N#issuecomment-…` (or any `#fragment`, including one after a `?query`) as a link to issue N. A URL with a query string is no longer counted. Closing keywords and bare issue URLs still count.
 

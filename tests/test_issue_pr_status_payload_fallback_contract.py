@@ -646,6 +646,29 @@ def test_managed_child_non_integration_merge_leaves_issue_untouched() -> None:
 	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
 
 
+def test_managed_child_other_project_branch_merge_leaves_issue_untouched() -> None:
+	"""A declared integration branch wins over the orchestrator/project-* prefix rule."""
+	if _jq_missing("test_managed_child_other_project_branch_merge_leaves_issue_untouched"):
+		return
+	managed = _issue_node(
+		37,
+		labels=["ai:orchestrator-managed"],
+		body="- Integration branch: `orchestrator/project-9`",
+	)
+	result = _run_status_sync(
+		merged=True,
+		base_ref="orchestrator/project-10",
+		default_branch="main",
+		head_ref="ai/issue-37",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
+
+
 def test_managed_child_declared_custom_integration_merge_completes() -> None:
 	"""A managed child merged into the custom integration branch its body declares completes."""
 	if _jq_missing("test_managed_child_declared_custom_integration_merge_completes"):
@@ -787,6 +810,7 @@ if __name__ == "__main__":
 	test_non_default_merge_with_closing_ref_does_not_label_or_finalize()
 	test_managed_child_integration_merge_still_labels_closes_and_finalizes()
 	test_managed_child_non_integration_merge_leaves_issue_untouched()
+	test_managed_child_other_project_branch_merge_leaves_issue_untouched()
 	test_managed_child_declared_custom_integration_merge_completes()
 	test_default_branch_merge_with_fixes_labels_closes_and_finalizes()
 	test_unmerged_close_keeps_closed_label_close_and_lineage()
