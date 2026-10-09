@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Implementation changes commonly include a `changelog.d` fragment.",
   "timestamps": {
     "created_at": "2026-10-09T04:20:01Z",
