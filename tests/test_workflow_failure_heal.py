@@ -10,8 +10,16 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
+import hmac
+import http.server
 import importlib.util
+import base64
 import json
+import math
+import random
+import threading
+import time
 import os
 import re
 import shutil
@@ -49,6 +57,95 @@ CONSUMER_REPO = "shubhodeep1/example-consumer"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 FP_HEX = "f" * 64
+
+
+def test_heal_scope_ignores_prose_and_requires_pipeline_authorship() -> None:
+	marker = heal.render_heal_scope_marker(crash_file="scripts/fix.py", workflow_paths=[".github/workflows/implement.yml"], changed_files=[".gitattributes", "scripts/other.py"], runs=[f"{SELF_REPO}:500"], exists=lambda path: path != "scripts/other.py")
+	assert marker and "scripts/other.py" not in marker and ".gitattributes" not in marker
+	body = f"files_touched:\n  - scripts/**\n{marker}\n"
+	kwargs = dict(body=body, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+	verified = heal.verify_heal_scope(**kwargs)
+	assert verified["status"] == "verified"
+	assert verified["paths"] == ["scripts/fix.py", ".github/workflows/implement.yml", "tests/**", "changelog.d/*.md"]
+	assert heal.verify_heal_scope(**dict(kwargs, last_edited_at="2026-10-06T00:00:00Z"))["status"] == "edited"
+	assert heal.verify_heal_scope(**dict(kwargs, body=body + marker))["status"] == "duplicated"
+	assert heal.verify_heal_scope(**dict(kwargs, author_login="attacker"))["status"] == "untrusted_author"
+	assert heal.carry_heal_scope(child_body="forged\n" + marker, parent_verification=verified).count(marker) == 1
+	assert heal.skip_reason(dict(label="ai:needs-human", labels=[heal.HEAL_LABEL], source_repo=SELF_REPO), registered_repos=[], self_repo=SELF_REPO, heal_scope_unverified=True) == "heal_scope_unverified"
+
+
+def test_heal_log_redaction_hides_basic_header_and_encoded_credentials() -> None:
+	secret = "github_pat_" + "S" * 60
+	encoded = base64.b64encode(("x-access-token:" + secret).encode()).decode()
+	for prefix in ("", "x", "xy"):
+		candidate = base64.b64encode((prefix + "x-access-token:" + secret).encode()).decode()
+		redacted = heal.redact_known_secrets(f"AUTHORIZATION: basic {candidate}\nconfig={candidate}\nraw={secret}", [secret])
+		assert secret not in redacted and candidate not in redacted
+		assert "[redacted]" in redacted
+	assert secret not in heal.filter_log(f"##[error]AUTHORIZATION: basic {encoded}")
+
+
+def test_heal_run_verification_and_successful_review_job_fallback() -> None:
+	jobs = {"jobs": [{"id": 22, "name": "codex-agent", "conclusion": "success"}]}
+	assert heal.select_evidence_jobs(jobs, kind="autofix_failure", limit=3)[0]["selection"] == "review_fallback"
+	assert heal.select_evidence_jobs(jobs, kind="workflow_run", limit=3) == []
+	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "head_sha": SHA_A, "conclusion": "failure", "path": ".github/workflows/implement.yml", "referenced_workflows": [{"path": f"{SELF_REPO}/.github/workflows/ci.yml@main"}]}
+	assert heal.verify_run(run, repo=SELF_REPO, kind="workflow_run", head_sha=SHA_A)["run_id"] == 500
+	assert ".github/workflows/ci.yml" in heal.verify_run(run, repo=SELF_REPO, kind="workflow_run", head_sha=SHA_A)["referenced_paths"]
+	try:
+		heal.verify_run(run, repo=CONSUMER_REPO, kind="workflow_run", head_sha=SHA_A)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("foreign run was trusted")
+
+
+def test_verify_run_accepts_pending_run_only_when_allowed() -> None:
+	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "in_progress", "conclusion": None, "path": ".github/workflows/internal-plan.yml"}
+	assert heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", allow_pending=True)["run_id"] == 500
+	for kwargs in ({}, {"allow_pending": False}):
+		try:
+			heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", **kwargs)
+		except ValueError:
+			pass
+		else:
+			raise AssertionError("pending run accepted without allow_pending")
+	# allow_pending never admits a completed run with a non-failure conclusion.
+	try:
+		heal.verify_run(dict(run, status="completed", conclusion="success"), repo=SELF_REPO, kind="phase_failure", allow_pending=True)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("successful phase run accepted")
+
+
+def test_autofix_failure_evidence_is_redacted_in_payload() -> None:
+	secret = "github_pat_" + "E" * 60
+	encoded = base64.b64encode(("x-access-token:" + secret).encode()).decode()
+	evidence = f"finalize_reason=editor_empty_noop\nAUTHORIZATION: basic {encoded}\nconfig={encoded}\ntoken {secret}\n"
+	payload = heal.validate_payload(_autofix_payload(failure_evidence=evidence))
+	assert secret not in payload["failure_evidence"] and encoded not in payload["failure_evidence"]
+	assert "finalize_reason=editor_empty_noop" in payload["failure_evidence"]
+	# 64-hex fingerprints in the evidence are not mistaken for credentials.
+	assert heal.redact_secrets("fp=" + "ab" * 32) == "fp=" + "ab" * 32
+
+
+def test_redact_stream_matches_credentials_split_by_ansi_escapes() -> None:
+	encoded = base64.b64encode(("x-access-token:github_pat_" + "F" * 60).encode()).decode()
+	line = f"AUTHORIZATION: ba\x1b[31msic {encoded[:20]}\x1b[0m{encoded[20:]}\n"
+	result = subprocess.run([sys.executable, str(LIB_PATH), "redact-stream"], input=line, capture_output=True, text=True, check=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+	assert encoded[20:] not in result.stdout and encoded[:20] not in result.stdout
+
+
+def test_intake_never_passes_basic_credentials_to_model_or_issue() -> None:
+	secret = "github_pat_" + "Z" * 60
+	encoded = base64.b64encode(("x-access-token:" + secret).encode()).decode()
+	state = _intake_state(job_logs={"9001": f"AUTHORIZATION: basic {encoded}\n##[error]credentials {secret} rejected\n"})
+	result, state_after, prompt = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"GH_PAT": secret})
+	assert result.returncode == 0, result.stderr
+	assert secret not in prompt and encoded not in prompt
+	body = state_after["issues_created"][0]["body"]
+	assert secret not in body and encoded not in body
 
 # Same regex as scripts/resolve_integration_ref.sh (Target branch alias).
 TARGET_BRANCH_RE = re.compile(
@@ -162,7 +259,14 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	payload_step = [s for s in job["steps"] if s.get("id") == "payload"][0]
 	# External inputs are env-bound, never interpolated into the script body.
 	assert "${{" not in payload_step["run"]
-	assert payload_step["env"]["CLIENT_PAYLOAD_JSON"] == "${{ toJson(github.event.client_payload) }}"
+	# client_payload (which may carry the report's OIDC identity) is read from
+	# the event file, never echoed in the step's env block (issue #6559).
+	assert "CLIENT_PAYLOAD_JSON" not in payload_step["env"]
+	assert "toJson(github.event.client_payload)" not in INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	assert '"${GITHUB_EVENT_PATH}"' in payload_step["run"]
+	assert "extract-report-identity" in payload_step["run"]
+	assert job["env"]["WORKFLOW_HEAL_REQUIRE_REPORT_AUTH"] == "${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}"
+	assert job["env"]["WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS"] == "${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}"
 	checkout_step = [s for s in job["steps"] if s.get("name") == "Checkout repository"][0]
 	assert checkout_step["with"]["persist-credentials"] is False
 	intake_script = INTAKE_SCRIPT.read_text(encoding="utf-8")
@@ -478,21 +582,33 @@ def test_intake_materialize_step_unwraps_enveloped_repository_dispatch() -> None
 	intake = _yaml(INTAKE_WORKFLOW)
 	step = [s for s in intake["jobs"]["intake"]["steps"] if s.get("id") == "payload"][0]
 	flat = _consumer_payload()
-	for client_payload in (heal.wrap_dispatch(flat)["client_payload"], flat):
+	fake_identity = "aGVhZGVy.Y2xhaW1z.c2lnbmF0dXJl"
+	cases = (
+		(heal.wrap_dispatch(flat)["client_payload"], "absent"),
+		(flat, "absent"),
+		(heal.wrap_dispatch(flat, fake_identity)["client_payload"], "present"),
+		({**heal.wrap_dispatch(flat)["client_payload"], "report_identity": "not a token"}, "malformed"),
+	)
+	for client_payload, expected_state in cases:
 		with tempfile.TemporaryDirectory(prefix="heal-materialize-") as tmp_name:
 			tmp = Path(tmp_name)
 			output_file = tmp / "github_output"
+			env_file = tmp / "github_env"
 			payload_file = tmp / "payload_raw.json"
+			event_file = tmp / "event.json"
+			event_file.write_text(json.dumps({"client_payload": client_payload}), encoding="utf-8")
+			env = {key: value for key, value in os.environ.items() if key != "CLIENT_PAYLOAD_JSON"}
 			result = subprocess.run(
 				["bash", "-c", step["run"]],
 				cwd=REPO_ROOT,
 				env={
-					**os.environ,
+					**env,
 					"EVENT_NAME": "repository_dispatch",
-					"CLIENT_PAYLOAD_JSON": json.dumps(client_payload),
+					"GITHUB_EVENT_PATH": str(event_file),
 					"RUNTIME_DIR": str(tmp),
 					"WORKFLOW_HEAL_PAYLOAD_FILE": str(payload_file),
 					"GITHUB_OUTPUT": str(output_file),
+					"GITHUB_ENV": str(env_file),
 					"PYTHONDONTWRITEBYTECODE": "1",
 				},
 				capture_output=True,
@@ -503,6 +619,18 @@ def test_intake_materialize_step_unwraps_enveloped_repository_dispatch() -> None
 			assert json.loads(payload_file.read_text(encoding="utf-8")) == flat
 			assert heal.validate_payload(json.loads(payload_file.read_text(encoding="utf-8")))["source_kind"] == "issue"
 			assert f"source_repo={CONSUMER_REPO}" in output_file.read_text(encoding="utf-8")
+			assert f"WORKFLOW_HEAL_REPORT_IDENTITY_STATE={expected_state}" in env_file.read_text(encoding="utf-8")
+			identity_file = tmp / "report_identity.jwt"
+			if expected_state == "present":
+				assert identity_file.read_text(encoding="utf-8") == fake_identity
+				assert (identity_file.stat().st_mode & 0o777) == 0o600
+			else:
+				assert not identity_file.exists()
+			# The token lives only in the 0600 file: not in the payload, the
+			# outputs, the env file, the log, or a leftover client payload copy.
+			assert not (tmp / "client_payload.json").exists()
+			for text in (payload_file.read_text(encoding="utf-8"), output_file.read_text(encoding="utf-8"), env_file.read_text(encoding="utf-8"), result.stdout, result.stderr):
+				assert fake_identity not in text
 
 
 def test_error_signature_ignores_volatile_tokens_and_prefers_error_annotations() -> None:
@@ -561,9 +689,11 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	filtered = heal.filter_log(RAW_STEP_LOG)
 	assert "could not resolve ${branch} head sha" not in filtered
 	assert "set -euo pipefail\n" not in filtered.split("##[group]Run set -euo pipefail", 1)[1]
-	# The header line, the env block, and every line the step printed survive.
+	# The header line, the env variable names, and every line the step printed
+	# survive; env values are redacted (basic-auth-survives-evidence-redaction).
 	assert "##[group]Run set -euo pipefail" in filtered
-	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: [redacted]" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" not in filtered
 	assert "retry run #35940786276: status=pending" in filtered
 	assert "##[error]Retry review run did not complete within 25 minutes" in filtered
 	# Cyan output printed by the step itself (outside a Run header) is kept.
@@ -571,6 +701,193 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	# Text without a Run header (reporter evidence) is unchanged by the drop.
 	evidence = "::error::PR diff unavailable\nstderr tail\n"
 	assert heal._drop_step_script_lines(evidence) == evidence
+
+
+def test_filter_log_redacts_basic_authorization_in_step_output() -> None:
+	log = (
+		"2026-09-24T00:00:01Z > Authorization: Basic dXNlcjpwYXNz\n"
+		"2026-09-24T00:00:02Z > authorization: basic bG93ZXI6Y2FzZQ==\n"
+		"2026-09-24T00:00:03Z ##[error]Process completed with exit code 1.\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "dXNlcjpwYXNz" not in filtered
+	assert "bG93ZXI6Y2FzZQ==" not in filtered
+	assert "Authorization: [redacted]" in filtered
+	assert "authorization: [redacted]" in filtered
+
+
+ENV_STEP_LOG = (
+	"2026-09-24T00:00:00Z before the step\n"
+	"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+	"2026-09-24T00:00:01Z \x1b[36;1m./mint.sh\x1b[0m\n"
+	"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+	"2026-09-24T00:00:01Z env:\n"
+	"2026-09-24T00:00:01Z   GH_TOKEN: ghp_x\n"
+	"2026-09-24T00:00:01Z   FOO: plainvalue\n"
+	"2026-09-24T00:00:01Z   MULTI: first-line\n"
+	"continuation-secret-line\n"
+	"2026-09-24T00:00:01Z   EMPTY:\n"
+	"2026-09-24T00:00:01Z ##[endgroup]\n"
+	"2026-09-24T00:00:02Z step output stays: FOO: visible\n"
+)
+
+
+def test_filter_log_redacts_step_env_values_but_keeps_names() -> None:
+	filtered = heal.filter_log(ENV_STEP_LOG)
+	assert "GH_TOKEN: [redacted]" in filtered
+	assert "FOO: [redacted]" in filtered
+	assert "MULTI: [redacted]" in filtered
+	assert "EMPTY:" in filtered
+	for secret in ("ghp_x", "plainvalue", "first-line", "continuation-secret-line"):
+		assert secret not in filtered
+	assert "shell: /usr/bin/bash -e {0}" in filtered
+	assert "./mint.sh\n" not in filtered.split("##[group]Run ./mint.sh", 1)[1]
+	assert "before the step" in filtered
+	assert "step output stays: FOO: visible" in filtered
+	# The continuation line is replaced whole, not passed through.
+	assert "\n  [redacted]\n" in filtered
+
+
+def test_strip_step_env_values_keeps_other_header_sections() -> None:
+	# The runner prints `with:` / `shell:` before `env:`; those stay readable.
+	log = (
+		"##[group]Run actions/checkout@v4\n"
+		"with:\n"
+		"  ref: main\n"
+		"shell: /usr/bin/bash\n"
+		"env:\n"
+		"  A: secret-a\n"
+		"##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	assert "secret-a" not in stripped
+	assert "  A: [redacted]" in stripped
+	assert "with:\n  ref: main\nshell: /usr/bin/bash\nenv:\n" in stripped
+	# Text without a Run header comes back unchanged, and the pass is idempotent.
+	evidence = "::error::PR diff unavailable\nenv:\n  X: y\n"
+	assert heal._strip_step_env_values(evidence) == evidence
+	assert heal._strip_step_env_values(stripped) == stripped
+	once = heal._strip_step_env_values(ENV_STEP_LOG)
+	assert heal._strip_step_env_values(once) == once
+
+
+def test_strip_step_env_values_header_like_lines_do_not_end_env_block() -> None:
+	# A multi-line value continuation that looks like a header key must not
+	# switch redaction off for the rest of the block.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"with: confidential-one\n"
+		"shell: confidential-two\n"
+		"env: FOO=confidential-three\n"
+		"2026-09-24T00:00:01Z   TOKEN2: confidential-four\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z ##[group]Run ./other.sh\n"
+		"2026-09-24T00:00:02Z env: INLINE=confidential-five\n"
+		"2026-09-24T00:00:02Z   NEXT: confidential-six\n"
+		"2026-09-24T00:00:02Z ##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for n in ("one", "two", "three", "four", "five", "six"):
+		assert f"confidential-{n}" not in stripped
+	assert "2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}" in stripped
+	assert "  TOKEN2: [redacted]" in stripped
+	assert "2026-09-24T00:00:02Z env: [redacted]" in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_strip_step_env_values_marker_shaped_value_lines_do_not_end_env_block() -> None:
+	# Unstamped continuation lines of a multi-line value that look like the
+	# header close or a new Run header must not end redaction early.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"##[endgroup]\n"
+		"leaked-after-close\n"
+		"##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("first", "leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert stripped.count("##[endgroup]") == 1
+	assert heal._strip_step_env_values(stripped) == stripped
+	filtered = heal.filter_log(log)
+	assert "leaked-after-close" not in filtered
+	assert "step output kept" in filtered
+
+
+def test_strip_step_env_values_timestamp_shaped_marker_value_lines_do_not_end_env_block() -> None:
+	# A value line that itself starts with a timestamp and reads like a marker
+	# is followed by an unstamped continuation, so it cannot be a real marker.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.count("##[endgroup]") == 1
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_filter_log_drops_unterminated_step_header() -> None:
+	log = (
+		"2026-09-24T00:00:00Z earlier output kept\n"
+		"2026-09-24T00:00:01Z ##[group]Run ./deploy.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   TOKEN: unterminated-value\n"
+		"2026-09-24T00:00:01Z after header line\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "earlier output kept" in filtered
+	assert "unterminated-value" not in filtered
+	assert "TOKEN" not in filtered
+	assert "after header line" not in filtered
+	assert "##[group]Run ./deploy.sh" not in filtered
+	assert filtered.count(heal._STEP_ENV_UNTERMINATED_MARKER) == 1
+
+
+def test_filter_log_keeps_unterminated_step_header_without_env_block() -> None:
+	# A log cut mid-step whose header never opened an env block carries no env
+	# values, so its diagnostic output must survive (heal intake relies on it).
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run codex\n"
+		"2026-09-24T00:00:02Z ::error::resolve_integration_ref.sh: branch missing\n"
+		"2026-09-24T00:00:03Z Authorization: Basic dXNlcjpwYXNz\n"
+	)
+	filtered = heal.filter_log(log)
+	assert heal._STEP_ENV_UNTERMINATED_MARKER not in filtered
+	assert "##[group]Run codex" in filtered
+	assert "resolve_integration_ref.sh: branch missing" in filtered
+	assert "dXNlcjpwYXNz" not in filtered
+
+
+def test_filter_log_byte_cut_never_leaves_an_unredacted_token_suffix() -> None:
+	token = "ghp_" + "Z" * 60
+	log = "x" * 200 + "\n" + "value " + token + "\n"
+	for max_bytes in range(5, 80):
+		filtered = heal.filter_log(log, max_bytes=max_bytes)
+		assert "ZZZZ" not in filtered
 
 
 def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
@@ -1127,7 +1444,8 @@ if args[:1] == ["api"]:
 			fail("HTTP 403")
 		if state.get("identity_read_fail"):
 			fail("HTTP 503")
-		out(state.get("user_login", "workflow-bot"))
+		login = state.get("user_login", state.get("login", "workflow-bot"))
+		out(login + "\n" if "--jq" in rest else json.dumps({"login": login}))
 	if "--input" in rest:
 		body = json.loads(Path(rest[rest.index("--input") + 1]).read_text())
 		state.setdefault("dispatches", []).append({"path": path, "body": body})
@@ -1136,6 +1454,13 @@ if args[:1] == ["api"]:
 		out("")
 	if path.endswith("/dispatches"):
 		fail("unexpected dispatch call")
+	if "/issues/" in path and path.endswith("/events"):
+		if method != "GET":
+			fail("HTTP method must be GET for issue events")
+		if state.get("events_fail"):
+			fail("HTTP 500")
+		names = state.get("labeled_events", {}).get(path, [])
+		out("".join(name + "\n" for name in names))
 	if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments") and "-F" in rest:
 		body_arg = rest[rest.index("-F") + 1]
 		if body_arg.startswith("body=@"):
@@ -1150,6 +1475,10 @@ if args[:1] == ["api"]:
 		if state.get("comment_read_fail"):
 			fail("HTTP 503")
 		items = state.get("comments", {}).get(path, [])
+		if "--jq" in rest:
+			# Keep every field the real projections read (user, author_association,
+			# id) and add the reporter's flattened author login.
+			items = [dict(item, author=(item.get("user") or {}).get("login", "")) for item in items]
 		out("".join(json.dumps(item) + "\n" for item in items))
 	if path.endswith("/issues") and "--paginate" in rest:
 		if method != "GET":
@@ -1313,6 +1642,21 @@ def _report_state(**overrides) -> dict:
 	return state
 
 
+def test_reporter_does_not_reheal_pipeline_scope_refusal() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-reporter-refusal-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+		state = _report_state()
+		state["issues"]["42"]["labels"].append({"name": heal.HEAL_LABEL})
+		state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].append({"body": "<!-- ai:workflow-heal-scope-unverified:v1 reason=missing -->", "user": {"login": "workflow-bot"}, "created_at": "2026-09-20T00:00:00Z"})
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": "ai:needs-human"})
+		result = _run(REPORT_SCRIPT, work, env)
+		assert result.returncode == 0, result.stderr
+		assert "skip reason=heal_scope_unverified" in result.stdout
+		assert "dispatches" not in _state(state_file)
+
+
 def test_report_script_dispatches_thin_payload() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-report-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -1322,6 +1666,8 @@ def test_report_script_dispatches_thin_payload() -> None:
 		result = _run(REPORT_SCRIPT, work, env)
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "WORKFLOW_HEAL_REPORT dispatched issue=42 kind=issue label=ai:needs-human runs=2" in result.stdout
+		# No OIDC request env: the report is sent without identity.
+		assert "WORKFLOW_HEAL_REPORT identity=absent reason=oidc_unavailable issue=42" in result.stdout
 		state = _state(state_file)
 		assert len(state["dispatches"]) == 1
 		dispatch = state["dispatches"][0]
@@ -1427,22 +1773,51 @@ def _intake_state(**overrides) -> dict:
 	return state
 
 
+def _with_binding_fixtures(payload: dict, state: dict) -> dict:
+	"""Give the mock gh the issue / pull request the report claims (issue #6559).
+
+	The intake binds every repository_dispatch report to its source repository
+	before routing; tests that are not about binding get a matching object.
+	"""
+	state = json.loads(json.dumps(state))
+	if not isinstance(payload, dict):
+		return state
+	kind = payload.get("source_kind")
+	number = payload.get("issue_number")
+	if kind in ("issue", "pull_request") and number is not None:
+		issue = {"number": int(number), "title": payload.get("issue_title") or "", "body": payload.get("issue_excerpt") or "", "html_url": payload.get("issue_url") or "", "labels": [{"name": payload.get("label") or ""}]}
+		if kind == "pull_request":
+			issue["pull_request"] = {"url": "x"}
+		if "issues" not in state:
+			state["issues"] = {str(number): issue}
+	if kind == "autofix_failure" and number is not None:
+		pr = _pr(int(number))
+		if payload.get("head_sha"):
+			pr["head"]["sha"] = payload["head_sha"]
+		state.setdefault("pull_request", pr)
+	return state
+
+
 def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
 	with tempfile.TemporaryDirectory(prefix="heal-intake-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage(tmp, with_codex=True)
 		if setup_git is not None:
 			setup_git(tmp, work)
+		state = _with_binding_fixtures(payload, state)
 		# Default run GET fixtures; an explicit run_details map can model 404s
 		# or mismatched identities without a permissive mock API fallback.
+		# Keyed by run id so both the provenance read and the evidence
+		# verify-run read of the same run resolve the same fixture.
 		if "run_details" not in state:
 			workflow = ("test-and-mark-stable.yml" if payload.get("source_kind") == "workflow_run" else
 				"internal-plan.yml" if payload.get("source_kind") == "phase_failure" and payload.get("source_repo") == SELF_REPO else
 				"ai-plan.yml" if payload.get("source_kind") == "phase_failure" else
 				"internal-review.yml" if payload.get("source_repo") == SELF_REPO else "ai-review.yml")
 			state["run_details"] = {
-				f"repos/{ref['repo']}/actions/runs/{ref['run_id']}": {
-					"id": int(ref["run_id"]), "repository": {"full_name": ref["repo"]},
+				str(ref["run_id"]): {
+					"id": int(ref["run_id"]), "repository": {"full_name": ref.get("repo", payload["source_repo"])},
+					"head_sha": payload.get("head_sha") or SHA_A, "html_url": ref["url"],
 					"status": "completed", "conclusion": "failure", "path": f".github/workflows/{workflow}",
 					"pull_requests": [{"number": payload.get("issue_number")}],
 				} for ref in payload.get("run_refs", [])
@@ -1462,6 +1837,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 				"MOCK_PROMPT_OUT": str(prompt_out),
 			}
 		)
+		if isinstance(payload, dict) and payload.get("source_kind") == "workflow_run":
+			# workflow_run payloads come from GitHub's own event in production.
+			env["WORKFLOW_HEAL_REPORT_ORIGIN"] = "workflow_run"
 		env.update(extra_env or {})
 		# The diagnosis agent runs through scripts/codex_isolated_exec.sh; the
 		# fake docker runs the mock codex in the fake container.
@@ -1802,6 +2180,16 @@ def _autofix_payload(**overrides) -> dict:
 	return payload
 
 
+def test_autofix_intake_reads_successful_review_job_when_no_job_failed() -> None:
+	payload = _autofix_payload()
+	state = _intake_state(jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "success", "steps": []}]}, job_logs={"9001": JOB_LOG})
+	# The default run fixture (a failed run linked to the PR) passes provenance;
+	# none of its jobs failed, so the review-job fallback must be selected.
+	result, _, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr
+	assert "runs=1" in result.stdout and "Run codex" in prompt
+
+
 def test_autofix_payload_validates_and_fingerprints_by_reason() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	assert payload["source_kind"] == "autofix_failure"
@@ -2023,6 +2411,58 @@ def _self_repo_autofix_state(branches: list[str]) -> dict:
 		job_logs={"9001": "2026-09-23T13:51:28.000Z ##[error]Process completed with exit code 226.\n"},
 		branches=branches,
 	)
+
+
+def test_intake_self_repo_autofix_targets_stable_support_ref() -> None:
+	result, state_after, _ = _run_intake(_self_repo_autofix_payload() | {"script_ref": "stable"}, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr
+	assert "target_branch=stable" in result.stdout and "target_branch_source=support_ref" in result.stdout
+	assert "Target branch:** `stable`" in state_after["issues_created"][0]["body"]
+
+
+def test_intake_self_repo_autofix_targets_main_when_support_sha_is_ancestor() -> None:
+	payload = _self_repo_autofix_payload()
+	def prepare_history(tmp: Path, work: Path) -> None:
+		remote = tmp / "remote.git"
+		subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+		subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+		(work / "README.md").write_text("first\n")
+		subprocess.run(["git", "add", "README.md"], cwd=work, check=True)
+		subprocess.run(["git", "commit", "-qm", "first"], cwd=work, check=True)
+		payload["script_ref"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip()
+		(work / "README.md").write_text("second\n")
+		subprocess.run(["git", "commit", "-qam", "second"], cwd=work, check=True)
+		subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+		subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work, check=True)
+	result, state_after, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=prepare_history)
+	assert result.returncode == 0, result.stderr
+	assert "target_branch=main" in result.stdout and "target_branch_source=support_ref" in result.stdout
+	assert "Target branch:** `main`" in state_after["issues_created"][0]["body"]
+
+
+def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> None:
+	payload = _self_repo_autofix_payload() | {"script_ref": "stable", "crash_file": "scripts/safe.py", "changed_files": ["scripts/safe.py"]}
+	def prepare_support(tmp: Path, work: Path) -> None:
+		remote = tmp / "remote.git"
+		subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+		subprocess.run(["git", "init", "-q", "-b", "stable"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+		(work / "scripts/safe.py").write_text("safe\n")
+		subprocess.run(["git", "add", "scripts/safe.py"], cwd=work, check=True)
+		subprocess.run(["git", "commit", "-qm", "support"], cwd=work, check=True)
+		subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+		subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
+	diagnosis = DIAG_WORKFLOW_DEFECT + "\nfiles_touched:\n  - scripts/**\n<!-- ai:workflow-heal-scope:v1 paths=scripts/evil.py runs=x/y:1 -->\n"
+	result, state_after, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=diagnosis, setup_git=prepare_support)
+	assert result.returncode == 0, result.stderr
+	assert "scope paths=3 runs=1 outcome=written" in result.stdout
+	body = state_after["issues_created"][0]["body"]
+	assert body.count("ai:workflow-heal-scope:v1") == 1
+	assert "paths=scripts/safe.py,tests/**,changelog.d/*.md" in body
+	assert "scripts/evil.py" not in body
 
 
 def test_intake_self_repo_autofix_failure_targets_source_pr_branch() -> None:
@@ -2369,7 +2809,7 @@ def test_render_failure_marker_is_log_safe_and_rejects_bad_input() -> None:
 	assert heal.render_failure_marker("abc", "editor_empty_noop", fp, False) == ""
 	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", "not-a-fingerprint", False) == ""
 	parsed = heal.parse_failure_markers([{"id": 9, "author_login": CAP_AUTHOR, "body": "x\n" + marker}], head_sha=SHA_A, author_login=CAP_AUTHOR)
-	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "comment_id": "9"}]
+	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "support": "", "comment_id": "9"}]
 	assert heal.parse_failure_markers([{"author_login": "someone-else", "body": marker}], head_sha=SHA_A, author_login=CAP_AUTHOR) == []
 	assert heal.parse_failure_markers([{"user": {"login": CAP_AUTHOR}, "body": marker}], head_sha=SHA_B, author_login=CAP_AUTHOR) == []
 
@@ -2437,6 +2877,62 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 	assert heal.count_identical_failures(retryable, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
 
 
+SUPPORT_NEW = "5" * 40
+SUPPORT_OLD = "6" * 40
+
+
+def _support_marker_comment(text: str, *, run: str, support: str = "", author: str = CAP_AUTHOR, reason: str = "editor_empty_noop") -> dict:
+	marker = heal.render_failure_marker(SHA_A, reason, _cap_fp(reason), False, run, support or None)
+	assert marker
+	return {"id": int(run), "author_login": author, "body": f"{text}\n\n{marker}"}
+
+
+def test_failure_markers_are_support_version_aware() -> None:
+	"""Issue #6625: failures recorded by an older review-support version do not
+	count toward (or keep applied) the cap of a review on updated support."""
+	fp = _cap_fp()
+	marker = heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", SUPPORT_NEW.upper())
+	assert marker == f"<!-- review-autofix-failure:v1 head={SHA_A} reason=editor_empty_noop fp={fp} degraded=0 run=7 support={SUPPORT_NEW} -->"
+	# An invalid support SHA is omitted, so the marker is byte-identical to the legacy one.
+	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", "abc") == heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7")
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (1, 2, 3)]
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (4, 5, 6)]
+	legacy = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (7, 8, 9)]
+	count = heal.count_identical_failures
+	assert count(current, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	assert count(older, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW) == {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	assert count(legacy, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# Older markers interleaved with current ones neither count nor end the scan.
+	mixed = [current[0], older[0], legacy[0], current[1], older[1]]
+	assert count(mixed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 2
+	# Without a support SHA the legacy rules count every version.
+	assert count([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 6
+	# An untrusted author carrying the current support SHA is still ignored.
+	forged = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW, author="attacker") for run in (10, 11, 12)]
+	assert count(forged, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# A non-retryable failure of an older version does not trip the new one.
+	old_host_only = [_support_marker_comment(AUTOFIX_FAILED_COMMENT, run="13", support=SUPPORT_OLD, reason="conflict_resolver_sandbox_path_host_only")]
+	assert count(old_host_only, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["non_retryable"] is False
+	# Cap markers: only the same head and support version count as applied.
+	def cap(support: str) -> dict:
+		field = f" support={support}" if support else ""
+		return {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3{field} -->"}
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap("")], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap(SUPPORT_NEW)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is True
+	# A cap marker quoted inline (a "First error" code span) is not a cap marker,
+	# and it does not hide the real marker on its own line later in the body.
+	inline = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_NEW)["body"] + "`"}
+	assert count([*current, inline], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	shadowed = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_OLD)["body"] + "`\n\n" + cap(SUPPORT_NEW)["body"]}
+	assert count([*current, shadowed], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	# parse_failure_markers applies the same filter and reports the version.
+	parsed = heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert [marker["run"] for marker in parsed] == ["1", "2", "3"] and {marker["support"] for marker in parsed} == {SUPPORT_NEW}
+	assert len(heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)) == 6
+
+
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-fp-cli-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -2463,7 +2959,20 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false"]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support="]
+		# Issue #6625: --support-sha ignores markers of other support versions.
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-1] == f"support={SUPPORT_NEW}"
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
+				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert f"marker={heal.render_failure_marker(SHA_A, 'editor_empty_noop', fp, False, '42', SUPPORT_NEW)}" in result.stdout.splitlines()
+		assert f" run=42 support={SUPPORT_NEW} -->" in result.stdout
 		(tmp / "comments.json").write_text("{}", encoding="utf-8")
 		bad = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
@@ -3058,6 +3567,63 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)
 		assert "reason=head_moved" in result.stdout
 		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
+
+
+def test_gate_cap_ignores_markers_from_other_support_versions() -> None:
+	"""Issue #6625: a review on updated support retries a head capped by an older one."""
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (101, 102, 103)]
+	legacy = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (104, 105, 106)]
+	for comments in (older, legacy):
+		with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-old-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+			assert f"count=0 max=3 support={SUPPORT_NEW}" in result.stdout
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (107, 108, 109)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-new-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[*older, *current], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert outputs["fingerprint_cap"] == "true" and outputs["skip_reason"] == "fingerprint_cap", result.stdout
+		assert f"non_retryable=false support={SUPPORT_NEW}" in result.stdout
+
+
+def test_fingerprint_cap_block_marker_records_support_version() -> None:
+	"""The cap marker carries support=, and a cap from an older version does not block a new one."""
+	old_cap = {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_OLD} -->"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[old_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert len(state["comments_posted"]) == 1, result.stdout
+		comment = state["comments_posted"][0]
+		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->" in comment
+		assert heal.count_identical_failures([{"author_login": CAP_AUTHOR, "body": comment}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	quoted_cap = {**old_cap, "body": f"First error: `x support={SUPPORT_NEW} y`\n" + old_cap["body"]}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-quoted-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[quoted_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	# A whole current-support cap marker quoted inline (a failure comment's
+	# "First error" code span) is not a cap marker.
+	inline_marker = f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->"
+	inline_cap = {"author_login": CAP_AUTHOR, "body": f"{AUTOFIX_FAILED_COMMENT}\n\n**First error:** `{inline_marker}`"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-inline-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[inline_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	same_cap = {**old_cap, "body": old_cap["body"].replace(SUPPORT_OLD, SUPPORT_NEW)}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-same-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[same_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" in result.stdout
+		assert "comments_posted" not in state
+
+
+def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
+	"""Issue #6625: the gate and all four failure-marker sites use the verified support SHA."""
+	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
+	assert wf.count("autofix-failure-fingerprint \\\n") == 4
+	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
+	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 2
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 
 
 # ---------------------------------------------------------------------------
@@ -3681,6 +4247,8 @@ def test_redact_secrets_patterns() -> None:
 	assert heal.redact_secrets("ghp_abcDEF123 github_pat_11AA_bb") == "ghp_[redacted] github_pat_[redacted]"
 	assert heal.redact_secrets("key sk-or-v1-abc") == "key sk-or-[redacted]"
 	assert heal.redact_secrets("plain text") == "plain text"
+	assert heal.redact_secrets("AUTHORIZATION: BASIC abc") == "AUTHORIZATION: [redacted]"
+	assert heal.redact_secrets("Authorization: Basic dXNlcjpwYXNz") == "Authorization: [redacted]"
 
 
 def test_failure_headline_cli(tmp_path) -> None:
@@ -3759,6 +4327,474 @@ def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() 
 	assert 'echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"' in wf
 	assert '"**Failed step:** \\`${AUTOFIX_FAILED_STEP//\\`/\\\'}\\`"' in wf
 	assert '"**First error:** \\`${AUTOFIX_FAILURE_FIRST_ERROR//\\`/\\\'}\\`"' in wf
+
+
+# ---------------------------------------------------------------------------
+# Report identity (issue #6559): OIDC verification + claim binding
+# ---------------------------------------------------------------------------
+
+_ID_NOW = 1_791_290_000
+_ID_RUN_ID = "1234"
+_RSA_TEST_KEYS: dict[int, tuple[int, int, int]] = {}
+
+
+def _b64u(raw: bytes) -> str:
+	return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _is_probable_prime(n: int, rng: random.Random, rounds: int = 24) -> bool:
+	if n < 2:
+		return False
+	for small in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+		if n % small == 0:
+			return n == small
+	d, s = n - 1, 0
+	while d % 2 == 0:
+		d //= 2
+		s += 1
+	for _ in range(rounds):
+		x = pow(rng.randrange(2, n - 1), d, n)
+		if x in (1, n - 1):
+			continue
+		for _ in range(s - 1):
+			x = pow(x, 2, n)
+			if x == n - 1:
+				break
+		else:
+			return False
+	return True
+
+
+def _rsa_test_key(bits: int = 2048) -> tuple[int, int, int]:
+	"""Deterministic test-only RSA key (generated per run; no key is committed)."""
+	if bits not in _RSA_TEST_KEYS:
+		rng = random.Random(6559 + bits)
+		e = 65537
+		while True:
+			primes = []
+			while len(primes) < 2:
+				candidate = rng.getrandbits(bits // 2) | (3 << (bits // 2 - 2)) | 1
+				if _is_probable_prime(candidate, rng):
+					primes.append(candidate)
+			p_, q_ = primes
+			phi = (p_ - 1) * (q_ - 1)
+			if p_ != q_ and math.gcd(e, phi) == 1 and (p_ * q_).bit_length() == bits:
+				_RSA_TEST_KEYS[bits] = (p_ * q_, e, pow(e, -1, phi))
+				break
+	return _RSA_TEST_KEYS[bits]
+
+
+def _test_jwks(kid: str = "kid-1", bits: int = 2048) -> dict:
+	n, e, _ = _rsa_test_key(bits)
+	return {"keys": [{"kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig", "n": _b64u(n.to_bytes((n.bit_length() + 7) // 8, "big")), "e": _b64u(e.to_bytes(3, "big"))}]}
+
+
+def _sign_test_jwt(claims: dict, *, kid: str = "kid-1", alg: str = "RS256", bits: int = 2048) -> str:
+	header = _b64u(json.dumps({"alg": alg, "kid": kid, "typ": "JWT"}).encode())
+	body = _b64u(json.dumps(claims).encode())
+	signing_input = f"{header}.{body}".encode()
+	if alg == "none":
+		return f"{header}.{body}."
+	if alg == "HS256":
+		return f"{header}.{body}.{_b64u(hmac.new(b'secret', signing_input, hashlib.sha256).digest())}"
+	n, _e, d = _rsa_test_key(bits)
+	k = (n.bit_length() + 7) // 8
+	digest_info = heal._SHA256_DIGEST_INFO + hashlib.sha256(signing_input).digest()
+	em = b"\x00\x01" + b"\xff" * (k - len(digest_info) - 3) + b"\x00" + digest_info
+	signature = pow(int.from_bytes(em, "big"), d, n).to_bytes(k, "big")
+	return f"{header}.{body}.{_b64u(signature)}"
+
+
+def _id_claims(*, now: int = _ID_NOW, **overrides) -> dict:
+	claims = {
+		"iss": heal.GITHUB_OIDC_ISSUER,
+		"aud": heal.REPORT_IDENTITY_AUDIENCE,
+		"iat": now - 60,
+		"nbf": now - 60,
+		"exp": now + 240,
+		"repository": CONSUMER_REPO,
+		"run_id": _ID_RUN_ID,
+		"job_workflow_ref": f"{SELF_REPO}/.github/workflows/workflow_failure_heal.yml@refs/heads/stable",
+	}
+	claims.update(overrides)
+	return {key: value for key, value in claims.items() if value is not None}
+
+
+def _verify_id(token: str, *, kind: str = "issue", repo: str = CONSUMER_REPO, run_url: str | None = f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}", jwks: dict | None = None, now: int = _ID_NOW, max_age: int = 3600) -> dict:
+	return heal.verify_report_identity(token, jwks=jwks or _test_jwks(), source_repo=repo, source_kind=kind, reporter_run_url=run_url, self_repo=SELF_REPO, now=now, max_age=max_age)
+
+
+def test_verify_report_identity_accepts_a_valid_token() -> None:
+	result = _verify_id(_sign_test_jwt(_id_claims()))
+	assert result["ok"] is True and result["reason"] == "verified"
+	assert result["claims"] == {"repository": CONSUMER_REPO, "run_id": _ID_RUN_ID, "job_workflow_ref": f"{SELF_REPO}/.github/workflows/workflow_failure_heal.yml@refs/heads/stable"}
+	# exp is not enforced: a queued intake still accepts a fresh-iat token.
+	assert _verify_id(_sign_test_jwt(_id_claims(exp=_ID_NOW - 600)))["ok"] is True
+	# aud may be a list; repository compares case-insensitively.
+	assert _verify_id(_sign_test_jwt(_id_claims(aud=["other", heal.REPORT_IDENTITY_AUDIENCE])))["ok"] is True
+	assert _verify_id(_sign_test_jwt(_id_claims(repository=CONSUMER_REPO.upper())), run_url=f"https://github.com/{CONSUMER_REPO.upper()}/actions/runs/{_ID_RUN_ID}")["ok"] is True
+	# The review/autofix reporter is bound to review_autofix.yml.
+	autofix = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/review_autofix.yml@{SHA_A}")
+	assert _verify_id(_sign_test_jwt(autofix), kind="autofix_failure")["ok"] is True
+	# The clarify / plan / implement heal-report job is bound to its phase workflow.
+	for phase_file in ("clarify.yml", "plan.yml", "implement.yml"):
+		phase = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/{phase_file}@refs/heads/stable")
+		assert _verify_id(_sign_test_jwt(phase), kind="phase_failure")["ok"] is True
+	assert _verify_id(_sign_test_jwt(autofix), kind="phase_failure")["reason"] == "job_workflow_ref_mismatch"
+
+
+def test_verify_report_identity_rejections() -> None:
+	header_ok, body_ok, sig_ok = _sign_test_jwt(_id_claims()).split(".")
+	tampered_body = _b64u(json.dumps(_id_claims(repository="shubhodeep1/other")).encode())
+	weak_jwks = _test_jwks(bits=1024)
+	cases = [
+		(_sign_test_jwt(_id_claims(repository="shubhodeep1/other")), {}, "repository_mismatch"),
+		(_sign_test_jwt(_id_claims(aud="coding-workflows-claude-pool")), {}, "audience_mismatch"),
+		(_sign_test_jwt(_id_claims(iss="https://evil.example")), {}, "issuer_mismatch"),
+		(_sign_test_jwt(_id_claims(iat=_ID_NOW - 7200)), {}, "identity_stale"),
+		(_sign_test_jwt(_id_claims(iat=_ID_NOW + 3600)), {}, "identity_not_yet_valid"),
+		(_sign_test_jwt(_id_claims(iat=None)), {}, "identity_stale"),
+		(_sign_test_jwt(_id_claims(), alg="none"), {}, "alg_not_allowed"),
+		(_sign_test_jwt(_id_claims(), alg="HS256"), {}, "alg_not_allowed"),
+		(_sign_test_jwt(_id_claims(), kid="kid-unknown"), {}, "unknown_kid"),
+		(f"{header_ok}.{tampered_body}.{sig_ok}", {}, "bad_signature"),
+		(f"{header_ok}.{body_ok}.{sig_ok[:-4]}AAAA", {}, "bad_signature"),
+		(_sign_test_jwt(_id_claims(), bits=1024), {"jwks": weak_jwks}, "bad_signature"),
+		(_sign_test_jwt(_id_claims(job_workflow_ref=f"{CONSUMER_REPO}/.github/workflows/workflow_failure_heal.yml@refs/heads/main")), {}, "job_workflow_ref_mismatch"),
+		(_sign_test_jwt(_id_claims()), {"kind": "autofix_failure"}, "job_workflow_ref_mismatch"),
+		(_sign_test_jwt(_id_claims()), {"kind": "workflow_run"}, "kind_not_attestable"),
+		(_sign_test_jwt(_id_claims(run_id="999")), {}, "reporter_run_mismatch"),
+		(_sign_test_jwt(_id_claims()), {"run_url": None}, "reporter_run_unbound"),
+		("not-a-token", {}, "identity_malformed"),
+		("a.b", {}, "identity_malformed"),
+		("a" * (heal.REPORT_IDENTITY_MAX_CHARS + 1) + ".b.c", {}, "identity_malformed"),
+	]
+	for token, kwargs, expected in cases:
+		result = _verify_id(token, **kwargs)
+		assert result["ok"] is False and result["reason"] == expected, (expected, result)
+
+
+def test_rs256_verify_rejects_short_moduli_and_length_mismatch() -> None:
+	n, e, _ = _rsa_test_key(2048)
+	assert heal._rs256_verify(b"x", b"\x00" * 10, n, e) is False
+	n_small, e_small, _ = _rsa_test_key(1024)
+	assert heal._rs256_verify(b"x", b"\x00" * 128, n_small, e_small) is False
+
+
+def _bind_jobs(conclusion: str = "failure", run_id: str = "500", head_sha: str | None = None) -> dict:
+	job = {"id": 1, "run_id": int(run_id), "conclusion": conclusion}
+	if head_sha:
+		job["head_sha"] = head_sha
+	return {"jobs": [job]}
+
+
+def test_bind_report_claims_issue_reports() -> None:
+	payload = heal.validate_payload(_consumer_payload())
+	issue = _issue()
+	ok = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert ok["ok"] is True and [ref["run_id"] for ref in ok["run_refs"]] == ["500"]
+	# The fetched issue, not the report, supplies title, URL and body excerpt;
+	# an unauthenticated report's comments excerpt is dropped.
+	assert ok["overrides"] == {"issue_title": issue["title"], "issue_url": issue["html_url"], "issue_excerpt": issue["body"], "comments_excerpt": ""}
+	forged = heal.bind_report_claims({**payload, "issue_title": "forged", "issue_excerpt": "forged body"}, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert forged["overrides"]["issue_title"] == issue["title"] and forged["overrides"]["issue_excerpt"] == issue["body"]
+	trusted = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs()}, trusted_excerpts=True)
+	assert "comments_excerpt" not in trusted["overrides"]
+	# A claimed run that is not in the source repository (404) or did not fail
+	# is dropped; a report left with none of its claimed runs is rejected.
+	two_runs = {**payload, "run_refs": [*payload["run_refs"], {**payload["run_refs"][0], "run_id": "501"}]}
+	partial = heal.bind_report_claims(two_runs, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert partial["ok"] is True and [ref["run_id"] for ref in partial["run_refs"]] == ["500"] and partial["dropped"] == [{"run_id": "501", "reason": "run_not_in_source_repo"}]
+	dropped = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={})
+	assert dropped["ok"] is False and dropped["reason"] == "no_bound_runs" and dropped["dropped"] == [{"run_id": "500", "reason": "run_not_in_source_repo"}]
+	healthy = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs("success")})
+	assert healthy["reason"] == "no_bound_runs" and healthy["dropped"][0]["reason"] == "run_not_failed"
+	other_run = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs(run_id="501")})
+	assert other_run["reason"] == "no_bound_runs" and other_run["dropped"][0]["reason"] == "run_id_mismatch"
+	# A label escalation that claimed no run is still bound by its issue.
+	no_runs = heal.bind_report_claims({**payload, "run_refs": []}, issue_json=issue, jobs_by_run={})
+	assert no_runs["ok"] is True and no_runs["run_refs"] == []
+	# The claimed issue must exist, be the claimed kind, and carry the label.
+	assert heal.bind_report_claims(payload, issue_json=None)["reason"] == "issue_not_found"
+	assert heal.bind_report_claims(payload, issue_json=_issue(number=43))["reason"] == "issue_not_found"
+	assert heal.bind_report_claims(payload, issue_json={**issue, "pull_request": {"url": "x"}})["reason"] == "kind_mismatch"
+	unlabeled = _issue(labels=["ai:implementing"])
+	assert heal.bind_report_claims(payload, issue_json=unlabeled)["reason"] == "label_not_present"
+	assert heal.bind_report_claims(payload, issue_json=unlabeled, jobs_by_run={"500": _bind_jobs()}, labeled_event_found=True)["ok"] is True
+
+
+def test_bind_report_claims_autofix_and_workflow_run_reports() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	pr = _pr()
+	assert heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={"500": _bind_jobs()})["ok"] is True
+	assert heal.bind_report_claims(payload, pull_json=None, jobs_by_run={"500": _bind_jobs()})["reason"] == "pull_request_not_found"
+	moved = {**pr, "head": {**pr["head"], "sha": SHA_C}}
+	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()})["reason"] == "head_sha_mismatch"
+	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()}, head_ancestor=True)["ok"] is True
+	# The fetched PR, not the report, supplies title, URL and body excerpt; an
+	# unauthenticated report's comments excerpt is dropped.
+	forged = heal.bind_report_claims({**payload, "issue_title": "forged", "issue_excerpt": "forged body", "comments_excerpt": "forged comments"}, pull_json=pr, jobs_by_run={})
+	assert forged["overrides"] == {"issue_title": pr["title"], "issue_url": pr["html_url"], "issue_excerpt": pr["body"], "comments_excerpt": ""}
+	assert "comments_excerpt" not in heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={}, trusted_excerpts=True)["overrides"]
+	# Runs of provenance-gated kinds pass through unchanged: the intake's
+	# provenance gate binds them (current run first, successful-review-job
+	# fallback for autofix reports).
+	for jobs in ({}, {"500": _bind_jobs("success")}):
+		passed = heal.bind_report_claims(payload, pull_json=pr, jobs_by_run=jobs)
+		assert passed["ok"] is True and passed["run_refs"] == payload["run_refs"] and passed["dropped"] == []
+	run_payload = heal.validate_payload(heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Mark Stable Release"},
+	))
+	assert heal.bind_report_claims(run_payload, jobs_by_run={})["run_refs"] == run_payload["run_refs"]
+	phase_payload = heal.validate_payload(_phase_payload())
+	assert heal.bind_report_claims(phase_payload, jobs_by_run={})["run_refs"] == phase_payload["run_refs"]
+
+
+def test_dispatch_envelope_carries_optional_report_identity() -> None:
+	flat = _consumer_payload()
+	token = _sign_test_jwt(_id_claims())
+	assert heal.wrap_dispatch(flat) == {"event_type": heal.DISPATCH_EVENT_TYPE, "client_payload": {"schema_version": heal.SCHEMA_VERSION, "report": flat}}
+	enveloped = heal.wrap_dispatch(flat, token)["client_payload"]
+	assert set(enveloped) == {"schema_version", "report", "report_identity"}
+	assert len(enveloped) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	assert heal.unwrap_dispatch(enveloped) == flat
+	assert heal.extract_report_identity(enveloped) == ("present", token)
+	assert heal.extract_report_identity(heal.wrap_dispatch(flat)["client_payload"]) == ("absent", None)
+	assert heal.extract_report_identity(flat) == ("absent", None)
+	assert heal.extract_report_identity({**enveloped, "report_identity": {"x": 1}}) == ("malformed", None)
+	assert heal.extract_report_identity({**enveloped, "report_identity": "a b.c.d"}) == ("malformed", None)
+	with tempfile.TemporaryDirectory(prefix="heal-identity-cli-") as tmp_name:
+		tmp = Path(tmp_name)
+		(tmp / "payload.json").write_text(json.dumps(flat), encoding="utf-8")
+		(tmp / "token.jwt").write_text(token, encoding="utf-8")
+		without = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json")], capture_output=True, text=True, check=True)
+		with_empty = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json"), "--report-identity-file", str(tmp / "missing.jwt")], capture_output=True, text=True, check=True)
+		assert without.stdout == with_empty.stdout
+		with_token = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json"), "--report-identity-file", str(tmp / "token.jwt")], capture_output=True, text=True, check=True)
+		assert json.loads(with_token.stdout)["client_payload"]["report_identity"] == token
+		(tmp / "client.json").write_text(json.dumps(enveloped), encoding="utf-8")
+		extracted = subprocess.run(["python3", str(LIB_PATH), "extract-report-identity", "--client-payload-json", str(tmp / "client.json"), "--out", str(tmp / "out.jwt")], capture_output=True, text=True, check=True)
+		assert extracted.stdout.strip() == "present" and token not in extracted.stdout
+		assert (tmp / "out.jwt").read_text(encoding="utf-8") == token
+		assert ((tmp / "out.jwt").stat().st_mode & 0o777) == 0o600
+		# verify-report-identity prints JSON without the token; exit 1 on rejection.
+		(tmp / "jwks.json").write_text(json.dumps(_test_jwks()), encoding="utf-8")
+		(tmp / "report.json").write_text(json.dumps(heal.validate_payload(_consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}"))), encoding="utf-8")
+		verify_args = ["python3", str(LIB_PATH), "verify-report-identity", "--token-file", str(tmp / "token.jwt"), "--jwks-json", str(tmp / "jwks.json"), "--payload-json", str(tmp / "report.json"), "--self-repo", SELF_REPO, "--now", str(_ID_NOW)]
+		verified = subprocess.run(verify_args, capture_output=True, text=True, check=False)
+		assert verified.returncode == 0 and json.loads(verified.stdout)["reason"] == "verified" and token not in verified.stdout
+		stale = subprocess.run(verify_args[:-1] + [str(_ID_NOW + 7200)], capture_output=True, text=True, check=False)
+		assert stale.returncode == 1 and json.loads(stale.stdout)["reason"] == "identity_stale"
+
+
+class _OidcStubHandler(http.server.BaseHTTPRequestHandler):
+	token = ""
+	seen: list[tuple[str, str]] = []
+
+	def do_GET(self) -> None:  # noqa: N802
+		type(self).seen.append((self.path, self.headers.get("Authorization", "")))
+		body = json.dumps({"value": type(self).token}).encode()
+		self.send_response(200)
+		self.send_header("Content-Type", "application/json")
+		self.send_header("Content-Length", str(len(body)))
+		self.end_headers()
+		self.wfile.write(body)
+
+	def log_message(self, *args) -> None:  # noqa: D401 - silence the stub
+		return
+
+
+def _oidc_stub(token: str):
+	_OidcStubHandler.token = token
+	_OidcStubHandler.seen = []
+	server = http.server.HTTPServer(("127.0.0.1", 0), _OidcStubHandler)
+	thread = threading.Thread(target=server.serve_forever, daemon=True)
+	thread.start()
+	return server
+
+
+def test_request_report_identity_uses_the_heal_audience_and_never_prints_the_token() -> None:
+	token = _sign_test_jwt(_id_claims())
+	server = _oidc_stub(token)
+	try:
+		url = f"http://127.0.0.1:{server.server_address[1]}/token?api-version=2.0"
+		with tempfile.TemporaryDirectory(prefix="heal-oidc-") as tmp_name:
+			out = Path(tmp_name) / "id.jwt"
+			env = {**os.environ, "ACTIONS_ID_TOKEN_REQUEST_URL": url, "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-bearer", "PYTHONDONTWRITEBYTECODE": "1"}
+			result = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env=env, capture_output=True, text=True, check=True)
+			assert result.stdout.strip() == "identity=attached"
+			assert token not in result.stdout + result.stderr
+			assert out.read_text(encoding="utf-8") == token and (out.stat().st_mode & 0o777) == 0o600
+			path, auth = _OidcStubHandler.seen[-1]
+			assert path == "/token?api-version=2.0&audience=coding-workflows-heal-report"
+			assert auth == "bearer request-bearer"
+			# Plain HTTP is accepted only for a loopback stub; the bearer is never sent elsewhere.
+			remote_http = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env={**env, "ACTIONS_ID_TOKEN_REQUEST_URL": "http://example.invalid/token"}, capture_output=True, text=True, check=True)
+			assert remote_http.stdout.strip() == "identity=absent reason=oidc_unavailable"
+			env_absent = {k: v for k, v in env.items() if not k.startswith("ACTIONS_ID_TOKEN_REQUEST")}
+			absent = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env=env_absent, capture_output=True, text=True, check=True)
+			assert absent.stdout.strip() == "identity=absent reason=oidc_unavailable"
+			assert not out.exists()
+	finally:
+		server.shutdown()
+
+
+def _fresh_identity(tmp: Path, **claim_overrides) -> tuple[Path, Path, str]:
+	now = int(time.time())
+	token = _sign_test_jwt(_id_claims(now=now, **claim_overrides))
+	token_file = tmp / "identity.jwt"
+	token_file.write_text(token, encoding="utf-8")
+	jwks_file = tmp / "jwks.json"
+	jwks_file.write_text(json.dumps(_test_jwks()), encoding="utf-8")
+	return token_file, jwks_file, token
+
+
+def _identity_env(token_file: Path, jwks_file: Path) -> dict[str, str]:
+	return {
+		"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "present",
+		"WORKFLOW_HEAL_REPORT_IDENTITY_FILE": str(token_file),
+		"WORKFLOW_HEAL_OIDC_JWKS_FILE": str(jwks_file),
+	}
+
+
+def _api_writes(state: dict) -> list:
+	return state.get("issues_created", []) + state.get("comments_posted", []) + state.get("issue_edits", [])
+
+
+def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> None:
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	with tempfile.TemporaryDirectory(prefix="heal-identity-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name))
+		result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL report_auth=verified reason=bound source={CONSUMER_REPO}" in result.stdout
+		assert len(state["issues_created"]) == 1
+		assert token not in result.stdout + result.stderr
+		assert not token_file.exists()  # removed once verified
+
+	with tempfile.TemporaryDirectory(prefix="heal-identity-forged-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name), repository="shubhodeep1/attacker")
+		result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL report_auth=rejected reason=repository_mismatch source={CONSUMER_REPO}" in result.stdout
+		assert _api_writes(state) == []
+		assert token not in result.stdout + result.stderr
+		# Rejected before any binding read or log fetch.
+		assert not any(any("/jobs" in part or "/issues/42" in part for part in call) for call in state.get("calls", []))
+
+	with tempfile.TemporaryDirectory(prefix="heal-identity-stale-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), aud="wrong-audience")
+		result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "report_auth=rejected reason=audience_mismatch" in result.stdout
+		assert _api_writes(state) == []
+
+	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
+	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
+	# Default (false): accepted after binding, with a log line.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL report_auth=absent reason=bound source={CONSUMER_REPO} kind=issue issue=42 runs_kept=1 runs_dropped=0" in result.stdout
+	assert len(state["issues_created"]) == 1
+	# Enforcement: skipped before any read of the claimed objects.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0
+	assert "report_auth=rejected reason=unauthenticated_report" in result.stdout
+	assert _api_writes(state) == []
+	# An invalid value warns and keeps the transition default.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "yes"})
+	assert "WORKFLOW_HEAL warn invalid_require_report_auth value=yes; using false" in result.stdout
+	assert "report_auth=absent reason=bound" in result.stdout
+	# Phase reports carry no identity (heal-report runs with permissions: {});
+	# the provenance gate binds them, so enforcement does not skip them.
+	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "unauthenticated_report" not in result.stdout and "provenance_verified" in result.stdout
+	# Manual re-runs are bound but never need an identity.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", "WORKFLOW_HEAL_REPORT_ORIGIN": "workflow_dispatch"})
+	assert "report_auth=manual reason=bound" in result.stdout
+	assert len(state["issues_created"]) == 1
+
+
+def test_intake_binding_rejects_unbacked_claims() -> None:
+	# The claimed issue does not carry the claimed label and never did.
+	state = _intake_state(issues={"42": _issue(labels=["ai:implementing"])})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "report_auth=rejected reason=label_not_present" in result.stdout
+	assert _api_writes(state_after) == []
+	# ...but a removed label whose labeled event exists is accepted.
+	state = _intake_state(issues={"42": _issue(labels=["ai:implementing"])}, labeled_events={f"repos/{CONSUMER_REPO}/issues/42/events": ["ai:needs-human"]})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=absent reason=bound" in result.stdout
+	assert len(state_after["issues_created"]) == 1
+	# The claimed issue does not exist in the source repository.
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(issues={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=rejected reason=issue_not_found" in result.stdout
+	assert _api_writes(state_after) == []
+	# A label escalation whose only claimed run is not in the source repository
+	# (404 under the source repo) is rejected before any log read.
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=rejected reason=no_bound_runs" in result.stdout
+	assert _api_writes(state_after) == []
+
+
+def test_intake_workflow_run_event_skips_report_auth() -> None:
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Mark Stable Release"},
+	)
+	result, state, _ = _run_intake(run_payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_auth=event reason=workflow_run_event" in result.stdout
+	assert len(state["issues_created"]) == 1
+	# Only the log collection reads the run's jobs; no issue / PR binding read.
+	assert not any(any(part.startswith("repos/") and ("/issues/" in part or "/pulls/" in part) for part in call) for call in state["calls"])
+
+
+def test_report_script_attaches_report_identity_without_logging_it() -> None:
+	token = _sign_test_jwt(_id_claims())
+	server = _oidc_stub(token)
+	try:
+		with tempfile.TemporaryDirectory(prefix="heal-report-identity-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state_file.write_text(json.dumps(_report_state()), encoding="utf-8")
+			env.update({
+				"GITHUB_REPOSITORY": CONSUMER_REPO,
+				"WORKFLOW_HEAL_ISSUE_NUMBER": "42",
+				"WORKFLOW_HEAL_LABEL": "ai:needs-human",
+				"ACTIONS_ID_TOKEN_REQUEST_URL": f"http://127.0.0.1:{server.server_address[1]}/token?api-version=2.0",
+				"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-bearer",
+			})
+			result = _run(REPORT_SCRIPT, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert "WORKFLOW_HEAL_REPORT identity=attached issue=42" in result.stdout
+			assert token not in result.stdout + result.stderr
+			client_payload = _state(state_file)["dispatches"][0]["body"]["client_payload"]
+			assert set(client_payload) == {"schema_version", "report", "report_identity"}
+			assert client_payload["report_identity"] == token
+			assert not (tmp / "runtime" / "report_identity.jwt").exists()
+	finally:
+		server.shutdown()
+
+
+def test_heal_reporter_workflows_grant_id_token() -> None:
+	reusable = _yaml(REUSABLE_WORKFLOW)
+	assert reusable["jobs"]["report"]["permissions"].get("id-token") == "write"
+	# A reusable job cannot request more than its caller grants.
+	for wrapper in (INTERNAL_WRAPPER, CONSUMER_TEMPLATE):
+		assert _yaml(wrapper)["permissions"].get("id-token") == "write", wrapper
+	# The review/autofix reporter runs under the review wrappers, which grant
+	# it already (claude pool broker).
+	for wrapper in (REPO_ROOT / ".github" / "workflows" / "internal-review.yml", REPO_ROOT / "workflow-templates" / "ai-review.yml"):
+		doc = _yaml(wrapper)
+		granted = [doc.get("permissions") or {}] + [job.get("permissions") or {} for job in (doc.get("jobs") or {}).values() if "review_autofix.yml@" in str(job.get("uses") or "")]
+		assert any(isinstance(perms, dict) and perms.get("id-token") == "write" for perms in granted), wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -4022,6 +5058,102 @@ def test_verify_run_provenance_cli_missing_comments_fails_closed(tmp_path) -> No
 	runs_file.write_text(json.dumps({"500": _provenance_run()}), encoding="utf-8")
 	result = subprocess.run([sys.executable, str(LIB_PATH), "verify-run-provenance", "--payload-json", str(payload_file), "--runs-json", str(runs_file), "--comments-json", str(tmp_path / "missing.json"), "--trusted-login", "workflow-bot", "--self-repo", SELF_REPO], capture_output=True, text=True, check=True)
 	assert json.loads(result.stdout)["reason"] == "comments_unavailable"
+
+
+def _ci_run_payload(head_branch: str = "main") -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "CI", "conclusion": "failure", "head_sha": SHA_A, "head_branch": head_branch, "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "CI"},
+	)
+
+
+def test_verify_run_provenance_accepts_ci_push_on_default_branch() -> None:
+	payload = heal.validate_payload(_ci_run_payload())
+	def check(run, default_branch="main", self_repo=SELF_REPO, use_payload=payload):
+		return heal.verify_run_provenance(use_payload, runs={"500": run}, comments=None, trusted_login="", self_repo=self_repo, default_branch=default_branch)
+	ci_push = _provenance_run(repo=SELF_REPO, path="ci.yml", event="push", head_branch="main")
+	verdict = check(ci_push)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["500"]
+	for run, default_branch in (
+		({**ci_push, "event": "pull_request"}, "main"),
+		({**ci_push, "event": "workflow_dispatch"}, "main"),
+		({**ci_push, "head_branch": "feature/x"}, "main"),
+		({**ci_push, "head_branch": None}, "main"),
+		(ci_push, ""),
+		(ci_push, "bad..branch"),
+		({**ci_push, "head_branch": "bad..branch"}, "bad..branch"),
+	):
+		verdict = check(run, default_branch)
+		assert verdict["status"] == "rejected"
+		assert verdict["reason"] == "current_run_rejected:ci_not_default_branch_push"
+		assert {"run_id": "500", "reason": "ci_not_default_branch_push"} in verdict["rejections"]
+	# The payload's head_branch is not trusted: GitHub's run data decides.
+	assert check({**ci_push, "head_branch": "feature/x"})["reason"] == "current_run_rejected:ci_not_default_branch_push"
+	# A non-default-branch payload still passes when GitHub reports a default-branch push.
+	assert check(ci_push, use_payload=heal.validate_payload(_ci_run_payload("feature/x")))["status"] == "ok"
+	# CI runs are only accepted from this repository.
+	assert check(ci_push, self_repo=CONSUMER_REPO)["reason"] == "source_not_self"
+	# A failed CI run must still have failed.
+	assert check({**ci_push, "conclusion": "success"})["reason"] == "current_run_rejected:not_failed"
+	# Release runs keep their behaviour without a default branch.
+	release_payload = heal.validate_payload(_gate_run_payload())
+	assert heal.verify_run_provenance(release_payload, runs={"500": _provenance_run(repo=SELF_REPO, path="test-and-mark-stable.yml")}, comments=None, trusted_login="", self_repo=SELF_REPO)["status"] == "ok"
+	# ci.yml is not accepted for other report kinds.
+	pr_payload = heal.validate_payload(_autofix_payload())
+	assert heal.verify_run_provenance(pr_payload, runs={"500": {**_provenance_run(path="ci.yml", event="push", head_branch="main"), "pull_requests": [{"number": 4174}]}}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO, default_branch="main")["reason"] == "no_verified_runs"
+
+
+def test_verify_run_provenance_cli_default_branch_for_ci_run(tmp_path) -> None:
+	payload_file = tmp_path / "payload.json"
+	runs_file = tmp_path / "runs.json"
+	payload_file.write_text(json.dumps(heal.validate_payload(_ci_run_payload())), encoding="utf-8")
+	runs_file.write_text(json.dumps({"500": _provenance_run(repo=SELF_REPO, path="ci.yml", event="push", head_branch="main")}), encoding="utf-8")
+	base = [sys.executable, str(LIB_PATH), "verify-run-provenance", "--payload-json", str(payload_file), "--runs-json", str(runs_file), "--self-repo", SELF_REPO]
+	accepted = subprocess.run(base + ["--default-branch", "main"], capture_output=True, text=True, check=True)
+	assert json.loads(accepted.stdout)["status"] == "ok"
+	rejected = subprocess.run(base, capture_output=True, text=True, check=True)
+	assert json.loads(rejected.stdout)["reason"] == "current_run_rejected:ci_not_default_branch_push"
+
+
+def _ci_intake_state(event: str = "push", head_branch: str = "main") -> dict:
+	ci_log = "2026-10-06T00:00:00.000Z ##[error]tests/test_example.py::test_x FAILED\n"
+	return _intake_state(
+		jobs={"500": [{"id": 9001, "name": "static-checks", "workflow_name": "CI", "conclusion": "failure", "steps": [{"name": "Run ruff", "conclusion": "failure"}]}]},
+		job_logs={"9001": ci_log},
+		branches=["stable", "main"],
+		run_details={"500": {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "completed", "conclusion": "failure",
+			"path": ".github/workflows/ci.yml", "event": event, "head_branch": head_branch}},
+	)
+
+
+def test_intake_files_heal_issue_for_failed_ci_push_on_default_branch(tmp_path) -> None:
+	event_file = tmp_path / "event.json"
+	event_file.write_text(json.dumps({"repository": {"full_name": SELF_REPO, "default_branch": "main"}}), encoding="utf-8")
+	for extra_env in ({"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"}, {"WORKFLOW_HEAL_DEFAULT_BRANCH": "", "GITHUB_EVENT_PATH": str(event_file)}):
+		result, state_after, prompt = _run_intake(_ci_run_payload(), _ci_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "provenance_rejected" not in result.stdout
+		assert "provenance_verified" in result.stdout
+		created = state_after["issues_created"][0]
+		assert created["repo"] == SELF_REPO
+		match = TARGET_BRANCH_RE.search(created["body"])
+		assert match and (match.group(1) or match.group(2)) == "main"
+		assert "Failed workflow: CI" in prompt
+
+
+def test_intake_rejects_ci_run_that_is_not_a_default_branch_push(tmp_path) -> None:
+	event_file = tmp_path / "event.json"
+	event_file.write_text(json.dumps({"repository": {"full_name": SELF_REPO, "default_branch": "main"}}), encoding="utf-8")
+	for state, extra_env in (
+		(_ci_intake_state(event="pull_request"), {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"}),
+		(_ci_intake_state(head_branch="feature/x"), {"WORKFLOW_HEAL_DEFAULT_BRANCH": "", "GITHUB_EVENT_PATH": str(event_file)}),
+		(_ci_intake_state(), {"WORKFLOW_HEAL_DEFAULT_BRANCH": "", "GITHUB_EVENT_PATH": str(tmp_path / "missing.json")}),
+	):
+		result, state_after, _ = _run_intake(_ci_run_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "run_id=500 reason=ci_not_default_branch_push" in result.stdout
+		assert "skip reason=provenance_rejected" in result.stdout
+		assert "issues_created" not in state_after
 
 
 def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:

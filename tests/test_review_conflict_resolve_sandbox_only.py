@@ -39,6 +39,17 @@ def _persistence_helper() -> str:
 	return match.group()
 
 
+def _report_helper() -> str:
+	match = re.search(r"^_resolver_report_rejected_path\(\)\n\{\n.*?\n\}\n", _source(), re.M | re.S)
+	assert match is not None
+	return match.group()
+
+
+def _guard() -> str:
+	src = _source()
+	return src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
+
+
 def _launch() -> str:
 	src = _source()
 	return src[src.index('  if [ "${_run_codex}" = "true" ]; then\n'):src.index('  resolver_clean_output="${tmp_output}.ansi-clean"')]
@@ -97,7 +108,7 @@ _resolver_sandbox_attempt() {
   _resolver_sandbox_opencode_attempt
   return "${_codex_exit}"
 }
-	""" + _failure_helper() + "\n" + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
+	""" + _failure_helper() + "\n" + _report_helper() + "\n" + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("resolve conflict\n", encoding="utf-8")
 	output = tmp_path / "output.txt"
@@ -109,6 +120,8 @@ _resolver_sandbox_attempt() {
 	env.pop("ENV", None)
 	setup = f'''resolver_sandbox_sh={str(sandbox)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_MODEL_PATHS_FILE={str(paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
 _effective_prompt_file={str(prompt)!r}
 tmp_output={str(output)!r}
 _stall_status_file={str(tmp_path / "status")!r}
@@ -191,6 +204,54 @@ echo unexpected
 	)
 
 
+REJECTED_LINE = re.compile(r"^REVIEW_RESOLVER_PATH_REJECTED reason=[a-z_]{1,32} path=(redacted|[A-Za-z0-9._/-]{1,128})$", re.M)
+
+
+def _run_guard(tmp_path, model_paths):
+	sandbox, calls = _stub(tmp_path)
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
+CONFLICTED_PATHS_FILE={str(tmp_path / "all_conflicted")!r}
+RESOLVER_MODEL_PATHS_FILE={str(model_paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
+{_failure_helper()}
+{_path_failure_helper()}
+{_report_helper()}
+{_guard()}
+echo guard-passed
+'''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+	return result, calls
+
+
+# Plainly named paths absent from the host are host-only (origin/main);
+# only the odd name keeps the nameless sandbox_path_unsupported reason.
+@pytest.mark.parametrize("path,reason,shown,fail_reason", [
+	("assets/x.svg", "unsupported_type", "assets/x.svg", "sandbox_path_host_only"),
+	(".ai/x.txt", "excluded_component", ".ai/x.txt", "sandbox_path_host_only"),
+	(".claude/settings.json", "dot_directory", ".claude/settings.json", "sandbox_path_host_only"),
+	(".claude/hooks/pr_merge_status_guard.py", "live_safety_hook", ".claude/hooks/pr_merge_status_guard.py", "sandbox_path_host_only"),
+	("assets/\x1b[31m::set-output.svg", "unsupported_type", "redacted", "sandbox_path_unsupported"),
+])
+def test_rejected_path_reason_is_logged_before_any_model(tmp_path, path, reason, shown, fail_reason):
+	paths = tmp_path / "paths"
+	paths.write_text(path + "\n", encoding="utf-8")
+	result, calls = _run_guard(tmp_path, paths)
+	assert result.returncode == 1
+	assert "guard-passed" not in result.stdout
+	# The existing fail-closed lines stay byte-identical.
+	assert f"AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason={fail_reason} action=fail_closed\n" in result.stderr
+	assert f"::error::Conflict resolver isolation unavailable (reason={fail_reason}); refusing host fallback.\n" in result.stderr
+	rejected = REJECTED_LINE.findall(result.stderr)
+	assert len(rejected) == 1
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={shown}\n" in result.stderr
+	assert "\x1b" not in result.stderr and "::set-output" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == fail_reason
+	assert not calls.exists()
+
+
 def _run_path_guard(tmp_path, conflicted, integration="false"):
 	paths = tmp_path / "paths"
 	paths.write_text("".join(name + "\n" for name in conflicted))
@@ -201,12 +262,15 @@ def _run_path_guard(tmp_path, conflicted, integration="false"):
 RUNTIME_DIR={str(tmp_path)!r}
 SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_MODEL_PATHS_FILE={str(paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
 GITHUB_ENV={str(github_env)!r}
 IS_INTEGRATION_SYNC={integration}
 emit_conflict_resolver_substate() {{ :; }}
 _persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
 {_failure_helper()}
 {_path_failure_helper()}
+{_report_helper()}
 {guard}
 echo guard-passed
 '''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
@@ -226,6 +290,30 @@ def test_unsupported_path_refuses_before_any_model(tmp_path):
 	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_unsupported"
 	assert env_text == "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_unsupported\n"
 	assert not calls.exists()
+
+
+def test_paired_model_paths_pass_guard(tmp_path):
+	# The paired live hook is removed from the model paths; the template passes.
+	paths = tmp_path / "model_paths"
+	paths.write_text("workflow-templates/.claude/hooks/pr_merge_status_guard.py\n", encoding="utf-8")
+	result, calls = _run_guard(tmp_path, paths)
+	assert result.returncode == 0, result.stderr
+	assert "guard-passed" in result.stdout
+	assert "REVIEW_RESOLVER_PATH_REJECTED" not in result.stderr
+	assert not calls.exists()
+
+
+def test_paired_live_copy_source_contract():
+	src = _source()
+	assert 'check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"' not in src
+	assert src.count('check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}"') == 2
+	assert src.index('paired-live-copies "$(pwd)"') < src.index('# Reject unsupported conflict paths for both engines')
+	assert src.index("  _resolver_mirror_paired_live_copies\n  _scan_residual_markers\n") > 0
+	tail = src[src.index("  if ! _resolver_verify_paired_live_index; then"):]
+	assert tail.index("_resolver_verify_paired_live_index") < tail.index("verify_resolver_index_complete_or_fail")
+	assert '--paths-file "${RESOLVER_TARGETED_PATHS_FILE}"' in src
+	workspace = (SCRIPT.parent / "review_untrusted_workspace.py").read_text(encoding="utf-8")
+	assert 'if name == ".claude/hooks/pr_merge_status_guard.py":\n\t\treturn False' in workspace
 
 
 def test_host_only_paths_stop_once_with_their_names(tmp_path):
@@ -267,6 +355,46 @@ def test_host_only_error_is_the_failure_headline(tmp_path):
 	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").write_text("x = 1\n")
 	result, _env_text = _run_path_guard(tmp_path, [".claude/hooks/pr_merge_status_guard.py"])
 	assert heal.failure_headline([result.stderr]) == "Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py"
+
+
+def test_real_merge_conflict_on_guard_hook_fails_closed(tmp_path):
+	"""Heal #6800 / PR #6555 (run 37828359475): the host-only hook needs a human merge."""
+	git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}}
+
+	def git(*args, check=True):
+		return subprocess.run(["git", *args], cwd=tmp_path, env=git_env, check=check, capture_output=True, text=True)
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+	git("config", "commit.gpgsign", "false")
+	hook = tmp_path / ".claude/hooks/pr_merge_status_guard.py"
+	hook.parent.mkdir(parents=True)
+	hook.write_text("x = 1\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-qm", "base")
+	git("checkout", "-q", "-b", "pr")
+	hook.write_text("x = 2\n", encoding="utf-8")
+	git("commit", "-qam", "pr")
+	git("checkout", "-q", "main")
+	hook.write_text("x = 3\n", encoding="utf-8")
+	git("commit", "-qam", "main")
+	git("checkout", "-q", "pr")
+	assert git("merge", "--no-edit", "main", check=False).returncode != 0
+	stages = git("ls-files", "-u", "--", ".claude/hooks/pr_merge_status_guard.py").stdout
+	assert set(re.findall(r"^\d+ [0-9a-f]+ ([123])\t", stages, re.M)) == {"1", "2", "3"}
+	conflicted = git("diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+	assert conflicted == [".claude/hooks/pr_merge_status_guard.py"]
+
+	_sandbox, calls = _stub(tmp_path)
+	result, env_text = _run_path_guard(tmp_path, conflicted)
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py" in result.stderr
+	assert "reason=sandbox_path_host_only" in result.stderr and "sandbox_path_unsupported" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_host_only"
+	assert env_text == "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_host_only\n"
+	assert not calls.exists()
+	assert "<<<<<<<" in hook.read_text(encoding="utf-8")
 
 
 def test_missing_sandbox_support_refuses_before_any_model(tmp_path):
