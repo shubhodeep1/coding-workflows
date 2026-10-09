@@ -330,6 +330,77 @@ esac
 		for checkout in checkouts:
 			self.assertIn(checkout["with"]["persist-credentials"], (False, "false"))
 
+	def test_diagnose_step_env_carries_only_model_credential(self) -> None:
+		# The diagnosis reads untrusted PR text, so no GitHub credential may reach it.
+		triage_job = _workflow()["jobs"]["triage"]
+		diagnose = _step(triage_job, name="Diagnose check failure")
+		self.assertNotIn("uses", diagnose)
+		self.assertIn("run", diagnose)
+		diagnose_env = diagnose.get("env", {})
+		diagnose_secret_names = {
+			match
+			for env_value in diagnose_env.values()
+			for match in re.findall(r"secrets\.([A-Za-z0-9_]+)", str(env_value))
+		}
+		self.assertEqual(diagnose_secret_names, {"OPENROUTER_API_KEY"})
+		forbidden_env_keys = {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "CHECK_TRIAGE_ISSUES_TOKEN"}
+		self.assertFalse(forbidden_env_keys & set(diagnose_env), diagnose_env)
+		for env_key, env_value in diagnose_env.items():
+			self.assertNotIn("github.token", str(env_value), env_key)
+		for env_key, env_value in triage_job.get("env", {}).items():
+			self.assertIsNone(re.search(r"secrets\.|github\.token", str(env_value)), env_key)
+
+	def test_no_step_persists_github_credentials_for_later_steps(self) -> None:
+		triage_job = _workflow()["jobs"]["triage"]
+		step_names = [step.get("name") for step in triage_job["steps"]]
+		diagnose_index = step_names.index("Diagnose check failure")
+		for step in triage_job["steps"][:diagnose_index]:
+			for run_line in step.get("run", "").splitlines():
+				if "GITHUB_ENV" not in run_line and "GITHUB_PATH" not in run_line:
+					continue
+				self.assertIsNone(
+					re.search(r"(?i)token|secrets\.|gh_pat", run_line),
+					f"{step.get('name')}: {run_line.strip()}",
+				)
+		# The collect stage holds GH_PAT; its helpers must not export state to later steps.
+		for helper_path in (
+			TRIAGE_SCRIPT_PATH,
+			REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py",
+			REPO_ROOT / "scripts" / "gh_helpers.sh",
+		):
+			self.assertNotIn("GITHUB_ENV", helper_path.read_text(encoding="utf-8"), str(helper_path))
+		for credential_source in (
+			WORKFLOW_PATH,
+			TRIAGE_SCRIPT_PATH,
+			REPO_ROOT / "scripts" / "gh_helpers.sh",
+		):
+			credential_text = credential_source.read_text(encoding="utf-8")
+			for persisting_command in ("gh auth login", "gh auth setup-git", "credential.helper", "extraheader"):
+				self.assertNotIn(persisting_command, credential_text, f"{credential_source}: {persisting_command}")
+
+	def test_issue_posting_token_scoped_to_post_step(self) -> None:
+		workflow = _workflow()
+		posting_secret = "secrets.CHECK_TRIAGE_ISSUES_TOKEN"
+		post_step_name = "Post check-failure triage issue"
+		post_steps_seen = 0
+		for job_name, job in workflow["jobs"].items():
+			self.assertNotIn(posting_secret, json.dumps(job.get("env", {})), job_name)
+			for step in job.get("steps", []):
+				step_text = json.dumps({key: step.get(key) for key in ("env", "with", "run")})
+				if job_name == "triage" and step.get("name") == post_step_name:
+					post_steps_seen += 1
+					self.assertEqual(step_text.count(posting_secret), 1)
+				else:
+					self.assertNotIn(posting_secret, step_text, f"{job_name}: {step.get('name')}")
+		self.assertEqual(post_steps_seen, 1)
+		post = _step(workflow["jobs"]["triage"], name=post_step_name)
+		post_secret_names = {
+			match
+			for env_value in post.get("env", {}).values()
+			for match in re.findall(r"secrets\.([A-Za-z0-9_]+)", str(env_value))
+		}
+		self.assertEqual(post_secret_names, {"CHECK_TRIAGE_ISSUES_TOKEN", "TG_BOT_SECRET"})
+
 	def test_support_staging_uses_trusted_checkout_not_pr_head(self) -> None:
 		stage_script = _step(_workflow()["jobs"]["triage"], name="Stage workflow support files")["run"]
 		self.assertIn("CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}", stage_script)

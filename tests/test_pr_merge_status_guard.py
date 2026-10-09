@@ -1712,10 +1712,14 @@ def test_absolute_chdir_inside_shell_control_checks_selected_repo(merged_branch_
 
 
 def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_branch_repo, monkeypatch, capsys) -> None:
-	# A `git -c` commit whose directory is unknown only because of shell control
-	# flow is never blocked on the session checkout alone (code 0, no message),
-	# but author decision Q30 = A makes it ask: per-command configuration may
-	# select another checkout (core.worktree), so the hook cannot vouch for it.
+	"""Per-command config on an unresolved commit asks (author decision Q30 = A).
+
+	The name predates that decision and is kept per CLAUDE.md §6. A `git -c`
+	commit whose directory is unknown only because of shell control flow is
+	never blocked on the session checkout alone (code 0, no message), but it
+	asks: per-command configuration may select another checkout
+	(core.worktree), so the hook cannot vouch for it.
+	"""
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
@@ -1723,6 +1727,7 @@ def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "per-command Git configuration may select another checkout" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
