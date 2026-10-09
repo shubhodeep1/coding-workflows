@@ -2517,7 +2517,7 @@ fi
 # branch-protection contexts win) and add a sensible allowlist for the
 # bitsafe-style "main is unprotected, third-party advisory check
 # failure stalls the orchestrator" case that motivated this knob.
-ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT="CI,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate"
+ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT="CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate"
 ORCH_FINAL_MERGE_REQUIRED_CHECKS="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT}}"
 
 # ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS bounds how long the orchestrator
