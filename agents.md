@@ -499,7 +499,10 @@ and `<(...)` bodies up to three levels deep and runs the normal merged-PR
 check on each Git commit or push found there; wrapped text it cannot read
 safely (a dynamic command word, an unterminated body, deeper nesting) asks for
 confirmation when it could run a Git write. `sudo`, `timeout`, `xargs` and
-pipes into `bash` keep their existing handling. Tests run against both copies
+pipes into `bash` keep their existing handling, and so does the `command`
+builtin: `command git push ...`, bare or inside `bash -c`, is not yet
+inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack it; the fix needs both
+hook copies, which the pipeline cannot write). Tests run against both copies
 in `tests/test_pr_merge_status_guard.py`. The interactive session applied the
 change because the pipeline's editors cannot write `.claude/hooks/**`; the
 former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder is retired
