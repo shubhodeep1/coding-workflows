@@ -46,7 +46,10 @@
             ],
             "properties": {
               "path": {
-                "$ref": "#/$defs/path"
+                "$ref": "#/$defs/path",
+                "not": {
+                  "const": "workflow-templates/CLAUDE.md"
+                }
               },
               "sha256": {
                 "$ref": "#/$defs/sha256"

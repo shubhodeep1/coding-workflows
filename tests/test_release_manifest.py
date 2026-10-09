@@ -125,6 +125,18 @@ def test_modes_and_symlink_entry(tmp_path: Path) -> None:
 	assert link["size"] == len("../CLAUDE.md")
 
 
+def test_schema_rejects_known_symlink_as_regular_file(tmp_path: Path) -> None:
+	root = _fixture(tmp_path)
+	output = tmp_path / "m.json"
+	assert _build(root, output).returncode == 0
+	manifest = json.loads(output.read_text(encoding="utf-8"))
+	for entry in manifest["files"]:
+		if entry["path"] == "workflow-templates/CLAUDE.md":
+			del entry["link_target"]
+			entry["mode"] = "100644"
+	assert not _validator().is_valid(manifest)
+
+
 def test_uppercase_sha_is_lowercased(tmp_path: Path) -> None:
 	root = _fixture(tmp_path)
 	output = tmp_path / "m.json"
