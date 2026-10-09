@@ -2100,7 +2100,30 @@ jobs:
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator
+      # decision Q35: A), read from the same verified support commit the
+      # gate resolved.
+      MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+      # Required-checks wait before `gh pr merge --auto` (pr_checks_lib.sh):
+      # without branch protection, auto-merge lands the PR immediately.
+      AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+      AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
     steps:
+      - name: Checkout merge-base freshness helper
+        id: checkout_freshness_helper
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.gate.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-freshness-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/pr_checks_lib.sh
+            scripts/gh_helpers.sh
+          sparse-checkout-cone-mode: false
+
       - name: Record GH_PAT budget at deterministic-skip-merge start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -2116,6 +2139,9 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
+        env:
+          FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
+          REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
 
@@ -2159,6 +2185,34 @@ jobs:
             local label="$1" repo="$2" color="$3" desc="$4"
             gh_retry gh label create "${label}" --repo "${repo}" --color "${color}" --description "${desc}" >/dev/null 2>&1 || true
           }
+
+          # Merge-base freshness gate: a gate-observed head whose base moved
+          # under files this PR touches is updated from the base instead of
+          # auto-merged, so CI runs on the combined tree first (the
+          # synchronize run then re-enters this job). The helper is read
+          # from the verified support commit; when the checkout is missing
+          # or unverified the freshness gate is skipped with a warning and
+          # the required-checks wait fails closed (auto-merge refused). `_safe_gh_jq` is the library's gh
+          # transport; the inline retry wrapper above serves as gh_retry.
+          _pr_base_fresh_for_merge() {
+            echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
+            return 0
+          }
+          _pr_wait_for_required_checks() {
+            PR_CHECKS_WAIT_OUTCOME="unavailable"
+            echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+            return 1
+          }
+          if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
+            && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
+            && [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+            && [ "$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}" ]; then
+            _safe_gh_jq() { gh api "$@"; }
+            # shellcheck disable=SC1091
+            source .codex-freshness-src/scripts/pr_checks_lib.sh
+          else
+            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
+          fi
 
           write_deterministic_skip_summary()
           {
@@ -2249,7 +2303,16 @@ jobs:
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
-              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
+              if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+              elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
                 echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
@@ -2267,7 +2330,16 @@ jobs:
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
-            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
+            if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+            elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+            elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
               echo "Auto-merge enabled. PR will merge once all required checks pass."
@@ -6135,6 +6207,9 @@ jobs:
           FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+          AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
@@ -6307,6 +6382,9 @@ jobs:
           JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'high' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+          AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # Single-issue security pass settings, the same as the
