@@ -210,3 +210,44 @@ No `TODO`, `FIXME`, or `HACK` marker matched within the scoped workflows and scr
 | Code modularization | Release workflows/helper, label helpers/callers, two Python shared modules/callers | Large |
 | Expression size reduction | `implement.yml`, `workflow-log-analysis.yml`, `test-and-mark-stable.yml`, new staged scripts and contract tests | Large |
 | Medium/Low fixes | `tg_helpers.sh`, `review_merge_train.sh`, `review_autofix.yml`, release dispatch paths and focused tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-09)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` is visible for manual review but must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`.** In `finalize_integration_merge_if_needed`, `scripts/orchestrate_poll_process.sh:11524-11536` makes two `gh_retry _safe_gh_jq` reads when the PR snapshot does not match: one for `.state` and one for `.merged_at`. **Current → proposed:** 2 → 1 REST reads on that cache-miss path. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`. **Evidence:** the adjacent calls differ only in `--jq '.state'` versus `--jq '.merged_at != null'`. **Proposed fix:** If manually approved, fetch one PR object in the cache-miss branch and derive both fields from it; retain the matching-snapshot path. **Safety rationale:** this is an upstream-race-defending poller path; two independently failed reads currently produce separate empty values, so one combined failure may change the final-merge decision. **Downstream signal:** Do not auto-implement; manually test partial API failure and a PR changing state between reads against the existing final-merge guards.
+
+- **MERGE-002 — `RISKY_SKIP`.** The implementation-failed reissue path reads an issue twice in `scripts/orchestrate_poll_process.sh:24082-24084`, once for `.title` and once for `.body`. **Current → proposed:** 2 → 1 REST reads per reissued issue reaching this path. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{if_issue}`. **Evidence:** both adjacent calls use the same issue URL with different `--jq` projections. **Proposed fix:** If manually approved, capture one issue object immediately before reissue and extract `IF_TITLE` and `IF_BODY`, retaining their empty-value fallbacks. **Safety rationale:** the call is inside the poller’s reissue path, and independent read failures currently have different observable effects on the replacement issue. **Downstream signal:** Do not auto-implement; manually verify title-only failure, body-only failure, and an issue edit between reads before changing reissue behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — changes retry-loop behavior; manually confirm which HTTP failures are permanently non-retryable.
+- API-002: `RISKY_SKIP` — the source read is paginated, and marker freshness affects merge-train authorization.
+- BATCH-001: `RISKY_SKIP` — poller comment-history pagination and the live issue check require manual completeness and race review.
+- BATCH-002: `RISKY_SKIP` — poller timeline pagination and issue-implementation classification must remain authoritative on batch misses.
+
+### Summary Counts
+
+Counts cover **net-new findings only**; Deep Audit cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
