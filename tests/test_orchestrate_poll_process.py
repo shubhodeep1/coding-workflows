@@ -6389,7 +6389,11 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 
 
 def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
-	# Issue #6729: low severity is still eligible for the round-cap conversion.
+	# Issue #6729's low-severity case of the round cap. Per #6539 the cap never
+	# accepts a finding: a low keep_fixing decision past the cap is converted to
+	# `fail`, the project terminalizes as ai:security-pass-failed, and no waiver
+	# row or advisory follow-up is recorded. (Name kept for history; the
+	# behaviour asserted below is conversion to fail, not to an advisory.)
 	low_finding = _security_pass_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6400,17 +6404,29 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
 	)
 	latest_state = result["latest_state"]
-	assert latest_state["status"] == "complete"
-	assert latest_state["security_pass_status"] == "passed"
-	waived = latest_state["security_pass_waived_findings"]
-	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
-	assert waived[0]["justification"].startswith(
-		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
-	)
-	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_judge_rounds"] == 3
+	assert latest_state["security_pass_waived_findings"] == []
+	assert not latest_state.get("security_pass_followup_issues")
+	assert result.get("created_issues", []) == []
+	assert "ai:security-pass-failed" in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
+	assert "accepted=0 keep_fixing=0 failed=1" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
 	assert "blocking_findings_after_cap" not in combined_log
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	assert "SECURITY_PASS_CLEAN" not in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "1 finding(s) cannot be accepted" in judge_comments[0]
+	assert "need a human" not in judge_comments[0]
+	assert "| SEC-TEST-1 | low | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
