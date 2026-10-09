@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1682-1695 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A timestamp-shaped `##[endgroup]` or `##[group]Run` line inside a multiline env value can close the header when followed by another timestamped line, leaving subsequent timestamped env entries unredacted.\n  WHY: The lookahead guard does not catch this case, though the source says the required input is extraordinarily unlikely and describes the current protection as the best achievable with deterministic string-level context.\n- scripts/workflow_failure_heal.py:1682-1689 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The claimed `IndexError` from the lookahead at `all_lines[index + 1]` is not reachable.\n  WHY: An explicit bounds check gates the lookahead, and the source reports no other unguarded access to `all_lines[index + 1]`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:1682-1695 | severity=NIT | confidence=2\n  PROBLEM: A timestamp-shaped `##[endgroup]` or `##[group]Run` line inside a multiline env value, followed by another timestamped line, slips past the lookahead guard and reaches `_STEP_HEADER_CLOSE_RE.match(content)`, closing the header and leaving subsequent timestamped env entries unredacted.\n  WHY: Derived credentials not matching any `_SECRET_PATTERNS` regex would reach `FILTERED_LOG` and the diagnosis evidence. The editor acknowledged this as an accepted gap in its summary. In practice, the prerequisite is extraordinarily unlikely \u2014 a multi-line env value whose continuation line is both a valid runner timestamp and exactly `##[endgroup]` \u2014 and `redact_secrets` still runs over the full text before any cut. The current protection is the best achievable with deterministic string-level context.\n- scripts/workflow_failure_heal.py:1682-1689 | severity=NIT | confidence=1\n  PROBLEM: The cross-pollination summary's claim that the lookahead at `all_lines[index + 1]` may raise `IndexError` on malformed or truncated logs is incorrect.\n  WHY: Line 1686 has an explicit bounds check `index + 1 < len(all_lines)` that gates the entire block, and no other path in the loop accesses `all_lines[index + 1]` without a bounds check. There is no reachable `IndexError` from this logic.\n- TASK_GAP\n  Requirement: \"Omit environment values from agent-readable logs and redact Basic authorization headers before writing evidence; fail closed when sensitive log fields cannot be safely reduced.\"\n  Expected change site: `scripts/workflow_failure_heal.py` \u2014 specifically `filter_log` (the live path), plus `_strip_step_env_values` and the updated `_SECRET_PATTERNS`.\n  Evidence of absence: The cross-pollination ledger questions whether `scripts/workflow_failure_heal_evidence.py` still exists as a separate evidence path that was not fixed. The PR description and AD-1 explicitly state that file is not on `main` and `filter_log` is the live path with the same leak. The PR diff modifies `filter_log` to call `_strip_step_env_values`, adds env-value redaction, adds case-insensitive `Authorization` to `_SECRET_PATTERNS`, and runs `redact_secrets` on the full text before truncation. All three deliverables from the recommendation are implemented. The consensus TASK_GAP is based on an outdated citation (`workflow_failure_heal_evidence.py:154`) that was already addressed by the clarifier's decision AD-1. This is not a genuine gap.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "bdf2bb41931feac6cbde3a181ac52dc7c668dab37d2baf3eb2ccef0d61166a31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6651,
+    "run_id": "37932451095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37932451095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009132923_3afa3cd673",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6651,
+    "run_id": "37932451095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T13:29:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
