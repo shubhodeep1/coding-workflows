@@ -364,6 +364,11 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	# The production block reads each issue's wave status with jq under
+	# `set -euo pipefail`; without jq the runner exits silently, so skip
+	# like the module's other jq-dependent tests (#6892).
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
 	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
@@ -23583,6 +23588,11 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	PR whose body carries a close keyword, keep skipping non-open PRs,
 	and treat an API failure as unknown state — all with exactly one
 	``pulls/<n>`` request per candidate."""
+	# close_linked_pr reads each PR's state with jq; without it every PR
+	# reads as state=unknown and the assertions fail for an environment
+	# reason, so skip like the module's other jq-dependent tests (#6892).
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")
