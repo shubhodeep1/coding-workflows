@@ -475,19 +475,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
 
-      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
-        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
-        # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence and gh_retry's per-attempt stdout buffering (#5495)
-        # in scripts/gh_helpers.sh.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_review_merge_train.py \
-            tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py
-
       - name: PR-watch guard hook tests (CLAUDE.md §25)
         run: |
           set -euo pipefail
@@ -649,11 +636,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_completion_lessons.py
-
-      - name: Integration-ahead-by gate regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
 
       - name: PR body auto-close lint unit tests
         # P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
@@ -1103,6 +1085,27 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      # Moved from tests-hooks-and-orchestrator, which measured 19.6 of its
+      # 20 minutes on main (2026-10-09) and timed out on PR heads; these two
+      # steps take about 4.5 minutes each and this job about 4.
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence and gh_retry's per-attempt stdout buffering (#5495)
+        # in scripts/gh_helpers.sh.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_review_merge_train.py \
+            tests/test_gh_helpers_parse_reset_header.py \
+            tests/test_gh_retry_stdout_isolation.py
+
+      - name: Integration-ahead-by gate regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
 
       - name: Update workflows guardrails contract test
         run: |
