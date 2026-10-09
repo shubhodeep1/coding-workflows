@@ -289,6 +289,9 @@ _pr_checks_completed()
 			else [] end
 		) | [.[] | select(_is_self_check_run | not)] | length
 	' 2>/dev/null | tail -n1)"
+	# Unparseable count: treat as "none registered" so the wait polls the
+	# grace intervals rather than reading a jq failure as green.
+	[[ "${PR_CHECKS_LAST_TOTAL}" =~ ^[0-9]+$ ]] || PR_CHECKS_LAST_TOTAL=0
 
 	if [ "${incomplete}" -gt 0 ]; then
 		if [ "${required_names_csv}" = "*" ]; then
