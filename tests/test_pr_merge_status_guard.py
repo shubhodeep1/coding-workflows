@@ -1471,6 +1471,11 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 	"git --config-env=remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git --config-env remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git -c user.name=bot push origin HEAD:feature/x",
+	# #6336/#6639 exploit shape: inline remote + --repo with the default branch as positional.
+	"git -c remote.main.url=https://github.com/other/repo -c push.default=current push --repo=origin main",
+	"git -c push.default=current push --repo=origin main",
+	"git -cremote.main.url=https://github.com/other/repo push --repo origin main",
+	"git --config-env=remote.main.url=REMOTE_URL push --repo=origin main",
 ])
 def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
