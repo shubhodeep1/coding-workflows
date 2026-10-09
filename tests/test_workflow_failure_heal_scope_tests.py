@@ -42,6 +42,15 @@ def test_extract_failing_tests_reads_shard_pytest_and_unittest_shapes() -> None:
 	assert heal.extract_failing_tests("All green. The word test_name appears in prose, as does FAIL and tests/test_x.py")["names"] == []
 
 
+def test_extract_failing_tests_handles_timestamps_classes_and_mid_line_prose() -> None:
+	text = ("2026-10-09T10:00:00.1234567Z   FAIL  test_stamped_case:\n"
+		"2026-10-09T10:00:01Z FAILED tests/test_klass.py::TestThing::test_method - AssertionError\n"
+		"We FAILED. tests/test_prose.py was the cause\n")
+	found = heal.extract_failing_tests(text)
+	assert found["names"] == ["test_stamped_case", "test_method"]
+	assert found["files"] == ["tests/test_klass.py"]
+
+
 def test_extract_failing_tests_is_capped_and_deduped() -> None:
 	text = "\n".join(f"  FAIL  test_case_{i}:" for i in range(40)) + "\n  FAIL  test_case_1:\n"
 	found = heal.extract_failing_tests(text)
@@ -71,9 +80,9 @@ def test_render_marker_appends_test_subjects_before_the_globs() -> None:
 
 def _init_scope_repo(root: Path) -> str:
 	subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
-	(root / "tests").mkdir()
-	(root / "scripts").mkdir()
-	(root / ".github/workflows").mkdir(parents=True)
+	(root / "tests").mkdir(exist_ok=True)
+	(root / "scripts").mkdir(exist_ok=True)
+	(root / ".github/workflows").mkdir(parents=True, exist_ok=True)
 	(root / "tests/test_orchestrate_poll_process.py").write_text("def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:\n\tpass\n")
 	(root / "scripts/orchestrate_poll_process.sh").write_text("#!/usr/bin/env bash\n")
 	(root / ".github/workflows/ci.yml").write_text("name: CI\n")
@@ -99,6 +108,24 @@ def test_render_cli_resolves_failing_test_names_at_the_scope_commit() -> None:
 		# The pytest-style file from the log does not exist at the scope commit and is dropped; the
 		# name resolves through git grep to its file, whose stem maps to the poller script.
 		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_orchestrate_poll_process.py,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+
+
+def test_render_cli_drops_log_reported_files_that_do_not_define_a_failing_test() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		(root / "tests").mkdir(parents=True)
+		(root / "tests/test_unrelated.py").write_text("def test_other() -> None:\n\tpass\n")
+		(root / "tests/test_klass.py").write_text("class TestThing:\n\tdef test_method(self) -> None:\n\t\tpass\n")
+		(root / "scripts").mkdir()
+		(root / "scripts/unrelated.sh").write_text("#!/usr/bin/env bash\n")
+		(root / "scripts/klass.py").write_text("\n")
+		sha = _init_scope_repo(root)
+		inputs = Path(tmpdir) / "scope_inputs.json"
+		inputs.write_text(json.dumps({"crash_file": "", "runs": [f"{SELF_REPO}:1"], "workflow_paths": [".github/workflows/ci.yml"], "changed_files": [],
+			"failing_tests": {"names": ["test_method"], "files": ["tests/test_unrelated.py", "tests/test_klass.py"]}}))
+		marker = subprocess.run([sys.executable, str(HEAL_PY), "heal-scope", "render", "--input-json", str(inputs), "--checkout", str(root), "--ref", sha],
+			capture_output=True, text=True, check=True).stdout.strip()
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_klass.py,scripts/klass.py,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 
 
 def test_render_cli_without_failing_tests_is_unchanged() -> None:

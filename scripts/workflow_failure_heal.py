@@ -2060,8 +2060,10 @@ _FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
 	re.compile(r'"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})"\s*,\s*"status"\s*:\s*"fail"'),
 	re.compile(r'"status"\s*:\s*"fail"\s*,\s*"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})"'),
 	re.compile(r"^\s*FAIL\s+(test_[A-Za-z0-9_]{1,160})\b", re.MULTILINE),
-	re.compile(r"\bFAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(test_[A-Za-z0-9_]{1,160})"),
-	re.compile(r"\bFAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b"),
+	# Pytest summary lines start the (timestamp-stripped) line; a class-based
+	# test reports ``tests/x.py::TestClass::test_y``.
+	re.compile(r"^\s*FAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(?:[A-Za-z_][A-Za-z0-9_]{0,160}::)?(test_[A-Za-z0-9_]{1,160})", re.MULTILINE),
+	re.compile(r"^\s*FAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b", re.MULTILINE),
 )
 FAILING_TEST_LIMIT = 20
 
@@ -2075,8 +2077,11 @@ def extract_failing_tests(text: str) -> dict[str, list[str]]:
 	"""
 	names: list[str] = []
 	files: list[str] = []
+	# Raw Actions job logs prefix every line with an ISO timestamp, which
+	# filter_log keeps; strip it so the line-anchored shapes match.
+	cleaned = "\n".join(_LOG_TIMESTAMP_RE.sub("", line) for line in sanitize_text(text).split("\n"))
 	for pattern in _FAILING_TEST_PATTERNS:
-		for match in pattern.finditer(sanitize_text(text)):
+		for match in pattern.finditer(cleaned):
 			for group in match.groups():
 				if not group:
 					continue
@@ -3388,7 +3393,8 @@ def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) ->
 	for name in names:
 		if not isinstance(name, str) or not re.fullmatch(r"test_[A-Za-z0-9_]{1,160}", name):
 			continue
-		cmd = ["git", "grep", "-l", "-z", "-E", f"^def {name}\\(", ref, "--", "tests/"]
+		# Indented definitions are class-based test methods.
+		cmd = ["git", "grep", "-l", "-z", "-E", f"^[[:space:]]*def {name}\\(", ref, "--", "tests/"]
 		result = subprocess.run(cmd, cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
 		if result.returncode != 0:
 			continue
@@ -3409,7 +3415,12 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 		failing = data.get("failing_tests") if isinstance(data.get("failing_tests"), dict) else {}
 		test_files = [path for path in (failing.get("files") or []) if isinstance(path, str)]
 		if args.ref:
-			test_files += [path for path in _heal_test_files_for_names(args.checkout, args.ref, failing.get("names") or []) if path not in test_files]
+			# Bind log-reported test files to the scope commit: a file is kept only
+			# when it defines one of the reported failing tests there, so a stray or
+			# forged "FAILED tests/x.py" line naming an unrelated file cannot add it
+			# (or the subject its stem maps to). Names still come from the same
+			# verified-run logs, so an existing test name remains the residual trust.
+			test_files = _heal_test_files_for_names(args.checkout, args.ref, failing.get("names") or [])
 		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=heal_scope_test_subjects(test_files, exists))
 		sys.stdout.write(marker + "\n")
 	elif args.operation == "failing-tests":
