@@ -1582,6 +1582,10 @@ for test_script in "${test_scripts[@]}"; do
     echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" >&2
     test_rc=0
   else
+    # Template-rendered tests reach this host runner only after
+    # run_template_validation_harness_renderer's manifest shell-safety gate
+    # rejected shell-unsafe .ai/validate.yml values (finding
+    # validation-manifest-shell-injection-fallback).
     set +e
     bash "${test_script}" > "${test_log}" 2>&1
     test_rc=$?
@@ -2379,6 +2383,93 @@ import yaml, jsonschema, jinja2
 ' "${RUNTIME_DIR}/renderer-venv" 2>&1)"; then
 		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
 		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are unavailable in the isolated environment; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	# Manifest shell-safety gate (finding validation-manifest-shell-injection-fallback).
+	# .ai/validate.yml is untrusted checkout data, and the renderer interpolates
+	# its values unescaped into shell scripts that validate_driver.sh and the
+	# runtime fallback runner execute on the host. Every render (first render and
+	# render recovery) passes through this function, so values in
+	# shell-reachable fields are rejected here, fail closed, before any template
+	# is written: quotes, $, backticks, backslashes, control characters and
+	# non-scalar YAML types. Exempt keys are commands by design (custom_tests,
+	# skip_tests), escaped where emitted (env_overrides), schema-constrained
+	# (port) or never interpolated (health_check, services). Parse errors and
+	# non-mapping roots are left to the renderer, which rejects them with the
+	# same yaml.safe_load. Violations name only a sanitized JSON pointer and the
+	# character class, never the raw value. The check is done here rather than
+	# in the renderer because this issue's automation-path grant covers this
+	# file only.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import sys
+import yaml
+MAX_BYTES = 2 * 1024 * 1024
+EXEMPT_TOP_LEVEL_KEYS = frozenset({"custom_tests", "skip_tests", "env_overrides", "health_check", "services", "port"})
+QUOTES = (chr(34), chr(39))
+BACKSLASH = chr(92)
+def pointer(parts):
+    if not parts:
+        return "$"
+    text = "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
+    text = "".join(ch if ch.isprintable() and ch not in QUOTES and ch not in ("$", "`", BACKSLASH) else "?" for ch in text)
+    return text if len(text) <= 120 else text[:117] + "..."
+def unsafe_classes(text):
+    found = []
+    if "$" in text:
+        found.append("dollar")
+    if "`" in text:
+        found.append("backtick")
+    if any(quote in text for quote in QUOTES):
+        found.append("quote")
+    if BACKSLASH in text:
+        found.append("backslash")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+        found.append("control")
+    return found
+with open(sys.argv[1], "rb") as handle:
+    raw = handle.read(MAX_BYTES + 1)
+if len(raw) > MAX_BYTES:
+    print("Manifest shell-safety check: manifest exceeds " + str(MAX_BYTES) + " bytes")
+    raise SystemExit(1)
+try:
+    manifest = yaml.safe_load(raw.decode("utf-8"))
+except (UnicodeDecodeError, yaml.YAMLError):
+    raise SystemExit(0)
+if not isinstance(manifest, dict):
+    raise SystemExit(0)
+stack = []
+for key in sorted(manifest, key=str, reverse=True):
+    if key == "slots" or key not in EXEMPT_TOP_LEVEL_KEYS:
+        stack.append(([key], manifest[key]))
+violations = []
+while stack:
+    parts, value = stack.pop()
+    if isinstance(value, str):
+        classes = unsafe_classes(value)
+        if classes:
+            violations.append(pointer(parts) + ": contains shell-unsafe character class " + ",".join(classes))
+    elif isinstance(value, dict):
+        for key in sorted(value, key=str, reverse=True):
+            stack.append((parts + [key], value[key]))
+    elif isinstance(value, list):
+        for index in range(len(value) - 1, -1, -1):
+            stack.append((parts + [index], value[index]))
+    elif value is None or isinstance(value, (bool, int, float)):
+        continue
+    else:
+        violations.append(pointer(parts) + ": contains unsupported value type " + type(value).__name__)
+if violations:
+    print("Manifest validation failed (shell-unsafe values in shell-reachable fields):")
+    for line in violations[:10]:
+        print("- " + line)
+    if len(violations) > 10:
+        print("- ... " + str(len(violations) - 10) + " additional shell-safety violations")
+    raise SystemExit(1)
+' "${renderer_workspace}/${manifest_path}" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template manifest shell-safety check failed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' '::error::.ai/validate.yml has shell-unsafe values in shell-reachable fields; renderer not invoked (see validate_generate.log).' >&2
 		return 14
 	fi
 
