@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Safeguarded consumer workflow updater: attested release manifest, fail-closed verification, pull-request delivery\",\"issues\":[{\"id\":\"p1-manifest-builder\",\"title\":\"Safeguarded updater phase 1a: release manifest builder, schema and tests\",\"priority\":1},{\"id\":\"p1-release-attest\",\"title\":\"Safeguarded updater phase 1b: publish and attest the release manifest from both release workflows\",\"priority\":1},{\"id\":\"p2-verifier\",\"title\":\"Safeguarded updater phase 2a: fail-closed release manifest verifier\",\"priority\":2},{\"id\":\"p2-updater-verify-flag\",\"title\":\"Safeguarded updater phase 2b: wire attested-manifest verification into the updater behind a default-off flag\",\"priority\":2},{\"id\":\"p3-pr-delivery\",\"title\":\"Safeguarded updater phase 3a: deliver updater changes as a pull request with a merge policy\",\"priority\":3},{\"id\":\"p3-verify-job-template-gate\",\"title\":\"Safeguarded updater phase 3b: PR verify job and consumer template gate\",\"priority\":3},{\"id\":\"docs-safeguarded-updater\",\"title\":\"Safeguarded updater: documentation for attested manifest, verification flag and PR delivery\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"p1-manifest-builder\",\"to\":\"p1-release-attest\"},{\"from\":\"p1-release-attest\",\"to\":\"p2-verifier\"},{\"from\":\"p2-verifier\",\"to\":\"p2-updater-verify-flag\"},{\"from\":\"p2-updater-verify-flag\",\"to\":\"p3-pr-delivery\"},{\"from\":\"p3-pr-delivery\",\"to\":\"p3-verify-job-template-gate\"},{\"from\":\"p3-verify-job-template-gate\",\"to\":\"docs-safeguarded-updater\"}]}",
+  "fingerprint": "2b191b39548fef3915951c03921f165b6ec22d0bfed716aa8cc373c1ab216e15",
+  "lineage": {
+    "issue_number": 6902,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37913704577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37913704577",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261009100226_86e59cab53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6902,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37913704577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Safeguarded consumer workflow updater: attested release manifest, fail-closed verification, pull-request delivery' into 7 issues (tracking #6902)",
+  "timestamps": {
+    "created_at": "2026-10-09T10:02:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
