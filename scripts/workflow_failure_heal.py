@@ -1647,12 +1647,17 @@ def _strip_step_env_values(text: str) -> str:
 	opened an ``env:`` block holds no env values and is kept unchanged, so a
 	log cut mid-step still carries the step's diagnostic output.
 	Timestamps are compared without their prefix and kept in the output.
+	When the header's open line is timestamped (a real runner log), a line
+	without a timestamp inside the env block is a multi-line value
+	continuation, so it is redacted whole even if it looks like
+	``##[endgroup]`` or ``##[group]Run``; only a timestamped marker ends it.
 	"""
 	kept: list[str] = []
 	header_lines: list[str] = []
 	in_header = False
 	in_env = False
 	env_seen = False
+	header_stamped = False
 	for line in text.split("\n"):
 		content = _LOG_TIMESTAMP_RE.sub("", line)
 		stamp = line[: len(line) - len(content)]
@@ -1661,9 +1666,15 @@ def _strip_step_env_values(text: str) -> str:
 				in_header = True
 				in_env = False
 				env_seen = False
+				header_stamped = bool(stamp)
 				header_lines = [line]
 			else:
 				kept.append(line)
+			continue
+		if in_env and header_stamped and not stamp:
+			# The runner timestamps every line it writes; an unstamped line in
+			# the env block of a stamped header continues a multi-line value.
+			header_lines.append(f"{_STEP_ENV_REDACTED_LINE}" if content.strip() else line)
 			continue
 		if _STEP_HEADER_CLOSE_RE.match(content):
 			kept.extend(header_lines)
