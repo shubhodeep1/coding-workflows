@@ -4214,6 +4214,11 @@ def test_bind_report_claims_autofix_and_workflow_run_reports() -> None:
 	moved = {**pr, "head": {**pr["head"], "sha": SHA_C}}
 	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()})["reason"] == "head_sha_mismatch"
 	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()}, head_ancestor=True)["ok"] is True
+	# The fetched PR, not the report, supplies title, URL and body excerpt; an
+	# unauthenticated report's comments excerpt is dropped.
+	forged = heal.bind_report_claims({**payload, "issue_title": "forged", "issue_excerpt": "forged body", "comments_excerpt": "forged comments"}, pull_json=pr, jobs_by_run={})
+	assert forged["overrides"] == {"issue_title": pr["title"], "issue_url": pr["html_url"], "issue_excerpt": pr["body"], "comments_excerpt": ""}
+	assert "comments_excerpt" not in heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={}, trusted_excerpts=True)["overrides"]
 	# Runs of provenance-gated kinds pass through unchanged: the intake's
 	# provenance gate binds them (current run first, successful-review-job
 	# fallback for autofix reports).

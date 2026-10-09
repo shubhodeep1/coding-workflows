@@ -1739,7 +1739,8 @@ through `clarify → plan → implement → review`.
   runs are dropped; a report that claimed runs and keeps none is rejected as
   `no_bound_runs`). A label-escalation report's title, URL and body excerpt
   are replaced with the fetched issue / PR's, and an unauthenticated report's
-  comments excerpt is dropped. Phase, autofix and `workflow_run` reports leave their runs
+  comments excerpt is dropped; an autofix report's are replaced the same way
+  from its fetched pull request. Phase, autofix and `workflow_run` reports leave their runs
   to the existing provenance gate, which already checks run repository,
   workflow path, failure and issue / PR linkage. A report without a token
   (a consumer whose wrappers have not synced yet) is accepted after the

@@ -410,7 +410,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `permissions: {}`, are exempt). Only label-escalation reports have their
     runs bound here (claimed runs that all fail binding reject the report as
     `no_bound_runs`; title, URL and body excerpt come from the fetched issue,
-    and an unauthenticated report's comments excerpt is dropped); phase, autofix and `workflow_run` runs stay with the
+    and an unauthenticated report's comments excerpt is dropped; autofix reports take theirs from the fetched PR); phase, autofix and `workflow_run` runs stay with the
     provenance gate; rejections fail closed (`report_auth=rejected reason=…`,
     WARNING, nothing filed). On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes

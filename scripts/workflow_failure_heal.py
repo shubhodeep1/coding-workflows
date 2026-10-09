@@ -1519,9 +1519,10 @@ def bind_report_claims(
 	provenance gate. A label-escalation report that claimed runs but kept none
 	is rejected (``no_bound_runs``); one that claimed no run stays valid.
 	Returns ``{"ok", "reason", "run_refs", "dropped", "overrides"}``:
-	``overrides`` replaces a label-escalation report's title, URL and body
-	excerpt with the fetched issue's, and clears its comments excerpt unless
-	``trusted_excerpts`` (an OIDC-verified reporter built it from GitHub).
+	``overrides`` replaces a label-escalation or autofix report's title, URL
+	and body excerpt with the fetched issue / PR's, and clears its comments
+	excerpt unless ``trusted_excerpts`` (an OIDC-verified reporter built it
+	from GitHub).
 	"""
 	kind = payload.get("source_kind")
 	number = payload.get("issue_number")
@@ -1549,10 +1550,20 @@ def bind_report_claims(
 		pr_head = str((pull_json.get("head") or {}).get("sha") or "").lower() if isinstance(pull_json.get("head"), dict) else ""
 		if head_sha and head_sha != pr_head and not head_ancestor:
 			return {"ok": False, "reason": "head_sha_mismatch", "run_refs": [], "dropped": []}
+		# As for label escalations: the fetched pull request, not the report,
+		# supplies title, URL and body excerpt; an unverified reporter's
+		# comments excerpt is dropped.
+		overrides = {
+			"issue_title": single_line(pull_json.get("title"), 300),
+			"issue_url": sanitize_text(pull_json.get("html_url"), 300),
+			"issue_excerpt": sanitize_text(pull_json.get("body"), ISSUE_EXCERPT_LIMIT),
+		}
+		if not trusted_excerpts:
+			overrides["comments_excerpt"] = ""
 
 	if kind in PROVENANCE_BOUND_KINDS:
 		# The provenance gate verifies these runs (and their order) next.
-		return {"ok": True, "reason": "bound", "run_refs": list(payload.get("run_refs") or []), "dropped": []}
+		return {"ok": True, "reason": "bound", "run_refs": list(payload.get("run_refs") or []), "dropped": [], "overrides": overrides}
 
 	kept: list[dict[str, Any]] = []
 	dropped: list[dict[str, str]] = []
