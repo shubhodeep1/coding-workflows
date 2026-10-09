@@ -6404,6 +6404,11 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 	# Issue #6729: at the cap, low keep_fixing becomes an advisory just like
 	# medium; high, critical and unrated findings still block (see
 	# test_security_pass_cap_never_waives_a_high_finding).
+	# Low severity is still eligible for the round-cap conversion to an
+	# advisory follow-up (#6906 restored that rule after #6549 had turned it
+	# into fail; the heal PRs #6907 and #6916 rewrote this test to the fail rule
+	# while #6906 was in flight, which left main red with the new code and the
+	# old expectation).
 	# Keep the historical name for the CI shard selector.
 	low_finding = _security_pass_test_finding()
 	low_finding["severity"] = "low"
