@@ -1550,6 +1550,7 @@ def _consumer_payload(**overrides) -> dict:
 
 JOB_LOG = (
 	"2026-09-20T10:00:00.000Z ##[group]Run codex\n"
+	"2026-09-20T10:00:00.000Z ##[endgroup]\n"
 	"2026-09-20T10:00:01.000Z codex: applying plan\n"
 	"2026-09-20T10:00:02.000Z ::error::resolve_integration_ref.sh: Integration branch 'orchestrator/project-4123' declared in child issue #4200 does not exist.\n"
 	"2026-09-20T10:00:03.000Z ##[error]Process completed with exit code 1.\n"
@@ -4859,10 +4860,27 @@ def test_phase_report_skip_paths() -> None:
 
 PLAN_JOB_LOG = (
 	"2026-10-05T23:41:45.000Z ##[group]Run bash scripts/run_plan_codex.sh\n"
+	"2026-10-05T23:41:45.000Z ##[endgroup]\n"
 	"2026-10-05T23:41:47.000Z codex_stall_guard.sh: unknown option: --engine\n"
 	"2026-10-05T23:42:19.000Z ##[error]Codex planning failed after 3 attempts.\n"
 	"2026-10-05T23:42:19.000Z ##[error]Process completed with exit code 1.\n"
 )
+
+
+def test_job_log_fixtures_close_every_run_header() -> None:
+	# Real Actions job logs always close a ##[group]Run step header with
+	# ##[endgroup]; the log filter fails closed on a header it never sees
+	# closed, so fixtures must keep the real shape (#6876).
+	for fixture in (JOB_LOG, PLAN_JOB_LOG):
+		open_header = False
+		for raw in fixture.splitlines():
+			content = heal._LOG_TIMESTAMP_RE.sub("", raw)
+			if heal._STEP_HEADER_OPEN_RE.match(content):
+				assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
+				open_header = True
+			elif heal._STEP_HEADER_CLOSE_RE.match(content):
+				open_header = False
+		assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
 
 
 def _plan_intake_state(*, repo: str = CONSUMER_REPO, **overrides) -> dict:
