@@ -689,9 +689,11 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	filtered = heal.filter_log(RAW_STEP_LOG)
 	assert "could not resolve ${branch} head sha" not in filtered
 	assert "set -euo pipefail\n" not in filtered.split("##[group]Run set -euo pipefail", 1)[1]
-	# The header line, the env block, and every line the step printed survive.
+	# The header line, the env variable names, and every line the step printed
+	# survive; env values are redacted (basic-auth-survives-evidence-redaction).
 	assert "##[group]Run set -euo pipefail" in filtered
-	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: [redacted]" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" not in filtered
 	assert "retry run #35940786276: status=pending" in filtered
 	assert "##[error]Retry review run did not complete within 25 minutes" in filtered
 	# Cyan output printed by the step itself (outside a Run header) is kept.
@@ -699,6 +701,193 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	# Text without a Run header (reporter evidence) is unchanged by the drop.
 	evidence = "::error::PR diff unavailable\nstderr tail\n"
 	assert heal._drop_step_script_lines(evidence) == evidence
+
+
+def test_filter_log_redacts_basic_authorization_in_step_output() -> None:
+	log = (
+		"2026-09-24T00:00:01Z > Authorization: Basic dXNlcjpwYXNz\n"
+		"2026-09-24T00:00:02Z > authorization: basic bG93ZXI6Y2FzZQ==\n"
+		"2026-09-24T00:00:03Z ##[error]Process completed with exit code 1.\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "dXNlcjpwYXNz" not in filtered
+	assert "bG93ZXI6Y2FzZQ==" not in filtered
+	assert "Authorization: [redacted]" in filtered
+	assert "authorization: [redacted]" in filtered
+
+
+ENV_STEP_LOG = (
+	"2026-09-24T00:00:00Z before the step\n"
+	"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+	"2026-09-24T00:00:01Z \x1b[36;1m./mint.sh\x1b[0m\n"
+	"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+	"2026-09-24T00:00:01Z env:\n"
+	"2026-09-24T00:00:01Z   GH_TOKEN: ghp_x\n"
+	"2026-09-24T00:00:01Z   FOO: plainvalue\n"
+	"2026-09-24T00:00:01Z   MULTI: first-line\n"
+	"continuation-secret-line\n"
+	"2026-09-24T00:00:01Z   EMPTY:\n"
+	"2026-09-24T00:00:01Z ##[endgroup]\n"
+	"2026-09-24T00:00:02Z step output stays: FOO: visible\n"
+)
+
+
+def test_filter_log_redacts_step_env_values_but_keeps_names() -> None:
+	filtered = heal.filter_log(ENV_STEP_LOG)
+	assert "GH_TOKEN: [redacted]" in filtered
+	assert "FOO: [redacted]" in filtered
+	assert "MULTI: [redacted]" in filtered
+	assert "EMPTY:" in filtered
+	for secret in ("ghp_x", "plainvalue", "first-line", "continuation-secret-line"):
+		assert secret not in filtered
+	assert "shell: /usr/bin/bash -e {0}" in filtered
+	assert "./mint.sh\n" not in filtered.split("##[group]Run ./mint.sh", 1)[1]
+	assert "before the step" in filtered
+	assert "step output stays: FOO: visible" in filtered
+	# The continuation line is replaced whole, not passed through.
+	assert "\n  [redacted]\n" in filtered
+
+
+def test_strip_step_env_values_keeps_other_header_sections() -> None:
+	# The runner prints `with:` / `shell:` before `env:`; those stay readable.
+	log = (
+		"##[group]Run actions/checkout@v4\n"
+		"with:\n"
+		"  ref: main\n"
+		"shell: /usr/bin/bash\n"
+		"env:\n"
+		"  A: secret-a\n"
+		"##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	assert "secret-a" not in stripped
+	assert "  A: [redacted]" in stripped
+	assert "with:\n  ref: main\nshell: /usr/bin/bash\nenv:\n" in stripped
+	# Text without a Run header comes back unchanged, and the pass is idempotent.
+	evidence = "::error::PR diff unavailable\nenv:\n  X: y\n"
+	assert heal._strip_step_env_values(evidence) == evidence
+	assert heal._strip_step_env_values(stripped) == stripped
+	once = heal._strip_step_env_values(ENV_STEP_LOG)
+	assert heal._strip_step_env_values(once) == once
+
+
+def test_strip_step_env_values_header_like_lines_do_not_end_env_block() -> None:
+	# A multi-line value continuation that looks like a header key must not
+	# switch redaction off for the rest of the block.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"with: confidential-one\n"
+		"shell: confidential-two\n"
+		"env: FOO=confidential-three\n"
+		"2026-09-24T00:00:01Z   TOKEN2: confidential-four\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z ##[group]Run ./other.sh\n"
+		"2026-09-24T00:00:02Z env: INLINE=confidential-five\n"
+		"2026-09-24T00:00:02Z   NEXT: confidential-six\n"
+		"2026-09-24T00:00:02Z ##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for n in ("one", "two", "three", "four", "five", "six"):
+		assert f"confidential-{n}" not in stripped
+	assert "2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}" in stripped
+	assert "  TOKEN2: [redacted]" in stripped
+	assert "2026-09-24T00:00:02Z env: [redacted]" in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_strip_step_env_values_marker_shaped_value_lines_do_not_end_env_block() -> None:
+	# Unstamped continuation lines of a multi-line value that look like the
+	# header close or a new Run header must not end redaction early.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"##[endgroup]\n"
+		"leaked-after-close\n"
+		"##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("first", "leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert stripped.count("##[endgroup]") == 1
+	assert heal._strip_step_env_values(stripped) == stripped
+	filtered = heal.filter_log(log)
+	assert "leaked-after-close" not in filtered
+	assert "step output kept" in filtered
+
+
+def test_strip_step_env_values_timestamp_shaped_marker_value_lines_do_not_end_env_block() -> None:
+	# A value line that itself starts with a timestamp and reads like a marker
+	# is followed by an unstamped continuation, so it cannot be a real marker.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.count("##[endgroup]") == 1
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_filter_log_drops_unterminated_step_header() -> None:
+	log = (
+		"2026-09-24T00:00:00Z earlier output kept\n"
+		"2026-09-24T00:00:01Z ##[group]Run ./deploy.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   TOKEN: unterminated-value\n"
+		"2026-09-24T00:00:01Z after header line\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "earlier output kept" in filtered
+	assert "unterminated-value" not in filtered
+	assert "TOKEN" not in filtered
+	assert "after header line" not in filtered
+	assert "##[group]Run ./deploy.sh" not in filtered
+	assert filtered.count(heal._STEP_ENV_UNTERMINATED_MARKER) == 1
+
+
+def test_filter_log_keeps_unterminated_step_header_without_env_block() -> None:
+	# A log cut mid-step whose header never opened an env block carries no env
+	# values, so its diagnostic output must survive (heal intake relies on it).
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run codex\n"
+		"2026-09-24T00:00:02Z ::error::resolve_integration_ref.sh: branch missing\n"
+		"2026-09-24T00:00:03Z Authorization: Basic dXNlcjpwYXNz\n"
+	)
+	filtered = heal.filter_log(log)
+	assert heal._STEP_ENV_UNTERMINATED_MARKER not in filtered
+	assert "##[group]Run codex" in filtered
+	assert "resolve_integration_ref.sh: branch missing" in filtered
+	assert "dXNlcjpwYXNz" not in filtered
+
+
+def test_filter_log_byte_cut_never_leaves_an_unredacted_token_suffix() -> None:
+	token = "ghp_" + "Z" * 60
+	log = "x" * 200 + "\n" + "value " + token + "\n"
+	for max_bytes in range(5, 80):
+		filtered = heal.filter_log(log, max_bytes=max_bytes)
+		assert "ZZZZ" not in filtered
 
 
 def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
@@ -3932,6 +4121,8 @@ def test_redact_secrets_patterns() -> None:
 	assert heal.redact_secrets("ghp_abcDEF123 github_pat_11AA_bb") == "ghp_[redacted] github_pat_[redacted]"
 	assert heal.redact_secrets("key sk-or-v1-abc") == "key sk-or-[redacted]"
 	assert heal.redact_secrets("plain text") == "plain text"
+	assert heal.redact_secrets("AUTHORIZATION: BASIC abc") == "AUTHORIZATION: [redacted]"
+	assert heal.redact_secrets("Authorization: Basic dXNlcjpwYXNz") == "Authorization: [redacted]"
 
 
 def test_failure_headline_cli(tmp_path) -> None:
