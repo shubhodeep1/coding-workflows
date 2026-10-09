@@ -19,6 +19,9 @@ the network; the shell only executes.
        PR provenance is validated again here; missing or malformed fields fail
        closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
+       `accept_with_followup` on an `ai:security` issue is refused here too: it
+       yields only a keep-open comment and a WARNING, never a follow-up issue
+       or a resume command, so the finding stays blocked (#6541).
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -364,12 +367,17 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		security_issue = _is_security_issue(ctx)
-		if security_issue and not ctx["tracking"] and ctx.get("security_metadata_unsafe"):
+		# A tracked security finding is split through the poller's fix-up
+		# request; it carries the finding marker, from which the poller labels
+		# the successor `ai:security` (#6541). Without a valid marker the
+		# successor cannot be bound to the finding, standalone or tracked, so
+		# nothing is split and the original keeps its block.
+		if security_issue and (ctx.get("security_metadata_unsafe") or not ctx.get("security_finding_id")):
 			return [
 				{"op": "comment", "issue": item, "body": "This security finding stays open: its finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge could not safely re-issue security finding #{item}; its metadata needs correction."},
 			]
-		if security_issue and not ctx["tracking"] and ctx.get("security_finding_id"):
+		if security_issue and ctx.get("security_finding_id"):
 			body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['security_finding_id']} -->\n{body}"
 		if security_issue and not ctx["tracking"]:
 			if ctx.get("security_target_branch"):
@@ -407,6 +415,19 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
 			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
 	elif name == "accept_with_followup":
+		if _is_security_issue(ctx):
+			# A security finding is never waived with an unbound follow-up; the
+			# block label stays so the scan keeps seeing it (#6541).
+			return [
+				{
+					"op": "comment",
+					"issue": item,
+					"body": "This security finding stays open and blocked: the unblock judge cannot accept it with a follow-up. "
+					"A split must be a security-labelled re-issue bound to this finding; it stays tracked here until a linked fix is merged."
+					"\n\nWhy: " + _one_line(verdict["reason"]),
+				},
+				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge refused accept_with_followup for security finding #{item} ({ctx['stop']}); the block is kept."},
+			]
 		followup_body = "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"])
 		if ctx["kind"] == "pr":
 			followup_body += "\n\n" + _provenance_line(ctx)

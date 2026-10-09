@@ -59,6 +59,10 @@
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
 #   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
+#   AI_ENGINE_INCLUDE_PATHS newline-separated trusted runtime paths the prompt
+#                           names, passed to the container as --include
+#                           (default empty; the security audit's oversized-
+#                           file export)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
 #
 # The OAuth token never reaches the CLI: scripts/claude_anthropic_relay.py
@@ -77,7 +81,7 @@ readonly -a _AI_ENGINE_SANDBOX_ONLY_ROLES=(REVIEW_EDITOR REVIEW_CONSOLIDATOR RB_
 
 _ai_engine_py()
 {
-	PYTHONDONTWRITEBYTECODE=1 python3 "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
 }
 
 _ai_engine_valid_role()
@@ -99,8 +103,8 @@ ai_engine_for_role()
 		printf 'codex\n'
 		return 0
 	fi
-	engine="$(printf '%s' "${resolved}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
-	printf '%s' "${resolved}" | python3 -c '
+	engine="$(printf '%s' "${resolved}" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
+	printf '%s' "${resolved}" | python3 -I -c '
 import json, sys
 r = json.load(sys.stdin)
 print("AI_ENGINE_SELECTED role={role} engine={engine} model={model} effort={effort} source={source}".format(**r))
@@ -177,7 +181,7 @@ ai_engine_accounts()
 
 _ai_engine_json_field()
 {
-	python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
+	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
 }
 
 _ai_engine_instructions_file()
@@ -302,6 +306,12 @@ claude_run()
 	# The container copy leaves CLAUDE.md out and never writes one back; the
 	# host file is never moved (answer Q19 A).
 	[ "${hide_claude_md}" = "true" ] && isolation_args+=(--hide-claude-md)
+	local include_path
+	while IFS= read -r include_path; do
+		if [ -n "${include_path}" ]; then
+			isolation_args+=(--include "${include_path}")
+		fi
+	done <<< "${AI_ENGINE_INCLUDE_PATHS:-}"
 	# Implement prepares one workspace sandbox per job with the project's
 	# dependencies preinstalled (codex_isolated_exec.sh prepare --deps); a
 	# write role in that job reuses it, as the codex attempts do.

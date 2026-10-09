@@ -348,3 +348,64 @@ def test_inline_wrapper_mktemp_failure_does_not_run_the_command(
 	assert result.stdout == "rc=1\n", result.stderr
 	assert "::error::gh_retry: failed to create stdout temp file" in result.stderr
 	assert _calls(tmp_path) == 0
+
+
+def test_pat_budget_snapshot_and_window_change(tmp_path: Path) -> None:
+	"""Shared-PAT deltas are unknown across resets; no raw response is logged."""
+	snapshot = tmp_path / "budget"
+	helper = REPO_ROOT / "scripts" / "gh_helpers.sh"
+	script = f'''source "{helper}"
+gh() {{ printf '%s\\n' "${{FAKE_BUDGET}}"; }}
+gh_pat_budget "$PHASE" review_autofix gate "{snapshot}"
+'''
+	for phase, remaining, reset, expected in (
+		("start", 100, 1000, "used_in_job=unknown"),
+		("end", 93, 1000, "used_in_job=7"),
+		("end", 89, 2000, "used_in_job=unknown"),
+	):
+		env = {**os.environ, "PHASE": phase, "FAKE_BUDGET": json.dumps({"resources": {"core": {"remaining": remaining, "reset": reset}}})}
+		result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert f"GH_PAT_BUDGET phase={phase} workflow=review_autofix job=gate remaining={remaining} reset={reset} {expected}" in result.stdout
+	headers = ("HTTP/2 200\r\nx-ratelimit-resource: core\r\nx-ratelimit-remaining: 65\r\n"
+		"x-ratelimit-reset: 3000\r\n\r\n" + json.dumps({"resources": {"core": {"remaining": 20, "reset": 4000}}}))
+	result = subprocess.run(["bash", "-c", script], env={**os.environ, "PHASE": "start", "FAKE_BUDGET": headers},
+		capture_output=True, text=True)
+	assert result.returncode == 0 and "remaining=65 reset=3000" in result.stdout
+
+
+def test_review_watchdog_state_is_job_local_and_expires(tmp_path: Path) -> None:
+	gh = tmp_path / "gh"
+	gh.write_text('#!/usr/bin/env bash\necho called >> "$CALL_LOG"\necho open\n')
+	gh.chmod(0o755)
+	call_log = tmp_path / "calls"
+	env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path),
+		"GITHUB_RUN_ID": "25", "CALL_LOG": str(call_log), "GH_TOKEN": "fake"}
+	script = f'source "{GH_HELPERS}"; gh_review_pr_state o/r 7; gh_review_pr_state o/r 7'
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\nopen\n", result.stderr
+	assert call_log.read_text().count("called") == 1
+	cache = next(tmp_path.glob("review_pr_state_*.lock")).with_suffix("")
+	cache.write_text("o/r 7 open 0\n")
+	result = subprocess.run(["bash", "-c", f'source "{GH_HELPERS}"; gh_review_pr_state o/r 7'], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\n"
+	assert call_log.read_text().count("called") == 2
+
+
+def test_review_watchdog_does_not_cache_terminal_state(tmp_path: Path) -> None:
+	"""A reopened PR must not be aborted based on an earlier closed read."""
+	call_log = tmp_path / "calls"
+	state_file = tmp_path / "state"
+	state_file.write_text("closed\n")
+	env = {**os.environ, "RUNNER_TEMP": str(tmp_path), "GITHUB_RUN_ID": "26",
+		"CALL_LOG": str(call_log), "STATE_FILE": str(state_file)}
+	script = f'''source "{GH_HELPERS}"
+gh() {{ printf 'called\\n' >> "$CALL_LOG"; read -r terminal_state_from_fixture < "$STATE_FILE"; printf '%s\\n' "$terminal_state_from_fixture"; }}
+gh_review_pr_state o/r 7
+'''
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "closed\n", result.stderr
+	state_file.write_text("open\n")
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\n", result.stderr
+	assert call_log.read_text().count("called") == 2

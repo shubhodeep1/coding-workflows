@@ -231,7 +231,7 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 		'set -euo pipefail\n' + _helper_source() + '\n'
 		f'_POLLER_AI_ENGINE_SH="{engine_dir / "ai_engine.sh"}"\n'
 		f'RB_COMBINED_WORKDIR="{worktree}"\n'
-		f'RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
+		f'export RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
 		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
 		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
 		f'_current_wave_details_json=\'{{"10":{{"labels":[{issue_labels}],"labels_complete":true}}}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'
@@ -904,7 +904,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	assert '--json number,title,labels' in steps[names.index("Find active tracking issues")]["run"]
 	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' in resolve["run"]
 	assert 'any(.[]; all(.labels[]?; .name != "ai:codex"))' in resolve["run"]
-	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do" in resolve["run"]
+	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in resolve["run"]
 	for name, uses in (
 		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
 		("Resolve Claude credential", "./.codex-workflow-src/.github/actions/claude-pool-token"),
@@ -915,9 +915,11 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		assert step["if"] == "steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'"
 		assert names.index(name) < names.index("Process each tracking issue")
 	process_env = steps[names.index("Process each tracking issue")]["env"]
-	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
+	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE", "SECURITY_AUDIT"):
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
 	assert process_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
+	assert steps[names.index("Resolve Claude credential")]["id"] == "claude_pool"
+	assert process_env["CLAUDE_POOL_REASON"] == "${{ steps.claude_pool.outputs.reason || '' }}"
 	assert process_env["RB_JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 	assert process_env["JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 

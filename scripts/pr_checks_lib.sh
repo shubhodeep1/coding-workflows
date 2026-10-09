@@ -55,7 +55,7 @@
 # the empty-string allow-all sentinel. Keep this string identical to the
 # orchestrate_poll_process.sh ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT
 # assignment; tests/test_pr_checks_lib_required_filter.py pins them equal.
-: "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate}"
+: "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate}"
 
 # Helper: returns the comma-separated list of check-run names treated as
 # blocking for the given base ref. Resolution: branch protection's
