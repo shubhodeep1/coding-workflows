@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Multiple merged changes that touched workspace-managed scripts, hooks, prompts, or workflow files also updated `.ai/.workspace_source_manifest.txt`. When planning changes to those areas, check whether the manifest tracks the changed paths and update it as needed.",
+  "fingerprint": "10dd62f25fd1c8737e4976954c563ecd4b4da6f41ba2de9f752a74015d041cfe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37882840842",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37882840842",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6561",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6658",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6763",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6821",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6564",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6566",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6670",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6765",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6833"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261009041532_62f6feddc5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep the workspace source manifest in sync when changing workspace-managed files.",
+  "timestamps": {
+    "created_at": "2026-10-09T04:15:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
