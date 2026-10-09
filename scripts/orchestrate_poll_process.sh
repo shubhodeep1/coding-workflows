@@ -7086,9 +7086,16 @@ security_pass_exhaustion_judge() {
   if [ "${keep_fixing_capped}" = "true" ] && [ "${fixing_count}" -gt 0 ]; then
     decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
     summary="$(jq -r '.summary' "${verdict_file}")"
+    # The converted low/medium rows are not recorded on this path, so the
+    # capped sentence says so instead of reusing capped_suffix ("converted to
+    # advisories"), which describes the accept path.
+    blocking_capped_sentence=""
+    if [ "${keep_fixing_converted}" -gt 0 ]; then
+      blocking_capped_sentence=" The cap converted ${keep_fixing_converted} low/medium \`keep_fixing\` decision(s) to advisories, but they are not recorded because the pass terminalizes; high, critical and unrated findings are never waived by the cap."
+    fi
     post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The extra fix-cycle budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent. ${fixing_count} blocking finding(s) still need \`keep_fixing\`, so the pass is terminalized as \`ai:security-pass-failed\` without recording any new waivers or follow-ups.
+The extra fix-cycle budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent. ${fixing_count} blocking finding(s) still need \`keep_fixing\`, so the pass is terminalized as \`ai:security-pass-failed\` without recording any new waivers or follow-ups.${blocking_capped_sentence}
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
