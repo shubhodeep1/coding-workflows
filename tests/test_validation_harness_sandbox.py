@@ -421,6 +421,7 @@ def test_provision_still_fails_closed_when_the_packages_cannot_be_installed() ->
 	text = HELPER.read_text(encoding="utf-8")
 	assert "install_rootless_packages || sandbox_fail provision rootless_packages_unavailable" in text
 	assert 'SANDBOX_DOCKER_APT_KEY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"' in text
+	assert 'key_tmp="$(mktemp)" || { sandbox_log provision fail docker_repo_tmpfile_failed; return 1; }' in text
 
 
 def test_ci_runs_this_file() -> None:

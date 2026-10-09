@@ -218,7 +218,7 @@ install_rootless_packages()
 		*) sandbox_log provision fail docker_repo_distro_unsupported; return 1 ;;
 	esac
 	[[ "${codename}" =~ ^[a-z]+$ ]] && [[ "${arch}" =~ ^[a-z0-9]+$ ]] || { sandbox_log provision fail docker_repo_platform_unknown; return 1; }
-	key_tmp="$(mktemp)" || return 1
+	key_tmp="$(mktemp)" || { sandbox_log provision fail docker_repo_tmpfile_failed; return 1; }
 	if ! curl -fsSL --retry 3 --max-time 60 -o "${key_tmp}" "https://download.docker.com/linux/${distro}/gpg"; then
 		rm -f -- "${key_tmp}"
 		sandbox_log provision fail docker_repo_key_download_failed
