@@ -5,13 +5,24 @@
   "entry_id": "processed_command_6946_6082500624_approved",
   "issue_number": 6946,
   "metadata": {
+    "branch": "ai/issue-6946",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/6946-ci-poll-shard-failure-summary.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 6946,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6946",
+    "pr_number": 6953,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6953",
+    "run_attempt": "1",
+    "run_id": "37941399543",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37941399543"
   },
   "run_attempt": 1,
   "run_id": "37941399543",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-09T14:07:27Z",
+  "status": "completed",
+  "timestamp": "2026-10-09T14:25:45Z",
   "workflow": "implement"
 }
