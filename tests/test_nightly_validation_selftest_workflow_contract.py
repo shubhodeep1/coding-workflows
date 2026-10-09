@@ -54,6 +54,20 @@ def test_workflow_commits_only_status_file_when_changed() -> None:
 	assert 'git push origin "HEAD:${TARGET_BRANCH}"' in wf
 
 
+def test_checkout_does_not_persist_credentials_for_generated_tests() -> None:
+	# Generated validation tests run inside this checkout; the token must not
+	# be persisted into .git/config where they could read it (#6568). Only the
+	# commit step receives a one-shot credential helper reading the env.
+	wf = _workflow_text()
+	assert 'persist-credentials: false' in wf
+	assert 'STATUS_PUSH_TOKEN: ${{ github.token }}' in wf
+	assert 'export GIT_CONFIG_KEY_0=credential.helper' in wf
+	commit_step = wf.split('- name: Commit validation self-test status', 1)[1]
+	assert commit_step.index('GIT_CONFIG_VALUE_0') < commit_step.index('git pull --rebase origin')
+	selftest_step = wf.split('- name: Run validation self-test matrix', 1)[1].split('- name:', 1)[0]
+	assert 'token' not in selftest_step.lower()
+
+
 def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 	wf = _workflow_text()
 	assert '- name: Write self-test summary' in wf
@@ -72,6 +86,7 @@ def main() -> int:
 	test_workflow_has_nightly_schedule_and_manual_dispatch()
 	test_workflow_runs_matrix_and_always_uploads_artifacts()
 	test_workflow_commits_only_status_file_when_changed()
+	test_checkout_does_not_persist_credentials_for_generated_tests()
 	test_workflow_emits_machine_readable_summary_to_step_summary()
 	return 0
 

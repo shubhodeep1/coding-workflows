@@ -25,6 +25,10 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          # The self-test runs generated validation tests inside this checkout;
+          # keep the token out of .git/config so they cannot read it (#6568).
+          # Only the commit step below receives a one-shot credential.
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -126,6 +130,7 @@ jobs:
         if: always() && github.ref_type == 'branch'
         env:
           TARGET_BRANCH: ${{ github.ref_name }}
+          STATUS_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           status_file="analysis/validation-selftest-status.json"
@@ -143,5 +148,10 @@ jobs:
           fi
 
           git commit -m "chore: update validation self-test status"
+          # Checkout does not persist credentials; authenticate pull/push
+          # through a one-shot helper that reads the token from the env.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=credential.helper
+          export GIT_CONFIG_VALUE_0='!f() { printf "username=x-access-token\npassword=%s\n" "${STATUS_PUSH_TOKEN}"; }; f'
           git pull --rebase origin "${TARGET_BRANCH}"
           git push origin "HEAD:${TARGET_BRANCH}"
