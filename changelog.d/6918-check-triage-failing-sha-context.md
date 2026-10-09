@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **Check-failure triage now reads check runs from the commit that failed, not from the PR's latest commit.** Before, a push after the failure could put a later commit's check runs into the diagnosis, so the triage issue described the wrong commit (#6918: the failure was on `7197226`, the context came from `2269945`).
+
+`scripts/check_failure_triage.sh` passes the failing check's SHA to `scripts/collect_pr_check_runs_context.py` as `PR_CHECK_RUNS_HEAD_SHA_OVERRIDE`, and logs `CHECK_TRIAGE context_head_sha=<sha> pr_head_sha=<sha> pr_head_advanced=true|false|unknown`. The collector queries only a full 40-character hex SHA. Any other value writes an `unavailable` context and makes no API call, rather than falling back to the PR head. When the variable is unset or empty, as in review/autofix or a triage run without a head SHA, the collector uses the PR's current head as before.

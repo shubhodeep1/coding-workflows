@@ -1193,12 +1193,22 @@ esac
 			self.assertFalse(capture_path.exists())
 
 
-def _run_collect_stage(*, parent_body: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
+def _run_collect_stage(
+	*,
+	parent_body: str,
+	pr_head_sha: str = "a" * 40,
+	check_runs_enabled: bool = False,
+	capture: dict | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
 	"""Run scripts/check_failure_triage.sh (stage=collect) for a failing CI check on
 	PR #17, whose head branch is ai/issue-41, against a fake ``gh`` that serves
 	the PR, its source issue #41 with ``parent_body``, and an empty open-triage
 	list. Returns the process, the GITHUB_OUTPUT map, and the collected
-	triage_metadata.json (empty when the script exited before writing it)."""
+	triage_metadata.json (empty when the script exited before writing it).
+	``pr_head_sha`` is the PR payload's current head (the failing check ran on
+	``"a" * 40``); with ``check_runs_enabled`` the fake ``gh`` serves an empty
+	check-run listing and ``capture`` receives the ``gh`` call log and the
+	collected check-run context."""
 	temp_dir = tempfile.TemporaryDirectory(prefix="check-triage-lineage-")
 	temp_path = Path(temp_dir.name)
 	bin_dir = temp_path / "bin"
@@ -1215,14 +1225,16 @@ def _run_collect_stage(*, parent_body: str) -> tuple[subprocess.CompletedProcess
 		"title": "AI implementation for issue #41",
 		"html_url": "https://github.com/owner/repo/pull/17",
 		"body": "",
-		"head": {"ref": "ai/issue-41", "sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
+		"head": {"ref": "ai/issue-41", "sha": pr_head_sha, "repo": {"full_name": "owner/repo"}},
 	})
 	_write_executable(
 		bin_dir / "gh",
 		"""#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\\n' "$*" >> "${MOCK_GH_CALL_LOG}"
 case "$*" in
   "api repos/owner/repo/pulls/17") printf '%s\\n' "${MOCK_PR_PAYLOAD}" ;;
+  "api --paginate --slurp repos/owner/repo/commits/"*"/check-runs?per_page=100") printf '[{"check_runs": []}]\\n' ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
   "api --paginate --method GET repos/owner/repo/issues "*) printf '[]\\n' ;;
   "label create "*) ;;
@@ -1239,7 +1251,8 @@ esac
 	env.update(
 		{
 			"CHECK_FAILURE_TRIAGE_ENABLED": "true",
-			"CHECK_RUNS_AUTOFIX_ENABLED": "false",
+			"CHECK_RUNS_AUTOFIX_ENABLED": "true" if check_runs_enabled else "false",
+			"CHECK_RUNS_WAIT_TIMEOUT_SECS": "0",
 			"CHECK_TRIAGE_CHECK_CONCLUSION": "failure",
 			"CHECK_TRIAGE_CHECK_NAME": "CI",
 			"CHECK_TRIAGE_DETAILS_URL": "https://github.com/owner/repo/actions/runs/1",
@@ -1251,6 +1264,7 @@ esac
 			"GITHUB_OUTPUT": str(output_path),
 			"GITHUB_REPOSITORY": "owner/repo",
 			"GITHUB_RUN_ID": "1",
+			"MOCK_GH_CALL_LOG": str(temp_path / "gh_calls.txt"),
 			"MOCK_PARENT_BODY_FILE": str(temp_path / "parent_body.txt"),
 			"MOCK_PR_PAYLOAD": pr_payload,
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
@@ -1274,6 +1288,11 @@ esac
 	metadata_path = runtime_dir / "triage_metadata.json"
 	if metadata_path.exists() and metadata_path.stat().st_size:
 		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+	if capture is not None:
+		gh_call_log = temp_path / "gh_calls.txt"
+		context_path = runtime_dir / "pr_check_runs_context.txt"
+		capture["gh_calls"] = gh_call_log.read_text(encoding="utf-8") if gh_call_log.exists() else ""
+		capture["context"] = context_path.read_text(encoding="utf-8") if context_path.exists() else ""
 	temp_dir.cleanup()
 	return proc, outputs, metadata
 
@@ -1378,6 +1397,110 @@ class CheckFailureTriageLineageTests(unittest.TestCase):
 				self.assertNotIn("source_issue_not_triage", proc.stdout)
 				self.assertNotIn("ready", outputs)
 				self.assertEqual(metadata, {})
+
+
+COLLECTOR_PATH = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
+
+
+def _run_collector(*, payload_head_sha: str, override: str | None) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	"""Run scripts/collect_pr_check_runs_context.py against a fake ``gh`` that
+	records its arguments and serves an empty check-run listing. Returns the
+	process, the recorded ``gh`` calls and the written context file."""
+	with tempfile.TemporaryDirectory(prefix="check-runs-collector-") as temp_dir:
+		temp_path = Path(temp_dir)
+		bin_dir = temp_path / "bin"
+		bin_dir.mkdir()
+		call_log = temp_path / "gh_calls.txt"
+		_write_executable(
+			bin_dir / "gh",
+			"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${MOCK_GH_CALL_LOG}\"\nprintf '[{\"check_runs\": []}]\\n'\n",
+		)
+		payload_path = temp_path / "pr_payload.json"
+		payload_path.write_text(json.dumps({"head": {"sha": payload_head_sha}}), encoding="utf-8")
+		context_path = temp_path / "context.txt"
+		env = os.environ.copy()
+		env.pop("BASH_ENV", None)
+		env.pop("ENV", None)
+		env.pop("PR_CHECK_RUNS_HEAD_SHA_OVERRIDE", None)
+		env.update({
+			"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+			"CHECK_RUNS_WAIT_TIMEOUT_SECS": "0",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"MOCK_GH_CALL_LOG": str(call_log),
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"PR_PAYLOAD_FILE": str(payload_path),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(context_path),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		if override is not None:
+			env["PR_CHECK_RUNS_HEAD_SHA_OVERRIDE"] = override
+		proc = subprocess.run(
+			["python3", "-I", "-B", str(COLLECTOR_PATH)],
+			cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+		)
+		calls = call_log.read_text(encoding="utf-8") if call_log.exists() else ""
+		context = context_path.read_text(encoding="utf-8") if context_path.exists() else ""
+	return proc, calls, context
+
+
+class CheckFailureTriageFailingShaContextTests(unittest.TestCase):
+	"""Triage collects check runs for the failing check's SHA, not the PR's
+	current head, so a push after the failure cannot swap a later commit's
+	check runs into the diagnosis (#6918)."""
+
+	def test_override_queries_failing_sha_when_pr_head_advanced(self) -> None:
+		proc, calls, context = _run_collector(payload_head_sha="b" * 40, override="A" * 40)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn(f"commits/{'a' * 40}/check-runs", calls)
+		self.assertNotIn("b" * 40, calls)
+		self.assertIn(f"head_sha: {'a' * 40}\n", context)
+		self.assertIn("collection_status: ready\n", context)
+		self.assertNotIn("b" * 40, context)
+
+	def test_invalid_override_fails_closed_without_api_call(self) -> None:
+		for override in ("zz", "a" * 40 + ";x", "../" + "a" * 37, "a" * 39):
+			with self.subTest(override=override):
+				proc, calls, context = _run_collector(payload_head_sha="b" * 40, override=override)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(calls, "")
+				self.assertIn("collection_status: unavailable\n", context)
+				self.assertIn("head_sha: \n", context)
+				self.assertNotIn("b" * 40, context)
+				self.assertIn("CHECK_RUNS_AUTOFIX head SHA override invalid.", proc.stdout)
+				self.assertNotIn(override, proc.stdout + proc.stderr)
+
+	def test_unset_or_empty_override_keeps_payload_head(self) -> None:
+		for override in (None, ""):
+			with self.subTest(override=override):
+				proc, calls, context = _run_collector(payload_head_sha="b" * 40, override=override)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn(f"commits/{'b' * 40}/check-runs", calls)
+				self.assertIn(f"head_sha: {'b' * 40}\n", context)
+
+	def test_triage_passes_failing_sha_to_collector(self) -> None:
+		script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
+		self.assertIn('PR_CHECK_RUNS_HEAD_SHA_OVERRIDE="${HEAD_SHA}"', script_text)
+
+	def test_triage_collect_stage_uses_failing_sha_after_pr_head_advanced(self) -> None:
+		capture: dict = {}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body="", pr_head_sha="b" * 40, check_runs_enabled=True, capture=capture,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertIn(
+			f"CHECK_TRIAGE context_head_sha={'a' * 40} pr_head_sha={'b' * 40} pr_head_advanced=true",
+			proc.stdout,
+		)
+		self.assertIn(f"commits/{'a' * 40}/check-runs", capture["gh_calls"])
+		self.assertNotIn(f"commits/{'b' * 40}/check-runs", capture["gh_calls"])
+		self.assertIn(f"head_sha: {'a' * 40}\n", capture["context"])
+
+	def test_triage_collect_stage_reports_unchanged_pr_head(self) -> None:
+		proc, _outputs, _metadata = _run_collect_stage(parent_body="")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn(f"pr_head_sha={'a' * 40} pr_head_advanced=false", proc.stdout)
 
 
 if __name__ == "__main__":
