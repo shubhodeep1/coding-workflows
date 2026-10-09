@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The failing test can't be identified from the evidence. What should this issue do?\nChoices:\nA) Make CI failures easier to diagnose. When a shard fails, have the orchestrate-poll sharding step repeat the failed shard's `FAIL` test names and its last error lines in the final `::error::` summary, so log tails and future triages show what failed. Add a matching assertion in `tests/test_ci_poll_test_sharding.py`. Don't touch poller behavior or the PR #6940 renderer, and don't loosen how failures are counted. (RECOMMENDED)\nB) Do the same as A, and also apply it to the identical sharded step in the release gates' `validate-scripts` job (`mark-stable.yml`, `test-and-mark-stable.yml`). The sharding contract test already requires these copies to match.\nC) Change no code. Close the issue as inconclusive or possibly flaky, and rerun the failed `orchestrate-poll (3)` job on PR #6940 instead.\nD) Hold the issue until an operator adds the failing test name from the full log of run 37935250730 (at check-run head `795be54a\u2026`). Then fix that specific test or poller behavior.\n**Note:** C and D don't fit the unattended pipeline well. D needs a human to pull the log, and C produces no PR.",
+  "fingerprint": "85f56057ea177cd724a6ca6570e911566ecb2efd6db62b8d15cc8eb3cc2d33b0",
+  "lineage": {
+    "issue_number": 6946,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37938438062",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37938438062",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009134510_221caf2129",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6946,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37938438062"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6946 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T13:45:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
