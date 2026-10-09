@@ -5029,6 +5029,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
+          REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'false' }}
+          REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS: ${{ vars.REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS || '600' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.

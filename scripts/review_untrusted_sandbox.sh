@@ -77,6 +77,20 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	fi
 	# Only the credential-free host proxy reaches vetted public registries.
 	# The user cannot specify the image, executable, mounts or Docker flags.
+	# Opt-in bound on the optional installs and pytest bootstrap below (#6835).
+	# Off by default, so the dependency container behaves as before. Only
+	# normalized scalars cross into the container; the 780s ceiling keeps a
+	# bounded run inside the outer 900s isolation timeout, which stays fatal.
+	bounded_deps_enabled=false
+	case "$(printf '%s' "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) bounded_deps_enabled=true ;;
+	esac
+	bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"
+	if ! [[ "${bounded_deps_budget}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${bounded_deps_budget}))" -lt 30 ] || [ "$((10#${bounded_deps_budget}))" -gt 780 ]; then
+		echo '::warning::REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS must be an integer between 30 and 780; using 600' >&2
+		bounded_deps_budget=600
+	fi
+	bounded_deps_budget="$((10#${bounded_deps_budget}))"
 	python_bin="$(python3 -c 'import sys; print(sys.executable)')"
 	if [ ! -f "${support}/dependency_registry_proxy.py" ] || [ -L "${support}/dependency_registry_proxy.py" ]; then
 		echo '::warning::Review dependencies skipped: registry proxy support missing' >&2
@@ -100,6 +114,8 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		--env npm_config_https_proxy=http://127.0.0.1:3128 --env npm_config_proxy=http://127.0.0.1:3128 \
 		--env YARN_HTTPS_PROXY=http://127.0.0.1:3128 --env YARN_HTTP_PROXY=http://127.0.0.1:3128 \
 		--env PIP_PROXY=http://127.0.0.1:3128 --env NO_PROXY= --env no_proxy= \
+		--env "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=${bounded_deps_enabled}" \
+		--env "REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=${bounded_deps_budget}" \
 		--workdir /source "${image}" /bin/bash -c '
 			set -u
 			python3 /support/dependency_registry_proxy.py bridge /socket/registry.sock 3128 &
@@ -110,25 +126,52 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 			install_failed=false
 			python3 -m venv --system-site-packages /source/.review-venv || exit 1
 			export PATH=/source/.review-venv/bin:$PATH
+			# REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true gives the optional
+			# installs one shared deadline; a timeout warns and continues. Off,
+			# run_bounded_install runs the command unchanged.
+			deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"
+			case "$deps_budget" in ""|*[!0-9]*) deps_budget=600 ;; esac
+			deps_budget=$((10#$deps_budget))
+			deps_deadline=$(( $(date +%s) + deps_budget ))
+			run_bounded_install()
+			{
+				bounded_step="$1"
+				shift
+				if [ "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}" != true ]; then
+					"$@"
+					return $?
+				fi
+				bounded_remaining=$(( deps_deadline - $(date +%s) ))
+				if [ "$bounded_remaining" -le 0 ]; then
+					echo "::warning::Review dependency install skipped (step=$bounded_step): dependency install budget of ${deps_budget}s exhausted; continuing."
+					return 124
+				fi
+				bounded_rc=0
+				timeout --signal=TERM --kill-after=5s "${bounded_remaining}s" "$@" || bounded_rc=$?
+				if [ "$bounded_rc" -eq 124 ] || [ "$bounded_rc" -eq 137 ]; then
+					echo "::warning::Review dependency install timed out (step=$bounded_step, budget=${deps_budget}s); continuing without it."
+				fi
+				return "$bounded_rc"
+			}
 			if [ -f package-lock.json ]; then
 				echo "Found package-lock.json — running npm ci"
-				npm ci --ignore-scripts 2>&1 || install_failed=true
+				run_bounded_install npm npm ci --ignore-scripts 2>&1 || install_failed=true
 			elif [ -f yarn.lock ]; then
 				echo "Found yarn.lock — running yarn install"
-				yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
+				run_bounded_install yarn yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
 			elif [ -f pnpm-lock.yaml ]; then
 				echo "Found pnpm-lock.yaml — running pnpm install"
-				npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
+				run_bounded_install pnpm npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
 			elif [ -f package.json ]; then
 				echo "Found package.json (no lockfile) — running npm install"
-				npm install --ignore-scripts 2>&1 || install_failed=true
+				run_bounded_install npm_install npm install --ignore-scripts 2>&1 || install_failed=true
 			fi
 			if [ -f requirements.txt ]; then
 				echo "Found requirements.txt — running pip install"
-				pip install -r requirements.txt 2>&1 || install_failed=true
+				run_bounded_install pip_requirements pip install -r requirements.txt 2>&1 || install_failed=true
 			elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
 				echo "Found pyproject.toml — running pip install"
-				pip install -e ".[dev]" 2>&1 || pip install -e . 2>&1 || install_failed=true
+				run_bounded_install pip_editable_dev pip install -e ".[dev]" 2>&1 || run_bounded_install pip_editable pip install -e . 2>&1 || install_failed=true
 			fi
 			[ "$install_failed" = false ] || echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
 			pytest_bootstrap_wanted=false
@@ -146,7 +189,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					echo "Repository declares pytest configuration and pytest is already importable."
 				else
 					echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-					python3 -m pip install pytest 2>&1 || python3 -m pip install --user --break-system-packages pytest 2>&1 || true
+					run_bounded_install pytest_bootstrap python3 -m pip install pytest 2>&1 || run_bounded_install pytest_bootstrap_user python3 -m pip install --user --break-system-packages pytest 2>&1 || true
 					if python3 -c "import pytest" >/dev/null 2>&1; then
 						echo "pytest bootstrap succeeded."
 					else
