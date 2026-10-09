@@ -46,6 +46,7 @@ no result); 2 invalid arguments or input.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import os
@@ -778,6 +779,86 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	return verdict
 
 
+def _format_reset(value: Any) -> str:
+	"""Epoch seconds to ``YYYY-MM-DD HH:MM UTC``; an unknown time is ``unknown``."""
+	seconds = _int_or_none(value)
+	if seconds is None:
+		return "unknown"
+	return datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float) -> str | None:
+	utilization = probe.get(name)
+	if utilization is None:
+		return None
+	text = f"{label} {round(float(utilization) * 100)}%"
+	if float(utilization) >= gate:
+		text += f" (resets {_format_reset(probe.get(f'{name}_resets_at'))})"
+	return text
+
+
+def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
+	"""One operator-facing reading of the pool for the hourly near-cap alert.
+
+	Input: the probe records ``parse_probe`` produced for every account in the
+	pool (the ``probes`` output of ``.github/actions/claude-pool-token``). Output:
+	``alert`` is true when at least one account is gated (a window at or above
+	``gate``, or a ``rejected`` status) or its token was rejected
+	(``auth_failed``), since both shrink the pool until an operator acts;
+	``gated``, ``auth_failed``, ``probe_failed`` and ``usable`` list account
+	names; ``text`` is the message body, one line per affected account with
+	each window's utilization and the reset time of every window at or above
+	the gate. ``text`` is empty when ``alert`` is false. Never raises on a
+	malformed record: a record without a name is reported as ``?``.
+	"""
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	gated: list[str] = []
+	auth_failed: list[str] = []
+	failed: list[str] = []
+	usable: list[str] = []
+	lines: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account") or "?")
+		error = probe.get("error")
+		if error == "auth_failed":
+			auth_failed.append(name)
+			lines.append(f"{name}: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_{name}")
+			continue
+		if error:
+			failed.append(name)
+			continue
+		known = _known_peak(probe)
+		rejected = probe.get("status") == "rejected"
+		if not rejected and (known is None or known < gate):
+			usable.append(name)
+			continue
+		gated.append(name)
+		parts = [part for part in (_window_summary(probe, "five_hour", "5h", gate), _window_summary(probe, "seven_day", "7d", gate)) if part]
+		if rejected and (known is None or known < gate):
+			parts.insert(0, f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
+		lines.append(f"{name}: {', '.join(parts) if parts else 'at the gate'}")
+	alert = bool(gated or auth_failed)
+	text = ""
+	if alert:
+		total = len(ordered)
+		headline = f"Claude pool: {len(gated)} of {total} account(s) at or above the {round(gate * 100)}% usage gate"
+		if auth_failed:
+			headline += f", {len(auth_failed)} with a rejected token"
+		headline += f"; {len(usable)} usable."
+		text = "\n".join([headline, *lines])
+		if failed:
+			text += "\nProbe failed (not counted): " + ", ".join(failed)
+	return {
+		"alert": alert,
+		"accounts": total if alert else len(ordered),
+		"gated": gated,
+		"auth_failed": auth_failed,
+		"probe_failed": failed,
+		"usable": usable,
+		"text": text,
+	}
+
+
 # --- command line ------------------------------------------------------------
 
 
@@ -940,6 +1021,23 @@ def cmd_choose(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_pool_health(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(pool_health(probes, gate))
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -998,6 +1096,11 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
 	p.set_defaults(func=cmd_choose)
+
+	p = sub.add_parser("pool-health")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.set_defaults(func=cmd_pool_health)
 	return parser
 
 
