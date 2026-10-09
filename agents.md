@@ -114,6 +114,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   Failure and cap markers carry `support=<sha>`, the gate's verified review
+   support SHA (#6625); the gate, the cap job and the sweep ignore markers of
+   another or no support version, so a support fix lets the scheduled sweep
+   retry a capped head (`NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT`). The
+   sweep takes the support SHA from its engine SHA here and from the
+   `ai-review.yml` pin in consumers; unresolved, any cap marker still skips.
    The gate runs `scripts/review_head_gate.sh` from its verified support SHA:
    `pull_request.synchronize` withdraws stale auto-merge (failure fails the
    gate), and opened/synchronize events mark their SHA `pending` immediately
@@ -921,6 +927,52 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   (`scripts/codex_isolated_workspace.py`). Both modes get a credential-free
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
+- **Merge-base freshness.** `scripts/pr_checks_lib.sh` carries
+  `_pr_base_fresh_for_merge <pr> [<head_sha>] [<base_ref>]` beside the
+  check-runs gate. Every path that enables auto-merge or merges directly
+  (`scripts/review_enable_auto_merge.sh`, the `deterministic-skip-merge`
+  job, `scripts/review_rb_judge.sh`, and the poller's backward-scan,
+  `attempt_merge` and review-blocked merge sites) calls it first. It reads
+  `compare/{head}...{base}` and, only when the base gained commits, the
+  PR's file list; when the two sets share a path (renames under both
+  names; 300 base-side files counts as overlap) it requests
+  `PUT pulls/{n}/update-branch` bound to the head and returns 1, so the
+  caller skips the merge and the `synchronize` run re-validates CI and
+  review on the combined tree. `fresh`, `clean`, `disabled`
+  (`MERGE_BASE_FRESHNESS_ENABLED`) and `unknown` (any API failure, logged
+  with a warning) return 0. The `deterministic-skip-merge` job reads the
+  library from the gate's verified support commit (`.codex-freshness-src`);
+  an unverified checkout skips the freshness gate with a warning and
+  refuses auto-merge, because the required-checks wait below cannot run.
+  A PR file list of 3,000 entries (GitHub's cap) counts as overlap. The
+  review-blocked judge's `merge_with_followup` and the poller's force-merge,
+  no-fix and `merge_with_followup` sites are gated too. The orchestrator's
+  sub-issue path already aligns and defers through
+  `_sync_integration_and_rebase_subissue`, and the final integration PR is
+  synced by the poller every tick, so those paths see `fresh`. Operator
+  decision Q35: A (2026-10-09), after #6741 merged green against a base
+  that #6549 had changed under its tests. `tests/test_pr_base_freshness_gate.py`
+  covers the outcomes, the switch and every wiring point.
+- **Required checks before auto-merge.** `gh pr merge --auto` merges as
+  soon as the base's required status checks pass, and an unprotected base
+  has none, so the review's auto-merge paths landed #6906 on `main` while
+  its own PR CI run showed `orchestrate-poll (3)` failing. The same two
+  paths and the review-blocked judge's `merge` and terminal `fix` paths
+  now call `_pr_wait_for_required_checks <pr> <head> <base>`
+  (`scripts/pr_checks_lib.sh`) first: it polls `_pr_checks_completed` with
+  the calling run excluded (`PR_CHECKS_SELF_RUN_ID`) for up to
+  `AUTO_MERGE_CHECKS_WAIT_MINUTES` (default 45, every
+  `AUTO_MERGE_CHECKS_POLL_SECONDS`, default 60), enables auto-merge only on
+  `ok`/`allow_all`, and refuses on a settled failure (`PR_CHECKS_LAST_PENDING`
+  is 0 while the gate still blocks) or a timeout; a failed query is retried
+  until the budget is spent. It logs
+  `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`, and a
+  missing library fails the wait closed. A head with no check-runs yet
+  (`PR_CHECKS_LAST_TOTAL=0`) is polled two more intervals before it counts
+  as green. After a wait that actually polled, every caller
+  (`review_enable_auto_merge.sh`, the `deterministic-skip-merge` job and
+  the judge) re-checks freshness before merging. The
+  orchestrator's direct merges already gated on `_pr_checks_completed`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
   only staged Node manifests and filtered third-party Python requirements
@@ -2132,6 +2184,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
+- `NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT`
 - `REVIEW_EDITOR_PREFLIGHT`
 - `IMPLEMENT_AUTOMATION_PATH_GUARD`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
@@ -2375,6 +2428,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
+LOG_PREFIX.name=NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=IMPLEMENT_AUTOMATION_PATH_GUARD
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
