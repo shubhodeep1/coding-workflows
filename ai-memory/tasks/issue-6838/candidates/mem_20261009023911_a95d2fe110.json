@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The guard already has the exact interface needed. `scripts/files_touched_scope_guard.py` exposes `--emit-automation-grant` (with `--issue-meta-file` and `--pipeline-login`) and `--check-automation-paths` (with `--automation-grant-file` and `--staged-file`), so it can be reused unchanged by passing the plan's file list as the `--staged-file` input. None of the workflows except `implement.yml` stage the guard. Even so, `.github/workflows/orchestrate_poll.yml` and `scripts/stage_workflow_support.sh` don't need a grant. The poller already reads helpers straight from the verified support checkout (`orchestrate_poll_process.sh:131-132` resolves `.codex-workflow-src/scripts/verify_integration_fingerprints.py`, falling back to `.codex-workflow-src-main`). `plan.yml` already uses the same lookup in its staging step (`plan.yml:287-289`), so its new step can do it inline. Tests, `README.md`, `agents.md` and `changelog.d/` are not automation paths.\nQ2: The issue's last instruction decides this: \"Keep the new behaviour off until a person finishes the operator step \u2026 defaults off \u2026 skip safely\". So with the flag off, behaviour must stay exactly as today. Option B's \"hold when off\" reading would stop auto-approval of most plans in this repo as soon as it merges, because most of them touch `scripts/`. That is the opposite of \"off\". With the flag on, the grant comparison holds back only the ungranted automation paths.\nQ3: Keeping `ai:awaiting-approval`, with a deduplicated comment, a log line and one WARNING, keeps the hold visible and recoverable. Recovery is a trusted body edit or a human `/approved`. Option B's `ai:scope-blocked` would feed the unblock judge again, and this issue is already deep in an unblock chain (#6769 \u2192 #6781 \u2192 #6790 \u2192 #6804 \u2192 this one). Option C's silent hold cannot be observed.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none: every decision is a lettered option)\n\nBinding notes for the planner and implementer:\n- **Files to change:**\n  - `.github/workflows/plan.yml`: add a gate step before its existing auto-approval post.\n  - `scripts/orchestrate_poll_process.sh`: add the gate to the managed `auto_approve` branch (around line 14709) and the standalone one (around line 18121), through one shared helper.\n  - Tests under `tests/`, plus a `changelog.d/<issue>-<slug>.md` fragment. Doc rows in `README.md` and `agents.md` are optional.\n  - Do not edit `orchestrate_poll.yml`, `stage_workflow_support.sh` or `files_touched_scope_guard.py`.\n- **Finding the guard:** look in `.codex-workflow-src/scripts/files_touched_scope_guard.py` first, then `.codex-workflow-src-main/scripts/files_touched_scope_guard.py`. Never use the PR or integration checkout's copy.\n- **If the guard can't be found or run, or the plan's file list can't be parsed** (flag on): withhold `/approved` with `reason=automation_path_check_unavailable`. This fails closed on auto-approval only; human `/approved` still works.\n- **With the flag off:** make no new calls and change no behaviour.\n- **Tests:**\n  - flag off: unchanged;\n  - flag on, all plan paths granted: approve;\n  - flag on, some paths ungranted: withhold, with the comment, log line and STALL_SKIP line;\n  - flag on, plan has no automation paths: approve.\n- **Unchanged:** the implement commit-time `guard=automation-path` check stays exactly as it is.\n\nSETUP REQUIRED:\n- AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED (variable): the operator sets it to `true` once the grant below is in place and this change has merged. Until then it is unset, which means off, and auto-approval behaves exactly as today.\n- Exact-path grant on this issue's body (operator step): a trusted OWNER, MEMBER or COLLABORATOR adds `.github/workflows/plan.yml` and `scripts/orchestrate_poll_process.sh` to the issue body's `files_touched` list, as exact entries. Until then, implement will reject the commit with `guard=automation-path`, the same way it did for #6804.",
+  "fingerprint": "50ca66169ae822ebc7b6d86343e10327f8160dd8e7a675b329c16ce84317038b",
+  "lineage": {
+    "issue_number": 6838,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37874977761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37874977761",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6838"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009023911_a95d2fe110",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6838,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37874977761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6838",
+  "timestamps": {
+    "created_at": "2026-10-09T02:39:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
