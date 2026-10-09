@@ -2050,16 +2050,20 @@ case "${RB_ACTION}" in
         # reaching the `|| true` fallthrough. Rate-limit alerts still
         # fire through every other gh_retry-wrapped call in this
         # script.
-        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+        # Gates first: the head-gate success status is posted only for a
+        # merge request that actually follows it, right before it.
         if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
         elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
-        elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
-          RB_MERGE_READY_LABEL_ALLOWED="true"
         else
-          echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
+            RB_MERGE_READY_LABEL_ALLOWED="true"
+          else
+            echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+          fi
         fi
       else
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
@@ -2104,16 +2108,20 @@ case "${RB_ACTION}" in
       PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
-        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+        # Gates first: the head-gate success status is posted only for a
+        # merge request that actually follows it, right before it.
         if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
         elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
-        elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
-          RB_MERGE_READY_LABEL_ALLOWED="true"
         else
-          echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
+            RB_MERGE_READY_LABEL_ALLOWED="true"
+          else
+            echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+          fi
         fi
       elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
         if [ "${PR_STATE}" = "open" ]; then

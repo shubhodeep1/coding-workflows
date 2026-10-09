@@ -2200,15 +2200,15 @@ jobs:
             echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
             return 1
           }
-          if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME}" = "success" ] \
+          if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
-            && [[ "${REVIEW_SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] \
-            && [ "$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA}" ]; then
+            && [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+            && [ "$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}" ]; then
             _safe_gh_jq() { gh api "$@"; }
             # shellcheck disable=SC1091
             source .codex-freshness-src/scripts/pr_checks_lib.sh
           else
-            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
+            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
           fi
 
           write_deterministic_skip_summary()
