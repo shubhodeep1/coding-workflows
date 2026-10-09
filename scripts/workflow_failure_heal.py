@@ -2057,8 +2057,9 @@ def _safe_heal_path(path: str) -> bool:
 # passes the same path rules as every other scope entry. The diagnosis still
 # cannot add a path.
 _FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
-	re.compile(r'"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})"\s*,\s*"status"\s*:\s*"fail"'),
-	re.compile(r'"status"\s*:\s*"fail"\s*,\s*"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})"'),
+	# A parameterized test reports ``test_x[param]``; only the function name is kept.
+	re.compile(r'"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"\s*,\s*"status"\s*:\s*"fail"'),
+	re.compile(r'"status"\s*:\s*"fail"\s*,\s*"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"'),
 	re.compile(r"^\s*FAIL\s+(test_[A-Za-z0-9_]{1,160})\b", re.MULTILINE),
 	# Pytest summary lines start the (timestamp-stripped) line; a class-based
 	# test reports ``tests/x.py::TestClass::test_y``.
@@ -2071,12 +2072,16 @@ FAILING_TEST_LIMIT = 20
 def extract_failing_tests(text: str) -> dict[str, list[str]]:
 	"""Failing test function names and test files that a filtered job log reports.
 
-	Returns ``{"names": [...], "files": [...]}`` in first-seen order, deduped and
-	capped at FAILING_TEST_LIMIT each. Only the shapes the CI shard runner, pytest
-	and unittest print are recognised; prose never matches.
+	Returns ``{"names": [...], "files": [...], "pairs": [...]}`` in first-seen
+	order, deduped and capped at FAILING_TEST_LIMIT each. ``pairs`` holds
+	``<file>::<name>`` for every line that names both (the pytest summary shape),
+	so an ambiguous name can be bound to the file the log reported for it. Only
+	the shapes the CI shard runner, pytest and unittest print are recognised;
+	prose never matches.
 	"""
 	names: list[str] = []
 	files: list[str] = []
+	pairs: list[str] = []
 	# Raw Actions job logs prefix every line with an ISO timestamp, which
 	# filter_log keeps; strip it so the line-anchored shapes match.
 	cleaned = "\n".join(_LOG_TIMESTAMP_RE.sub("", line) for line in sanitize_text(text).split("\n"))
@@ -2088,7 +2093,12 @@ def extract_failing_tests(text: str) -> dict[str, list[str]]:
 				bucket = files if group.startswith("tests/") else names
 				if group not in bucket and len(bucket) < FAILING_TEST_LIMIT:
 					bucket.append(group)
-	return {"names": names, "files": files}
+			groups = [group for group in match.groups() if group]
+			if len(groups) == 2 and groups[0].startswith("tests/"):
+				pair = f"{groups[0]}::{groups[1]}"
+				if pair not in pairs and len(pairs) < FAILING_TEST_LIMIT:
+					pairs.append(pair)
+	return {"names": names, "files": files, "pairs": pairs}
 
 
 def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str]:
@@ -3423,24 +3433,29 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 			# Each name resolves on its own: a name defined in more than one test
 			# file is ambiguous (another file can define the same name, so the
 			# failure does not establish which file, or subject, it exercised) and
-			# is kept only for the files the log itself reported for it.
-			reported_files = set(test_files)
+			# is kept only for the files the log itself reported for that name
+			# (a ``<file>::<name>`` pair), never for a file another failure reported.
+			reported_for_name: dict[str, set[str]] = {}
+			for pair in failing.get("pairs") or []:
+				if isinstance(pair, str) and "::" in pair:
+					pair_file, pair_name = pair.split("::", 1)
+					reported_for_name.setdefault(pair_name, set()).add(pair_file)
 			test_files = []
 			for name in failing.get("names") or []:
 				matches = _heal_test_files_for_names(args.checkout, args.ref, [name])
 				if len(matches) > 1:
-					matches = [path for path in matches if path in reported_files]
+					matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]
 				test_files.extend(path for path in matches if path not in test_files)
 		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=heal_scope_test_subjects(test_files, exists))
 		sys.stdout.write(marker + "\n")
 	elif args.operation == "failing-tests":
-		merged: dict[str, list[str]] = {"names": [], "files": []}
+		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
 		for log_path in args.log_files or []:
 			try:
 				found = extract_failing_tests(Path(log_path).read_text(encoding="utf-8", errors="replace"))
 			except OSError:
 				continue
-			for key in ("names", "files"):
+			for key in ("names", "files", "pairs"):
 				for item in found[key]:
 					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
 						merged[key].append(item)

@@ -143,9 +143,24 @@ def test_render_cli_drops_a_name_defined_in_several_files_unless_the_log_names_o
 		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": []}}))
 		marker = subprocess.run(render, capture_output=True, text=True, check=True).stdout.strip()
 		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
-		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": ["tests/test_orchestrate_poll_process.py"]}}))
+		# A file reported only for another failure does not bind the ambiguous name.
+		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": ["tests/test_orchestrate_poll_process.py"],
+			"pairs": ["tests/test_orchestrate_poll_process.py::test_other"]}}))
+		marker = subprocess.run(render, capture_output=True, text=True, check=True).stdout.strip()
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": ["tests/test_orchestrate_poll_process.py"],
+			"pairs": [f"tests/test_orchestrate_poll_process.py::{name}"]}}))
 		marker = subprocess.run(render, capture_output=True, text=True, check=True).stdout.strip()
 		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_orchestrate_poll_process.py,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+
+
+def test_extract_failing_tests_pairs_files_with_names_and_strips_parameters() -> None:
+	text = ("FAILED tests/test_a.py::test_other - AssertionError\n"
+		"FAILED tests/test_b.py::TestK::test_shared[case-1] - AssertionError\n"
+		'TEST_CASE_EVENT: {"status":"fail","test_name":"test_param[x]"}\n')
+	found = heal.extract_failing_tests(text)
+	assert found["pairs"] == ["tests/test_a.py::test_other", "tests/test_b.py::test_shared"]
+	assert found["names"] == ["test_param", "test_other", "test_shared"]
 
 
 def test_render_cli_without_failing_tests_is_unchanged() -> None:
