@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6911,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6911\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6927\",\"pr_number\":6927,\"branch\":\"ai/issue-6911\",\"run_id\":\"37921251529\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37921251529\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.md\",\"changelog.d/6911-fingerprint-cap-support-rearm.md\",\"scripts/workflow_failure_heal.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "775b844152b1d8e7dd63f451ac539ab185878e7f6ef6c1f399ad07dc03c4b7fc",
+  "lineage": {
+    "issue_number": 6911,
+    "parent_ids": [],
+    "pr_number": 6927,
+    "run_id": "37921251529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37921251529",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6927"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261009112627_1cf739b6a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6911,
+    "level": "run",
+    "pr_number": 6927,
+    "run_id": "37921251529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6911: https://github.com/shubhodeep1/coding-workflows/pull/6927",
+  "timestamps": {
+    "created_at": "2026-10-09T11:26:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
