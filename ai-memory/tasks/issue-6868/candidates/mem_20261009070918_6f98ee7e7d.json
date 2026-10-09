@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fixture fix be committed to?\nChoices:\nA) PR #6574's head branch `ai/issue-6570`. Add the commit there, for example through that PR's review/autofix loop, so its CI turns green before merge. (RECOMMENDED)\nB) The default branch `main`, after PR #6574 has merged. Hold this issue until then and fix the fixture on `main` as a follow-up.\nC) Neither. Close this issue and let PR #6574's own review/autofix pass, which already sees the failed `CI` check-run, apply the fix.\nQ2: How far should the test hardening go?\nChoices:\nA) Only what the triage proposes: add `--no-local` to the `work` clone in `_git_fixture`, and assert the older commit is absent immediately after fixture setup. Do not change `scripts/review_merge_train.sh`. (RECOMMENDED)\nB) Option A, plus extend the absence check to every test that uses the fixture, not just the two that fail.",
+  "fingerprint": "80961fcaa308c6e49e13c9c032574eb47eacaa87b0ee7c2c766976de10328ff8",
+  "lineage": {
+    "issue_number": 6868,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37897004722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37897004722",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009070918_6f98ee7e7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6868,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37897004722"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6868 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T07:09:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
