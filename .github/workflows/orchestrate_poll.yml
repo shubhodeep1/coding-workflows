@@ -653,7 +653,7 @@ jobs:
           # poller script carries the same defaults.
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           RECLARIFY_UNROUTED_DETECT_ENABLED: ${{ vars.RECLARIFY_UNROUTED_DETECT_ENABLED || 'true' }}
           RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
