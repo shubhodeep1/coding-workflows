@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:17165-17278 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The orchestrate-poll CI jobs are failing, but the supplied log tails do not identify the failing test, so the failure cannot be attributed to a specific assertion in this change.\n  WHY: The red CI check means the new regression coverage has not been verified as passing; the failure's cause remains uncertain.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py: lines 17165-17278 | severity=MAJOR | confidence=3\n  PROBLEM: Orchestrate-poll CI shards 2 and 3 each report 1 failed test out of 33 total (collection_status: timeout; truncated log tails do not identify the failing test name). The PR adds 8 new test instances (3 parametrized variants for judge_resume, 2 parametrized variants for revalidate, plus 3 non-parametrized tests). Two shards each show one failure, consistent with two new test instances failing. The production code at scripts/orchestrate_poll_process.sh lines 20680-20682, 20817-20819, 20995-20997 already carries the author_association gate for all three reset commands. The test logic appears correct on inspection: each test asserts that unauthorized comments are rejected and authorized ones are accepted, matching the production jq filters. The failure could be a sandbox interaction: test_forged_re_security_pass_dedup_marker_does_not_suppress_trusted_command (line 17236) mixes a plain-string comment with a dict-form comment in tracking_comments passed to _run_failed_project_tick; the test sandbox resolves plain strings to login=octocat / author_association=OWNER (line 1144-1145), which is a trusted pipeline-identity equivalent, so the authorization should pass. A transient shard-boundary interaction or poller-environment setup issue may be responsible rather than a test logic defect.\n  WHY: The CI check is red; the new tests are the only changed code and are the most likely cause of the failures, but the truncated log tails prevent identifying which specific test(s) fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py: 17165\u201317273 | severity=MAJOR | confidence=5\n  PROBLEM: The available CI results show three failed orchestrate-poll matrix jobs, including a shard reporting 32 passed and 1 failed. The supplied log tails do not identify the failing test, so the failure cannot be attributed to a specific assertion in this change.\n  WHY: The orchestrate-poll check is red; the new regression coverage has not been verified as passing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d548e032295d4d588c4a2f784b033fae6cc6f31e554aee67d8e59867d9fd3416",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6572,
+    "run_id": "37860675796",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37860675796",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009001058_4df622cc75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6572,
+    "run_id": "37860675796"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T00:10:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
