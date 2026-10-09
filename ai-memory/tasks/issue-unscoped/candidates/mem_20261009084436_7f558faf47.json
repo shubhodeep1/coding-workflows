@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Flag manual Worker redeployment in the PR; the production vulnerability remains open until it is deployed.\"\n  expected_change_site: PR description/body text\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description/title and body do not warn that the deployed `claude-pool-broker` Worker must be redeployed with `wrangler deploy` to activate the fix; the changelog fragment and wrangler.toml mention redeployment, but the PR body does not. The Setup required block covers only the optional `BROKER_GITHUB_READ_TOKEN` secret.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Flag manual Worker redeployment in the PR; the production vulnerability remains open until it is deployed.\" (from the AI Issue Summary on the PR, entry[0] in the issue comments)\n  Expected change site: PR description body (the text displayed when a reviewer or operator clicks Merge)\n  Evidence of absence: The PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6636\" followed by the Auto-decisions and Setup required sections. The only setup item (SETUP-1) covers the optional BROKER_GITHUB_READ_TOKEN secret, not the mandatory wrangler deploy of the updated Worker. The changelog fragment and wrangler.toml comments do mention the redeploy, but the PR body \u2014 the surface a merge reviewer sees \u2014 does not carry the warning. The broker source code change has no effect until the Worker is redeployed, so omitting this flag risks the fix being merged but never activated.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Flag manual Worker redeployment in the PR; the production vulnerability remains open until it is deployed.\n  Expected change site: PR description / body text.\n  Evidence of absence: The PR title and description do not warn the operator about the mandatory redeploy step (wrangler deploy) required to activate the security fix in production.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Flag manual Worker redeployment in the PR; the production vulnerability remains open until it is deployed.\"\n  Expected change site: PR description / body text on this PR\n  Evidence of absence: The PR title is \"AI implementation for issue #6636\" and the PR description body reads only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6636\" plus the Auto-decisions and Setup required sections. None of those surface that the deployed `claude-pool-broker` Worker on Cloudflare must be re-deployed with `wrangler deploy` for the fix to take effect. The wrangler.toml comment and the changelog fragment (`changelog.d/6636-broker-exact-workflow-refs.md`) do mention it, and the changelog even says so explicitly (\"The change takes effect when the Worker is redeployed with `wrangler deploy`\"), but the PR body itself does not flag the mandatory manual step a reviewer / operator needs to take after merge. The setup-required block (`SETUP-1`) covers only the optional `BROKER_GITHUB_READ_TOKEN` secret.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cFlag manual Worker redeployment in the PR; the production vulnerability remains open until it is deployed.\u201d\n  Expected change site: PR description/body for the PR closing issue #6636.\n  Evidence of absence: The provided PR description says \u201cAutomated implementation\u201d and references issue #6636, but does not flag that the deployed `claude-pool-broker` Worker must be redeployed. The changelog and `wrangler.toml` mention redeployment, but do not put the required operational warning in the PR body.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Flag manual Worker redeployment in the PR; the production vulnerability remains open until it is deployed.\"\n  Expected change site: PR description / body text\n  Evidence of absence: The PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6636\" plus Auto-decisions and Setup required sections. None mention that the deployed `claude-pool-broker` Worker must be redeployed with `wrangler deploy` for the fix to take effect. The changelog fragment (`changelog.d/6636-broker-exact-workflow-refs.md`) and wrangler.toml comment do mention it, but the PR body itself does not flag this mandatory operational step. The Setup required block only covers the optional `BROKER_GITHUB_READ_TOKEN` secret.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a303e66a37166e2e9bcbcbf036215249c94e485f030f48b4d02ff63e48e609d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6648,
+    "run_id": "37903504662",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37903504662",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009084436_7f558faf47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6648,
+    "run_id": "37903504662"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T08:44:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
