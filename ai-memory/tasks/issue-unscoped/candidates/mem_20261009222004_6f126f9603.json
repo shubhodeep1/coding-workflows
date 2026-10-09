@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:491-503 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A managed child without a parsed integration-branch declaration is treated as completed when its PR merges into any `orchestrator/project-*` branch.\n  WHY: A merge into another project's integration branch can label and close the issue and finalize its lineage, although the workflow cannot verify that the branch belongs to the child\u2019s project.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/issue_pr_status.yml:491-503 | severity=high | confidence=[4]\n  PROBLEM: A managed child with no parsed `Integration branch:` is treated as completed when its PR merges into any `orchestrator/project-*` branch.\n  WHY: Managed status can be established by the issue label or body marker without an integration-branch declaration. If that child\u2019s PR merges into another project\u2019s integration branch, this fallback still labels and closes the issue and finalizes its lineage. The code cannot verify that the branch belongs to the child\u2019s project, contrary to the requirement to leave issues unchanged for merges into any other branch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "94b50a46171011592cd5d3f0dba40fb8efd819fa8ef950e386afd1ce2acc294a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6645,
+    "run_id": "37996834743",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37996834743",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009222004_6f126f9603",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6645,
+    "run_id": "37996834743"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T22:20:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
