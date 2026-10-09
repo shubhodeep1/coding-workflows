@@ -868,6 +868,22 @@ jobs:
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
+      # Hourly Telegram WARNING naming every pool account at or above the usage
+      # gate (and every rejected token), from the probes the step above already
+      # ran; silent while every account is below the gate (#6951).
+      - name: Alert on Claude pool accounts at the usage gate
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CLAUDE_POOL_HEALTH_ALERT_ENABLED || 'true' }}
+          CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
+          CLAUDE_ENGINE_CONFIG: .codex-workflow-src/.github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:

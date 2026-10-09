@@ -63,6 +63,12 @@ engine_py()
 	PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/claude_engine.py" "$@"
 }
 
+# The probe records (account name, window utilizations, reset times, status,
+# error; never a token) for the `probes` output, so orchestrate_poll.yml can
+# raise the hourly near-cap alert (scripts/claude_pool_health_alert.sh) even
+# when every account is gated and the pool directory is removed.
+probes="[]"
+
 finish()
 {
 	local available="$1" reason="$2" count="${3:-0}"
@@ -72,6 +78,7 @@ finish()
 		echo "reason=${reason}"
 		echo "accounts=${count}"
 		echo "pool_dir=${pool_dir}"
+		echo "probes=${probes}"
 	} >> "${output_file}"
 	if [ "${available}" != "true" ] && [ ! -L "${pool_dir}" ]; then
 		rm -rf -- "${pool_dir}"

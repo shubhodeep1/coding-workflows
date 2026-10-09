@@ -2087,6 +2087,7 @@ and shipped:
 - `NEEDS_HUMAN` (`scripts/operator_step_issue.py needs-human park|prune`, called by `scripts/unblock_judge.sh` and `scripts/orchestrate_poll_process.sh`: `item= kind= reason= outcome=parked|updated|removed|skip`, poller skips add `detail=`)
 - `OPERATOR_STEP_TICK` (`scripts/operator_step_issue.py tick`, run by `scripts/promote_main_cycle.sh`: `key= outcome=ticked|already_done|no_source_sha|not_ancestor|unknown_commit stable=`)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
+- `CLAUDE_POOL_HEALTH` (`scripts/claude_pool_health_alert.sh`, the "Alert on Claude pool accounts at the usage gate" step of `orchestrate_poll.yml`: `accounts= gated= auth_failed= probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`; `sent` means one Telegram WARNING named every account at or above `gate_utilization` and every rejected token; the step reads the pool action's `probes` output and sends at most once an hour, see README "Near-cap alert")
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. A failed dispatch logs `outcome=hold reason=dispatch_failed` and posts a `failed` marker for the used cycle (past the cap, `reason=dispatch_failed_exhausted` and the marker counts as a used head attempt). If result publication fails, report skips review re-dispatch so it cannot run without the marker. After dispatch the gate confirms the pending-marker comment response with bounded retries and fails closed with `reason=pending_marker_failed` if none is confirmed. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication. On a current-head findings marker before exhaustion, `awaiting_followups` requires an open `ai:security` issue authored by the pipeline account for that branch and a findings marker younger than `SECURITY_PASS_FOLLOWUP_STALE_HOURS`; otherwise the gate holds with `followups_missing`, `followups_unverifiable` or `followups_stalled`.)
@@ -2169,6 +2170,8 @@ and shipped:
 - `VALIDATION_DISCOVERY_DRY_RUN`
 - `VALIDATE_TRUSTED_TEMPLATE_OVERRIDE`
 - `VALIDATE_TRUSTED_TEMPLATES`
+- `VALIDATE_TRUSTED_RENDERER_OVERRIDE`
+- `VALIDATE_TRUSTED_RENDERER`
 - `REVIEWER_RISK_TIER`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
@@ -2333,6 +2336,7 @@ LOG_PREFIX.name=REVIEW_UTILITY_ISOLATION
 LOG_PREFIX.name=NEEDS_HUMAN
 LOG_PREFIX.name=OPERATOR_STEP_TICK
 LOG_PREFIX.name=CLAUDE_POOL
+LOG_PREFIX.name=CLAUDE_POOL_HEALTH
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS
@@ -2414,6 +2418,8 @@ LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_BUDGET
 LOG_PREFIX.name=VALIDATION_DISCOVERY_DRY_RUN
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATE_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATES
+LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER_OVERRIDE
+LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER
 LOG_PREFIX.name=REVIEWER_RISK_TIER
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
