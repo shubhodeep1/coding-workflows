@@ -297,7 +297,15 @@ def test_poller_judges_stay_on_the_review_sandbox():
 	assert "return 77" in isolated, POLLER_JUDGE_DECISION
 	assert "codex_isolated_exec" not in isolated, POLLER_JUDGE_DECISION
 
-	assert text.count("ORCH_CODEX_ISOLATED_EXEC") == 1, POLLER_JUDGE_DECISION
+	# Only real expansions count: comments or log prose that merely name the
+	# variable must not fail this contract.
+	isolated_exec_uses = [
+		line
+		for line in text.splitlines()
+		if not line.lstrip().startswith("#")
+		and re.search(r"\$\{?ORCH_CODEX_ISOLATED_EXEC\b", line)
+	]
+	assert isolated_exec_uses == [], POLLER_JUDGE_DECISION
 
 	agents = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
 	section = agents[agents.index("## Isolated Codex agents"):]
