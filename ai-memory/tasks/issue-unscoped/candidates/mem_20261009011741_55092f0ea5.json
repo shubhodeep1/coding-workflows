@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing GitHub Actions workflows or their supporting scripts, add or update focused tests that assert the workflow contract, including security-sensitive inputs and repository allowlists. Several merged changes touched workflow files alongside dedicated contract tests, and some changes were test-only.",
+  "fingerprint": "5384d072f178a8f1de76de2c708099e52fbbbe610eee10b76a9c3ce7590db4c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37868774338",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37868774338",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6506",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6639",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6641",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6782",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6796",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6572",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6643",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6644",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6786",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6805"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261009011741_55092f0ea5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior in this repository is commonly protected by contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-09T01:17:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
