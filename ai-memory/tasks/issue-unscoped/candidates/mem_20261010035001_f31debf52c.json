@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add the script to `REQUIRED_BOOTSTRAP_SCRIPTS` in `scripts/stage_workflow_support.sh`, to the `REVIEW_AUTOFIX_STEP_SCRIPTS` registry in `tests/review_autofix_step_scripts.py`, and to `docs/INVENTORY.md`.\" (from CLAUDE.md \u00a727, when oversized workflow step scripts are created).\n  expected_change_site: `tests/review_autofix_step_scripts.py`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR does not include changes to `tests/review_autofix_step_scripts.py`, although the instructions require it to be registered as an autofix step script when such scripts are created for oversized workflows.\n- requirement: \"Add the script to `REQUIRED_BOOTSTRAP_SCRIPTS` in `scripts/stage_workflow_support.sh`, to the `REVIEW_AUTOFIX_STEP_SCRIPTS` registry in `tests/review_autofix_step_scripts.py`, and to `docs/INVENTORY.md`.\" (from CLAUDE.md \u00a727).\n  expected_change_site: `docs/INVENTORY.md`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR does not include changes to `docs/INVENTORY.md`, although the instructions require the script to be registered in the inventory.\n- requirement: PR DESCRIPTION item 11: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\" The agents.md added by this PR describes the mapping as \"`tests/test_ci_job_split_contract.py` and `tests/test_ci_wires_every_test_file.py` to `.github/workflows/ci.yml`\".\n  expected_change_site: tests/test_ci_wires_every_test_file.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: A repo-wide search for tests/test_ci_wires_every_test_file.py returns no matches \u2014 the file does not exist. The HEAL_SCOPE_GUARD_TEST_SUBJECTS entry at scripts/workflow_failure_heal.py:2160 (\"tests/test_ci_wires_every_test_file.py\": (\".github/workflows/ci.yml\",)) is therefore dead. The companion test test_size_guard_threshold_matches_the_guard_test at tests/test_workflow_failure_heal_scope_tests.py only asserts (REPO_ROOT / subject).is_file() on the mapped subjects (the right-hand side of the dict), never on the test_file keys themselves, so the dead reference is not caught. Either the guard test must be added as part of this PR or the entry and the agents.md claim must be dropped; the deliverable as written cannot fire because no failing CI run ever names this test.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Add the script to `REQUIRED_BOOTSTRAP_SCRIPTS` in `scripts/stage_workflow_support.sh`, to the `REVIEW_AUTOFIX_STEP_SCRIPTS` registry in `tests/review_autofix_step_scripts.py`, and to `docs/INVENTORY.md`.\" (from CLAUDE.md \u00a727, when oversized workflow step scripts are created).\n  Expected change site: `tests/review_autofix_step_scripts.py`\n  Evidence of absence: The PR does not include changes to `tests/review_autofix_step_scripts.py`, although the instructions require it to be registered as an autofix step script when such scripts are created for oversized workflows.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Add the script to `REQUIRED_BOOTSTRAP_SCRIPTS` in `scripts/stage_workflow_support.sh`, to the `REVIEW_AUTOFIX_STEP_SCRIPTS` registry in `tests/review_autofix_step_scripts.py`, and to `docs/INVENTORY.md`.\" (from CLAUDE.md \u00a727).\n  Expected change site: `docs/INVENTORY.md`\n  Evidence of absence: The PR does not include changes to `docs/INVENTORY.md`, although the instructions require the script to be registered in the inventory.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: PR DESCRIPTION item 11: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\" The agents.md added by this PR describes the mapping as \"`tests/test_ci_job_split_contract.py` and `tests/test_ci_wires_every_test_file.py` to `.github/workflows/ci.yml`\".\n  Expected change site: tests/test_ci_wires_every_test_file.py\n  Evidence of absence: A repo-wide search for tests/test_ci_wires_every_test_file.py returns no matches \u2014 the file does not exist. The HEAL_SCOPE_GUARD_TEST_SUBJECTS entry at scripts/workflow_failure_heal.py:2160 (\"tests/test_ci_wires_every_test_file.py\": (\".github/workflows/ci.yml\",)) is therefore dead. The companion test test_size_guard_threshold_matches_the_guard_test at tests/test_workflow_failure_heal_scope_tests.py only asserts (REPO_ROOT / subject).is_file() on the mapped subjects (the right-hand side of the dict), never on the test_file keys themselves, so the dead reference is not caught. Either the guard test must be added as part of this PR or the entry and the agents.md claim must be dropped; the deliverable as written cannot fire because no failing CI run ever names this test.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "9ba99be6ebc7132f9bb983859b3b71ecfcd1e9b18c878c3b5ac92cb2b8c5606b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7016,
+    "run_id": "38019562607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38019562607",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010035001_f31debf52c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7016,
+    "run_id": "38019562607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T03:50:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
