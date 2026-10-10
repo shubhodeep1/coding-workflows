@@ -261,6 +261,7 @@ def test_consumer_sync_notification_predicate_matches_commit_predicate() -> None
 		"steps.claude_md_sync.outputs.claude_md_changed == 'true'",
 		"steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'",
 		"steps.changelog_assemble.outputs.changelog_assembled == 'true'",
+		"steps.agents_assemble.outputs.agents_assembled == 'true'",
 	)
 
 

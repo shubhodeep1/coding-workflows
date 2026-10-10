@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -307,7 +308,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 
 def test_stable_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
@@ -3103,7 +3104,7 @@ def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:
 
 
 def test_fingerprint_cap_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
 		assert f"- `{prefix}`" in agents_text, prefix
 		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
@@ -3627,16 +3628,42 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 
 
 def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
-	"""Issues #6625/#6938: the gate and four failure-marker sites use the verified SHA.
+	"""Issues #6625/#6938: the gate and every failure-marker site use the verified SHA.
 
-	The gate SHA also reaches fingerprint-cap-block, codex-agent, and the
-	deterministic-skip-merge freshness-helper verification step.
+	Structural, not counted: every `autofix-failure-fingerprint` call passes
+	`--support-sha`, and the jobs that build markers or verify helper
+	checkouts take REVIEW_SUPPORT_SHA from the gate's verified output. A new
+	marker site or consumer then has to follow the rule instead of breaking
+	an occurrence count.
 	"""
 	wf = expanded_review_autofix_text()
-	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
-	assert wf.count("autofix-failure-fingerprint \\\n") == 4
-	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
-	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 3
+	calls = wf.split("autofix-failure-fingerprint \\\n")[1:]
+	assert calls, "no autofix-failure-fingerprint call sites found"
+	# A single-line call has no continuation to split on; every invocation
+	# must be one of the multi-line calls checked below.
+	invocations = [line for line in wf.splitlines() if '"${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint' in line]
+	assert len(invocations) == len(calls), invocations
+	for call in calls:
+		# The call's continuation lines end at the first line without a trailing backslash.
+		block = call.split(")\"", 1)[0]
+		assert '--support-sha "${REVIEW_SUPPORT_SHA:-}"' in block, block[:400]
+	# Spelling- and layout-agnostic: any non-comment, non-grep line naming the
+	# subcommand (a renamed variable, or the subcommand on its own continuation
+	# line) must be one of the checked calls.
+	mentions = [line for line in wf.splitlines() if "autofix-failure-fingerprint" in line and not line.lstrip().startswith("#") and "grep " not in line]
+	assert len(mentions) == len(calls), mentions
+	jobs = yaml.safe_load(wf)["jobs"]
+	gate_steps = {step.get("name"): step for step in jobs["gate"]["steps"]}
+	assert gate_steps["Evaluate review gate"]["env"]["REVIEW_SUPPORT_SHA"] == "${{ steps.resolve_support.outputs.review_support_sha }}"
+	verified = "${{ needs.gate.outputs.review_support_sha }}"
+	for job in ("fingerprint-cap-block", "codex-agent"):
+		assert jobs[job]["env"]["REVIEW_SUPPORT_SHA"] == verified, job
+	det_skip = {step.get("name"): step for step in jobs["deterministic-skip-merge"]["steps"]}
+	assert det_skip["Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"]["env"]["REVIEW_SUPPORT_SHA"] == verified
+	# No job may take the support SHA from anywhere but the verified outputs.
+	for line in wf.splitlines():
+		if line.strip().startswith("REVIEW_SUPPORT_SHA:"):
+			assert line.strip() in (f"REVIEW_SUPPORT_SHA: {verified}", "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}"), line
 	assert 'git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}"' in wf
 	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 

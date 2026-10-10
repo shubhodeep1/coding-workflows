@@ -377,7 +377,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py; do
+          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -575,12 +575,30 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
+            # agents.md keeps precedence; consumer repos that only have
+            # AGENTS.md (the casing update_workflows.yml folds) fall back to it.
+            orchestrate_agents_file=""
             if [ -f agents.md ] && [ ! -L agents.md ]; then
-              echo "=== AGENTS.MD ==="
-              cat agents.md
-              echo
+              orchestrate_agents_file="agents.md"
             elif [ -L agents.md ]; then
               echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -z "${orchestrate_agents_file}" ]; then
+              if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
+                orchestrate_agents_file="AGENTS.md"
+              elif [ -L AGENTS.md ]; then
+                echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
+              fi
+            fi
+            if [ -n "${orchestrate_agents_file}" ]; then
+              echo "=== AGENTS.MD ==="
+              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+              if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${orchestrate_agents_file}" 2>/dev/null)"; then
+                printf '%s\n' "${orchestrate_agents_render}"
+              else
+                cat "${orchestrate_agents_file}"
+              fi
+              echo
             fi
             cat "${orchestrate_readme_context}"
             if [ -f probably_unnecessary_but_read_if_stuck.md ] && [ ! -L probably_unnecessary_but_read_if_stuck.md ]; then

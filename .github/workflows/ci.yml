@@ -212,6 +212,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_job_split_contract.py
 
+      - name: CI test wiring guard
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_wires_every_test_file.py
+
       - name: YAML lint
         run: |
           set -euo pipefail
@@ -229,6 +234,14 @@ jobs:
         run: |
           set -euo pipefail
           make generate-check
+
+      # CLAUDE.md §30: every pending agents.d/ fragment must fold into
+      # agents.md; the release job would otherwise skip it with a warning.
+      - name: agents.d fragment check and tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py check --repo-root .
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py
 
       - name: Install actionlint
         env:
@@ -589,6 +602,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
 
+      - name: CI budget watch tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_budget_watch.py
+
       - name: Validation harness sandbox tests
         run: |
           set -euo pipefail
@@ -829,6 +847,40 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      - name: Regression tests wired by the CI wiring guard (part 1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_cli.py \
+            tests/test_branch_rebuild.py \
+            tests/test_codex_thread_reuse_review.py \
+            tests/test_family_python_mongo_flask.py \
+            tests/test_family_python_repo_checks.py \
+            tests/test_implement_heal_preflight.py \
+            tests/test_implement_pr_body_tracking_refs.py \
+            tests/test_orchestrate_final_merge_required_checks_gate.py \
+            tests/test_prompt_compaction.py \
+            tests/test_render_validation_templates_node_hardhat_regressions.py \
+            tests/test_render_validation_templates_node_runtime_regressions.py \
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
+            tests/test_review_commit_new_files_preserved.py \
+            tests/test_review_conflict_resolve_sandbox_only.py \
+            tests/test_review_head_gate.py \
+            tests/test_review_parse_consolidator.py \
+            tests/test_review_pipeline_integration.py \
+            tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_install_timeout.py \
+            tests/test_review_static_context_readme.py \
+            tests/test_semble_helpers.py \
+            tests/test_validate_driver_credential_scrub.py \
+            tests/test_validate_lint_graceful_shutdown_hooks.py \
+            tests/test_validate_lint_init_true.py \
+            tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_render_recovery.py \
+            tests/test_verify_integration_fingerprints_partial_removal.py \
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
+            tests/test_workflow_retro_fanout.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1115,6 +1167,48 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+
+      - name: Regression tests wired by the CI wiring guard (part 2)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_sync_reference_files.py \
+            tests/test_ai_memory_workflow_log_analysis_cache.py \
+            tests/test_assemble_changelog.py \
+            tests/test_changelog_fragment_contract.py \
+            tests/test_codex_heartbeat.py \
+            tests/test_codex_isolated_exec_claude_contract.py \
+            tests/test_cost_audit_serena_metrics.py \
+            tests/test_gh_helpers_list_runs_method.py \
+            tests/test_plan_reuse_audit_contract.py \
+            tests/test_plan_template_owned_path_guard.py \
+            tests/test_pytest_git_env_isolation.py \
+            tests/test_render_validation_templates.py \
+            tests/test_render_validation_templates_repo_checks.py \
+            tests/test_render_validation_templates_shell_quoting.py \
+            tests/test_retrigger_default_branch_dispatch.py \
+            tests/test_review_autofix_reasoning_schedule.py \
+            tests/test_review_autofix_sweep_merge_queued_skip.py \
+            tests/test_review_commit_changelog_fragment_preserved.py \
+            tests/test_review_conflict_prepare_state_author.py \
+            tests/test_review_floor_rules.py \
+            tests/test_review_host_python_safe_path.py \
+            tests/test_review_issue_ledger.py \
+            tests/test_review_ledger_cache_path_stability.py \
+            tests/test_review_rb_judge_reference_staging.py \
+            tests/test_review_resolve_review_threads.py \
+            tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_static_context_symlink_guard.py \
+            tests/test_summarize_unselected_runs.py \
+            tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_validate_lint_bounded_tail_capture.py \
+            tests/test_validate_lint_external_tool_dependencies.py \
+            tests/test_validate_lint_import_audit_safety.py \
+            tests/test_validate_lint_service_tool_scope.py \
+            tests/test_validate_lint_shell_parity.py \
+            tests/test_validate_process_fixup_labels.py \
+            tests/test_verify_integration_fingerprints_baseline.py \
+            tests/test_workflow_untrusted_input_contract.py
 
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1747,6 +1841,44 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
           fi
+
+  budget-watch:
+    # Early warning for the two budgets CI has hit without notice (workflow
+    # file size near the §27 guard, a CI job near its timeout-minutes). Runs
+    # only on pushes to main, after the test jobs, and opens one deduplicated
+    # `ai:ci-budget` issue per finding so the pipeline fixes it in time.
+    # Never fails, and is not part of the `lint` aggregate.
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - static-checks
+      - tests-hooks-and-orchestrator
+      - tests-heal-plan-and-validation
+      - tests-promote-stall-and-review
+      - tests-release-and-log-analysis
+      - orchestrate-poll
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Check workflow sizes and CI job durations against their budgets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Issues opened with github.token start no workflow, so the issue
+          # would never reach clarify. The issue-only PAT (Issues: write) is
+          # used for the create call alone; unset, the job token is used.
+          CI_BUDGET_ISSUE_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+          CI_BUDGET_WORKFLOW_WARN_BYTES: ${{ vars.CI_BUDGET_WORKFLOW_WARN_BYTES || '440000' }}
+          CI_BUDGET_JOB_WARN_RATIO: ${{ vars.CI_BUDGET_JOB_WARN_RATIO || '0.75' }}
+        run: |
+          set -uo pipefail
+          python3 -m pip install --quiet pyyaml || true
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci_budget_watch.py || echo "::warning::ci_budget_watch.py exited non-zero; ignoring (warning only)."
 
   lint:
     # Aggregate status: the one check that says whether all of CI passed.
