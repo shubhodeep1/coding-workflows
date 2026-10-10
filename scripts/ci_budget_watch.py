@@ -166,11 +166,18 @@ def main(argv: list[str] | None = None) -> int:
 
 	findings = workflow_size_findings(root / ".github" / "workflows", warn_bytes)
 	if args.repo and args.run_id:
+		jobs = None
 		try:
 			jobs = _gh([f"repos/{args.repo}/actions/runs/{args.run_id}/jobs?per_page=100"]).get("jobs", [])
-			findings += job_duration_findings(jobs, job_timeouts(root / ".github" / "workflows" / "ci.yml"), ratio)
 		except Exception as exc:  # noqa: BLE001 - fail-open by contract
 			print(f"::warning::ci_budget_watch: could not read this run's jobs ({exc}); job durations not checked.")
+		if jobs is not None:
+			# Separate from the jobs read so a missing PyYAML or a malformed
+			# ci.yml is not reported as an API failure.
+			try:
+				findings += job_duration_findings(jobs, job_timeouts(root / ".github" / "workflows" / "ci.yml"), ratio)
+			except Exception as exc:  # noqa: BLE001 - fail-open by contract
+				print(f"::warning::ci_budget_watch: could not read job timeouts from ci.yml ({exc}); job durations not checked.")
 
 	for f in findings:
 		print(f"::warning::CI_BUDGET kind={f['kind']} subject={f['subject']} value={f['value']} limit={f['limit']}")
