@@ -741,7 +741,12 @@ def build_workflow_run_payload(*, repo: str, workflow_run: dict[str, Any], now: 
 	}
 
 
-def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
+# Feature probe for the reporter (scripts/workflow_failure_heal_autofix_report.sh):
+# a staged copy carrying this string accepts `autofix-failure-streak --author-login`.
+AUTOFIX_STREAK_AUTHOR_FILTER = "autofix-failure-streak-author-login:v1"
+
+
+def count_autofix_failure_streak(comments: Iterable[dict[str, Any]], *, author_login: str | None = None) -> int:
 	"""Count the trailing review/autofix failure comments on a pull request.
 
 	``comments`` is the PR's issue-comment list, oldest first (the order the
@@ -749,11 +754,20 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 	adds one. An editor summary stops the count unless it belongs to the
 	post-editor failure immediately newer than it. The current run's own failure
 	comment is normally not in the list yet, so the reporter adds one for it.
+
+	With a non-empty ``author_login`` (the pipeline identity), comments by any
+	other author are skipped entirely: their failure or summary text neither
+	counts nor ends the streak (security-pass finding
+	untrusted-comment-resets-identical-failure-cap, sibling path). Without it
+	the legacy rules apply unchanged.
 	"""
+	author = str(author_login or "").strip().lower()
 	streak = 0
 	skip_paired_summary = False
 	for comment in reversed(list(comments)):
 		if not isinstance(comment, dict):
+			continue
+		if author and _comment_author(comment) != author:
 			continue
 		body = sanitize_text(comment.get("body"))
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
@@ -3345,7 +3359,10 @@ def _cmd_autofix_failure_streak(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json)
 	except (OSError, json.JSONDecodeError):
 		comments = []
-	sys.stdout.write(str(count_autofix_failure_streak(comments if isinstance(comments, list) else [])) + "\n")
+	streak = count_autofix_failure_streak(
+		comments if isinstance(comments, list) else [], author_login=getattr(args, "author_login", "") or None
+	)
+	sys.stdout.write(str(streak) + "\n")
 	return 0
 
 
@@ -3887,6 +3904,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)
+	p.add_argument("--author-login", default="", help="pipeline login; other authors' comments are skipped (empty: legacy, every author)")
 	p.set_defaults(func=_cmd_autofix_failure_streak)
 
 	p = sub.add_parser("autofix-failure-fingerprint", help="Print fp= / degraded= / reason= (and marker= with --head-sha) for a review/autofix failure")

@@ -160,8 +160,18 @@ fi
 
 COMMENTS_FILE="${PR_ISSUE_COMMENTS_FILE:-}"
 PRIOR_FAILURES=0
+# Count only the pipeline identity's comments when the caller names it and the
+# staged helper supports the filter (an older copy would reject the flag and
+# the streak would read 0): another commenter's failure / summary text must
+# neither inflate nor end the streak.
+STREAK_ARGS=(--comments-json "${COMMENTS_FILE}")
+STREAK_AUTHOR_FILTER="off"
+if [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ] && grep -q 'autofix-failure-streak-author-login:v1' "${HEAL_PY}" 2>/dev/null; then
+	STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")
+	STREAK_AUTHOR_FILTER="on"
+fi
 if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
-	PRIOR_FAILURES="$(python3 "${HEAL_PY}" autofix-failure-streak --comments-json "${COMMENTS_FILE}" 2>/dev/null || echo 0)"
+	PRIOR_FAILURES="$(python3 "${HEAL_PY}" autofix-failure-streak "${STREAK_ARGS[@]}" 2>/dev/null || echo 0)"
 	[[ "${PRIOR_FAILURES}" =~ ^[0-9]+$ ]] || PRIOR_FAILURES=0
 else
 	log "warn pr_comments_unavailable pr=${PR}; counting this run only"
@@ -173,7 +183,7 @@ if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && [ "${PRIOR_FAILURES}" -g
 	STREAK="${PRIOR_FAILURES}"
 fi
 if [ "${STREAK}" -lt "${STREAK_THRESHOLD}" ]; then
-	log "skip reason=below_streak pr=${PR} reason=${FAILURE_REASON} streak=${STREAK} threshold=${STREAK_THRESHOLD}"
+	log "skip reason=below_streak pr=${PR} reason=${FAILURE_REASON} streak=${STREAK} threshold=${STREAK_THRESHOLD} streak_author_filter=${STREAK_AUTHOR_FILTER}"
 	exit 0
 fi
 
@@ -299,5 +309,5 @@ if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISP
 	log "skip reason=dispatch_denied pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} upstream=${UPSTREAM_REPO} detail=$(head -c 300 "${DISPATCH_ERROR_FILE}" | tr '\n' ' ')"
 	exit 0
 fi
-log "dispatched pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} workflow=${WORKFLOW_NAME} wrapper_sha=${WRAPPER_SHA:-none} upstream=${UPSTREAM_REPO}"
+log "dispatched pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} workflow=${WORKFLOW_NAME} wrapper_sha=${WRAPPER_SHA:-none} upstream=${UPSTREAM_REPO} streak_author_filter=${STREAK_AUTHOR_FILTER}"
 exit 0
