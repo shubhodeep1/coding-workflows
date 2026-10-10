@@ -1622,7 +1622,7 @@ through `clarify → plan → implement → review`.
   retry; the intake keys these reports on the PR, so one PR holds one open
   heal issue either way. The report carries
   the run's `finalize_reason` (or the flag that fired: `reviewers_failed`,
-  `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
+  `sandbox_prepare_failed`, `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
   `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
   escalations are left to the `ai:resolver-escalated` label path. The
   reporter never fails the review job; stable log lines are prefixed
@@ -1715,6 +1715,26 @@ through `clarify → plan → implement → review`.
   handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
   no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
   summariser exited 226 and the run was reported as an empty editor.
+- **A failed review sandbox prepare names its phase too:** when `Install
+  project dependencies (best-effort)` (step id `deps_prepare`) fails, the
+  editor never runs either. `Post editor summary comment` then names the
+  failure `sandbox_prepare_failed` (ranked after `reviewers_failed` and ahead
+  of the editor flags, in the same places), sets
+  `AUTOFIX_SANDBOX_PREPARE_FAILED=true`, and writes
+  `sandbox_prepare_failure_evidence.txt` (the last `REVIEW_SANDBOX_BUILD
+  outcome=fail` line and the prepare's last error line) from the prepare
+  stderr the step keeps in `sandbox_prepare_stderr.txt`. The no-output
+  comment names the sandbox prepare and its redacted error; the retry
+  handling is unchanged. `scripts/review_untrusted_sandbox.sh` also retries
+  the sandbox image build when Docker Hub or the network fails (429/5xx,
+  `failed to resolve source metadata`, TLS or I/O timeouts, resets): up to
+  `REVIEW_SANDBOX_BUILD_ATTEMPTS` attempts (default `3`), sleeping
+  `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` (default `10`) then
+  `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2` (default `30`) seconds, and logs
+  `REVIEW_SANDBOX_BUILD attempt=<n> outcome=ok|retry|fail`. Other build
+  failures fail at once. On PR #6645 two runs (37989220029, 37994304266) lost
+  their editor to one Docker Hub 500/504 on `node:22.16.0-bookworm-slim` and
+  were reported as `editor_empty_noop`.
 - **The summariser works from its prompt only:** `scripts/summarize_reviewer_consensus.sh`
   inlines every reviewer output and tells the model not to call tools or open
   reviewer files on disk. The prompt used to point at
@@ -2190,6 +2210,9 @@ through `clarify → plan → implement → review`.
 | `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by production paths that still use Codex outside the fully migrated review/autofix model pipeline. |
 | `DEPENDENCY_PROXY_ALLOWED_HOSTS` | `pypi.org,files.pythonhosted.org,registry.npmjs.org,registry.yarnpkg.com` | Complete comma- or whitespace-separated allowlist of public DNS names for the isolated implement/review dependency installs. Replace the list to add a public mirror; unlisted hosts, non-global DNS addresses and plain HTTP are refused. Direct-only egress is required on the runner; corporate upstream proxies are not chained. |
 | `DEPENDENCY_INSTALL_TIMEOUT_SECONDS` | `600` | Per-command budget, in seconds, for each dependency install the review sandbox runs before the editor (`npm ci`, `yarn install`, `pnpm install`, `npm install`, `pip install -r requirements.txt`, `pip install -e ".[dev]"` / `pip install -e .`, and the pytest bootstrap). A command that exceeds it is killed and reported as a failed install (`::warning::Review dependency install timed out after <n>s`), the venv and pytest bootstrap still run, and the editor proceeds with whatever installed. The container's own 900-second budget is unchanged; a container that still exceeds it is also a failed install (`Review dependencies skipped: dependency container timed out`), not an isolation failure (an exit 137 before the budget elapsed is an OOM kill and stays fatal), so the editor is no longer skipped. Must be a positive integer; anything else warns and uses `600`. Why: on 2026-10-09 pip backtracked through dozens of `ruff` and `structlog` releases for a consumer's unpinned `[dev]` extras until the 900-second budget killed the container, which counted as `Review dependency isolation failed`, skipped the editor for 31 minutes per review run and left the PR in the no-output retry loop. |
+| `REVIEW_SANDBOX_BUILD_ATTEMPTS` | `3` | Maximum attempts for the review sandbox image build in `scripts/review_untrusted_sandbox.sh` (`Install project dependencies (best-effort)` in `review_autofix.yml`). Only a build whose error names a registry or network failure (Docker Hub auth/registry endpoints, 429/5xx, `failed to resolve source metadata`, TLS or I/O timeouts, resets, refused connections) is retried; any other failure fails at once. Logs `REVIEW_SANDBOX_BUILD attempt=<n> outcome=ok\|retry\|fail`. Must be a positive integer; anything else uses `3`. |
+| `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` | `10` | Seconds the review sandbox image build waits after its first retryable failure. Must be a non-negative integer; anything else uses `10`. |
+| `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2` | `30` | Seconds the review sandbox image build waits after each later retryable failure. Must be a non-negative integer; anything else uses `30`. |
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
