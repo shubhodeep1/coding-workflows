@@ -3645,6 +3645,11 @@ def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
 		# The call's continuation lines end at the first line without a trailing backslash.
 		block = call.split(")\"", 1)[0]
 		assert '--support-sha "${REVIEW_SUPPORT_SHA:-}"' in block, block[:400]
+	# Spelling- and layout-agnostic: any non-comment, non-grep line naming the
+	# subcommand (a renamed variable, or the subcommand on its own continuation
+	# line) must be one of the checked calls.
+	mentions = [line for line in wf.splitlines() if "autofix-failure-fingerprint" in line and not line.lstrip().startswith("#") and "grep " not in line]
+	assert len(mentions) == len(calls), mentions
 	jobs = yaml.safe_load(wf)["jobs"]
 	gate_steps = {step.get("name"): step for step in jobs["gate"]["steps"]}
 	assert gate_steps["Evaluate review gate"]["env"]["REVIEW_SUPPORT_SHA"] == "${{ steps.resolve_support.outputs.review_support_sha }}"
