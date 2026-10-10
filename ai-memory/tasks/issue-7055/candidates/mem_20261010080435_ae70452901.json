@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix for PR #6654's four failing test groups land on?\nChoices:\nA) Commit to PR #6654's head branch `ai/issue-6634` (a fix PR based on that branch, or a direct commit), so the tests are fixed alongside the retry-helper migration they cover. Leave the CI gate and the retry and rate-limit behaviour unchanged (RECOMMENDED)\nB) Target the default branch after PR #6654 merges. **Note:** PR #6654 cannot merge while `CI / lint` is red, so this order may never complete.\nC) Close this issue without code changes and let PR #6654's own review/autofix loop fix the failures, since its editor already gets the failed check-runs (`CHECK_RUNS_AUTOFIX_ENABLED`).\nAssumptions and notes:\n- Scope stays limited to the four test files named in the issue: `tests/test_clarify_respond_standalone.py`, `tests/test_phase_skip_gate_telemetry_contract.py`, `tests/test_security_audit_workflow_contract.py` and `tests/test_gh_api_retry.py`. The triage itself says not to change the retry behaviour or the CI gate.\n- Missing context: this checkout is not a git repository and is not PR #6654's head. I checked only that `tests/test_gh_api_retry.py` is absent and that the two existing test functions are present (`tests/test_clarify_respond_standalone.py:180`, `tests/test_phase_skip_gate_telemetry_contract.py:204`). The quoted line numbers from the PR head have not been checked here.",
+  "fingerprint": "7a10e36c6618743d055d462ec157eb2e0d88973b1598e095d6b1a78ba6884b6b",
+  "lineage": {
+    "issue_number": 7055,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38036266528",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38036266528",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010080435_ae70452901",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7055,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38036266528"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7055 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T08:04:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
