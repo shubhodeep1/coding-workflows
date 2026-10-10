@@ -6,7 +6,7 @@ The promote cycle reads `analysis/workflow-optimization-*.md` from the checkout 
 | The numbers that matter | Value |
 | --- | --- |
 | Extra API calls per dispatch | 1 contents read per doc checked |
-| Extra API calls per purge | 1 issue list call per 100 open tracking issues + 1 comment read per open tracking issue + 1 orchestrator runs read |
+| Extra API calls per purge | 1 issue list call per 100 open tracking issues + 1 comment read per 100 comments on each open tracking issue + 1 orchestrator runs read |
 | New log lines | `APPLY_ANALYSIS_DOC_GONE`, `APPLY_ANALYSIS_IN_FLIGHT_DOCS`, `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED` |
 
 What this means for operators: an apply-analysis project always starts on a doc its plan can read, and a project that runs past the 30-day mark keeps its doc until its own final PR deletes it.
