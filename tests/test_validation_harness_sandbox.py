@@ -737,3 +737,68 @@ def test_stopping_the_daemon_signals_only_as_the_sandbox_user() -> None:
 	for line in body.splitlines():
 		if "pkill" in line or "pgrep" in line or "rm -rf" in line:
 			assert 'sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" --' in line, line
+
+
+def test_a_refused_probe_image_import_counts_as_a_daemon_refusal(tmp_path: Path) -> None:
+	script = f'''
+source "{HELPER}"
+as_sandbox() {{
+	case "$*" in
+		"docker image inspect"*) return 1 ;;
+		"docker import"*) cat >/dev/null; return 1 ;;
+		"docker run"*) echo "docker run must not be reached" >&2; return 0 ;;
+	esac
+}}
+rootless_docker_container_probe
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	if shutil.which("ldd") is None or not Path("/usr/bin/true").exists():
+		assert result.returncode == 2, result.stderr
+		return
+	assert result.returncode == 1, result.stderr
+	assert "probe_exit=import" in result.stderr
+	assert "docker run must not be reached" not in result.stderr
+
+
+def test_docker_info_ok_but_container_start_refused_fails_provision_before_any_harness(tmp_path: Path) -> None:
+	"""#7063: `docker info` answers, `docker run` hits the cgroup error under both drivers.
+
+	Uses the real probe (only the docker CLI is stubbed) and asserts that nothing after
+	provisioning, standing in for the harness launch, ever runs.
+	"""
+	calls = tmp_path / "calls"
+	status = tmp_path / "status"
+	script = f'''
+source "{HELPER}"
+sudo() {{ :; }}
+build_sandbox_env() {{ :; }}
+sandbox_systemd_session() {{ return 0; }}
+DAEMON=""
+start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
+stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
+as_sandbox() {{
+	case "$*" in
+		"docker info"*) [ -n "${{DAEMON}}" ] ;;
+		"docker image inspect"*) return 0 ;;
+		"docker run"*) echo "run ${{DAEMON}}" >> "{calls}"; echo "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory" >&2; return 125 ;;
+	esac
+}}
+sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
+echo "HARNESS_LAUNCHED" >> "{calls}"
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+	assert result.returncode == 3, result.stderr
+	lines = calls.read_text(encoding="utf-8").splitlines()
+	assert lines == ["start systemd", "run systemd", "stop", "start cgroupfs", "run cgroupfs"]
+	assert "HARNESS_LAUNCHED" not in lines
+	assert status.read_text(encoding="utf-8") == "fail provision container_start_failed\n"
+
+
+def test_a_non_integer_session_wait_falls_back_to_the_default(tmp_path: Path) -> None:
+	result = subprocess.run(["bash", "-c", f'source "{HELPER}"; printf "%s" "${{SANDBOX_SESSION_WAIT_SECS}}"'],
+		capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "SANDBOX_SESSION_WAIT_SECS": "15s"})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "15"

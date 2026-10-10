@@ -24,7 +24,9 @@
 # Exit codes: the harness exit code for `run`; 3 for any sandbox failure.
 # Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|retry|fail reason=<token>
 # (`retry` only from provision, when a test container would not start under the
-# systemd cgroup driver and the daemon is restarted with cgroupfs; #7063).
+# systemd cgroup driver, or under a daemon reused from an earlier provision in
+# the job, and the daemon is restarted with cgroupfs: reasons
+# container_start_failed_systemd / container_start_failed_reused; #7063).
 # Values are never logged.
 
 set -euo pipefail
@@ -45,8 +47,10 @@ VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE
 VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-}"
 # Cgroup setup for the sandbox's rootless dockerd: `auto` (the default) tries a
 # systemd user session first and falls back to cgroupfs; `cgroupfs` skips the
-# systemd attempt. Either way provision only succeeds once a test container
-# has started.
+# systemd attempt. Either way a test container that the daemon refuses to
+# start (or a probe image the daemon refuses to import) fails provision; only
+# a probe the host cannot build, or whose command cannot run inside the
+# container (exit 126/127), passes as container_probe_inconclusive.
 VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-auto}"
 SANDBOX_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -202,6 +206,7 @@ rootless_docker_ready()
 SANDBOX_SYSTEMD_RUN_DIR="${SANDBOX_SYSTEMD_RUN_DIR:-/run/systemd/system}"
 SANDBOX_CGROUP_ROOT="${SANDBOX_CGROUP_ROOT:-/sys/fs/cgroup}"
 SANDBOX_SESSION_WAIT_SECS="${SANDBOX_SESSION_WAIT_SECS:-15}"
+is_positive_int "${SANDBOX_SESSION_WAIT_SECS}" || SANDBOX_SESSION_WAIT_SECS=15
 SANDBOX_PROBE_IMAGE="ai-validation-probe:local"
 
 # Start a systemd user session for the sandbox user (linger keeps
@@ -264,6 +269,8 @@ stop_rootless_dockerd()
 
 # Import a one-binary image (the host's /usr/bin/true and the libraries ldd
 # lists for it) into the sandbox daemon, so the probe needs no registry pull.
+# Returns 0 when the image exists, 1 when the host cannot assemble it (no ldd,
+# no files, tar failed), 3 when the daemon refused the import.
 build_probe_image()
 {
 	as_sandbox docker image inspect "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>&1 && return 0
@@ -278,17 +285,28 @@ build_probe_image()
 	tar -C / -chf - -- "${files[@]}" 2>/dev/null | as_sandbox docker import --change 'CMD ["/usr/bin/true"]' - "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>&1
 	local -a import_status=("${PIPESTATUS[@]}")
 	set -e
-	[ "${import_status[0]}" -eq 0 ] && [ "${import_status[1]}" -eq 0 ]
+	[ "${import_status[0]}" -eq 0 ] && [ "${import_status[1]}" -eq 0 ] && return 0
+	# tar killed by SIGPIPE (141) means the daemon side closed the stream first.
+	if [ "${import_status[1]}" -ne 0 ] && { [ "${import_status[0]}" -eq 0 ] || [ "${import_status[0]}" -eq 141 ]; }; then
+		return 3
+	fi
+	return 1
 }
 
 # Start (and remove) one container: 0 when it ran, 1 when the daemon refused
-# to start it (`docker run` exit 125, the cgroup failure), 2 when the probe is
-# inconclusive (no image, or the image's command could not run: 126/127), so
-# a probe problem is never mistaken for a broken daemon.
+# to start it (`docker run` exit 125, the cgroup failure) or to import the
+# probe image, 2 when the probe is inconclusive (the host could not assemble
+# the image, or the image's command could not run: 126/127), so a host-side
+# probe problem is never mistaken for a broken daemon.
 rootless_docker_container_probe()
 {
-	local probe_err="" rc=0
-	build_probe_image || return 2
+	local probe_err="" rc=0 build_rc=0
+	build_probe_image || build_rc=$?
+	if [ "${build_rc}" -eq 3 ]; then
+		printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=import detail=docker import refused\n' >&2
+		return 1
+	fi
+	[ "${build_rc}" -eq 0 ] || return 2
 	probe_err="$(as_sandbox docker run --rm --network none "${SANDBOX_PROBE_IMAGE}" 2>&1 >/dev/null)" || rc=$?
 	[ "${rc}" -eq 0 ] && return 0
 	# The daemon's own error line, for the job log (no credentials reach the sandbox).
