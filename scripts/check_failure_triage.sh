@@ -396,6 +396,10 @@ else
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
 				--jq '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""' 2>/dev/null || true)"
 			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
+		elif [ -z "${CHECK_DETAILS_URL}" ]; then
+			base_gate_reason="details_url_unavailable"
+		elif ! [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
+			base_gate_reason="details_url_unparseable"
 		else
 			base_gate_reason="workflow_unresolved"
 		fi

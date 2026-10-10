@@ -1444,6 +1444,20 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 				self.assertEqual(outputs.get("ready"), "true")
 				self.assertEqual(metadata.get("generation"), "1")
 
+	def test_unusable_details_url_files_with_a_specific_reason(self) -> None:
+		for url, expected in (
+			("", "reason=details_url_unavailable"),
+			("https://ci.example.test/build/42", "reason=details_url_unparseable"),
+		):
+			with self.subTest(url=url):
+				proc, outputs, _metadata = _run_collect_stage(
+					parent_body=PLAIN_SOURCE, base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+					extra_env={"CHECK_TRIAGE_DETAILS_URL": url},
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=unknown " + expected, proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+
 	def test_check_run_event_reads_the_base_check(self) -> None:
 		calls: list[str] = []
 		proc, outputs, _metadata = _run_collect_stage(
