@@ -184,7 +184,7 @@ if [ -z "${STREAK_AUTHOR_LOGIN}" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${COMMENTS
 	# returns the identity authenticated by GH_TOKEN (the PR and comments
 	# reads come from the run's start), and the gate resolves it only when its
 	# cap scan runs. One read, only on a failed run with PR comments to count.
-	STREAK_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || echo "")"
+	STREAK_AUTHOR_LOGIN="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || echo "")"
 fi
 STREAK_AUTHOR_LOGIN="$(printf '%s' "${STREAK_AUTHOR_LOGIN}" | head -1 | tr -d '[:space:]')"
 if ! [[ "${STREAK_AUTHOR_LOGIN}" =~ ^[A-Za-z0-9-]{1,39}(\[bot\])?$ ]]; then
