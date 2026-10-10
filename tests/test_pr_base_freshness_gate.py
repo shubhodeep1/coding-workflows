@@ -250,14 +250,22 @@ def _runs(*entries: tuple[str, str, str]) -> str:
 	]}])
 
 
-def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None) -> tuple[int, str]:
-	"""Each check-runs read returns the next fixture; the last one repeats."""
+def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None,
+		ci_runs_sequence: list[str] | None = None) -> tuple[int, str]:
+	"""Each check-runs read returns the next fixture; the last one repeats.
+
+	ci_runs_sequence does the same for the actions/runs?head_sha= read.
+	"""
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_seq_{os.getpid()}.json"
 	seq_file.write_text(json.dumps(runs_sequence), encoding="utf-8")
 	counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_n_{os.getpid()}"
 	counter.write_text("0", encoding="utf-8")
+	ci_seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_ci_seq_{os.getpid()}.json"
+	ci_seq_file.write_text(json.dumps(ci_runs_sequence or [json.dumps({"workflow_runs": []})]), encoding="utf-8")
+	ci_counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_ci_n_{os.getpid()}"
+	ci_counter.write_text("0", encoding="utf-8")
 	preamble = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -267,6 +275,9 @@ _safe_gh_jq() {{
     *"/check-runs"*)
       n="$(cat "{counter}")"; printf '%s' "$((n + 1))" > "{counter}"
       jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{seq_file}" ;;
+    *"/actions/runs?head_sha="*)
+      n="$(cat "{ci_counter}")"; printf '%s' "$((n + 1))" > "{ci_counter}"
+      jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{ci_seq_file}" ;;
     *) printf '%s' '{{}}' ;;
   esac
 }}
@@ -281,6 +292,13 @@ printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 	assert res.returncode == 0, res.stderr
 	last = [line for line in res.stdout.splitlines() if line.startswith("rc=")][-1]
 	return int(last.split()[0][3:]), res.stdout
+
+
+def _ci_runs(*entries: tuple) -> str:
+	"""actions/runs?head_sha= shape: workflow name, status, run id[, conclusion]."""
+	return json.dumps({"workflow_runs": [
+		{"name": e[0], "status": e[1], "id": e[2], "conclusion": e[3] if len(e) > 3 else None} for e in entries
+	]})
 
 
 GREEN = _runs(("CI", "completed", "success"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
@@ -347,6 +365,58 @@ class RequiredChecksWait(unittest.TestCase):
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=ok waited_s=2", out)
 
+	def test_queued_ci_run_keeps_waiting_until_it_completes(self) -> None:
+		"""A fast check already passed but CI's run is still queued: do not read the head as green."""
+		queued = _ci_runs(("CI", "queued", 101))
+		done = _ci_runs(("CI", "completed", 101))
+		rc, out = _wait([GREEN], ci_runs_sequence=[queued, queued, done])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("1 CI workflow run(s) on", out)
+		self.assertIn("outcome=ok", out)
+
+	def test_ci_run_that_never_completes_times_out(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[_ci_runs(("CI", "in_progress", 101))])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_unlisted_workflows_and_the_own_run_do_not_wait(self) -> None:
+		runs = _ci_runs(("Security audit", "in_progress", 101), ("CI", "in_progress", 4242))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+		self.assertNotIn("CI workflow run(s)", out)
+
+	def test_wait_workflows_can_be_disabled_or_renamed(self) -> None:
+		runs = _ci_runs(("Build", "queued", 101))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "none"})
+		self.assertEqual(rc, 0, out)
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "Build, CI"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_wait_workflow_names_match_case_insensitively(self) -> None:
+		runs = _ci_runs(("CI", "queued", 101))
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "ci"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_ci_run_cancelled_before_its_jobs_refuses(self) -> None:
+		"""A queued CI run cancelled before any job started leaves no check-runs: not green."""
+		runs = _ci_runs(("CI", "completed", 101, "cancelled"))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=failed", out)
+		self.assertIn("reason=ci_run_cancelled", out)
+
+	def test_cancelled_run_superseded_by_a_finished_run_proceeds(self) -> None:
+		runs = _ci_runs(("CI", "completed", 101, "cancelled"), ("CI", "completed", 102, "success"))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+
+	def test_failed_runs_read_falls_back_to_the_check_runs(self) -> None:
+		rc, out = _wait([GREEN], ci_runs_sequence=["not json"])
+		self.assertEqual(rc, 0, out)
+
 	def test_allow_all_sentinel_proceeds(self) -> None:
 		rc, out = _wait([RED], env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
 		self.assertEqual(rc, 0)
@@ -366,12 +436,14 @@ class RequiredChecksWiring(unittest.TestCase):
 		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
 		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", job)
 
 	def test_codex_agent_auto_merge_step_passes_the_wait_variables(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
 
 	def test_freshness_is_rechecked_after_a_wait_on_every_auto_merge_path(self) -> None:
 		job = WORKFLOW.read_text(encoding="utf-8").split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
@@ -384,6 +456,7 @@ class RequiredChecksWiring(unittest.TestCase):
 		step = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
 
 	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
