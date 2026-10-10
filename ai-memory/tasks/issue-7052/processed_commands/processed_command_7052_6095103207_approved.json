@@ -5,13 +5,23 @@
   "entry_id": "processed_command_7052_6095103207_approved",
   "issue_number": 7052,
   "metadata": {
+    "branch": "ai/issue-7052",
+    "changed_files": [
+      "agents.md",
+      "changelog.d/7052-pr-merge-guard-activation-pending.md"
+    ],
+    "issue_number": 7052,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7052",
+    "pr_number": 7054,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7054",
+    "run_attempt": "1",
+    "run_id": "38034404019",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38034404019"
   },
   "run_attempt": 1,
   "run_id": "38034404019",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-10T07:28:29Z",
+  "status": "completed",
+  "timestamp": "2026-10-10T07:46:33Z",
   "workflow": "implement"
 }
