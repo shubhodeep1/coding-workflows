@@ -198,13 +198,15 @@ def test_managed_open_pr_guard_reroutes_before_dispatch() -> None:
 
 
 def test_standalone_guard_reroutes_to_close_and_reissue_case() -> None:
-	guard = POLLER_TEXT.index('&& _stall_retired_host_only_conflict_check "${issue_num}" "${STALL_CONFLICT_PR_NUM}" "${_std_conflict_linked}"; then')
+	guard = POLLER_TEXT.index('&& _stall_retired_host_only_conflict_check "${issue_num}" "${STALL_CONFLICT_PR_NUM}" "${_std_retired_pr_json}"; then')
 	reroute = POLLER_TEXT.index('action="close_and_reissue"', guard)
 	dispatch = POLLER_TEXT.index('_dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}"', guard)
 	case_start = POLLER_TEXT.index('    case "${action}" in\n      run_stall_judge)', guard)
 	reissue_case = POLLER_TEXT.index("      close_and_reissue)\n", case_start)
 	assert guard < reroute < dispatch < case_start < reissue_case
 	assert "elif _check_open_pr_conflict_guard" in POLLER_TEXT[reroute:dispatch]
+	# The full REST payload cached this iteration is reused (no refetch).
+	assert '_std_retired_pr_json="${_STD_ITER_PR_JSON_CACHED}"' in POLLER_TEXT[guard - 800:guard]
 
 
 def test_both_reissue_bodies_append_issue_bound_guidance() -> None:
@@ -371,3 +373,52 @@ def test_helper_fails_closed_on_oversized_conflict_set() -> None:
 	assert "head -n 500" not in body
 	assert "_srcc_skip too_many_conflicts" in body
 	assert body.index("_srcc_skip too_many_conflicts") < body.index("retired-conflict-check")
+
+
+# --- review-blocked rungs (ai:review-blocked ends here after the resolver fails closed) ---
+
+
+def test_managed_dispatch_rb_judge_reroutes_before_judge_dispatch() -> None:
+	start = POLLER_TEXT.index("    dispatch_rb_judge)\n      # Autonomous escape from ai:review-blocked")
+	dispatch = POLLER_TEXT.index('_dispatch_rb_judge_for_pr "${rb_pr_num}" "${issue_num}"', start)
+	block = POLLER_TEXT[start:dispatch]
+	check = block.index('_stall_retired_host_only_conflict_check "${issue_num}" "${rb_pr_num}" "${STALL_IMPL_PR_JSON:-}"')
+	assert block.index('_stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}"') < check
+	assert 'execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue"' in block[check:]
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"' in block[check:]
+
+
+def test_standalone_dispatch_rb_judge_reroutes_to_close_and_reissue_case() -> None:
+	pre = POLLER_TEXT.index('    if [ "${action}" = "dispatch_rb_judge" ]; then\n      _std_rb_pre_resolved="true"')
+	check = POLLER_TEXT.index('_stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}" "${STALL_IMPL_PR_JSON:-}"', pre)
+	reroute = POLLER_TEXT.index('action="close_and_reissue"', check)
+	case_start = POLLER_TEXT.index('    case "${action}" in\n      run_stall_judge)', reroute)
+	rb_case = POLLER_TEXT.index("      dispatch_rb_judge)\n", case_start)
+	reissue_case = POLLER_TEXT.index("      close_and_reissue)\n", case_start)
+	assert pre < check < reroute < case_start < reissue_case
+	# The case reuses the pre-resolved PR instead of a second lookup.
+	assert '_std_rb_pr_num="${_std_rb_pre_pr_num}"' in POLLER_TEXT[rb_case:rb_case + 1200]
+
+
+def test_managed_review_blocked_predispatch_skips_futile_resolver() -> None:
+	dispatch = POLLER_TEXT.index('_dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF_PRECHECK}"')
+	block = POLLER_TEXT[dispatch - 2500:dispatch]
+	check = block.index('_stall_retired_host_only_conflict_check "${rb_issue}" "${RB_PR}" "${_rb_pr_json}"')
+	assert "continue" in block[check:block.index('if [ "${RB_SHOULD_PREDISPATCH}" = "true" ] && [ -n "${RB_HEAD_REF_PRECHECK}" ]')]
+
+
+@needs_tools
+@pytest.mark.parametrize(
+	("pr", "expected_rc"),
+	[
+		({"mergeable": True, "mergeable_state": "clean"}, 1),
+		({"mergeable": True, "mergeable_state": "dirty"}, 0),
+		({"mergeable": False, "mergeable_state": "dirty"}, 0),
+		({"mergeable": None, "mergeable_state": "unknown"}, 0),
+		({}, 0),
+	],
+)
+def test_may_conflict_prefilter_only_skips_known_clean(pr: dict, expected_rc: int) -> None:
+	script = _extract_function("_stall_pr_json_may_conflict") + '\n_stall_pr_json_may_conflict "$1"\n'
+	result = subprocess.run(["bash", "-c", script, "bash", json.dumps(pr)], capture_output=True, text=True, check=False)
+	assert result.returncode == expected_rc, result.stderr

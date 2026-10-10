@@ -24290,11 +24290,14 @@ def test_stall_retired_conflict_reissue_is_wired_and_registered():
 	# behaviour against a scratch origin is covered in
 	# tests/test_stall_retired_conflict_reissue.py.
 	poller_text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
-	assert poller_text.count("_stall_retired_host_only_conflict_check \"${issue_num}\"") == 3
+	# resolve_merge_conflict, standalone retrigger guard, managed open-PR
+	# guard, and the managed and standalone dispatch_rb_judge rungs.
+	assert poller_text.count("_stall_retired_host_only_conflict_check \"${issue_num}\"") == 5
+	assert '_stall_retired_host_only_conflict_check "${rb_issue}" "${RB_PR}" "${_rb_pr_json}"' in poller_text
 	assert 'STALL_RETIRED_CONFLICT_REISSUE_ENABLED:-true' in poller_text
 	poll_workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}" in poll_workflow
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments(REPO_ROOT)
 	assert "LOG_PREFIX.name=STALL_RETIRED_CONFLICT_REISSUE" in agents_text
 	assert "- `STALL_RETIRED_CONFLICT_REISSUE`" in agents_text
 	readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

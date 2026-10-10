@@ -10342,6 +10342,20 @@ _stall_retired_conflict_branch_ok() {
   git check-ref-format "refs/heads/${branch}" >/dev/null 2>&1
 }
 
+# _stall_pr_json_may_conflict <pr_json>: returns 1 only when the REST PR
+# payload says the PR merges cleanly (mergeable true and not dirty), so a
+# clean PR skips the local merge-tree probe. Unknown mergeability returns 0
+# and the probe decides. No API calls.
+_stall_pr_json_may_conflict() {
+  local _spmc_json="${1:-}" _spmc_mergeable _spmc_state
+  _spmc_mergeable="$(printf '%s' "${_spmc_json}" | jq -r 'if .mergeable == null then "" else (.mergeable | tostring) end' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+  _spmc_state="$(printf '%s' "${_spmc_json}" | jq -r '(.mergeable_state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+  if [ "${_spmc_mergeable}" = "true" ] && [ "${_spmc_state}" != "dirty" ]; then
+    return 1
+  fi
+  return 0
+}
+
 _stall_retired_host_only_conflict_check() {
   local issue_num="$1"
   local pr_num="$2"
@@ -10381,11 +10395,11 @@ _stall_retired_host_only_conflict_check() {
     pr_json="$(_fetch_pr_json "${pr_num}")"
   fi
   local pr_state head_repo head_ref head_sha base_ref
-  pr_state="$(printf '%s' "${pr_json}" | jq -r '(.state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-  head_repo="$(printf '%s' "${pr_json}" | jq -r '(.head.repo.full_name // empty)' 2>/dev/null)"
-  head_ref="$(printf '%s' "${pr_json}" | jq -r '(.head.ref // empty)' 2>/dev/null)"
-  head_sha="$(printf '%s' "${pr_json}" | jq -r '(.head.sha // empty)' 2>/dev/null)"
-  base_ref="$(printf '%s' "${pr_json}" | jq -r '(.base.ref // empty)' 2>/dev/null)"
+  pr_state="$(printf '%s' "${pr_json}" | jq -r '(.state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+  head_repo="$(printf '%s' "${pr_json}" | jq -r '(.head.repo.full_name // empty)' 2>/dev/null || echo "")"
+  head_ref="$(printf '%s' "${pr_json}" | jq -r '(.head.ref // empty)' 2>/dev/null || echo "")"
+  head_sha="$(printf '%s' "${pr_json}" | jq -r '(.head.sha // empty)' 2>/dev/null || echo "")"
+  base_ref="$(printf '%s' "${pr_json}" | jq -r '(.base.ref // empty)' 2>/dev/null || echo "")"
   if [ "${pr_state}" != "open" ]; then
     _srcc_skip pr_not_open
     return 1
@@ -15941,6 +15955,20 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         return 0
       fi
+      # Issue #6680: a PR that conflicts with its base only on retired
+      # host-only file(s) the base no longer has can never be merged by the
+      # sandboxed resolver, and the judge cannot merge it either. Close and
+      # re-issue against the current base instead of dispatching the judge.
+      # Reuses the PR payload _resolve_issue_implementation_pr fetched.
+      if _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
+        && _stall_retired_host_only_conflict_check "${issue_num}" "${rb_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then
+        add_healing_note "Issue #${issue_num}: review-blocked PR #${rb_pr_num} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; closing and re-issuing instead of dispatching the review-blocked judge"
+        STALL_HEALING_CHANGED=true
+        local _rbj_reissue_rc=0
+        execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
+        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        return "${_rbj_reissue_rc}"
+      fi
       local rb_dispatch_rc=0
 	      _dispatch_rb_judge_for_pr "${rb_pr_num}" "${issue_num}" || rb_dispatch_rc=$?
 	      if [ "${rb_dispatch_rc}" -eq 1 ]; then
@@ -18563,8 +18591,15 @@ PY
         continue
       fi
 
+      # Pass the full REST payload when this iteration already fetched it for
+      # the same PR, so the retired-conflict check needs no refetch.
+      local _std_retired_pr_json="${_std_conflict_linked}" _std_retired_pr_num=""
+      _std_retired_pr_num="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+      if [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ] && [[ "${_std_retired_pr_num}" =~ ^[0-9]+$ ]] && [ "${_STD_ITER_PR_NUM_CACHED:-}" = "${_std_retired_pr_num}" ]; then
+        _std_retired_pr_json="${_STD_ITER_PR_JSON_CACHED}"
+      fi
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}" \
-        && _stall_retired_host_only_conflict_check "${issue_num}" "${STALL_CONFLICT_PR_NUM}" "${_std_conflict_linked}"; then
+        && _stall_retired_host_only_conflict_check "${issue_num}" "${STALL_CONFLICT_PR_NUM}" "${_std_retired_pr_json}"; then
         # Issue #6680: the conflict is on retired host-only file(s) the base
         # no longer has, which the sandboxed resolver can never merge. Route
         # to the standalone close_and_reissue case below instead of
@@ -18627,6 +18662,27 @@ PY
             continue
             ;;
         esac
+      fi
+    fi
+
+    # Issue #6680: the ai:review-blocked rung (dispatch_rb_judge). A PR that
+    # conflicts with its base only on retired host-only file(s) the base no
+    # longer has can never be merged by the sandboxed resolver or the judge,
+    # so route to the standalone close_and_reissue case below. The resolved
+    # implementation PR is reused by the dispatch_rb_judge case (no second
+    # lookup); the check reuses the PR payload the lookup fetched.
+    local _std_rb_pre_resolved="false" _std_rb_pre_pr_num="" _std_rb_pre_failure_reason=""
+    if [ "${action}" = "dispatch_rb_judge" ]; then
+      _std_rb_pre_resolved="true"
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        _std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"
+      fi
+      _std_rb_pre_failure_reason="${STALL_IMPL_PR_FAILURE_REASON}"
+      if [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] \
+        && _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
+        && _stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then
+        echo "STALL_RECOVERY issue=${issue_num} reason=review_blocked_retired_host_only_conflict pr=${_std_rb_pre_pr_num} phase=${phase} action=close_and_reissue override_from=${action}"
+        action="close_and_reissue"
       fi
     fi
 
@@ -19144,7 +19200,10 @@ REISSUE_EOF
         # the mention-based linked-PR cache. The judge may merge, fix, or
         # close/reissue its target, so a mention-only PR is unsafe here.
         local _std_rb_pr_num=""
-        if _resolve_issue_implementation_pr "${issue_num}"; then
+        if [ "${_std_rb_pre_resolved}" = "true" ]; then
+          _std_rb_pr_num="${_std_rb_pre_pr_num}"
+          STALL_IMPL_PR_FAILURE_REASON="${_std_rb_pre_failure_reason}"
+        elif _resolve_issue_implementation_pr "${issue_num}"; then
           _std_rb_pr_num="${STALL_IMPL_PR_NUM}"
         fi
         if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]] && [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
@@ -23091,6 +23150,19 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           RB_PREDISPATCH_REASON="external head commit ${RB_HEAD_SHA_PRECHECK:0:7} by ${_rb_head_author_login:-${_rb_head_author_name:-unknown}}"
         fi
 
+        # Issue #6680: a conflict only on retired host-only file(s) the base
+        # no longer has fails closed in the resolver sandbox on every run, and
+        # the judge cannot merge it. Skip the futile resolver dispatch and the
+        # judge; stall recovery's dispatch_rb_judge rung closes the PR and
+        # re-issues the issue against the current base. Reuses _rb_pr_json.
+        if [ "${RB_SHOULD_PREDISPATCH}" = "true" ] && [ "${RB_HEAD_IS_EXTERNAL}" != "true" ] \
+          && _stall_retired_host_only_conflict_check "${rb_issue}" "${RB_PR}" "${_rb_pr_json}"; then
+          echo "  [review-blocked] PR #${RB_PR} conflicts with ${STALL_RETIRED_CONFLICT_BASE} only on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; skipping resolver dispatch and judge, stall recovery will close and re-issue issue #${rb_issue}."
+          STALL_REISSUE_EXTRA_GUIDANCE=""
+          STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
+          STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
+          continue
+        fi
         if [ "${RB_SHOULD_PREDISPATCH}" = "true" ] && [ -n "${RB_HEAD_REF_PRECHECK}" ] && [ "${RB_HEAD_REF_PRECHECK}" != "null" ]; then
           echo "  [review-blocked] Pre-judge dispatch for PR #${RB_PR}: ${RB_PREDISPATCH_REASON}"
           _predispatch_rc=0
