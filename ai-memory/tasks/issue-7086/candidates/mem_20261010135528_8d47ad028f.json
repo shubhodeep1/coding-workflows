@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix for PR #6655's CI failure target?\nChoices:\nA) The PR's head branch `ai/issue-6633`: add `Integration branch: ai/issue-6633` so the fix PR stacks on it and merges into PR #6655 before it lands (RECOMMENDED)\nB) The default branch: only if PR #6655 has already merged by planning time; otherwise the planner should emit `BLOCKED: PR #6655 not merged`\nC) No separate fix: close this issue and leave the failure to PR #6655's own review/autofix loop, which handles PR-specific check failures\n**Note:** B does nothing while PR #6655 is still open, because none of the files it would edit exist on the default branch yet.\n**Assumptions (to be settled in planning, not asked here):** whichever branch is chosen, the fix will:\n- restore `--support-sha` and the sandbox-preparation `--evidence-file` input in the extracted evidence step script;\n- make `scripts/label_helpers.sh` (and `.github/ai/label_contract.v1.json`, if it is missing the label) agree on `ai:provider-outage`;\n- update the affected contract tests to read the expanded step bodies, accept `provider_outage.py` as a trusted support script, and pin the new alert declarations without loosening their safety checks.\n**Missing context:** I couldn't check whether PR #6655 is still open or already merged, and I couldn't read the truncated assertion from the poller shard log.",
+  "fingerprint": "1ff21abce30ae9f3760f2118b2e6732e863304b247bca8497df46c2bb1a085ce",
+  "lineage": {
+    "issue_number": 7086,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38057262097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38057262097",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010135528_8d47ad028f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7086,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38057262097"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7086 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T13:55:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
