@@ -16,9 +16,9 @@ command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
 
 # `_review_sandbox_build_image <timeout_seconds|0> <docker build args...>`
-# prints the built image id. The base image comes from Docker Hub, whose
-# token and registry endpoints intermittently answer 429/500/504; one such
-# answer used to fail the whole sandbox prepare and, with it, the review
+# prints the built image id, built (or pulled) through `review_image_builder`.
+# The base image comes from Docker Hub, whose token and registry endpoints
+# intermittently answer 429/500/504; one such answer used to fail the whole sandbox prepare and, with it, the review
 # editor (PR #6645 runs 37989220029 and 37994304266). A build whose error
 # output names a registry or network failure is retried up to
 # REVIEW_SANDBOX_BUILD_ATTEMPTS times (default 3) after 10 s, then 30 s;
@@ -36,9 +36,9 @@ _review_sandbox_build_image()
 	while :; do
 		rc=0
 		if [ "${build_timeout}" -gt 0 ]; then
-			built="$(timeout --signal=TERM --kill-after=10s "${build_timeout}s" env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q "$@" 2>"${err_file}")" || rc=$?
+			built="$(timeout --signal=TERM --kill-after=10s "${build_timeout}s" env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" "${review_image_builder[@]}" "$@" 2>"${err_file}")" || rc=$?
 		else
-			built="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q "$@" 2>"${err_file}")" || rc=$?
+			built="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" "${review_image_builder[@]}" "$@" 2>"${err_file}")" || rc=$?
 		fi
 		cat "${err_file}" >&2
 		if [ "${rc}" -eq 0 ] && [ -n "${built}" ]; then
@@ -100,6 +100,12 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
+	# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
+	# without the helper, build locally as before.
+	review_image_builder=(docker build -q)
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		review_image_builder=(bash "${support}/sandbox_image.sh" build --family review)
+	fi
 	# Ephemeral OpenCode retries must not require the Claude CLI or engine files.
 	if [ "${prepare_engine}" = claude ]; then
 		[ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ] || { echo '::error::Review Claude support missing' >&2; exit 1; }

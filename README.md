@@ -107,6 +107,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
+| `UNBLOCK_JUDGE_REGRANT_ENABLED` | No | `true` | unblock_judge | Re-check a scope-blocked issue's automation-path rejection with the current grant guard before asking the judge, and resume it without a verdict when every rejected path is now granted (once per rejection run). `false` sends every such item to the judge. The re-check reads `ALLOW_WORKFLOW_EDITS` with the same `true` default as `implement.yml`. |
 | `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (both Codex and Claude run in a read-only, network-isolated container; their credentials stay in host-side relays. The Claude path follows `.github/ai/claude_engine.json` and falls back to isolated Codex only when unavailable). |
 | `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
 | `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
@@ -1413,7 +1414,7 @@ byte-identical.
 | The numbers that matter | Value |
 | --- | --- |
 | Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
-| Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
+| Image | pulled prebuilt from GHCR when one matches its inputs, else built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after); see "Prebuilt sandbox images" |
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | staged Node manifests and filtered `requirements.txt` / `pyproject.toml` dependencies (both when present) installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; installable Python source (`pyproject.toml`, or requirements with `setup.py`) runs separately offline, including Node/Python hybrids; a failed dev dependency install warns even if base dependencies install on retry; never copied back; when the proxy is unavailable, installation is skipped without restoring network access |
@@ -1489,6 +1490,40 @@ merged-PR check; only digits glued to the redirection (`2>&1`, `2>/dev/null`)
 are a file descriptor, as in Bash.
 An unresolved push source also requires confirmation instead of checking the
 session checkout's unrelated HEAD.
+
+### Prebuilt sandbox images
+
+The sandbox images the isolated agents run in are now pulled ready-made from
+GHCR instead of built on every job. `scripts/sandbox_image.sh` sits in front of
+each image build (`codex_isolated_exec.sh`, `clarify_isolated_run.sh`,
+`heal_isolated_implement.sh`, `review_untrusted_sandbox.sh`): it pulls
+`ghcr.io/shubhodeep1/coding-workflows-sandbox:<family>-<input hash>` and runs
+the same `docker build` as before when the pull fails, times out or returns an
+image whose `coding-workflows.sandbox-input` label does not match. A job no
+longer depends on Docker Hub, npm or the Debian mirrors being reachable, which
+on 2026-10-09 pushed Claude roles onto the codex fallback.
+
+The input hash covers the build context's files, the Dockerfile path and the
+build args (`CODEX_VERSION`, `OPENCODE_VERSION`, `CLAUDE_CLI_VERSION`). A repo
+that overrides one of them, or a ref whose Dockerfile differs from the published
+ones, finds no tag and builds locally exactly as before.
+`.github/workflows/publish-sandbox-images.yml` publishes the tags:
+
+| The numbers that matter | Value |
+| --- | --- |
+| Images per ref | 7: clarify (codex, Claude, heal defaults), review (OpenCode, Claude), `codex_isolated_exec.sh` (codex, Claude) |
+| Published from | pushes to `main` and `stable` that touch an image input; weekly forced rebuild Mondays 04:23 UTC (Debian security updates); `workflow_dispatch` |
+| Pull timeout | `SANDBOX_IMAGE_PULL_TIMEOUT_SECS`, default `60` |
+| Registry | `SANDBOX_IMAGE_REGISTRY`, default `ghcr.io/shubhodeep1/coding-workflows-sandbox`; `off` always builds locally |
+| Log line | `SANDBOX_IMAGE family=<f> outcome=pulled\|built reason=<pull_failed\|label_mismatch\|disabled> ref=<ref>` |
+
+What this means for operators: the package must be public so consumer repos
+pull it without credentials. GitHub creates a new package as private; after
+the first publish, set it to public once under the package's settings. Until
+then, and whenever GHCR is down, jobs build locally and log
+`outcome=built reason=pull_failed`. The publish job runs only in
+`shubhodeep1/coding-workflows` and logs in with the job's `GITHUB_TOKEN`
+(`packages: write`); no consumer job holds a registry credential.
 
 ### Workflow file size limit
 
@@ -1580,6 +1615,16 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **Base-branch gate:** the issue is implemented as a new PR off the default
+  branch, so it can only fix a failure the base branch shares. After the
+  open-issue dedup, the script reads the base branch's result for the same
+  check (two reads for a failed CI workflow run, one for a non-Actions check).
+  A `success` there means the failure is PR-specific: the run logs
+  `skip reason=pr_specific_failure base=<ref> base_conclusion=success` and
+  files nothing, leaving the failure to the PR's review/autofix loop. Any
+  other result, a pending or missing base run, or a failed read files the issue
+  as before (`base_gate outcome=file base_conclusion=<c|unknown> reason=…`).
+  `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED=false` turns the gate off.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2194,6 +2239,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress counts as unknown, never as an older success), a non-Actions check with that check's newest run on the base branch tip. When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. `false` files every failure. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
@@ -2244,7 +2290,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
-| `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor container wall-time limit. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. |
+| `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor wall-time limit, for the codex container and for the Claude run alike. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. When `IMPLEMENT` resolves to Claude (the default), `scripts/heal_isolated_implement.sh` runs the heal editor and its syntax repairs through `ai_engine.sh` `claude_run` on its own snapshot (in `codex_isolated_exec.sh`'s credential-free write container, never the job's shared workspace sandbox), then applies the same syntax validation and scoped transfer as a codex edit. Claude unavailable (exit 75) runs the isolated codex editor; any other Claude failure fails the run. `HEAL_ISOLATED_EDITOR ... engine=` names the engine that ran. |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
@@ -3322,6 +3368,25 @@ and resolver chains, a failed project) now goes to the unblock judge
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
+  An `operator_step` fix-up gates only the new code path behind its
+  placeholder flag; existing paths (releases, tagging, dispatches, merges)
+  keep running while the flag is unset.
+- **Before a verdict.** Two deterministic exits run before the judge is asked.
+  (1) A scope-blocked issue whose newest trusted rejection comes from the
+  automation-path grant guard is re-checked with today's
+  `scripts/files_touched_scope_guard.py` (same issue body, author and
+  `ALLOW_WORKFLOW_EDITS`). When it grants every rejected path, the judge posts
+  a comment ending in `<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->` and
+  the stop's resume command, with no verdict and no operator step; the
+  implementation run checks the grant again before it commits. Each rejection
+  run is re-granted at most once (`UNBLOCK_JUDGE op=regrant ... outcome=regranted`,
+  or `outcome=skip reason=still_denied|already_regranted|not_automation_path|disabled`).
+  (2) A blocked issue that is itself a fix-up the judge filed (first line
+  `<!-- ai:unblock-fixup:v1 item=<n> ...`, authored by the pipeline login)
+  never gets a fix-up of its own: the judge adds one `unblock-fixup-<n>` entry
+  to the `ai:operator-step` issue, comments
+  `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->` and sends one WARNING
+  (`outcome=escalated reason=fixup_blocked`); later runs stop at that marker.
   A malformed pipeline-authored project fix-up request is skipped with
   `UNBLOCK_PROJECT action=fixup comment=<id> outcome=invalid_request` in the
   poll log; a failed request-list parse logs `outcome=request_parse_failed`.

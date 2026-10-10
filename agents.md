@@ -300,6 +300,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    Files nothing when the base branch passes the same check
+    (`CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED`, default `true`; log
+    `CHECK_TRIAGE skip reason=pr_specific_failure`): a base-branch fix cannot
+    repair a PR-specific failure, which the PR's autofix loop owns.
     The PR-head checkout does not persist credentials; collection uses a
     GitHub token before Codex runs from a trusted support directory in a
     separate, GitHub-token-free step. Missing trusted support fails closed.
@@ -1232,6 +1236,19 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   root removes it by label, and an orphan without its broker has no model
   access. Implement's final cleanup removes its persistent sandbox root;
   a failed cleanup warns. Log prefix: `CODEX_ISOLATION`.
+- **Prebuilt images.** Every image build goes through
+  `scripts/sandbox_image.sh build --family <f> [--build-arg K=V]... [-f DOCKERFILE] CONTEXT`,
+  which pulls `${SANDBOX_IMAGE_REGISTRY}:<family>-<first 32 hex of the input hash>`
+  and falls back to the local `docker build -q` (same args, plus the label
+  `coding-workflows.sandbox-input=<full hash>`). It runs under the caller's
+  `env -i` / `env -u` wrapper, so pass `SANDBOX_IMAGE_REGISTRY` and
+  `SANDBOX_IMAGE_PULL_TIMEOUT_SECS` through explicitly. A caller without the
+  helper next to it builds locally, so support-copy lists that ship a build
+  site must ship `sandbox_image.sh` too (`tests/test_sandbox_image.py` checks
+  them). `codex_isolated_exec.sh image-context [--engine claude] --out DIR`
+  writes the generated context, and `scripts/sandbox_images_publish.sh`
+  mirrors each site's default inputs; change a site's default and the
+  publish script together. Log prefix: `SANDBOX_IMAGE`.
 
 ## Workflow file size limit
 
@@ -2087,6 +2104,7 @@ and shipped:
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `CLAUDE_POOL_HEALTH` (`scripts/claude_pool_health_alert.sh`, the "Alert on Claude pool accounts at the usage gate" step of `orchestrate_poll.yml`: `accounts= gated= auth_failed= probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`; `sent` means one Telegram WARNING named every account at or above `gate_utilization` and every rejected token; the step reads the pool action's `probes` output and sends at most once an hour, see README "Near-cap alert")
+- `SANDBOX_IMAGE` (`scripts/sandbox_image.sh`: `family= outcome=pulled|built|published|publish_skipped reason= ref=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. A failed dispatch logs `outcome=hold reason=dispatch_failed` and posts a `failed` marker for the used cycle (past the cap, `reason=dispatch_failed_exhausted` and the marker counts as a used head attempt). If result publication fails, report skips review re-dispatch so it cannot run without the marker. After dispatch the gate confirms the pending-marker comment response with bounded retries and fails closed with `reason=pending_marker_failed` if none is confirmed. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication. On a current-head findings marker before exhaustion, `awaiting_followups` requires an open `ai:security` issue authored by the pipeline account for that branch and a findings marker younger than `SECURITY_PASS_FOLLOWUP_STALE_HOURS`; otherwise the gate holds with `followups_missing`, `followups_unverifiable` or `followups_stalled`.)
@@ -2095,7 +2113,7 @@ and shipped:
 - `RECLARIFY_UNROUTED` (`detect_unrouted_blocked_comments` in `scripts/orchestrate_poll_process.sh`: `issue= comment= reason=command_unrouted|no_command age_minutes= outcome=flagged|post_failed`, `outcome=skip reason=budget_low|issue_list_unavailable|graphql_unavailable|classifier_failed`)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `UNBLOCK_SCAN` (`run_unblock_scan` in `scripts/orchestrate_poll_process.sh`: `candidates= dispatched= skipped= outcome=idle|done|skip reason=`, and `item= kind= outcome=dispatched|dispatch_failed`)
-- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation)
+- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation; `op=regrant run= paths= outcome=regranted`, `op=regrant [run=] outcome=skip reason=still_denied|already_regranted|not_automation_path|missing|truncated|malformed|grant_unavailable|rejection_unreadable|disabled`, `op=regrant run= outcome=failed reason=actuation_failed`; `origin= outcome=escalated reason=fixup_blocked`, `origin= outcome=skip reason=fixup_escalated`, `origin= outcome=failed reason=fixup_escalation_failed`)
 - `UNBLOCK_PROJECT` (`handle_unblock_judge_project_hooks`: `tracking_issue= action=abandoned|fixup id= item= issue= outcome=`)
 - `UNBLOCK_HANDOVER` (poller and `review_autofix.yml`: `tracking_issue=|pr= stop=judge_output|rb_judge reason= failures= outcome=counted|failed|labelled`)
 - `UNBLOCK_BULK_DELETE_OVERRIDE` (`implement.yml` "Unblock judge bulk-delete override" and the destructive guard: `outcome=enabled|skip reason= marker=`, `applied deletions=`)
@@ -2343,6 +2361,7 @@ LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=CLAUDE_POOL_HEALTH
+LOG_PREFIX.name=SANDBOX_IMAGE
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS
@@ -2854,6 +2873,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/plan.yml
 .github/workflows/promote-main-to-stable.yml
 .github/workflows/propagate-consumer-secrets.yml
+.github/workflows/publish-sandbox-images.yml
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
