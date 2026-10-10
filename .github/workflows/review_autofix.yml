@@ -4537,16 +4537,24 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
+        id: deps_prepare
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           DEPENDENCY_INSTALL_TIMEOUT_SECONDS: ${{ vars.DEPENDENCY_INSTALL_TIMEOUT_SECONDS || '600' }}
+          REVIEW_SANDBOX_BUILD_ATTEMPTS: ${{ vars.REVIEW_SANDBOX_BUILD_ATTEMPTS || '3' }}
+          REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 || '10' }}
+          REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2 || '30' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
           # Both the editor and consolidator share the prepared sandbox.
+          # Each prepare's stderr is also kept for "Post editor summary
+          # comment": a failed prepare skips the editor, and that step names
+          # the failure sandbox_prepare_failed instead of an empty editor.
+          sandbox_prepare_log="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/sandbox_prepare_stderr.txt"
           if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ] || [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]; then
-            if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude; then
+            if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude 2> >(tee -a "${sandbox_prepare_log}" >&2); then
               for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do
                 resolved="AI_ENGINE_RESOLVED_${role}"
                 if [ "${!resolved:-codex}" = "claude" ]; then
@@ -4554,10 +4562,10 @@ jobs:
                   echo "${resolved}=codex" >> "$GITHUB_ENV"
                 fi
               done
-              bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+              bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare 2> >(tee -a "${sandbox_prepare_log}" >&2)
             fi
           else
-            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare 2> >(tee -a "${sandbox_prepare_log}" >&2)
           fi
 
       - name: Switch reasoning effort for editor
@@ -4784,6 +4792,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
+          SANDBOX_PREPARE_STEP_OUTCOME: ${{ steps.deps_prepare.outcome }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -4824,6 +4833,31 @@ jobs:
                   > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
                 echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
               fi
+            elif [ "${SANDBOX_PREPARE_STEP_OUTCOME:-}" = "failure" ]; then
+              # The review sandbox could not be prepared (PR #6645: Docker
+              # Hub answered 500/504 on the base image), so the editor never
+              # ran. Name that phase and keep its last error line as evidence.
+              autofix_empty_failure_reason="sandbox_prepare_failed"
+              echo "AUTOFIX_SANDBOX_PREPARE_FAILED=true" >> "$GITHUB_ENV"
+              if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+                sandbox_prepare_last_error="$(grep -E '^(#[0-9]+ )?(::error::|ERROR:? )' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 | sed -E 's/^#[0-9]+ //; s/^::error:://; s/^ERROR:? //' | tr -d '\r' | cut -c1-300 || true)"
+                {
+                  echo "sandbox_prepare_failed=true"
+                  grep -E '^REVIEW_SANDBOX_BUILD .*outcome=fail' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 || true
+                  if [ -n "${sandbox_prepare_last_error}" ]; then
+                    printf '::error::Review sandbox prepare failed: %s\n' "${sandbox_prepare_last_error}"
+                  else
+                    echo "::error::Review sandbox prepare failed"
+                  fi
+                } > "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt"
+              fi
+              sandbox_prepare_headline=""
+              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+                sandbox_prepare_headline="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
+                  --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
+              fi
+              noop_explanation="The review sandbox could not be prepared (step \"Install project dependencies\"), so the editor never ran and no file changes were committed. ${sandbox_prepare_headline:-The prepare error is in the workflow run log.}"
+              echo "AUTOFIX_SANDBOX_PREPARE_FAILED reason=sandbox_prepare_failed error_present=$([ -n "${sandbox_prepare_headline}" ] && echo 1 || echo 0)"
             fi
             # review-autofix-failure:v1 marker for the gate's identical-failure
             # fingerprint cap. Same evidence files and reason precedence as
@@ -4835,6 +4869,7 @@ jobs:
                 --failure-reason "${autofix_empty_failure_reason}" \
                 --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6168,6 +6203,7 @@ jobs:
             autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
               --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6258,6 +6294,7 @@ jobs:
             autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
               --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6518,6 +6555,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
             echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"
           fi
@@ -6534,6 +6572,7 @@ jobs:
           fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
             --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
             --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
             --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
