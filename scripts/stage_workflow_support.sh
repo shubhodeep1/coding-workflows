@@ -531,6 +531,7 @@ bootstrap_support_roots()
 	SUPPORT_MAIN_ROOT=""
 	SELF_REPO_TRUSTED_TEMPLATE_ROOT=""
 	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=0
+	SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT=0
 
 	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
@@ -851,6 +852,64 @@ stage_self_repo_validation_renderer_entry()
 	echo "VALIDATE_TRUSTED_RENDERER path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
 }
 
+# Issue #6865: the renderer above was not the only executable safety asset an
+# integration checkout could supply. Its slot schema (the project_name
+# allowlist), validate_process.sh (run on the host with GH_TOKEN and the model
+# key), validate_driver.sh (the per-test credential scrub) and
+# validation_harness_sandbox.sh (the isolation boundary) came from the
+# validation checkout too, so a project PR that weakened one of them took
+# effect in its own validation run. Self-repo runs without an explicit target
+# stage them from the same verified support commit as the templates and the
+# renderer, and fail closed when a trusted copy is unavailable.
+stage_self_repo_validation_safety_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local trusted_path inspected_safety_path
+
+	case "${repo_path}" in
+		/*|..|../*|*/..|*/../*)
+			echo "::error::Refusing unsafe validation safety asset path '${repo_path}'." >&2
+			exit 1
+			;;
+		scripts/*)
+			;;
+		*)
+			echo "::error::Path '${repo_path}' is not a validation safety asset under scripts/." >&2
+			exit 1
+			;;
+	esac
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ] || [ -L "${trusted_path}" ]; then
+		echo "::error::Required trusted validation safety asset ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	inspected_safety_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_safety_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation safety asset path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_safety_path}" == */* ]] || break
+		inspected_safety_path="${inspected_safety_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file or symlinked validation safety asset path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_SUPPORT_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	if [ "${executable}" = "true" ]; then
+		chmod +x "${repo_path}"
+	fi
+	SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT=$((SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT + 1))
+}
+
 stage_copy_if_missing_silent_entry()
 {
 	local repo_path="$1"
@@ -1032,6 +1091,24 @@ stage_validate_support()
 		fi
 		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "${require_remote_when_external}"
 	done < <(json_array_lines "required_remote_when_external_scripts")
+
+	# Issue #6865: overwrite the safety assets the lists above took from the
+	# validation checkout with the verified support commit's copies (see
+	# stage_self_repo_validation_safety_entry). Consumers and explicit targets
+	# already stage from a trusted root and skip this pass.
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		if [ "${IS_SELF_REPO}" != "true" ] || [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+			continue
+		fi
+		case "${repo_path}" in
+			*.sh|*.py) stage_self_repo_validation_safety_entry "${repo_path}" "true" ;;
+			*) stage_self_repo_validation_safety_entry "${repo_path}" "false" ;;
+		esac
+	done < <(json_array_lines "self_repo_trusted_support_files")
+	if [ "${SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT}" -gt 0 ]; then
+		echo "VALIDATE_TRUSTED_SUPPORT staged=${SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+	fi
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue

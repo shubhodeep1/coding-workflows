@@ -1646,6 +1646,7 @@ committing the corresponding file:
   It keeps the synthetic `TEST_*` fixtures and masks global/system git config.
 - `scripts/validation_refresh_runner.py` runs each consumer self-test through the same sandbox: `provision` once per runner, then `checked-run <runner pid> scripts/validate_driver.sh`, which runs `selfcheck` against the `GH_TOKEN`-holding runner process before `run`. Logs are copied back to the old out-of-clone directory through `VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST` (default `<workspace>/validation/logs`), so drift detection is unchanged. A sandbox failure is a `self_test` failure (`red`); there is no host fallback.
 - The nightly self-test (`nightly-validation-selftest.yml`) still calls the driver on the host with the per-test scrub; it runs this repository's own `tests/fixtures/selftest` fixtures, not consumer or model-written tests. Its checkout uses `persist-credentials: false`, and the self-test job holds only a read-only `GITHUB_TOKEN` (`contents: read`). Those tests run as the runner user and could rewrite that checkout's `.git` (hooks, config, `HEAD`), so the status commit does not run there: the `commit-selftest-status` job (`contents: write`) runs on a fresh runner and checkout, receives only the summary JSON artifact, and authenticates its pull/push through a one-shot credential helper that reads `github.token` from its commit step's env. Log prefix: `VALIDATION_HARNESS_SANDBOX`.
+- In this repository, a validation run without an explicit `target_ref` stages the renderer, its slot schema (`scripts/templates/slot_manifest.schema.json`), `validate_process.sh`, `validate_driver.sh` and `validation_harness_sandbox.sh` from the verified support commit rather than the validation checkout (issue #6865; manifest key `self_repo_trusted_support_files`, logs `VALIDATE_TRUSTED_SUPPORT_OVERRIDE` / `VALIDATE_TRUSTED_SUPPORT`), and the support step fails closed if any trusted copy is missing. `tests/test_render_validation_templates_shell_quoting.py`, `tests/test_validation_harness_sandbox.py` and `tests/test_validate_driver_credential_scrub.py` run in CI and in both release gates' `validate-scripts` jobs.
 
 ## Workflow scenario traces
 
@@ -2141,6 +2142,8 @@ and shipped:
 - `VALIDATE_TRUSTED_TEMPLATES`
 - `VALIDATE_TRUSTED_RENDERER_OVERRIDE`
 - `VALIDATE_TRUSTED_RENDERER`
+- `VALIDATE_TRUSTED_SUPPORT_OVERRIDE`
+- `VALIDATE_TRUSTED_SUPPORT`
 - `REVIEWER_RISK_TIER`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
@@ -2385,6 +2388,8 @@ LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATE_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATES
 LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER
+LOG_PREFIX.name=VALIDATE_TRUSTED_SUPPORT_OVERRIDE
+LOG_PREFIX.name=VALIDATE_TRUSTED_SUPPORT
 LOG_PREFIX.name=REVIEWER_RISK_TIER
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
