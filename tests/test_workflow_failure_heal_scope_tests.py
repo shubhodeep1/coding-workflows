@@ -311,6 +311,8 @@ def test_size_guard_threshold_matches_the_guard_test() -> None:
 	for registry in heal.HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES:
 		assert (REPO_ROOT / registry).is_file(), registry
 	for test_file, subjects in heal.HEAL_SCOPE_GUARD_TEST_SUBJECTS.items():
+		# A key that names no real test can never match a failing run.
+		assert (REPO_ROOT / test_file).is_file(), test_file
 		for subject in subjects:
 			assert (REPO_ROOT / subject).is_file(), (test_file, subject)
 

@@ -2157,7 +2157,6 @@ def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str
 # fix edits instead; every entry must still exist at the scope commit.
 HEAL_SCOPE_GUARD_TEST_SUBJECTS: dict[str, tuple[str, ...]] = {
 	"tests/test_ci_job_split_contract.py": (".github/workflows/ci.yml",),
-	"tests/test_ci_wires_every_test_file.py": (".github/workflows/ci.yml",),
 }
 # The workflow size guard (CLAUDE.md §27) is fixed by moving inline run:
 # bodies of the oversized workflow into new scripts/<workflow>_step_<slug>.sh

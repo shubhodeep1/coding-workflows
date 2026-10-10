@@ -962,8 +962,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   exists at the scope commit and passes the usual path rules (never
   `.claude/` or `.github/ai/`). Guard tests check other files, so their own
   name maps to no subject; `HEAL_SCOPE_GUARD_TEST_SUBJECTS` maps them to the
-  files their fix edits (`tests/test_ci_job_split_contract.py` and
-  `tests/test_ci_wires_every_test_file.py` to `.github/workflows/ci.yml`).
+  files their fix edits (`tests/test_ci_job_split_contract.py` to
+  `.github/workflows/ci.yml`).
   A failing `tests/test_workflow_file_size_limit.py` adds every workflow at
   or above 480,000 bytes at the scope commit, `scripts/stage_workflow_support.sh`,
   `docs/INVENTORY.md`, and `scripts/<workflow>_step_*.sh` for each oversized
