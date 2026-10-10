@@ -6,7 +6,7 @@ action="${1:-}"
 support="${SUPPORT_SCRIPTS_DIR:-scripts}"
 root="${REVIEW_SANDBOX_ROOT:-}"
 workspace="${GITHUB_WORKSPACE:-$PWD}"
-case "${action}" in prepare|prepare-ephemeral|run|cleanup) ;; *) exit 2 ;; esac
+case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; esac
 prepare_engine="${2:-codex}"
 if [ "${action}" = prepare-ephemeral ]; then
 	prepare_engine="${2:-claude}"
@@ -14,6 +14,50 @@ if [ "${action}" = prepare-ephemeral ]; then
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
+
+# `_review_sandbox_build_image <timeout_seconds|0> <docker build args...>`
+# prints the built image id, built (or pulled) through `review_image_builder`.
+# The base image comes from Docker Hub, whose token and registry endpoints
+# intermittently answer 429/500/504; one such answer used to fail the whole sandbox prepare and, with it, the review
+# editor (PR #6645 runs 37989220029 and 37994304266). A build whose error
+# output names a registry or network failure is retried up to
+# REVIEW_SANDBOX_BUILD_ATTEMPTS times (default 3) after 10 s, then 30 s;
+# any other failure returns at once. Every attempt's error output stays on
+# stderr. Logs REVIEW_SANDBOX_BUILD attempt=<n> outcome=ok|retry|fail.
+_review_sandbox_build_image()
+{
+	local build_timeout="$1" attempts="${REVIEW_SANDBOX_BUILD_ATTEMPTS:-3}" attempt=1 rc err_file built
+	local retry_sleep_1="${REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1:-10}" retry_sleep_2="${REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2:-30}"
+	shift
+	[[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || attempts=3
+	[[ "${retry_sleep_1}" =~ ^[0-9]+$ ]] || retry_sleep_1=10
+	[[ "${retry_sleep_2}" =~ ^[0-9]+$ ]] || retry_sleep_2=30
+	err_file="$(mktemp)"
+	while :; do
+		rc=0
+		if [ "${build_timeout}" -gt 0 ]; then
+			built="$(timeout --signal=TERM --kill-after=10s "${build_timeout}s" env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" "${review_image_builder[@]}" "$@" 2>"${err_file}")" || rc=$?
+		else
+			built="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" "${review_image_builder[@]}" "$@" 2>"${err_file}")" || rc=$?
+		fi
+		cat "${err_file}" >&2
+		if [ "${rc}" -eq 0 ] && [ -n "${built}" ]; then
+			echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=ok" >&2
+			rm -f -- "${err_file}"
+			printf '%s\n' "${built}"
+			return 0
+		fi
+		if [ "${attempt}" -lt "${attempts}" ] && grep -qiE 'auth\.docker\.io|registry-1\.docker\.io|failed to resolve source metadata|too many requests|(status|code)[: ]+(429|5[0-9][0-9])|: (429|5[0-9][0-9]) [A-Za-z]|tls handshake timeout|i/o timeout|connection reset by peer|unexpected EOF|ECONNRESET|ECONNREFUSED|ENOTCONN|connection refused|ETIMEDOUT|EAI_AGAIN|socket hang up' "${err_file}"; then
+			echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=retry rc=${rc}" >&2
+			if [ "${attempt}" -eq 1 ]; then sleep "${retry_sleep_1}"; else sleep "${retry_sleep_2}"; fi
+			attempt=$((attempt + 1))
+			continue
+		fi
+		echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=fail rc=${rc}" >&2
+		rm -f -- "${err_file}"
+		return 1
+	done
+}
 
 # Only the trusted prepare step may select a root; never accept a path from
 # the PR checkout or a model-controlled environment variable.
@@ -56,6 +100,12 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
+	# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
+	# without the helper, build locally as before.
+	review_image_builder=(docker build -q)
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		review_image_builder=(bash "${support}/sandbox_image.sh" build --family review)
+	fi
 	# Ephemeral OpenCode retries must not require the Claude CLI or engine files.
 	if [ "${prepare_engine}" = claude ]; then
 		[ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ] || { echo '::error::Review Claude support missing' >&2; exit 1; }
@@ -63,10 +113,10 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		source "${support}/ai_engine.sh"
 		claude_cli_version="$(ai_engine_cli_version)"
 		[[ "${claude_cli_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Claude CLI version' >&2; exit 1; }
-		image="$(timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		image="$(_review_sandbox_build_image 900 --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'claude\n' > "${root}/engine"
 	else
-		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		image="$(_review_sandbox_build_image 0 --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 	fi
 	[ -n "${image}" ] || exit 1
 	printf '%s\n' "${image}" > "${root}/image"
@@ -90,11 +140,29 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		sleep 0.1
 	done
 	if [ -S "${root}/socket/registry.sock" ]; then
+	# Each install command runs under its own budget so a package manager
+	# that keeps resolving (pip backtracking through dozens of ruff and
+	# structlog releases for a consumer's unpinned pyproject extras,
+	# 2026-10-09) cannot consume the whole container budget below: the
+	# install is reported as failed, the venv and pytest bootstrap still
+	# happen, and the editor runs with partial dependencies. A container
+	# that still outruns the 900s budget is a failed install too, not a
+	# failed isolation boundary (the editor was skipped for 31 minutes per
+	# review run before this distinction, and the PR never left the retry
+	# loop). Any other non-zero exit stays fatal.
+	install_budget="${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}"
+	if ! [[ "${install_budget}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::warning::Invalid DEPENDENCY_INSTALL_TIMEOUT_SECONDS=${install_budget}; using 600" >&2
+		install_budget=600
+	fi
+	dep_rc=0
+	dep_started_at="${SECONDS}"
 	timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${dep_container}" --user "$(id -u):$(id -g)" \
 		--network none --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
 		--mount "type=bind,src=${root}/source,dst=/source" \
 		--mount "type=bind,src=${root}/socket,dst=/socket" \
 		--mount "type=bind,src=${root}/dependency_registry_proxy.py,dst=/support/dependency_registry_proxy.py,readonly" \
+		--env "DEPENDENCY_INSTALL_TIMEOUT_SECONDS=${install_budget}" \
 		--env HTTPS_PROXY=http://127.0.0.1:3128 --env https_proxy=http://127.0.0.1:3128 \
 		--env HTTP_PROXY=http://127.0.0.1:3128 --env http_proxy=http://127.0.0.1:3128 \
 		--env npm_config_https_proxy=http://127.0.0.1:3128 --env npm_config_proxy=http://127.0.0.1:3128 \
@@ -108,27 +176,40 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 			python3 -c "import socket,time; [(time.sleep(.1) if s.connect_ex((\"127.0.0.1\",3128)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)" \
 				|| { echo "::warning::Review dependencies skipped: registry proxy bridge unavailable" >&2; exit 0; }
 			install_failed=false
+			# Bounded install: a resolver that keeps going is a failed install,
+			# reported and skipped, not a reason to lose the editor run.
+			# Exit 137 is also an OOM kill under the 3g memory limit; only call it
+			# a timeout when the budget actually elapsed.
+			bounded_install() {
+				local started_at="${SECONDS}"
+				timeout --signal=TERM --kill-after=10s "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" "$@" 2>&1
+				local rc=$?
+				if [ "${rc}" -eq 124 ] || { [ "${rc}" -eq 137 ] && [ $((SECONDS - started_at)) -ge "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" ]; }; then
+					echo "::warning::Review dependency install timed out after ${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}s: $*"
+				fi
+				return "${rc}"
+			}
 			python3 -m venv --system-site-packages /source/.review-venv || exit 1
 			export PATH=/source/.review-venv/bin:$PATH
 			if [ -f package-lock.json ]; then
 				echo "Found package-lock.json — running npm ci"
-				npm ci --ignore-scripts 2>&1 || install_failed=true
+				bounded_install npm ci --ignore-scripts || install_failed=true
 			elif [ -f yarn.lock ]; then
 				echo "Found yarn.lock — running yarn install"
-				yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
+				bounded_install yarn install --frozen-lockfile --ignore-scripts || install_failed=true
 			elif [ -f pnpm-lock.yaml ]; then
 				echo "Found pnpm-lock.yaml — running pnpm install"
-				npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
+				bounded_install npx pnpm install --frozen-lockfile --ignore-scripts || install_failed=true
 			elif [ -f package.json ]; then
 				echo "Found package.json (no lockfile) — running npm install"
-				npm install --ignore-scripts 2>&1 || install_failed=true
+				bounded_install npm install --ignore-scripts || install_failed=true
 			fi
 			if [ -f requirements.txt ]; then
 				echo "Found requirements.txt — running pip install"
-				pip install -r requirements.txt 2>&1 || install_failed=true
+				bounded_install pip install -r requirements.txt || install_failed=true
 			elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
 				echo "Found pyproject.toml — running pip install"
-				pip install -e ".[dev]" 2>&1 || pip install -e . 2>&1 || install_failed=true
+				bounded_install pip install -e ".[dev]" || bounded_install pip install -e . || install_failed=true
 			fi
 			[ "$install_failed" = false ] || echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
 			pytest_bootstrap_wanted=false
@@ -146,7 +227,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					echo "Repository declares pytest configuration and pytest is already importable."
 				else
 					echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-					python3 -m pip install pytest 2>&1 || python3 -m pip install --user --break-system-packages pytest 2>&1 || true
+					bounded_install python3 -m pip install pytest || bounded_install python3 -m pip install --user --break-system-packages pytest || true
 					if python3 -c "import pytest" >/dev/null 2>&1; then
 						echo "pytest bootstrap succeeded."
 					else
@@ -154,7 +235,23 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					fi
 				fi
 			fi
-		' || { echo '::error::Review dependency isolation failed' >&2; exit 1; }
+		' || dep_rc=$?
+	# timeout exits 137 when its KILL escalation fires, but a container
+	# OOM-killed under --memory 3g also exits 137 well before the budget;
+	# only the former is a timeout, the latter stays fatal.
+	if [ "${dep_rc}" -eq 137 ] && [ $((SECONDS - dep_started_at)) -lt 900 ]; then
+		dep_rc=1
+	fi
+	case "${dep_rc}" in
+		0) ;;
+		124|137)
+			echo "::warning::Review dependencies skipped: dependency container timed out after 900s (install budget ${install_budget}s). Editor validation may be limited." >&2
+			;;
+		*)
+			echo '::error::Review dependency isolation failed' >&2
+			exit 1
+			;;
+	esac
 	else
 		echo '::warning::Review dependencies skipped: registry proxy unavailable' >&2
 	fi
@@ -168,21 +265,74 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	exit 0
 fi
 
-[[ "${root}" == "${RUNNER_TEMP:-/tmp}"/review-isolated-* ]] && \
-	[ "$(dirname "$(realpath -e -- "${root}" 2>/dev/null || echo /invalid)")" = "$(realpath -e -- "${RUNNER_TEMP:-/tmp}")" ] && \
-	[ -f "${root}/image" ] && [ -f "${root}/baseline.json" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
+# The first failing check is named for cleanup only (fixed, path-free token;
+# issue #6484); the run path keeps its original output.
+sandbox_root_reason=""
+if [[ "${root}" != "${RUNNER_TEMP:-/tmp}"/review-isolated-* ]]; then
+	sandbox_root_reason=root_pattern_mismatch
+elif [ "$(dirname "$(realpath -e -- "${root}" 2>/dev/null || echo /invalid)")" != "$(realpath -e -- "${RUNNER_TEMP:-/tmp}")" ]; then
+	sandbox_root_reason=root_outside_runner_temp
+elif [ ! -f "${root}/image" ]; then
+	sandbox_root_reason=image_marker_missing
+elif [ ! -f "${root}/baseline.json" ]; then
+	sandbox_root_reason=baseline_missing
+fi
+if [ -n "${sandbox_root_reason}" ]; then
+	echo '::error::Review sandbox not prepared' >&2
+	if [ "${action}" = cleanup ]; then
+		echo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2
+	fi
+	exit 1
+fi
 if [ "${action}" = cleanup ]; then
 	if [ -f "${root}/active-container" ]; then
 		active_container="$(< "${root}/active-container")"
 		[[ "${active_container}" =~ ^review-editor-[0-9]+$ ]] && env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${active_container}" >/dev/null 2>&1 || true
 	fi
-	rm -rf -- "${root}"
-	exit 0
+	# rm's stderr carries PR/sandbox paths: classify it, never print it. The
+	# capture file lives outside the root being removed.
+	cleanup_err="$(mktemp "${RUNNER_TEMP:-/tmp}/review-cleanup-err-XXXXXXXX" 2>/dev/null)" || cleanup_err=/dev/null
+	cleanup_rc=0
+	LC_ALL=C rm -rf -- "${root}" 2>"${cleanup_err}" || cleanup_rc=$?
+	if [ "${cleanup_rc}" -ne 0 ]; then
+		# Directories the sandbox left without owner rwx (dependency caches)
+		# block a non-root rm. Repair them once inside the validated root;
+		# find -P never follows symlinks out of it. Still fatal if rm fails again.
+		find -P "${root}" -type d ! -perm -u=rwx -exec chmod u+rwx -- {} + 2>/dev/null || true
+		if LC_ALL=C rm -rf -- "${root}" 2>"${cleanup_err}"; then
+			echo 'REVIEW_SANDBOX_CLEANUP reason=remove_permission_repaired' >&2
+			cleanup_rc=0
+		else
+			cleanup_cause=other
+			if grep -q 'Permission denied' "${cleanup_err}" 2>/dev/null; then
+				cleanup_cause=permission_denied
+			elif grep -q 'Directory not empty' "${cleanup_err}" 2>/dev/null; then
+				cleanup_cause=not_empty
+			elif grep -q 'Device or resource busy' "${cleanup_err}" 2>/dev/null; then
+				cleanup_cause=busy
+			fi
+			echo "::error::REVIEW_SANDBOX_CLEANUP reason=remove_failed cause=${cleanup_cause}" >&2
+			cleanup_rc=1
+		fi
+	fi
+	if [ "${cleanup_err}" != /dev/null ]; then
+		rm -f -- "${cleanup_err}" 2>/dev/null || true
+	fi
+	exit "${cleanup_rc}"
 fi
 # Transfer only into the workspace prepare validated and recorded.
 [ -f "${root}/workspace" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
 workspace="$(< "${root}/workspace")"
 [ -d "${workspace}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
+# seed <relative-path> <payload-file>: trusted host content (the smoke canary
+# pre-write) goes into the disposable source after the snapshot, so the
+# validated transfer publishes it. Writing the host instead trips
+# host_baseline_changed (runs 37669315093 / 37674139451).
+if [ "${action}" = seed ]; then
+	[ "$#" -eq 3 ] || exit 2
+	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"
+	exit $?
+fi
 
 [ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2
 prompt="$2"
@@ -193,15 +343,16 @@ config="$6"
 engine="${7:-codex}"
 case "${engine}" in codex|claude) ;; *) exit 2 ;; esac
 claude_role="${8:-REVIEW_EDITOR}"
-case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) ;; *) exit 2 ;; esac
+case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER) ;; *) exit 2 ;; esac
 claude_access="${9:-write}"
 if [ "$#" -lt 9 ] && [ "${claude_role}" = REVIEW_CONSOLIDATOR ]; then
 	claude_access=read
 fi
 case "${claude_access}" in read|write) ;; *) exit 2 ;; esac
-# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the Claude review-panel
+# slot (PANEL_REVIEWER) are read-only sandbox roles; never transfer.
 case "${claude_role}" in
-	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE)
+	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER)
 		[ "${claude_access}" = read ] || exit 2 ;;
 esac
 

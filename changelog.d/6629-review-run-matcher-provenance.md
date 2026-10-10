@@ -1,0 +1,6 @@
+<!-- changelog: security -->
+- **Review runs named for a PR now count only when they ran from the default branch.**
+
+The poller, the merge train, the review sweep and the review/autofix retrigger helpers recognise a review run dispatched for a PR by its name (`Internal: AI Review & Autofix [pr:<N>]` or `AI Review [pr:<N>]`). Anyone who could push a branch copy of a review wrapper could dispatch a run with that name from their branch, and use it to suppress a review dispatch, block a stall-recovery push, hold a merge-train release or use up a retry budget. Each matcher now also requires a `workflow_dispatch` run from the repository's default branch (or with no branch reported), with the name paired to its own wrapper file. The default branch is read once per poller process, merge-train release or sweep tick, with no fallback. If it cannot be read, the matchers fail closed for that cycle, and the next cycle retries.
+
+What this means for operators: a run dispatched by hand with `--ref <feature branch>` no longer holds or suppresses automation for the PR it names. New log reasons: `PR_NAMED_REVIEW_RUNS … reason=default_branch_unavailable`, `MERGE_TRAIN_RUNS_LISTING … reason=default_branch_unavailable` and `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable`.

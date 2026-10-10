@@ -26,10 +26,13 @@ they are given and write JSON or text to stdout.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +73,12 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 # the default branch: a red main blocks every PR, and pull-request CI failures
 # go to check-failure triage instead.
 MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
+
+# Scheduled self-checks in coding-workflows. The intake takes their failed
+# runs on the default branch only. The nightly self-test carries the daily
+# validation harness sandbox check, which catches runner-image drift before
+# project validations fail on it.
+SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
@@ -150,6 +159,14 @@ PHASE_WRAPPER_WORKFLOW_FILES: dict[str, tuple[str, ...]] = {
 }
 REVIEW_WRAPPER_WORKFLOW_FILES = ("ai-review.yml", "internal-review.yml", "review_autofix.yml", "review_rb_judge_dispatch.yml")
 RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promote-main-to-stable.yml", "auto-release-stable.yml", "forward-merge-stable-to-main.yml")
+# CI workflow files a `workflow_run` report may cite. Accepted only for push
+# runs on the repository's default branch (checked against the run GitHub
+# returns, not the payload), matching the intake job's `if:` predicate.
+CI_WORKFLOW_FILES = ("ci.yml",)
+# Scheduled self-check workflow files (SCHEDULED_CHECK_WORKFLOW_NAMES) a
+# `workflow_run` report may cite. Accepted only for runs GitHub reports on the
+# default branch, matching the intake job's `if:` predicate.
+SCHEDULED_CHECK_WORKFLOW_FILES = ("nightly-validation-selftest.yml",)
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
@@ -196,6 +213,29 @@ MAX_PAYLOAD_BYTES = 60_000
 # with more than 10 top-level properties (HTTP 422). The report has ~20 keys,
 # so reporters wrap it in a {schema_version, report} envelope (wrap_dispatch).
 DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
+# Report identity (issue #6559): reporters attach a GitHub Actions OIDC token
+# under client_payload.report_identity; the intake verifies it against GitHub's
+# JWKS and binds its claims to the report before routing.
+REPORT_IDENTITY_AUDIENCE = "coding-workflows-heal-report"
+GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+GITHUB_OIDC_JWKS_URL = GITHUB_OIDC_ISSUER + "/.well-known/jwks"
+REPORT_IDENTITY_MAX_CHARS = 8192
+REPORT_IDENTITY_CLOCK_SKEW_SECONDS = 60
+DEFAULT_REPORT_MAX_AGE_SECONDS = 3600
+REPORT_IDENTITY_MIN_RSA_BITS = 2048
+REPORT_IDENTITY_WORKFLOW_BY_KIND = {
+	"issue": ("workflow_failure_heal.yml",),
+	"pull_request": ("workflow_failure_heal.yml",),
+	"autofix_failure": ("review_autofix.yml",),
+	# The heal-report job of the clarify / plan / implement reusable workflows.
+	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
+}
+# Kinds whose run_refs the intake's provenance gate already binds to the
+# source repository (run repository, workflow path, failure, issue/PR link);
+# claim binding leaves their runs to that gate so its current-run ordering and
+# successful-review-job fallback stay intact.
+PROVENANCE_BOUND_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
+FAILED_JOB_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 SIGNATURE_LINE_LIMIT = 5
 # Ownership facts carried by an autofix_failure report (self-repo routing).
 CHANGED_FILES_MAX_ENTRIES = 200
@@ -236,6 +276,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
 _FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+# Issue #6625: a cap marker counts only on its own line, like the workflow and
+# poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
+_FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -271,6 +314,23 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
 _STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
 _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
+# The `env:` block of a step header prints every variable's value, and values
+# the runner does not know to be secrets (tokens minted in an earlier step,
+# derived credentials) are not masked. filter_log keeps only the names: an
+# entry keeps `NAME:` and gets `[redacted]` for its value, any other line in
+# the block (a multi-line value, an unparseable shape) is replaced whole, and
+# the block ends only at the header close. The runner prints `env:` as the last
+# section of a Run header (after `shell:` / `with:`), so a `with:` or `shell:`
+# line inside the block is a multi-line value continuation, not a header key,
+# and is redacted too. An inline `env: <value>` line keeps only `env:`.
+_STEP_ENV_OPEN_RE = re.compile(r"^env:\s*$")
+_STEP_ENV_INLINE_RE = re.compile(r"^env:\s*\S")
+_STEP_ENV_ENTRY_RE = re.compile(r"^(\s+[A-Za-z_][A-Za-z0-9_.-]*:)(\s*)(.*)$")
+_STEP_ENV_REDACTED_LINE = "  [redacted]"
+# A header that never closes (truncated log) after opening an `env:` block
+# cannot be bounded, so everything from its open line to the end of the job
+# log is replaced by this line. An open header without an `env:` block is kept.
+_STEP_ENV_UNTERMINATED_MARKER = "[env block omitted: unterminated step header]"
 # Test & Mark Stable Release runs dispatched by a promote cycle carry the
 # cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
 # scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
@@ -781,7 +841,7 @@ def build_autofix_failure_payload(
 		"head_sha": head_sha if is_valid_sha(head_sha) else None,
 		"conclusion": "failure",
 		"failure_reason": single_line(failure_reason, 80),
-		"failure_evidence": sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_evidence": redact_secrets(sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT)),
 		"failure_streak": max(1, _positive_int(failure_streak) or 1),
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
@@ -1220,7 +1280,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"head_sha": head_sha,
 		"conclusion": single_line(payload.get("conclusion"), 40) or None,
 		"failure_reason": failure_reason,
-		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind == "autofix_failure" else "",
+		# Runtime log tails can carry Basic headers or encoded PATs; redact here
+		# so they reach neither disk nor the diagnosis prompt (#6463).
+		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind == "autofix_failure" else "",
 		"failure_streak": failure_streak,
 		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
@@ -1236,16 +1298,21 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	return normalized
 
 
-def wrap_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
+def wrap_dispatch(payload: dict[str, Any], report_identity: str | None = None) -> dict[str, Any]:
 	"""Build the ``repository_dispatch`` request body for a report.
 
 	The report travels one level down under ``report`` so ``client_payload``
 	stays within GitHub's top-level property limit
-	(``DISPATCH_CLIENT_PAYLOAD_MAX_KEYS``).
+	(``DISPATCH_CLIENT_PAYLOAD_MAX_KEYS``). A reporter that obtained an OIDC
+	token adds it as ``report_identity`` (a third top-level property); without
+	one the body is unchanged.
 	"""
+	client_payload: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "report": payload}
+	if report_identity:
+		client_payload["report_identity"] = report_identity
 	return {
 		"event_type": DISPATCH_EVENT_TYPE,
-		"client_payload": {"schema_version": SCHEMA_VERSION, "report": payload},
+		"client_payload": client_payload,
 	}
 
 
@@ -1265,8 +1332,10 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str) -> str:
+def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
 	"""Return a stable skip reason when a validated payload must not be healed."""
+	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
+		return "heal_scope_unverified"
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -1279,6 +1348,287 @@ def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], sel
 	if SELF_WORKFLOW_FRAGMENT.lower() in workflow_name.lower():
 		return "self_workflow"
 	return ""
+
+
+# ---------------------------------------------------------------------------
+# Report identity (GitHub Actions OIDC) and claim binding
+# ---------------------------------------------------------------------------
+
+_JWT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_JWT_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$")
+_SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def is_well_formed_jwt(value: Any) -> bool:
+	return isinstance(value, str) and 0 < len(value) <= REPORT_IDENTITY_MAX_CHARS and bool(_JWT_RE.match(value))
+
+
+def request_report_identity(audience: str = REPORT_IDENTITY_AUDIENCE, *, timeout: int = 30) -> tuple[str | None, str]:
+	"""Request a GitHub Actions OIDC token. Returns ``(token, reason)``.
+
+	Never raises and never logs the token. ``reason`` is empty on success.
+	"""
+	import urllib.error
+	import urllib.parse
+	import urllib.request
+
+	request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+	if not request_url or not request_token:
+		return None, "oidc_unavailable"
+	parsed_request_url = urllib.parse.urlsplit(request_url)
+	# The runner always serves the OIDC endpoint over HTTPS; plain HTTP is
+	# accepted only for a loopback stub, so the bearer never leaves the host.
+	if parsed_request_url.scheme != "https" and not (
+		parsed_request_url.scheme == "http" and parsed_request_url.hostname in ("127.0.0.1", "localhost", "::1")
+	):
+		return None, "oidc_unavailable"
+	separator = "&" if "?" in request_url else "?"
+	url = f"{request_url}{separator}audience={urllib.parse.quote(audience, safe='')}"
+	request = urllib.request.Request(url, headers={"Authorization": f"bearer {request_token}", "Accept": "application/json"})
+	try:
+		with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - runner-provided endpoint
+			body = response.read(REPORT_IDENTITY_MAX_CHARS * 2)
+	except urllib.error.HTTPError as exc:
+		return None, f"oidc_request_failed_{int(exc.code)}"
+	except Exception:  # noqa: BLE001 - fail open: the report is sent without identity
+		return None, "oidc_request_failed"
+	try:
+		value = json.loads(body.decode("utf-8")).get("value")
+	except Exception:  # noqa: BLE001
+		return None, "oidc_invalid"
+	if not is_well_formed_jwt(value):
+		return None, "oidc_invalid"
+	return value, ""
+
+
+def extract_report_identity(client_payload: Any) -> tuple[str, str | None]:
+	"""Return ``(state, token)`` where state is ``present`` / ``absent`` / ``malformed``."""
+	if not isinstance(client_payload, dict) or "report_identity" not in client_payload:
+		return "absent", None
+	value = client_payload.get("report_identity")
+	if value is None or value == "":
+		return "absent", None
+	if not is_well_formed_jwt(value):
+		return "malformed", None
+	return "present", value
+
+
+def _b64url_decode(segment: str) -> bytes:
+	if not _JWT_SEGMENT_RE.match(segment or ""):
+		raise ValueError("invalid base64url segment")
+	return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+
+
+def _rs256_verify(signing_input: bytes, signature: bytes, n: int, e: int) -> bool:
+	"""RSASSA-PKCS1-v1_5 / SHA-256 verification (stdlib only, constant-time compare)."""
+	if n.bit_length() < REPORT_IDENTITY_MIN_RSA_BITS or e < 3 or e % 2 == 0:
+		return False
+	k = (n.bit_length() + 7) // 8
+	if len(signature) != k:
+		return False
+	s = int.from_bytes(signature, "big")
+	if s >= n:
+		return False
+	em = pow(s, e, n).to_bytes(k, "big")
+	t = _SHA256_DIGEST_INFO + hashlib.sha256(signing_input).digest()
+	if k < len(t) + 11:
+		return False
+	expected = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
+	return hmac.compare_digest(em, expected)
+
+
+def _jwks_rsa_key(jwks: Any, kid: str) -> tuple[int, int] | None:
+	keys = jwks.get("keys") if isinstance(jwks, dict) else None
+	if not isinstance(keys, list):
+		return None
+	for key in keys:
+		if not isinstance(key, dict) or key.get("kid") != kid or key.get("kty") != "RSA":
+			continue
+		if key.get("alg") not in (None, "RS256") or key.get("use") not in (None, "sig"):
+			continue
+		try:
+			n = int.from_bytes(_b64url_decode(str(key.get("n") or "")), "big")
+			e = int.from_bytes(_b64url_decode(str(key.get("e") or "")), "big")
+		except (ValueError, TypeError):
+			return None
+		return n, e
+	return None
+
+
+def _reject(reason: str, claims: dict[str, Any] | None = None) -> dict[str, Any]:
+	return {"ok": False, "reason": reason, "claims": claims or {}}
+
+
+def verify_report_identity(
+	token: Any,
+	*,
+	jwks: Any,
+	source_repo: str,
+	source_kind: str,
+	reporter_run_url: str | None,
+	self_repo: str,
+	now: float,
+	max_age: int = DEFAULT_REPORT_MAX_AGE_SECONDS,
+) -> dict[str, Any]:
+	"""Verify a report's OIDC token and bind it to the report.
+
+	Returns ``{"ok", "reason", "claims"}``; the first failed check names the
+	reason. ``exp`` is deliberately not enforced (a queued intake would reject
+	a valid report); freshness is bounded by ``iat`` and ``max_age`` instead.
+	"""
+	if not is_well_formed_jwt(token):
+		return _reject("identity_malformed")
+	header_b64, payload_b64, signature_b64 = token.split(".")
+	try:
+		header = json.loads(_b64url_decode(header_b64))
+		claims = json.loads(_b64url_decode(payload_b64))
+		signature = _b64url_decode(signature_b64) if signature_b64 else b""
+	except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+		return _reject("identity_malformed")
+	if not isinstance(header, dict) or not isinstance(claims, dict):
+		return _reject("identity_malformed")
+	if header.get("alg") != "RS256":
+		return _reject("alg_not_allowed")
+	kid = header.get("kid")
+	if not isinstance(kid, str) or not kid:
+		return _reject("unknown_kid")
+	key = _jwks_rsa_key(jwks, kid)
+	if key is None:
+		return _reject("unknown_kid")
+	if not _rs256_verify(f"{header_b64}.{payload_b64}".encode("ascii"), signature, key[0], key[1]):
+		return _reject("bad_signature")
+	repository = claims.get("repository")
+	run_id = claims.get("run_id")
+	job_workflow_ref = claims.get("job_workflow_ref")
+	summary = {
+		"repository": repository if isinstance(repository, str) else None,
+		"run_id": str(run_id) if isinstance(run_id, (str, int)) else None,
+		"job_workflow_ref": job_workflow_ref if isinstance(job_workflow_ref, str) else None,
+	}
+	if claims.get("iss") != GITHUB_OIDC_ISSUER:
+		return _reject("issuer_mismatch", summary)
+	aud = claims.get("aud")
+	audiences = aud if isinstance(aud, list) else [aud]
+	if REPORT_IDENTITY_AUDIENCE not in audiences:
+		return _reject("audience_mismatch", summary)
+	iat = claims.get("iat")
+	if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+		return _reject("identity_stale", summary)
+	if iat > now + REPORT_IDENTITY_CLOCK_SKEW_SECONDS:
+		return _reject("identity_not_yet_valid", summary)
+	if now - iat > max_age:
+		return _reject("identity_stale", summary)
+	nbf = claims.get("nbf")
+	if nbf is not None and (isinstance(nbf, bool) or not isinstance(nbf, (int, float)) or nbf > now + REPORT_IDENTITY_CLOCK_SKEW_SECONDS):
+		return _reject("identity_not_yet_valid", summary)
+	if not isinstance(repository, str) or not isinstance(source_repo, str) or repository.lower() != source_repo.lower():
+		return _reject("repository_mismatch", summary)
+	workflow_files = REPORT_IDENTITY_WORKFLOW_BY_KIND.get(source_kind)
+	if workflow_files is None:
+		return _reject("kind_not_attestable", summary)
+	expected_prefixes = tuple(f"{self_repo}/.github/workflows/{workflow_file}@" for workflow_file in workflow_files)
+	if not isinstance(job_workflow_ref, str) or not job_workflow_ref.startswith(expected_prefixes):
+		return _reject("job_workflow_ref_mismatch", summary)
+	if not reporter_run_url:
+		return _reject("reporter_run_unbound", summary)
+	if summary["run_id"] is None or not re.fullmatch(r"[0-9]+", summary["run_id"]):
+		return _reject("reporter_run_mismatch", summary)
+	if reporter_run_url != f"https://github.com/{repository}/actions/runs/{summary['run_id']}":
+		return _reject("reporter_run_mismatch", summary)
+	return {"ok": True, "reason": "verified", "claims": summary}
+
+
+def _jobs_list(jobs_doc: Any) -> list[dict[str, Any]] | None:
+	if isinstance(jobs_doc, dict) and isinstance(jobs_doc.get("jobs"), list):
+		return [job for job in jobs_doc["jobs"] if isinstance(job, dict)]
+	return None
+
+
+def bind_report_claims(
+	payload: dict[str, Any],
+	*,
+	issue_json: Any = None,
+	pull_json: Any = None,
+	jobs_by_run: dict[str, Any] | None = None,
+	reporter_run_id: str | None = None,
+	labeled_event_found: bool = False,
+	head_ancestor: bool = False,
+	trusted_excerpts: bool = False,
+) -> dict[str, Any]:
+	"""Bind a validated report's claims to GitHub data the intake fetched.
+
+	``jobs_by_run`` maps run id -> the ``repos/<source_repo>/actions/runs/<id>/jobs``
+	response (absent when the read failed or 404'd, i.e. the run is not in the
+	source repository). Runs of ``PROVENANCE_BOUND_KINDS`` pass through for the
+	provenance gate. A label-escalation report that claimed runs but kept none
+	is rejected (``no_bound_runs``); one that claimed no run stays valid.
+	Returns ``{"ok", "reason", "run_refs", "dropped", "overrides"}``:
+	``overrides`` replaces a label-escalation or autofix report's title, URL
+	and body excerpt with the fetched issue / PR's, and clears its comments
+	excerpt unless ``trusted_excerpts`` (an OIDC-verified reporter built it
+	from GitHub).
+	"""
+	kind = payload.get("source_kind")
+	number = payload.get("issue_number")
+	jobs_by_run = jobs_by_run or {}
+	overrides: dict[str, str] = {}
+	if kind in ("issue", "pull_request"):
+		if not isinstance(issue_json, dict) or issue_json.get("number") != number:
+			return {"ok": False, "reason": "issue_not_found", "run_refs": [], "dropped": []}
+		is_pr = bool(issue_json.get("pull_request"))
+		if is_pr != (kind == "pull_request"):
+			return {"ok": False, "reason": "kind_mismatch", "run_refs": [], "dropped": []}
+		if payload.get("label") not in _labels_of(issue_json) and not labeled_event_found:
+			return {"ok": False, "reason": "label_not_present", "run_refs": [], "dropped": []}
+		overrides = {
+			"issue_title": single_line(issue_json.get("title"), 300),
+			"issue_url": sanitize_text(issue_json.get("html_url"), 300),
+			"issue_excerpt": sanitize_text(sanitize_text(issue_json.get("body")), ISSUE_EXCERPT_LIMIT),
+		}
+		if not trusted_excerpts:
+			overrides["comments_excerpt"] = ""
+	elif kind == "autofix_failure":
+		if not isinstance(pull_json, dict) or pull_json.get("number") != number:
+			return {"ok": False, "reason": "pull_request_not_found", "run_refs": [], "dropped": []}
+		head_sha = payload.get("head_sha")
+		pr_head = str((pull_json.get("head") or {}).get("sha") or "").lower() if isinstance(pull_json.get("head"), dict) else ""
+		if head_sha and head_sha != pr_head and not head_ancestor:
+			return {"ok": False, "reason": "head_sha_mismatch", "run_refs": [], "dropped": []}
+		# As for label escalations: the fetched pull request, not the report,
+		# supplies title, URL and body excerpt; an unverified reporter's
+		# comments excerpt is dropped.
+		overrides = {
+			"issue_title": single_line(pull_json.get("title"), 300),
+			"issue_url": sanitize_text(pull_json.get("html_url"), 300),
+			"issue_excerpt": sanitize_text(pull_json.get("body"), ISSUE_EXCERPT_LIMIT),
+		}
+		if not trusted_excerpts:
+			overrides["comments_excerpt"] = ""
+
+	if kind in PROVENANCE_BOUND_KINDS:
+		# The provenance gate verifies these runs (and their order) next.
+		return {"ok": True, "reason": "bound", "run_refs": list(payload.get("run_refs") or []), "dropped": [], "overrides": overrides}
+
+	kept: list[dict[str, Any]] = []
+	dropped: list[dict[str, str]] = []
+	for ref in payload.get("run_refs") or []:
+		run_id = str(ref.get("run_id") or "")
+		jobs = _jobs_list(jobs_by_run.get(run_id))
+		if jobs is None:
+			dropped.append({"run_id": run_id, "reason": "run_not_in_source_repo"})
+			continue
+		if any(str(job.get("run_id")) != run_id for job in jobs if job.get("run_id") is not None):
+			dropped.append({"run_id": run_id, "reason": "run_id_mismatch"})
+			continue
+		failed = any((job.get("conclusion") or "") in FAILED_JOB_CONCLUSIONS for job in jobs)
+		if not failed and not (reporter_run_id and run_id == str(reporter_run_id)):
+			dropped.append({"run_id": run_id, "reason": "run_not_failed"})
+			continue
+		kept.append(ref)
+	if (payload.get("run_refs") or []) and not kept:
+		return {"ok": False, "reason": "no_bound_runs", "run_refs": [], "dropped": dropped}
+	return {"ok": True, "reason": "bound", "run_refs": kept, "dropped": dropped, "overrides": overrides}
 
 
 # ---------------------------------------------------------------------------
@@ -1308,14 +1658,121 @@ def _drop_step_script_lines(text: str) -> str:
 	return "\n".join(kept)
 
 
+def _strip_step_env_values(text: str) -> str:
+	"""Redact the values of a step header's ``env:`` block in raw job-log text.
+
+	Inside a ``##[group]Run`` header, each ``NAME: value`` entry of the
+	``env:`` block keeps its name and gets ``[redacted]`` for its value; any
+	other non-empty line of the block is replaced with ``  [redacted]``
+	(fail closed). The block ends only at ``##[endgroup]``: the runner prints
+	``env:`` last, so a ``with:`` / ``shell:`` line inside it is part of a
+	multi-line value and is redacted. An inline ``env: <value>`` line keeps
+	``env:`` and opens the block. Lines outside the env block and
+	outside step headers are unchanged, so text without a Run header comes
+	back byte-for-byte. A header that is still open when the text ends and
+	opened an ``env:`` block cannot be bounded, so it is dropped from its open
+	line onwards and replaced by one marker line; an open header that never
+	opened an ``env:`` block holds no env values and is kept unchanged, so a
+	log cut mid-step still carries the step's diagnostic output.
+	Timestamps are compared without their prefix and kept in the output.
+	When the header's open line is timestamped (a real runner log), a line
+	without a timestamp inside the env block is a multi-line value
+	continuation, so it is redacted whole even if it looks like
+	``##[endgroup]`` or ``##[group]Run``; only a timestamped marker ends it.
+	A timestamped marker inside the env block that is followed by an
+	unstamped non-empty line is itself part of a value and is redacted too.
+	"""
+	kept: list[str] = []
+	header_lines: list[str] = []
+	in_header = False
+	in_env = False
+	env_seen = False
+	header_stamped = False
+	all_lines = text.split("\n")
+	for index, line in enumerate(all_lines):
+		content = _LOG_TIMESTAMP_RE.sub("", line)
+		stamp = line[: len(line) - len(content)]
+		if not in_header:
+			if _STEP_HEADER_OPEN_RE.match(content):
+				in_header = True
+				in_env = False
+				env_seen = False
+				header_stamped = bool(stamp)
+				header_lines = [line]
+			else:
+				kept.append(line)
+			continue
+		if in_env and header_stamped and not stamp:
+			# The runner timestamps every line it writes; an unstamped line in
+			# the env block of a stamped header continues a multi-line value.
+			header_lines.append(f"{_STEP_ENV_REDACTED_LINE}" if content.strip() else line)
+			continue
+		if (
+			in_env
+			and header_stamped
+			and (_STEP_HEADER_CLOSE_RE.match(content) or _STEP_HEADER_OPEN_RE.match(content))
+			and index + 1 < len(all_lines)
+			and all_lines[index + 1].strip()
+			and not _LOG_TIMESTAMP_RE.match(all_lines[index + 1])
+		):
+			# A marker followed by an unstamped value continuation is itself a
+			# value line that starts with a timestamp-shaped string: the runner
+			# never writes an unstamped line after a real marker. Redact it whole
+			# and stay in the env block (fail closed).
+			header_lines.append(_STEP_ENV_REDACTED_LINE)
+			continue
+		if _STEP_HEADER_CLOSE_RE.match(content):
+			kept.extend(header_lines)
+			kept.append(line)
+			header_lines = []
+			in_header = False
+			in_env = False
+			continue
+		if _STEP_HEADER_OPEN_RE.match(content):
+			in_env = False
+			header_lines.append(line)
+			continue
+		if _STEP_ENV_OPEN_RE.match(content):
+			in_env = True
+			env_seen = True
+			header_lines.append(line)
+			continue
+		if not in_env and _STEP_ENV_INLINE_RE.match(content):
+			in_env = True
+			env_seen = True
+			header_lines.append(f"{stamp}env: [redacted]")
+			continue
+		if not in_env or not content.strip():
+			header_lines.append(line)
+			continue
+		entry = _STEP_ENV_ENTRY_RE.match(content)
+		if entry and not entry.group(3):
+			header_lines.append(line)
+		elif entry:
+			header_lines.append(f"{stamp}{entry.group(1)} [redacted]")
+		else:
+			header_lines.append(f"{stamp}{_STEP_ENV_REDACTED_LINE}")
+	if in_header and env_seen:
+		kept.append(_STEP_ENV_UNTERMINATED_MARKER)
+	elif in_header:
+		# No env block was opened, so the buffered lines are verbatim and
+		# carry no env values; redact_secrets still runs over them later.
+		kept.extend(header_lines)
+	return "\n".join(kept)
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
 	"""Keep the high-signal lines plus the tail of a job log, bounded.
 
 	The echoed step script is dropped first (it has to be, before ANSI codes
 	are stripped), so the tail and the high-signal matches cover what the
-	steps printed rather than their source.
+	steps printed rather than their source. Step ``env:`` values are then
+	redacted (an unterminated header is dropped), and credential shapes are
+	masked with ``redact_secrets`` on the whole text before the tail and byte
+	cut, so a cut can never leave a token without its recognisable prefix.
+	The output feeds the diagnosis prompt and the heal issue evidence.
 	"""
-	lines = sanitize_text(_drop_step_script_lines(text)).split("\n")
+	lines = redact_secrets(sanitize_text(_strip_step_env_values(_drop_step_script_lines(text)))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
@@ -1429,7 +1886,8 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
 	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then a failed editor
-	preflight (the editor never ran), then the editor flags, then the run
+	preflight, a failed reviewer step or a failed sandbox prepare (the editor
+	never ran), then the editor flags, then the run
 	summary's ``finalize_reason``, then ``workflow_failure``.
 	"""
 	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
@@ -1441,6 +1899,9 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	# failing phase rather than the empty editor output it left behind.
 	if flags.get("AUTOFIX_REVIEWERS_FAILED") == "true":
 		return "reviewers_failed"
+	# The review sandbox could not be prepared, so the editor never ran.
+	if flags.get("AUTOFIX_SANDBOX_PREPARE_FAILED") == "true":
+		return "sandbox_prepare_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":
@@ -1529,7 +1990,10 @@ _ERROR_LINE_RE = re.compile(r"^\s*(?:::error(?: [^:]*)?::|##\[error\])\s*(?P<msg
 _GENERIC_ERROR_RE = re.compile(r"^(?:Process completed with exit code [0-9]+\.?|.*\bAborting\.?)$", re.IGNORECASE)
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
-	(re.compile(r"([Aa]uthorization:\s*)(?:(?:[Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+"), r"\1[redacted]"),
+	# HTTP header names are case-insensitive (`curl -v` prints `authorization:`).
+	(re.compile(r"(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(extraheader\s*[=:]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(basic\s+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"([Bb]earer\s+)\S+"), r"\1[redacted]"),
 	(re.compile(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+"), r"\1[redacted]"),
 	(re.compile(r"(sk-(?:or|ant)-)[A-Za-z0-9_-]+"), r"\1[redacted]"),
@@ -1547,7 +2011,315 @@ def redact_secrets(text: str) -> str:
 	"""
 	for pattern, replacement in _SECRET_PATTERNS:
 		text = pattern.sub(replacement, text)
+	# Encoded x-access-token credentials are not necessarily preceded by a
+	# Basic header (for example when a failed command prints its config).
+	text = re.sub(r"[A-Za-z0-9+/_-]{24,}={0,2}", _redact_encoded_credential, text)
 	return text
+
+
+def _redact_encoded_credential(match: re.Match[str]) -> str:
+	import base64
+
+	value = match.group()
+	for offset in range(4):
+		try:
+			decoded = base64.b64decode(value[offset:] + "=" * (-len(value[offset:]) % 4), altchars=b"-_", validate=True)
+		except (ValueError, base64.binascii.Error):
+			continue
+		# A user:token pair decodes to printable ASCII; random hex (SHAs,
+		# fingerprints) decodes to binary and must not be redacted.
+		if b"x-access-token:" in decoded.lower() or (all(0x20 <= byte < 0x7F for byte in decoded) and re.search(rb"[^:\s]:\S{36,}", decoded)):
+			return "[redacted]"
+	return value
+
+
+def redact_known_secrets(text: str, values: Iterable[str]) -> str:
+	import base64
+
+	for value in values:
+		if not value:
+			continue
+		# Short mock/placeholder values must not erase ordinary prose ("codex").
+		if len(value) < 8:
+			text = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])", "[redacted]", text)
+			continue
+		text = text.replace(value, "[redacted]")
+		for raw in (value, "x-access-token:" + value):
+			for altchars in (None, b"-_"):
+				encoded = base64.b64encode(raw.encode()) if altchars is None else base64.b64encode(raw.encode(), altchars=altchars)
+				# Match the stable interior for all three possible base64 alignments.
+				for offset in range(3):
+					fragment = encoded.decode()[offset + 4:-(4 if encoded.endswith(b"=") else 0) or None]
+					if len(fragment) >= 12:
+						text = text.replace(fragment, "[redacted]")
+				text = text.replace(encoded.decode(), "[redacted]")
+	return redact_secrets(text)
+
+
+HEAL_SCOPE_RE = re.compile(r"<!-- ai:workflow-heal-scope:v1 paths=([^\s<>]+) runs=([^\s<>]+) -->")
+HEAL_FP_RE = re.compile(r"<!-- workflow-failure-heal:fp=[0-9a-f]{64} -->")
+
+
+def is_heal_route(issue: dict[str, Any]) -> bool:
+	return "ai:workflow-heal" in [label.get("name") if isinstance(label, dict) else label for label in issue.get("labels", [])] or bool(HEAL_FP_RE.search(issue.get("body") or ""))
+
+
+def _safe_heal_path(path: str) -> bool:
+	return (is_valid_repo_path(path) and path.isascii() and not any(c in path for c in ",*?[]\\ \t\r\n")
+		and not any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in path.split("/"))
+		and not path.lower().startswith((".github/ai/", ".claude/")))
+
+
+# Failing tests named by the run's own logs (operator decision Q37: A,
+# 2026-10-09). A CI heal's scope used to be the workflow file plus tests/**,
+# so the implementer could only edit tests, and when a test and the code
+# disagreed it rewrote the test to match whatever the code did: heal PRs
+# #6907 and #6916 flipped the security-pass cap rule that #6906 had just
+# restored, and main went red. The run logs are authenticated run metadata
+# (fetched by job id from the verified run, redacted and filtered before any
+# model sees them), so the test names they report may widen the frozen scope
+# deterministically: each failing test resolves to the test file that defines
+# it (git grep at the scope commit) and that file's stem to the subject it
+# covers (scripts/<stem>.sh, scripts/<stem>.py, .github/workflows/<stem>.yml,
+# with "-" for "_" too), only when that file exists at the scope commit and
+# passes the same path rules as every other scope entry. The diagnosis still
+# cannot add a path.
+_FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+	# A parameterized test reports ``test_x[param]``; only the function name is kept.
+	re.compile(r'"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"\s*,\s*"status"\s*:\s*"fail"'),
+	re.compile(r'"status"\s*:\s*"fail"\s*,\s*"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"'),
+	re.compile(r"^\s*FAIL\s+(test_[A-Za-z0-9_]{1,160})\b", re.MULTILINE),
+	# Pytest summary lines start the (timestamp-stripped) line; a class-based
+	# test reports ``tests/x.py::TestClass::test_y``.
+	re.compile(r"^\s*FAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(?:[A-Za-z_][A-Za-z0-9_]{0,160}::)?(test_[A-Za-z0-9_]{1,160})", re.MULTILINE),
+	re.compile(r"^\s*FAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b", re.MULTILINE),
+	# A test file CI runs as a script (``python3 tests/x.py``) fails with a
+	# traceback whose frame names the file and the test function, or with
+	# unittest's ``FAIL: test_x (module.Class.test_x)`` / ``ERROR:`` header.
+	re.compile(r'^\s*File "(?:[^"\n]{0,400}/)?(tests/(?:[A-Za-z0-9_-]{1,80}/){0,4}test_[A-Za-z0-9_]{1,160}\.py)", line [0-9]+, in (test_[A-Za-z0-9_]{1,160})\s*$', re.MULTILINE),
+	re.compile(r"^\s*(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,160}) \([A-Za-z0-9_.]{1,300}\)\s*$", re.MULTILINE),
+)
+FAILING_TEST_LIMIT = 20
+
+
+def extract_failing_tests(text: str) -> dict[str, list[str]]:
+	"""Failing test function names and test files that a filtered job log reports.
+
+	Returns ``{"names": [...], "files": [...], "pairs": [...]}`` in first-seen
+	order, deduped and capped at FAILING_TEST_LIMIT each. ``pairs`` holds
+	``<file>::<name>`` for every line that names both (the pytest summary shape),
+	so an ambiguous name can be bound to the file the log reported for it. Only
+	the shapes the CI shard runner, pytest and unittest print are recognised;
+	prose never matches.
+	"""
+	names: list[str] = []
+	files: list[str] = []
+	pairs: list[str] = []
+	# Raw Actions job logs prefix every line with an ISO timestamp, which
+	# filter_log keeps; strip it so the line-anchored shapes match.
+	cleaned = "\n".join(_LOG_TIMESTAMP_RE.sub("", line) for line in sanitize_text(text).split("\n"))
+	for pattern in _FAILING_TEST_PATTERNS:
+		for match in pattern.finditer(cleaned):
+			for group in match.groups():
+				if not group:
+					continue
+				bucket = files if group.startswith("tests/") else names
+				if group not in bucket and len(bucket) < FAILING_TEST_LIMIT:
+					bucket.append(group)
+			groups = [group for group in match.groups() if group]
+			if len(groups) == 2 and groups[0].startswith("tests/"):
+				pair = f"{groups[0]}::{groups[1]}"
+				if pair not in pairs and len(pairs) < FAILING_TEST_LIMIT:
+					pairs.append(pair)
+	return {"names": names, "files": files, "pairs": pairs}
+
+
+def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str]:
+	"""Test files plus the subject each one covers, when that subject exists.
+
+	``tests/test_<stem>.py`` maps to ``scripts/<stem>.sh``, ``scripts/<stem>.py``
+	and ``.github/workflows/<stem>.yml`` (also with ``-`` for ``_``); every
+	candidate must exist at the scope commit and pass ``_safe_heal_path``.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str) or not _safe_heal_path(test_file) or not test_file.startswith("tests/"):
+			continue
+		if not exists(test_file):
+			continue
+		if test_file not in out:
+			out.append(test_file)
+		stem = test_file.rsplit("/", 1)[-1]
+		if not stem.startswith("test_") or not stem.endswith(".py"):
+			continue
+		stem = stem[len("test_"):-len(".py")]
+		if not re.fullmatch(r"[A-Za-z0-9_]{1,120}", stem):
+			continue
+		candidates = [f"scripts/{stem}.sh", f"scripts/{stem}.py", f".github/workflows/{stem}.yml"]
+		dashed = stem.replace("_", "-")
+		if dashed != stem:
+			candidates.append(f".github/workflows/{dashed}.yml")
+		for candidate in candidates:
+			if candidate not in out and _safe_heal_path(candidate) and exists(candidate):
+				out.append(candidate)
+	return out
+
+
+# Guard tests check a property of other files, so their own name maps to no
+# subject (tests/test_workflow_file_size_limit.py has no
+# scripts/workflow_file_size_limit.*) and a heal for them was confined to
+# tests/**, where the guard cannot be fixed. Each one maps to the files its
+# fix edits instead; every entry must still exist at the scope commit.
+HEAL_SCOPE_GUARD_TEST_SUBJECTS: dict[str, tuple[str, ...]] = {
+	"tests/test_ci_job_split_contract.py": (".github/workflows/ci.yml",),
+	# Pin the inventory-parity step order and the shared shell-block guard step in ci.yml.
+	"tests/test_ci_inventory_parity_order_contract.py": (".github/workflows/ci.yml",),
+	"tests/test_ci_shared_shell_block_guard.py": (".github/workflows/ci.yml",),
+	# Pins the orchestrate-poll sharded step in ci.yml and its ports in both
+	# release gates; ci.yml, mark-stable.yml and test-and-mark-stable.yml run it.
+	"tests/test_ci_poll_test_sharding.py": (".github/workflows/ci.yml", ".github/workflows/mark-stable.yml", ".github/workflows/test-and-mark-stable.yml"),
+}
+# The workflow size guard (CLAUDE.md §27) is fixed by moving inline run:
+# bodies of the oversized workflow into new scripts/<workflow>_step_<slug>.sh
+# files, registered in the bootstrap list and the inventory. Its subjects are
+# the workflow files at or above the guard at the scope commit, those
+# registries, and one glob per oversized workflow for the new step scripts.
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST = "tests/test_workflow_file_size_limit.py"
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES = 480_000
+HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES = ("scripts/stage_workflow_support.sh", "docs/INVENTORY.md")
+# The only glob a scope may carry besides the trailing tests/** and
+# changelog.d/*.md: new step scripts of one named workflow, never scripts/*.
+_HEAL_SCOPE_STEP_GLOB_RE = re.compile(r"scripts/[a-z0-9][a-z0-9_]{0,79}_step_\*\.sh")
+
+
+def heal_scope_step_script_glob(workflow_path: str) -> str:
+	"""``scripts/<stem>_step_*.sh`` for ``.github/workflows/<stem>.yml`` (``-`` becomes ``_``), or ``""``."""
+	match = re.fullmatch(r"\.github/workflows/([A-Za-z0-9_-]{1,80})\.ya?ml", workflow_path or "")
+	if not match:
+		return ""
+	glob = f"scripts/{match.group(1).replace('-', '_').lower()}_step_*.sh"
+	return glob if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(glob) else ""
+
+
+def _heal_oversized_workflows(checkout: str, ref: str | None, guard_bytes: int = HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES) -> list[str]:
+	"""Workflow files at or above ``guard_bytes`` at ``ref`` (or in the checkout when ``ref`` is empty)."""
+	found: list[str] = []
+	if ref:
+		result = subprocess.run(["git", "ls-tree", "-l", "-z", ref, "--", ".github/workflows/"], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			return []
+		for entry in result.stdout.split(b"\0"):
+			meta, _, raw_path = entry.partition(b"\t")
+			fields = meta.split()
+			if len(fields) != 4 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") or not fields[3].isdigit():
+				continue
+			path = raw_path.decode("utf-8", errors="replace")
+			if int(fields[3]) >= guard_bytes and re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml", path):
+				found.append(path)
+		return sorted(found)
+	workflows = Path(checkout) / ".github" / "workflows"
+	for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
+		if path.is_file() and not path.is_symlink() and path.stat().st_size >= guard_bytes:
+			found.append(path.relative_to(checkout).as_posix())
+	return found
+
+
+def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_workflows: Any) -> list[str]:
+	"""Subjects of the failing guard tests: existing paths, plus step-script globs.
+
+	``oversized_workflows`` is called only when the size guard failed and returns
+	the workflow paths at or above the guard at the scope commit.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str):
+			continue
+		candidates: list[str] = list(HEAL_SCOPE_GUARD_TEST_SUBJECTS.get(test_file, ()))
+		if test_file == HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST:
+			oversized = [path for path in oversized_workflows() if isinstance(path, str)]
+			candidates.extend(oversized)
+			if oversized:
+				candidates.extend(HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES)
+			candidates.extend(heal_scope_step_script_glob(path) for path in oversized)
+		for candidate in candidates:
+			if not candidate or candidate in out:
+				continue
+			if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(candidate) or (_safe_heal_path(candidate) and exists(candidate)):
+				out.append(candidate)
+	return out
+
+
+# Explicit scope slots reserved for failing-test subjects ahead of changed_files.
+HEAL_SCOPE_SUBJECT_RESERVE = 8
+
+
+def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
+	paths = []
+	dropped = 0
+	# Test files are already covered by the trailing ``tests/**`` glob, so only
+	# the subjects they map to take one of the 20 explicit slots
+	# (verify_heal_scope accepts at most 20 explicit paths).
+	subjects = [path for path in test_subjects if isinstance(path, str) and not path.startswith("tests/")]
+	# Up to HEAL_SCOPE_SUBJECT_RESERVE subjects go ahead of the ownership
+	# ``changed_files`` list: a PR or base diff touching 20+ files would
+	# otherwise fill every slot first and confine the heal to tests/** again.
+	# The crash file and workflow paths keep priority; remaining subjects follow.
+	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
+	for path in ordered:
+		if not isinstance(path, str) or path in paths:
+			continue
+		step_glob = bool(_HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) and path in subjects
+		if not step_glob and not _safe_heal_path(path):
+			continue
+		if len(paths) >= 20:
+			# Counted without an existence lookup, so this is an upper bound.
+			dropped += 1
+		elif step_glob or exists(path):
+			# A step-script glob names files the fix creates, so it has no
+			# existence check; it comes only from heal_scope_guard_subjects.
+			paths.append(path)
+	if dropped:
+		print(f"WORKFLOW_HEAL warn heal_scope_truncated kept={len(paths)} dropped_candidates={dropped}", file=sys.stderr)
+	if not paths:
+		return ""
+	refs = list(runs)
+	if not refs or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in refs):
+		return ""
+	return f"<!-- ai:workflow-heal-scope:v1 paths={','.join(paths + ['tests/**', 'changelog.d/*.md'])} runs={','.join(refs)} -->"
+
+
+def strip_heal_scope_markers(text: str) -> str:
+	return re.sub(r"(?im)^.*ai(?::|&#0*58;|&colon;|&amp;:)workflow-heal-scope.*\n?", "", text)
+
+
+def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | None, labels: Iterable[str], pipeline_login: str) -> dict[str, Any]:
+	markers = HEAL_SCOPE_RE.findall(body)
+	count = len(re.findall(r"ai:workflow-heal-scope", body, re.IGNORECASE))
+	status = "verified"
+	if count == 0:
+		status = "missing"
+	elif count != 1:
+		status = "duplicated"
+	elif not markers:
+		status = "malformed"
+	elif not pipeline_login or author_login.casefold() != pipeline_login.casefold() or "ai:workflow-heal" not in labels:
+		status = "untrusted_author"
+	elif last_edited_at is not None:
+		status = "edited"
+	paths = markers[0][0].split(",") if markers else []
+	runs = markers[0][1].split(",") if markers else []
+	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
+		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
+		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
+		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
+		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
+		status = "malformed"
+	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
+
+
+def carry_heal_scope(*, child_body: str, parent_verification: dict[str, Any]) -> str:
+	clean = strip_heal_scope_markers(child_body).rstrip()
+	return clean + ("\n\n" + parent_verification["marker"] if parent_verification.get("status") == "verified" else "") + "\n"
 
 
 def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) -> str:
@@ -1607,11 +2379,20 @@ def autofix_failure_fingerprint(*, failure_reason: str, evidence_text: str) -> d
 	}
 
 
-def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None) -> str:
+def _normalized_support_sha(support_sha: Any) -> str:
+	"""Return ``support_sha`` lowercased when it is a 40-hex SHA, else ``""``."""
+	value = str(support_sha or "").strip().lower()
+	return value if is_valid_sha(value) else ""
+
+
+def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None, support_sha: str | None = None) -> str:
 	"""Render the ``review-autofix-failure:v1`` marker appended to a failure comment.
 
 	``run`` lets the counter treat two failure comments of one run as a single
-	failure. Returns an empty string when the head or fingerprint is malformed.
+	failure. ``support`` (issue #6625) records the verified review-support SHA
+	that ran, so a later review on updated support can ignore failures from an
+	older support version; it is omitted when ``support_sha`` is not a 40-hex
+	SHA. Returns an empty string when the head or fingerprint is malformed.
 	"""
 	head = str(head_sha or "").strip().lower()
 	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
@@ -1620,6 +2401,9 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	run = safe_token(run_id, 20)
 	if run.isdigit():
 		fields.append(f"run={run}")
+	support = _normalized_support_sha(support_sha)
+	if support:
+		fields.append(f"support={support}")
 	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
 
 
@@ -1652,9 +2436,16 @@ def _run_workflow_file(run: dict[str, Any]) -> str | None:
 
 def verify_run_provenance(
 	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
-	trusted_login: str, self_repo: str,
+	trusted_login: str, self_repo: str, default_branch: str = "",
 ) -> dict[str, Any]:
-	"""Keep only run references corroborated by GitHub, before reading job logs."""
+	"""Keep only run references corroborated by GitHub, before reading job logs.
+
+	A ``workflow_run`` report may cite a CI run (``CI_WORKFLOW_FILES``) only
+	when GitHub reports it as a ``push`` run on ``default_branch``; an empty or
+	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
+	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
+	GitHub reports it on ``default_branch``, under the same fail-closed rule.
+	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
 	result: dict[str, Any] = {"status": "not_applicable", "reason": "", "run_refs": refs, "rejections": [], "pending_current_run": ""}
@@ -1676,7 +2467,7 @@ def verify_run_provenance(
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
 	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
 		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
-		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -1701,6 +2492,17 @@ def verify_run_provenance(
 			reason = "unexpected_run_event"
 		if not reason and _run_workflow_file(run) not in allowed:
 			reason = "unexpected_workflow_path"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in CI_WORKFLOW_FILES and not (
+			run.get("event") == "push"
+			and is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "ci_not_default_branch_push"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in SCHEDULED_CHECK_WORKFLOW_FILES and not (
+			is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "scheduled_check_not_default_branch"
 		if not reason and kind == "phase_failure":
 			linked = any(
 				isinstance(comment, dict) and bool(_comment_author(comment))
@@ -1750,12 +2552,15 @@ def verify_run_provenance(
 	return result
 
 
-def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> list[dict[str, Any]]:
+def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> list[dict[str, Any]]:
 	"""Return the trusted failure markers for ``head_sha``, oldest first.
 
 	A marker is trusted only when its comment was written by ``author_login``
 	(the identity the workflow posts as); markers from anyone else are ignored.
+	With a valid ``support_sha`` only markers carrying that ``support`` value
+	are returned (markers without one come from older support versions).
 	"""
+	support = _normalized_support_sha(support_sha)
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	markers: list[dict[str, Any]] = []
@@ -1767,19 +2572,22 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 		fields = _marker_fields(_FAILURE_MARKER_RE.search(sanitize_text(comment.get("body"))))
 		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
 		markers.append(
 			{
 				"fp": fields["fp"],
 				"reason": fields.get("reason") or "unknown",
 				"degraded": fields.get("degraded") == "1",
 				"run": fields.get("run", ""),
+				"support": fields.get("support", "").lower() if is_valid_sha(fields.get("support", "").lower()) else "",
 				"comment_id": safe_token(comment.get("id"), 20),
 			}
 		)
 	return markers
 
 
-def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> dict[str, Any]:
+def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> dict[str, Any]:
 	"""Count the trailing identical failures on ``head_sha``.
 
 	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
@@ -1793,7 +2601,15 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
+
+	With a valid ``support_sha`` (the verified review-support SHA of the
+	evaluating run, issue #6625), failure and cap markers whose ``support``
+	field is missing or different come from an older support version: they are
+	skipped like markers for another head, so they neither count nor end the
+	scan, and an older cap marker does not set ``cap_applied``. Without
+	``support_sha`` the legacy rules apply unchanged.
 	"""
+	support = _normalized_support_sha(support_sha)
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
@@ -1803,8 +2619,11 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	for comment in ordered:
 		if _comment_author(comment) != author:
 			continue
-		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(sanitize_text(comment.get("body"))))
-		if cap_fields.get("head", "").lower() == head:
+		cap_body = sanitize_text(comment.get("body"))
+		if any(
+			fields.get("head", "").lower() == head and (not support or fields.get("support", "").lower() == support)
+			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(cap_body))
+		):
 			result["cap_applied"] = True
 			break
 	seen_runs: set[str] = set()
@@ -1815,6 +2634,8 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 		if match is not None:
 			fields = _marker_fields(match)
 			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+				continue
+			if support and fields.get("support", "").lower() != support:
 				continue
 			run = fields.get("run", "")
 			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
@@ -2200,6 +3021,8 @@ def compose_issue_body(
 		if payload.get("source_kind") == "workflow_run":
 			if payload.get("workflow_name") in MAIN_CI_WORKFLOW_NAMES:
 				intro = "A CI run on the default branch failed."
+			elif payload.get("workflow_name") in SCHEDULED_CHECK_WORKFLOW_NAMES:
+				intro = "A scheduled self-check workflow run on the default branch failed."
 			else:
 				intro = "A release / promotion workflow run failed."
 			intro += (
@@ -2625,7 +3448,7 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
 	if args.head_sha:
-		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None, args.support_sha or None) + "\n")
 	return 0
 
 
@@ -2655,12 +3478,13 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
 		raise ValueError("comments JSON must be a list")
-	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login)
+	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
 	sys.stdout.write(f"count={int(result['count'])}\n")
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
+	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
 	return 0
 
 
@@ -2691,7 +3515,7 @@ def _cmd_verify_run_provenance(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json) if args.comments_json else None
 	except (OSError, ValueError):
 		comments = None
-	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo))
+	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo, default_branch=args.default_branch))
 	return 0
 
 
@@ -2704,7 +3528,156 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo) + "\n")
+	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	return 0
+
+
+def _cmd_redact_stream(args: argparse.Namespace) -> int:
+	values = [os.environ.get(name, "") for name in args.secret_env.split(",")]
+	for line in sys.stdin:
+		sys.stdout.write(redact_known_secrets(_ANSI_RE.sub("", line), values))
+	return 0
+
+
+def select_evidence_jobs(jobs: dict[str, Any], *, kind: str, limit: int) -> list[dict[str, Any]]:
+	items = jobs.get("jobs", []) if isinstance(jobs, dict) else []
+	if not isinstance(items, list):
+		return []
+	failed = [dict(job, selection="failed") for job in items if isinstance(job, dict) and job.get("conclusion") in ("failure", "timed_out", "cancelled") and isinstance(job.get("id"), int) and job["id"] > 0]
+	if failed:
+		return failed[:limit]
+	if kind == "autofix_failure":
+		return [dict(job, selection="review_fallback") for job in items if isinstance(job, dict) and isinstance(job.get("id"), int) and job["id"] > 0 and job.get("conclusion") == "success" and re.search(r"review|codex-agent", job.get("name") or "", re.I)][:1]
+	return []
+
+
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False) -> dict[str, Any]:
+	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
+		raise ValueError("run identity mismatch")
+	# A phase reporter dispatches while its own run is still in progress; the
+	# caller passes allow_pending only for the run provenance accepted as such.
+	pending = allow_pending and run_json.get("conclusion") is None and run_json.get("status") in ("queued", "in_progress", "pending")
+	if not pending and run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
+		raise ValueError("run not completed with expected conclusion")
+	if head_sha and run_json.get("head_sha") != head_sha:
+		raise ValueError("run head mismatch")
+	path = run_json.get("path") or ""
+	paths = [path] if isinstance(path, str) and _safe_heal_path(path) else []
+	for ref in run_json.get("referenced_workflows") or []:
+		if isinstance(ref, dict) and isinstance(ref.get("path"), str) and ref["path"].startswith((target_repo or repo) + "/"):
+			candidate = ref["path"][len(target_repo or repo) + 1:].split("@", 1)[0]
+			if _safe_heal_path(candidate):
+				paths.append(candidate)
+	return {"run_id": run_json["id"], "url": run_json.get("html_url") or "", "path": path, "referenced_paths": paths}
+
+
+def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
+	_write_json(select_evidence_jobs(_load_json_file(args.jobs_json), kind=args.kind, limit=args.limit))
+	return 0
+
+
+def _cmd_verify_run(args: argparse.Namespace) -> int:
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending))
+	return 0
+
+
+def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
+	result = subprocess.run(["git", "ls-tree", "-z", ref, "--", path], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+	return (result.returncode == 0 and result.stdout.endswith(b"\t" + path.encode("ascii") + b"\0")
+		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
+
+
+def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) -> list[str]:
+	"""Test files under tests/ at ``ref`` that define one of the failing test functions."""
+	found: list[str] = []
+	for name in names:
+		if not isinstance(name, str) or not re.fullmatch(r"test_[A-Za-z0-9_]{1,160}", name):
+			continue
+		# Indented definitions are class-based test methods.
+		cmd = ["git", "grep", "-l", "-z", "-E", f"^[[:space:]]*def {name}\\(", ref, "--", "tests/"]
+		result = subprocess.run(cmd, cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			continue
+		for entry in result.stdout.split(b"\0"):
+			text = entry.decode("utf-8", errors="replace")
+			path = text.split(":", 1)[1] if ":" in text else text
+			if path and path not in found and _safe_heal_path(path):
+				found.append(path)
+	return found
+
+
+def _cmd_heal_scope(args: argparse.Namespace) -> int:
+	if args.operation == "strip":
+		sys.stdout.write(strip_heal_scope_markers(Path(args.body_file).read_text()))
+	elif args.operation == "render":
+		data = _load_json_file(args.input_json)
+		exists = (lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path)) if args.ref else (lambda path: Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		failing = data.get("failing_tests") if isinstance(data.get("failing_tests"), dict) else {}
+		test_files = [path for path in (failing.get("files") or []) if isinstance(path, str)]
+		if args.ref:
+			# Bind log-reported test files to the scope commit: a file is kept only
+			# when it defines one of the reported failing tests there, so a stray or
+			# forged "FAILED tests/x.py" line naming an unrelated file cannot add it
+			# (or the subject its stem maps to). Names still come from the same
+			# verified-run logs, so an existing test name remains the residual trust.
+			# Each name resolves on its own: a name defined in more than one test
+			# file is ambiguous (another file can define the same name, so the
+			# failure does not establish which file, or subject, it exercised) and
+			# is kept only for the files the log itself reported for that name
+			# (a ``<file>::<name>`` pair), never for a file another failure reported.
+			reported_for_name: dict[str, set[str]] = {}
+			for pair in failing.get("pairs") or []:
+				if isinstance(pair, str) and "::" in pair:
+					pair_file, pair_name = pair.split("::", 1)
+					reported_for_name.setdefault(pair_name, set()).add(pair_file)
+			test_files = []
+			for name in failing.get("names") or []:
+				matches = _heal_test_files_for_names(args.checkout, args.ref, [name])
+				if len(matches) > 1:
+					matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]
+				test_files.extend(path for path in matches if path not in test_files)
+		subjects = heal_scope_test_subjects(test_files, exists)
+		subjects += [path for path in heal_scope_guard_subjects(test_files, exists, lambda: _heal_oversized_workflows(args.checkout, args.ref)) if path not in subjects]
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=subjects)
+		sys.stdout.write(marker + "\n")
+	elif args.operation == "failing-tests":
+		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
+		for log_path in args.log_files or []:
+			try:
+				found = extract_failing_tests(Path(log_path).read_text(encoding="utf-8", errors="replace"))
+			except OSError:
+				continue
+			for key in ("names", "files", "pairs"):
+				for item in found[key]:
+					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
+						merged[key].append(item)
+		_write_json(merged)
+	elif args.operation == "verify":
+		data = _load_json_file(args.input_json)
+		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
+	else:
+		if args.parent_issue:
+			if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.parent_repo) or not re.fullmatch(r"[1-9][0-9]*", args.parent_issue):
+				raise ValueError("invalid parent")
+			owner, repository = args.parent_repo.split("/")
+			query = "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}"
+			try:
+				# The reissuers' existing issue REST reads supply body/labels, but
+				# neither lastEditedAt nor the authenticated token's login. One
+				# GraphQL read replaces a second body lookup; failures strip markers.
+				identity = args.pipeline_login or json.loads(subprocess.check_output(["gh", "api", "user"], stderr=subprocess.DEVNULL))["login"]
+				parent = json.loads(subprocess.check_output(["gh", "api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "repo=" + repository, "-F", "number=" + args.parent_issue], stderr=subprocess.DEVNULL))["data"]["repository"]["issue"]
+				data = verify_heal_scope(body=parent["body"] or "", author_login=parent["author"]["login"], last_edited_at=parent["lastEditedAt"], labels=[node["name"] for node in parent["labels"]["nodes"]], pipeline_login=identity)
+			except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+				data = {"status": "unverified"}
+		else:
+			data = _load_json_file(args.input_json)
+		sys.stdout.write(carry_heal_scope(child_body=Path(args.body_file).read_text(), parent_verification=data))
+	return 0
+
+
+def _cmd_heal_route(args: argparse.Namespace) -> int:
+	sys.stdout.write("true\n" if is_heal_route(_load_json_file(args.issue_json)) else "false\n")
 	return 0
 
 
@@ -2725,8 +3698,118 @@ def _cmd_wrap_dispatch(args: argparse.Namespace) -> int:
 	payload = _load_json_file(args.payload_json)
 	if not isinstance(payload, dict):
 		raise ValueError("payload must be a JSON object")
-	_write_json(wrap_dispatch(payload))
+	report_identity = None
+	identity_file = getattr(args, "report_identity_file", "") or ""
+	if identity_file and Path(identity_file).is_file():
+		candidate = Path(identity_file).read_text(encoding="utf-8").strip()
+		if candidate:
+			if not is_well_formed_jwt(candidate):
+				raise ValueError("report identity is not a well-formed token")
+			report_identity = candidate
+	_write_json(wrap_dispatch(payload, report_identity))
 	return 0
+
+
+def _write_secret_file(path: str, value: str) -> None:
+	"""Write ``value`` to ``path`` with mode 0600 (never through stdout)."""
+	fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+	try:
+		os.fchmod(fd, 0o600)
+		os.write(fd, value.encode("ascii"))
+	finally:
+		os.close(fd)
+
+
+def _cmd_request_report_identity(args: argparse.Namespace) -> int:
+	token, reason = request_report_identity(args.audience)
+	if not token:
+		try:
+			os.unlink(args.out)
+		except OSError:
+			pass
+		sys.stdout.write(f"identity=absent reason={reason or 'oidc_unavailable'}\n")
+		return 0
+	_write_secret_file(args.out, token)
+	sys.stdout.write("identity=attached\n")
+	return 0
+
+
+def _cmd_extract_report_identity(args: argparse.Namespace) -> int:
+	try:
+		client_payload = _load_json_file(args.client_payload_json)
+	except (OSError, json.JSONDecodeError):
+		client_payload = None
+	state, token = extract_report_identity(client_payload)
+	if token:
+		_write_secret_file(args.out, token)
+	sys.stdout.write(state + "\n")
+	return 0
+
+
+def _cmd_verify_report_identity(args: argparse.Namespace) -> int:
+	try:
+		token = Path(args.token_file).read_text(encoding="utf-8").strip()
+	except OSError:
+		token = ""
+	try:
+		jwks = _load_json_file(args.jwks_json)
+	except (OSError, json.JSONDecodeError):
+		jwks = None
+	payload = _load_json_file(args.payload_json)
+	if not isinstance(payload, dict):
+		raise ValueError("payload must be a JSON object")
+	now = float(args.now) if args.now is not None else _utc_now().timestamp()
+	max_age = args.max_age if args.max_age and args.max_age > 0 else DEFAULT_REPORT_MAX_AGE_SECONDS
+	if jwks is None:
+		result = {"ok": False, "reason": "jwks_unavailable", "claims": {}}
+	else:
+		result = verify_report_identity(
+			token,
+			jwks=jwks,
+			source_repo=str(payload.get("source_repo") or ""),
+			source_kind=str(payload.get("source_kind") or ""),
+			reporter_run_url=payload.get("reporter_run_url"),
+			self_repo=args.self_repo,
+			now=now,
+			max_age=max_age,
+		)
+	_write_json(result)
+	return 0 if result["ok"] else 1
+
+
+def _cmd_bind_report(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	if not isinstance(payload, dict):
+		raise ValueError("payload must be a JSON object")
+
+	def _optional_json(path: str) -> Any:
+		if not path or not Path(path).is_file():
+			return None
+		try:
+			return _load_json_file(path)
+		except (OSError, json.JSONDecodeError):
+			return None
+
+	jobs_by_run: dict[str, Any] = {}
+	if args.jobs_dir and Path(args.jobs_dir).is_dir():
+		for ref in payload.get("run_refs") or []:
+			run_id = str(ref.get("run_id") or "")
+			if re.fullmatch(r"[0-9]+", run_id):
+				doc = _optional_json(str(Path(args.jobs_dir) / f"{run_id}.json"))
+				if doc is not None:
+					jobs_by_run[run_id] = doc
+	result = bind_report_claims(
+		payload,
+		issue_json=_optional_json(args.issue_json),
+		pull_json=_optional_json(args.pull_json),
+		jobs_by_run=jobs_by_run,
+		reporter_run_id=args.reporter_run_id or None,
+		labeled_event_found=args.labeled_event_found,
+		head_ancestor=args.head_ancestor,
+		trusted_excerpts=args.trusted_excerpts,
+	)
+	_write_json(result)
+	return 0 if result["ok"] else 1
 
 
 def _cmd_unwrap_dispatch(args: argparse.Namespace) -> int:
@@ -2789,7 +3872,7 @@ def _cmd_parse_classification(args: argparse.Namespace) -> int:
 
 def _cmd_compose_issue(args: argparse.Namespace) -> int:
 	payload = validate_payload(_load_json_file(args.payload_json))
-	diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	diagnosis = strip_heal_scope_markers(Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace"))
 	run_summaries = _load_json_file(args.run_summaries_json) if args.run_summaries_json else []
 	if not isinstance(run_summaries, list):
 		run_summaries = []
@@ -2824,6 +3907,12 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 			neutralized_count += sum(neutralize_untrusted_routing(single_line(summary.get(field)))[1] for field in ("url", "workflow_name", "failing_step"))
 	if neutralized_count:
 		print(f"WORKFLOW_HEAL neutralized count={neutralized_count}", file=sys.stderr)
+	# The intake-authored scope marker is appended after routing validation,
+	# which rejects any HTML comment outside the generated header lines.
+	if args.scope_marker_file:
+		marker = Path(args.scope_marker_file).read_text(encoding="utf-8").strip()
+		if marker and HEAL_SCOPE_RE.fullmatch(marker):
+			body = body.rstrip() + "\n\n" + marker + "\n"
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
 	return 0
@@ -2934,6 +4023,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
+	p.add_argument("--support-sha", default="", help="verified review-support SHA; recorded as support= in the marker (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
@@ -2944,6 +4034,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
+	p.add_argument("--support-sha", default="", help="verified review-support SHA; markers from other support versions are ignored (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
@@ -2961,13 +4052,50 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", default="")
 	p.add_argument("--trusted-login", default="")
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--default-branch", default="")
 	p.set_defaults(func=_cmd_verify_run_provenance)
 
 	p = sub.add_parser("skip-reason", help="Print a skip reason (empty when the payload should be healed)")
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--heal-scope-unverified", action="store_true")
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("redact-stream")
+	p.add_argument("--secret-env", default="GH_PAT,GH_TOKEN,GITHUB_TOKEN,OPENROUTER_API_KEY")
+	p.set_defaults(func=_cmd_redact_stream)
+
+	p = sub.add_parser("select-evidence-jobs")
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--kind", default="issue")
+	p.add_argument("--limit", type=int, default=3)
+	p.set_defaults(func=_cmd_select_evidence_jobs)
+
+	p = sub.add_parser("verify-run")
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--target-repo", default="")
+	p.add_argument("--kind", default="issue")
+	p.add_argument("--head-sha", default="")
+	p.add_argument("--allow-pending", action="store_true")
+	p.set_defaults(func=_cmd_verify_run)
+
+	p = sub.add_parser("heal-route")
+	p.add_argument("--issue-json", required=True)
+	p.set_defaults(func=_cmd_heal_route)
+
+	p = sub.add_parser("heal-scope")
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests"))
+	p.add_argument("--log-files", nargs="*")
+	p.add_argument("--input-json", default="")
+	p.add_argument("--body-file", default="")
+	p.add_argument("--checkout", default=".")
+	p.add_argument("--ref", default="")
+	p.add_argument("--parent-repo", default="")
+	p.add_argument("--parent-issue", default="")
+	p.add_argument("--pipeline-login", default="")
+	p.set_defaults(func=_cmd_heal_scope)
 
 	p = sub.add_parser("verify-phase-provenance", help="Verify a phase failure report against GitHub-read run, job and comment evidence")
 	p.add_argument("--payload-json", required=True)
@@ -2980,7 +4108,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")
 	p.add_argument("--payload-json", required=True)
+	p.add_argument("--report-identity-file", default="", help="OIDC token file; when non-empty it is sent as client_payload.report_identity")
 	p.set_defaults(func=_cmd_wrap_dispatch)
+
+	p = sub.add_parser("request-report-identity", help="Request a GitHub Actions OIDC token for the heal report (written 0600, never printed)")
+	p.add_argument("--out", required=True)
+	p.add_argument("--audience", default=REPORT_IDENTITY_AUDIENCE)
+	p.set_defaults(func=_cmd_request_report_identity)
+
+	p = sub.add_parser("extract-report-identity", help="Print present / absent / malformed and write the client_payload.report_identity token (0600)")
+	p.add_argument("--client-payload-json", required=True)
+	p.add_argument("--out", required=True)
+	p.set_defaults(func=_cmd_extract_report_identity)
+
+	p = sub.add_parser("verify-report-identity", help="Verify a heal report's OIDC token against the JWKS and the report (JSON; exit 1 on rejection)")
+	p.add_argument("--token-file", required=True)
+	p.add_argument("--jwks-json", required=True)
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--self-repo", required=True)
+	p.add_argument("--now", type=float, default=None)
+	p.add_argument("--max-age", type=int, default=DEFAULT_REPORT_MAX_AGE_SECONDS)
+	p.set_defaults(func=_cmd_verify_report_identity)
+
+	p = sub.add_parser("bind-report", help="Bind a report's issue / PR / run claims to fetched GitHub data (JSON; exit 1 on rejection)")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--issue-json", default="")
+	p.add_argument("--pull-json", default="")
+	p.add_argument("--jobs-dir", default="")
+	p.add_argument("--reporter-run-id", default="")
+	p.add_argument("--labeled-event-found", action="store_true")
+	p.add_argument("--head-ancestor", action="store_true")
+	p.add_argument("--trusted-excerpts", action="store_true", help="keep the report's comments excerpt (OIDC-verified reports)")
+	p.set_defaults(func=_cmd_bind_report)
 
 	p = sub.add_parser("unwrap-dispatch", help="Print the report inside an enveloped client_payload (flat payloads pass through)")
 	p.add_argument("--payload-json", required=True)
@@ -3041,6 +4200,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--classification", required=True, choices=CLASSIFICATIONS)
 	p.add_argument("--target-branch", default="")
 	p.add_argument("--integration-branch", default="")
+	p.add_argument("--scope-marker-file", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)

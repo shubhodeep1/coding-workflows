@@ -165,6 +165,11 @@
       "engine": "codex",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
+    },
+    "PANEL_REVIEWER": {
+      "engine": "claude",
+      "claude_model": "claude-sonnet-5-5",
+      "profile": "read"
     }
   }
 }

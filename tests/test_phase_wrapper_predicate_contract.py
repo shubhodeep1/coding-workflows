@@ -78,6 +78,9 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
 			"startsWith(github.event.comment.body, '/reclarify')",
+			"contains(github.event.comment.body, fromJson('\"\\n/reclarify\"'))",
+			"!contains(github.event.comment.body, '<!-- ai:')",
+			"!contains(github.event.comment.body, 'To restart clarification reply:')",
 		),
 	)
 	opened, reclarify = _canonical_predicate("clarify").split(" || (github.event_name == 'issue_comment'", 1)
@@ -86,6 +89,105 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 	assert "github.event.comment.user.type == 'User'" in reclarify
 	assert "github.event.issue.author_association" not in reclarify
 
+
+# Issue #6630: /reclarify on a later line of a human comment starts clarify,
+# while automation comments that mention or echo it never do.
+RECLARIFY_CLAUSE = (
+	"(startsWith(github.event.comment.body, '/reclarify') || "
+	"(contains(github.event.comment.body, fromJson('\"\\n/reclarify\"')) && "
+	"!contains(github.event.comment.body, '<!-- ai:') && "
+	"!contains(github.event.comment.body, 'To restart clarification reply:')))"
+)
+
+_PLAN_COMMENT_TRAILER = "Implementation Plan\n\nplan text\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n"
+
+RECLARIFY_CASES = (
+	("Answer to the blocker.\n\n/reclarify", True),
+	("Answer\r\n/reclarify", True),
+	("/reclarify", True),
+	("/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=1 -->", True),
+	("/reclarify\n<!-- ai:security-dependency-released:7 -->", True),
+	("please run /reclarify later", False),
+	("Clarification blocked: human input required.\n\nProvide the input, then run /reclarify or continue with /answer.", False),
+	("text\n/reclarify\n<!-- ai:clarification-questions -->", False),
+	(_PLAN_COMMENT_TRAILER + "\n<!-- ai:plan-proposal:v1 -->\n", False),
+	(_PLAN_COMMENT_TRAILER, False),
+	(" /reclarify", False),
+	("> /reclarify", False),
+	("Answer\n/Reclarify", True),
+)
+
+
+def _model_reclarify_clause(body: str) -> bool:
+	# GitHub's startsWith/contains compare case-insensitively.
+	lowered = body.lower()
+	return lowered.startswith("/reclarify") or (
+		"\n/reclarify" in lowered
+		and "<!-- ai:" not in lowered
+		and "to restart clarification reply:" not in lowered
+	)
+
+
+def _clarify_bash_snippet() -> str:
+	text = (REPO_ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8")
+	blocks = []
+	start = 0
+	while True:
+		begin = text.find('_rc_body_lc="${COMMENT_BODY,,}"', start)
+		if begin < 0:
+			break
+		end = text.index('_rc_is_command="true"\n', begin)
+		end = text.index("fi\n", end) + len("fi\n")
+		line_start = text.rfind("\n", 0, begin) + 1
+		blocks.append("\n".join(line.strip() for line in text[line_start:end].splitlines()))
+		start = end
+	assert len(blocks) == 2, "route and requeue steps must both carry the reclarify classifier"
+	assert blocks[0] == blocks[1], "route and requeue reclarify classifiers drifted"
+	return blocks[0]
+
+
+def test_clarify_reclarify_clause_is_pinned_in_every_wrapper() -> None:
+	for relative_path in PHASE_WORKFLOWS["clarify"]:
+		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+		assert RECLARIFY_CLAUSE in text, f"{relative_path} lost the any-line /reclarify clause"
+
+
+def test_reclarify_classifiers_agree_with_the_job_predicate() -> None:
+	import os
+	import shutil
+	import subprocess
+	import sys
+
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import orchestrate_lib
+
+	snippet = _clarify_bash_snippet()
+	poller = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	jq_line = next(line for line in poller.splitlines() if line.startswith("RECLARIFY_COMMAND_JQ_DEF="))
+	cases = list(RECLARIFY_CASES) + [("x" * 70000 + "\n/reclarify", True)]
+	for body, expected in cases:
+		assert _model_reclarify_clause(body) is expected, body[:80]
+		assert orchestrate_lib.is_reclarify_command_body(body) is expected, body[:80]
+		bash = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + snippet + '\nprintf %s "${_rc_is_command}"'],
+			env={"COMMENT_BODY": body, "PATH": os.environ["PATH"]}, capture_output=True, text=True, check=True,
+		)
+		assert bash.stdout == ("true" if expected else "false"), body[:80]
+		if shutil.which("jq") is None:
+			# The poller itself needs jq; CI runners carry it.
+			continue
+		jq = subprocess.run(
+			["bash", "-c", jq_line + '\njq -n --arg b "${COMMENT_BODY}" "${RECLARIFY_COMMAND_JQ_DEF}"\' $b | is_reclarify_command\''],
+			env={"COMMENT_BODY": body, "PATH": os.environ["PATH"]}, capture_output=True, text=True, check=True,
+		)
+		assert jq.stdout.strip() == ("true" if expected else "false"), body[:80]
+
+
+def test_plan_comment_carries_automation_marker_after_its_reclarify_line() -> None:
+	text = (REPO_ROOT / ".github/workflows/plan.yml").read_text(encoding="utf-8")
+	begin = text.index('echo "To restart clarification reply:"')
+	block = text[begin:text.index('} > "${PLAN_COMMENT_FILE}"', begin)]
+	assert block.index('echo "/reclarify"') < block.index('echo "<!-- ai:plan-proposal:v1 -->"')
 
 def test_plan_predicate_preserves_trusted_human_and_bot_answer_routes() -> None:
 	_assert_clauses(

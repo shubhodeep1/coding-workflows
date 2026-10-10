@@ -290,12 +290,55 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		log "error parent_body_parse_failed issue=${PARENT_ISSUE}"
 		exit 1
 	fi
-	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}gen=\([0-9]\{1,\}\).*/\1/p" | head -1)"
-	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}root=\([0-9a-f]\{64\}\).*/\1/p" | head -1)"
+	# Drop fenced code blocks (``` / ~~~, CommonMark closing rules) so a
+	# marker quoted as an example inside a fence cannot set or break the
+	# lineage. The markers this script writes sit outside any fence.
+	if ! PARENT_MARKER_BODY="$(printf '%s' "${PARENT_BODY}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import re
+import sys
+
+fence = None
+kept = []
+for line in sys.stdin.read().split("\n"):
+	match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+	if fence is None:
+		if match:
+			fence = match.group(1)
+			continue
+		kept.append(line)
+	elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+		fence = None
+sys.stdout.write("\n".join(kept))
+')"; then
+		log "error parent_body_fence_strip_failed issue=${PARENT_ISSUE}"
+		exit 1
+	fi
+	# Read only line-leading HTML-comment markers (the shape this script
+	# writes), so a prose or inline-code mention such as
+	# `<!-- check-failure-triage:gen=2 -->` cannot set the lineage. At most
+	# three leading spaces are allowed: four spaces or a tab start an
+	# indented Markdown code block, whose example markers are not lineage.
+	PGEN="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^ \{0,3\}<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	PROOT="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^ \{0,3\}<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
 	if [[ "${PGEN}" =~ ^[0-9]+$ ]]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
+	# grep reads a here-string (not a pipeline) so set -o pipefail cannot
+	# turn printf's SIGPIPE after grep -q's early exit into "no marker".
+	elif ! grep -qE "^ {0,3}<!-- ${MARKER_PREFIX}gen=" <<<"${PARENT_MARKER_BODY}"; then
+		# Only a line-leading HTML-comment marker (the shape this script
+		# writes) counts as a triage marker; prose or inline code that merely
+		# mentions check-failure-triage:gen= does not.
+		# The source issue carries no triage lineage marker: this is an
+		# ordinary pipeline PR (clarify/plan/implement, activation gaps, an
+		# orchestrator wave, a heal issue), not a fix PR for an earlier
+		# triage issue. Its failure starts a new lineage at generation 1,
+		# exactly like a PR on any other branch. Until #6273 routed every
+		# failed CI run through this script, only triage-born
+		# ai/issue-<N> PRs reached this branch, so a missing marker was
+		# treated as an error and every ordinary PR's triage crashed here.
+		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=none gen=${GEN} root=${ROOT} reason=source_issue_not_triage"
 	else
 		log "error parent_generation_missing_or_malformed issue=${PARENT_ISSUE}"
 		exit 1
@@ -314,6 +357,67 @@ EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | sel
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
 	exit 0
+fi
+
+# --- Base-branch gate (#7020) ----------------------------------------------
+# The issue this script files is implemented as a new PR off the default
+# branch, so it can only fix a failure the base branch also has. A check that
+# is green on the base branch failed because of this PR's own changes; that
+# PR's review/autofix loop owns it, and a base-branch implementation finds
+# nothing to change (issue #7020 ended BLOCKED as a "verified no-op"). File only
+# when the base branch fails the same check, or when its result is unknown.
+# API budget (CLAUDE.md §15): the PR payload above supplies the base ref. A
+# failed CI workflow run costs two reads (the failing run's workflow id, then
+# that workflow's newest push run on the base branch, used only once it has
+# completed, so a pending newest run never yields an older success); a check_run
+# event costs one (that check's newest runs on the base branch tip, counted as
+# success only when every returned run has completed with success and the page
+# holds every run total_count reports, so an omitted failure cannot hide behind
+# a full page of successes). Fails open:
+# any read failure, a pending or missing base result, or a conclusion other
+# than success files the issue as before.
+BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
+BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
+if [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
+	log "base_gate outcome=disabled pr=${PR_NUMBER}"
+elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
+	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
+else
+	base_gate_conclusion=""
+	base_gate_reason=""
+	if [ -z "${CHECK_RUN_ID}" ]; then
+		# workflow_run triage: the check name is the workflow name.
+		base_gate_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
+		base_gate_workflow_id=""
+		if [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
+			base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
+		fi
+		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
+			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
+				--jq '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""' 2>/dev/null || true)"
+			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
+		elif [ -z "${CHECK_DETAILS_URL}" ]; then
+			base_gate_reason="details_url_unavailable"
+		elif ! [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
+			base_gate_reason="details_url_unparseable"
+		else
+			base_gate_reason="workflow_unresolved"
+		fi
+	else
+		# The ref is one path segment: encode "/" (the only reserved character the
+		# BASE_REF check above admits) so a branch such as release/1.x resolves.
+		base_gate_ref_path="${BASE_REF//\//%2F}"
+		base_gate_conclusion="$(gh_retry gh api -X GET "repos/${REPO}/commits/${base_gate_ref_path}/check-runs" \
+			-f check_name="${CHECK_NAME}" -f filter=latest -f per_page=100 \
+			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) or any($r[]; .status != "completed") then "" elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
+		[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_check"
+	fi
+	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
+	if [ "${base_gate_conclusion}" = "success" ]; then
+		log "skip reason=pr_specific_failure base=${BASE_REF} base_conclusion=success pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
 fi
 
 # --- Lineage cap / escalation ----------------------------------------------

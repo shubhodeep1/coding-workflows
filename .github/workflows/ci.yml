@@ -475,19 +475,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
 
-      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
-        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
-        # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence and gh_retry's per-attempt stdout buffering (#5495)
-        # in scripts/gh_helpers.sh.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_review_merge_train.py \
-            tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py
-
       - name: PR-watch guard hook tests (CLAUDE.md §25)
         run: |
           set -euo pipefail
@@ -557,6 +544,31 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_claude_roles.py
 
+      - name: Claude account-pool review-panel slot tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pool_reviewer.py
+
+      - name: Workflow-heal editor on the Claude engine tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_heal_isolated_claude_editor.py
+
+      - name: Review editor account-pool telemetry tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_pool_telemetry.py
+
+      - name: Prebuilt sandbox image tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
+
+      - name: Review sandbox image build retry tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
+
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail
@@ -576,6 +588,16 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
+
+      - name: Validation harness sandbox tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+      - name: Claude pool health alert tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_health_alert.py
 
       - name: Install Claude CLI action tests
         run: |
@@ -603,6 +625,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
+
+      - name: Security-pass final PR sync tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_final_pr_sync.py
 
       - name: Security dependency hold tests (issue 4934)
         run: |
@@ -645,11 +672,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_completion_lessons.py
 
-      - name: Integration-ahead-by gate regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
-
       - name: PR body auto-close lint unit tests
         # P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
         # Pins the keyword list, regex, label-lookup contract, and exit
@@ -687,7 +709,7 @@ jobs:
       - name: Workflow failure heal contract and driver tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py
 
       - name: CI failure workflow_run trigger tests
         run: |
@@ -997,6 +1019,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
+      - name: Review conflict-resolve sandbox-only tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_sandbox_only.py
+
       - name: Review conflict manifest union contract test
         run: |
           set -euo pipefail
@@ -1042,6 +1069,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
+
+      - name: Merge-base freshness gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
 
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
@@ -1093,6 +1125,27 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      # Moved from tests-hooks-and-orchestrator, which measured 19.6 of its
+      # 20 minutes on main (2026-10-09) and timed out on PR heads; these two
+      # steps take about 4.5 minutes each and this job about 4.
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence and gh_retry's per-attempt stdout buffering (#5495)
+        # in scripts/gh_helpers.sh.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_review_merge_train.py \
+            tests/test_gh_helpers_parse_reset_header.py \
+            tests/test_gh_retry_stdout_isolation.py
+
+      - name: Integration-ahead-by gate regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
 
       - name: Update workflows guardrails contract test
         run: |
@@ -1157,6 +1210,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
 
+      - name: Test-and-mark-stable test_repo allowlist contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_test_and_mark_stable_test_repo_allowlist.py
+
       - name: Test-and-mark-stable closed-PR single-fetch regression test
         run: |
           set -euo pipefail
@@ -1177,10 +1235,205 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phantom_review_run_filter.py
 
+      - name: Test-and-mark-stable git-config credential dump guard test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_no_git_config_value_dump.py
+
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
+      - name: Release CI gate tests (stubbed gh; both release workflows)
+        run: |
+          set -euo pipefail
+          # Security finding release-gate-ignores-actions-ci (#6797, Refs
+          # #6532): both stable-tag writers must require a successful
+          # github-actions `lint` check-run from ci.yml on the exact commit
+          # they release. Runs scripts/release_ci_gate.sh against a stub `gh`
+          # for every pass/fail path, then checks that both release jobs call
+          # the gate before any changelog push or tag write.
+          work="$(mktemp -d)"
+          trap 'rm -rf "${work}"' EXIT
+          mkdir -p "${work}/bin" "${work}/fx"
+          cat > "${work}/bin/gh" <<'STUB'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          fx="${RCG_TEST_FIXTURE_DIR:?}"
+          if [ -f "${fx}/fail" ]; then
+            echo "stub gh: forced failure" >&2
+            exit 1
+          fi
+          case "$*" in
+            *actions/workflows/ci.yml/runs*) cat "${fx}/runs.json" ;;
+            *check-runs*)
+              n=0
+              if [ -f "${fx}/counter" ]; then n="$(cat "${fx}/counter")"; fi
+              echo "$((n + 1))" > "${fx}/counter"
+              if [ -f "${fx}/checks.${n}.json" ]; then
+                cat "${fx}/checks.${n}.json"
+              else
+                cat "${fx}/checks.json"
+              fi
+              ;;
+            *) echo "stub gh: unexpected call: $*" >&2; exit 1 ;;
+          esac
+          STUB
+          chmod +x "${work}/bin/gh"
+
+          sha="$(printf 'a%.0s' $(seq 1 40))"
+          other_sha="$(printf 'b%.0s' $(seq 1 40))"
+          RCG_FX="${work}/fx" RCG_SHA="${sha}" RCG_OTHER="${other_sha}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RCG_FX"])
+          sha = os.environ["RCG_SHA"]
+          other = os.environ["RCG_OTHER"]
+          CI_RUN = {"head_sha": sha, "path": ".github/workflows/ci.yml", "check_suite_id": 100}
+
+
+          def check(run_id=1, status="completed", conclusion="success", head=sha, app="github-actions", suite=100, name="lint"):
+              return {"id": run_id, "name": name, "head_sha": head, "status": status,
+                      "conclusion": conclusion, "app": {"slug": app}, "check_suite": {"id": suite}}
+
+
+          def write(case, runs, checks, extra=None):
+              d = root / case
+              d.mkdir()
+              (d / "runs.json").write_text(json.dumps([{"workflow_runs": runs}]))
+              (d / "checks.json").write_text(checks if isinstance(checks, str) else json.dumps([{"check_runs": checks}]))
+              for name, body in (extra or {}).items():
+                  (d / name).write_text(body)
+
+
+          write("success", [CI_RUN], [check()])
+          write("success_ref_suffix", [dict(CI_RUN, path=".github/workflows/ci.yml@refs/heads/stable")], [check()])
+          write("missing", [], [])
+          write("pending", [CI_RUN], [check(status="in_progress", conclusion=None)])
+          write("cancelled", [CI_RUN], [check(conclusion="cancelled")])
+          write("failure", [CI_RUN], [check(conclusion="failure")])
+          write("timed_out", [CI_RUN], [check(conclusion="timed_out")])
+          write("skipped", [CI_RUN], [check(conclusion="skipped")])
+          write("gh_fail", [CI_RUN], [check()], {"fail": ""})
+          write("malformed_shape", [CI_RUN], json.dumps({"check_runs": [check()]}))
+          write("malformed_json", [CI_RUN], "not json")
+          write("non_actions_app", [CI_RUN], [check(app="evil-app")])
+          write("non_ci_suite", [CI_RUN], [check(suite=999)])
+          write("ci_run_other_sha", [dict(CI_RUN, head_sha=other)], [check()])
+          write("other_workflow", [dict(CI_RUN, path=".github/workflows/lint.yml")], [check()])
+          write("sha_mismatch", [CI_RUN], [check(head=other)])
+          write("newest_cancelled", [CI_RUN], [check(run_id=10), check(run_id=11, conclusion="cancelled")])
+          write("newest_success", [CI_RUN], [check(run_id=10, conclusion="failure"), check(run_id=11)])
+          write("pending_then_success", [CI_RUN], [check()],
+                {"checks.0.json": json.dumps([{"check_runs": [check(status="queued", conclusion=None)]}])})
+          PY
+
+          failures=0
+          run_case() {
+            # $1 case, $2 expected exit code, $3 expected output regex,
+            # remaining args: extra env assignments.
+            local case_name="$1" want_rc="$2" want_re="$3"
+            shift 3
+            local out rc=0
+            out="$(env PATH="${work}/bin:${PATH}" GH_RETRY_MAX_ATTEMPTS=1 \
+              RCG_TEST_FIXTURE_DIR="${work}/fx/${case_name}" \
+              RELEASE_CI_GATE_WAIT_SECS=0 RELEASE_CI_GATE_POLL_SECS=1 "$@" \
+              bash scripts/release_ci_gate.sh "${GATE_REPO:-owner/repo}" "${GATE_SHA:-${sha}}" 2>&1)" || rc=$?
+            # Flatten to one line so a pattern can span several log lines.
+            if [ "${rc}" -ne "${want_rc}" ] || ! grep -Eq "${want_re}" <<<"$(tr '\n' ' ' <<<"${out}")"; then
+              echo "::error::release CI gate case '${case_name}': rc=${rc} (want ${want_rc}), output does not match /${want_re}/"
+              printf '%s\n' "${out}"
+              failures=$((failures + 1))
+            else
+              echo "OK: ${case_name} (rc=${rc})"
+            fi
+          }
+
+          run_case success 0 'RELEASE_CI_GATE .*outcome=pass reason=success check_run_id=1 '
+          run_case success_ref_suffix 0 'outcome=pass reason=success'
+          run_case missing 1 'outcome=fail reason=wait_timeout .*last_state=missing'
+          run_case pending 1 'outcome=fail reason=wait_timeout .*status=in_progress .*last_state=pending'
+          run_case cancelled 1 'outcome=fail reason=conclusion_cancelled'
+          run_case failure 1 'outcome=fail reason=conclusion_failure'
+          run_case timed_out 1 'outcome=fail reason=conclusion_timed_out'
+          run_case skipped 1 'outcome=fail reason=conclusion_skipped'
+          run_case gh_fail 1 'outcome=fail reason=api_unreadable'
+          run_case malformed_shape 1 'outcome=fail reason=api_unreadable'
+          run_case malformed_json 1 'outcome=fail reason=api_unreadable'
+          run_case non_actions_app 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case non_ci_suite 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case ci_run_other_sha 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case other_workflow 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case sha_mismatch 1 'outcome=fail reason=sha_mismatch'
+          run_case newest_cancelled 1 'outcome=fail reason=conclusion_cancelled check_run_id=11 '
+          run_case newest_success 0 'outcome=pass reason=success check_run_id=11 '
+          run_case pending_then_success 0 'outcome=waiting reason=pending.*outcome=pass reason=success' \
+            RELEASE_CI_GATE_WAIT_SECS=5
+          run_case success 0 '::warning::RELEASE_CI_GATE RELEASE_CI_GATE_WAIT_SECS.*outcome=pass' \
+            RELEASE_CI_GATE_WAIT_SECS=abc
+          GATE_SHA="${sha:0:39}" run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_SHA="${other_sha^^}" run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_REPO='owner/repo;id' run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_REPO='../..' run_case success 2 'outcome=fail reason=invalid_input'
+
+          if [ "${failures}" -ne 0 ]; then
+            echo "::error::${failures} release CI gate case(s) failed."
+            exit 1
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          GATE = "Require CI / lint success on the tested commit"
+          # Built at runtime: a literal expression opener here would be
+          # evaluated by GitHub inside this run block.
+          EXPR_OPEN = "$" + "{" + "{"
+          errors = []
+          for wf in (".github/workflows/test-and-mark-stable.yml", ".github/workflows/mark-stable.yml"):
+              doc = yaml.safe_load(Path(wf).read_text(encoding="utf-8"))
+              job = doc["jobs"]["release"]
+              names = [step.get("name") for step in job["steps"]]
+              if GATE not in names:
+                  errors.append(f"{wf}: release job has no '{GATE}' step")
+                  continue
+              gate_index = names.index(GATE)
+              for earlier in ("Record the tested commit",):
+                  if earlier not in names or names.index(earlier) > gate_index:
+                      errors.append(f"{wf}: '{earlier}' must run before the gate")
+              for later in ("Assemble changelog fragments", "Tag version and update stable pointer", "Create GitHub Release"):
+                  if later not in names or names.index(later) < gate_index:
+                      errors.append(f"{wf}: '{later}' must run after the gate")
+              step = job["steps"][gate_index]
+              run = step.get("run", "")
+              if "scripts/release_ci_gate.sh" not in run or '"${RELEASE_TESTED_SHA}"' not in run:
+                  errors.append(f"{wf}: gate must run scripts/release_ci_gate.sh on the RELEASE_TESTED_SHA env value")
+              if EXPR_OPEN in run:
+                  errors.append(f"{wf}: gate run body must not contain workflow expressions; pass values through env")
+              if step.get("if") is not None or step.get("continue-on-error"):
+                  errors.append(f"{wf}: gate step must not be conditional or continue-on-error")
+              if "GH_TOKEN" not in (step.get("env") or {}):
+                  errors.append(f"{wf}: gate step must set GH_TOKEN")
+              perms = job.get("permissions") or {}
+              want = {"contents": "write", "checks": "read", "actions": "read"}
+              if any(perms.get(k) != v for k, v in want.items()):
+                  errors.append(f"{wf}: release job permissions must include {want}, got {perms}")
+          if errors:
+              for line in errors:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          print("OK: both release jobs gate on CI / lint before tagging")
+          PY
+
+      - name: Consumer secrets propagation contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
 
       - name: Soft-error report consolidator unit tests
         run: |
@@ -1250,6 +1503,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
 
       - name: Semantic cache unit tests
         run: |
@@ -1398,6 +1652,12 @@ jobs:
           done
 
           shard_failures=0
+          # One line per failed shard, printed after the loop (outside every
+          # ::group::) so the failing test names reach the log tail and the
+          # job annotations (#6889). Only names matching [A-Za-z0-9_] are
+          # printed, so test output cannot inject workflow commands here.
+          shard_failure_summaries=()
+          failed_shard_ids=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             # A shard with tests but no log died before its runner started, so
@@ -1405,6 +1665,8 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_summaries+=("orchestrate-poll shard ${shard} exit none failed tests: no log (tests did not run)")
+              failed_shard_ids+=("${shard}")
               continue
             fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
@@ -1419,9 +1681,50 @@ jobs:
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
               shard_failures=$((shard_failures + 1))
+              # `|| true`: under pipefail a grep with no match would abort the
+              # step before the tally below.
+              shard_failed_names="$(grep -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
+                | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | awk '!seen[$0]++' || true)"
+              if [ -z "${shard_failed_names}" ]; then
+                shard_failed_list="no FAIL lines (process failure)"
+              else
+                shard_failed_count="$(printf '%s\n' "${shard_failed_names}" | wc -l | tr -d '[:space:]')"
+                shard_failed_list="$(printf '%s\n' "${shard_failed_names}" | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
+                if [ "${shard_failed_count}" -gt 20 ]; then
+                  shard_failed_list="${shard_failed_list} (+$((shard_failed_count - 20)) more)"
+                fi
+              fi
+              shard_failure_summaries+=("orchestrate-poll shard ${shard} exit ${shard_rc} failed tests: ${shard_failed_list}")
+              failed_shard_ids+=("${shard}")
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
+            # Issue #6946 (triage of PR #6940): each shard log above sits in a
+            # collapsed group, so the log tail showed only the last shard's
+            # passing summary and never the failing test. Repeat each failed
+            # shard's FAIL lines and log tail here, after the last group.
+            # Copied log lines are prefixed so they cannot act as workflow
+            # commands; the annotation carries only [A-Za-z0-9_] test names.
+            echo "orchestrate-poll failed-shard summary (full shard logs are in the groups above):"
+            for failed_shard in "${failed_shard_ids[@]}"; do
+              failed_shard_log="/tmp/poll_shard_${failed_shard}.log"
+              if [ ! -f "${failed_shard_log}" ]; then
+                echo "  shard ${failed_shard}: no log; its tests did not run"
+                continue
+              fi
+              failed_test_names="$({ grep -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
+                | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | tr '\n' ' ')"
+              if [ -n "${failed_test_names// /}" ]; then
+                echo "::error::orchestrate-poll shard ${failed_shard} failing tests: ${failed_test_names% }"
+              fi
+              echo "  shard ${failed_shard}: FAIL lines (first 50):"
+              { grep -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
+              echo "  shard ${failed_shard}: last 20 log lines:"
+              tail -n 20 "${failed_shard_log}" | sed 's/^/    | /'
+            done
+            for shard_failure_summary in "${shard_failure_summaries[@]}"; do
+              echo "::error::${shard_failure_summary}"
+            done
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi

@@ -45,6 +45,13 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Mark linked issues review-blocked (workflow failure)": ("review_autofix_step_mark_review_blocked_workflow_failure.sh", "warning"),
 	"Post review-blocked comment on PR (workflow failure)": ("review_autofix_step_failure_comment.sh", "warning"),
 	"Record Claude pool capacity": ("review_autofix_step_claude_pool_capacity.sh", "warning"),
+	"Apply fixes with editor model": ("review_autofix_step_apply_fixes_editor.sh", "error"),
+	"Restore same-head partial resume state": ("review_autofix_step_restore_partial_resume.sh", "error"),
+	"Generate diff context": ("review_autofix_step_generate_diff_context.sh", "error"),
+	"Preflight: Verify required files before reviewer invocation": ("review_autofix_step_preflight_required_files.sh", "error"),
+	"Validate editor no-op disposition": ("review_autofix_step_editor_noop_disposition.sh", "error"),
+	"Stage codex logs for upload (failure or empty-editor)": ("review_autofix_step_stage_codex_logs.sh", "warning"),
+	"Initialize runtime workspace": ("review_autofix_step_init_runtime_workspace.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(

@@ -5,9 +5,12 @@ Some gaps only a person can close: a missing secret or credential, a
 repository variable to set, a release to tag, an operation the pipeline must
 never perform by itself. The pipeline does not stop for them. Activation
 verification (port P4) and the unblock judge's `operator_step` verdict record
-each one here instead, and the work it belongs to stays safely off (a feature
-flag that defaults off, or a placeholder env var named `*_UNSET_OPERATOR_STEP`)
-until the operator acts.
+each one here instead, and the new work it belongs to stays safely off (a
+feature flag that defaults off, or a placeholder env var named
+`*_UNSET_OPERATOR_STEP`) until the operator acts. The flag gates only the new
+code path; everything that already runs keeps running. The judge also lists a
+blocked fix-up of its own here (key `unblock-fixup-<n>`) instead of filing a
+fix-up for it.
 
 There is one open `ai:operator-step` issue per repository. Its body starts
 with `<!-- ai:operator-step:v1 -->`; each new entry is an immutable keyed
@@ -78,14 +81,35 @@ def _clean(value: object, limit: int = MAX_FIELD) -> str:
 	return text.strip()[:limit]
 
 
-def _gh(args: list[str]) -> str:
+def _gh(args: list[str], *, allow_existing_label: bool = False) -> str:
 	try:
 		result = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
 	except OSError as exc:
 		raise ApiError(f"gh {args[0] if args else ''} failed: {exc}") from exc
 	if result.returncode != 0:
+		if allow_existing_label and re.search(r"\blabel\b[^\r\n]*\balready[ _-]*exists\b|\balready_exists\b", result.stderr, re.IGNORECASE):
+			return ""
 		raise ApiError(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()[:300]}")
 	return result.stdout
+
+
+def _ensure_operator_label(repo: str) -> None:
+	# Read metadata from the same trusted support checkout as this writer, not the target repo.
+	contract_path = Path(__file__).resolve().parent.parent / ".github/ai/label_contract.v1.json"
+	try:
+		registration = json.loads(contract_path.read_text(encoding="utf-8"))["labels"][LABEL]
+	except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+		raise ApiError("operator-step label registration unavailable") from exc
+	if not isinstance(registration, dict):
+		raise ApiError("invalid operator-step label registration")
+	color = registration.get("color")
+	description = registration.get("description")
+	if (not isinstance(color, str) or not re.fullmatch(r"[0-9a-fA-F]{6}", color)
+		or not isinstance(description, str) or not description or len(description) > 100
+		or not description.isprintable()):
+		raise ApiError("invalid operator-step label registration")
+	_gh(["label", "create", LABEL, "--repo", repo, "--color", color,
+		"--description", description], allow_existing_label=True)
 
 
 def _trusted(issue: dict) -> bool:
@@ -207,12 +231,7 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 					time.sleep(2 ** _upsert_attempt)
 					continue
 				raise ApiError("operator-step tracker listing did not converge after creation")
-			try:
-				_gh(["api", f"repos/{repo}/labels/ai%3Aoperator-step"])
-			except ApiError as exc:
-				if "HTTP 404" not in str(exc):
-					raise
-				_gh(["api", f"repos/{repo}/labels", "-f", f"name={LABEL}", "-f", "color=fbca04", "-f", "description=Steps only a person can take; the pipeline continues and the gated work stays off until they are done"])
+			_ensure_operator_label(repo)
 			try:
 				created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={render_body([])}", "-f", f"labels[]={LABEL}"]) or "{}")
 			except ValueError as exc:

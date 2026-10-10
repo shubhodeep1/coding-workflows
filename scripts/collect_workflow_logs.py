@@ -296,6 +296,11 @@ def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
         "created_at",
         "run_started_at",
         "updated_at",
+        # Origin fields (issue #6637): kept so the HTTP 304 snapshot path can
+        # still classify fork-origin runs. head_repository stays the raw
+        # API object, the shape _run_origin_trust reads.
+        "event",
+        "head_repository",
     )
     snapshot = {key: run.get(key) for key in keys}
     snapshot["_workflow_family"] = run.get("_workflow_family")
@@ -801,6 +806,7 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
         "failure",
         "not_selected",
         "cached",
+        "excluded_untrusted_origin",
     }:
         run["log_download_status"] = "not_selected"
     if not isinstance(run.get("observed_job_conclusions"), list):
@@ -825,6 +831,84 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
         run["diagnostic_failure_reason"] = _bound_diagnostic_reason_parts(normalized_parts)
     run["workflow_validation_annotations_status"] = WORKFLOW_VALIDATION_ANNOTATIONS_STATUS
     return run
+
+
+def _run_head_repository_name(run_payload: dict[str, Any]) -> str | None:
+    head_repository = run_payload.get("head_repository")
+    if isinstance(head_repository, dict):
+        full_name = head_repository.get("full_name")
+        if isinstance(full_name, str) and full_name.strip():
+            return full_name.strip()
+    return None
+
+
+def _run_origin_trust(run_payload: dict[str, Any], repository: str) -> str:
+    """Classify a raw API run payload as trusted, fork or origin_unknown.
+
+    Issue #6637: a fork PR controls the text in its CI logs and its own
+    workflow's job/step names. Such text must never reach the log-analysis
+    model. Runs without origin data whose event is a pull_request variant (or
+    missing, e.g. older cache snapshots) fail closed as origin_unknown.
+    """
+    head_name = _run_head_repository_name(run_payload)
+    if head_name is not None:
+        if head_name.lower() != str(repository or "").strip().lower():
+            return "fork"
+        return "trusted"
+    event = run_payload.get("event")
+    event_text = str(event).strip() if event is not None else ""
+    if not event_text or event_text.startswith("pull_request"):
+        return "origin_unknown"
+    return "trusted"
+
+
+# Fixed family vocabulary from normalize_workflow_family. A family outside it
+# is derived from the workflow file stem, which a fork PR can choose.
+_FIXED_WORKFLOW_FAMILIES = frozenset({
+    "orchestrate_clarify_respond", "orchestrate_poll", "issue_pr_status", "cancel_on_pr_close",
+    "memory_maintenance", "review_autofix", "validate", "clarify", "plan", "implement",
+    "orchestrate", "ci", "workflow_log_analysis", "other",
+})
+
+
+def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
+    """Strip log-derived and fork-controlled text from an untrusted-origin row.
+
+    Run metadata (conclusion, status, retries, durations, timestamps, job
+    conclusions) is kept so report totals stay unchanged. The workflow name,
+    workflow path and head-repository name are cleared too: a fork PR's own
+    workflow file sets the first two and the fork owner names the third.
+    Returns True when the row was excluded.
+    """
+    if row.get("origin_trust", "trusted") == "trusted":
+        return False
+    row["log_download_status"] = "excluded_untrusted_origin"
+    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs"):
+        row.pop(key, None)
+    row["failure_point"] = {"job_name": None, "step_name": None}
+    row["workflow_name"] = None
+    row["workflow_path"] = None
+    row["head_repository"] = None
+    if row.get("workflow_family") not in _FIXED_WORKFLOW_FAMILIES:
+        row["workflow_family"] = "other"
+    _set_diagnostic_failure_reason(row, "logs", None)
+    return True
+
+
+def _stamp_run_origin(row: dict[str, Any], run_payload: dict[str, Any], repository: str) -> None:
+    """Stamp origin fields from the live run payload and exclude untrusted rows."""
+    row["event"] = run_payload.get("event")
+    row["head_repository"] = _run_head_repository_name(run_payload)
+    row["origin_trust"] = _run_origin_trust(run_payload, repository)
+    if _apply_untrusted_origin_exclusion(row):
+        # Only repository, run id and reason: no log text, workflow name or
+        # head-repository name, which a fork author controls (the row has
+        # those fields cleared by _apply_untrusted_origin_exclusion too).
+        print(
+            f"WORKFLOW_LOG_FORK_EXCLUDED repository={_sanitize_diagnostic_text(repository)} "
+            f"run_id={_to_int(row.get('run_id'), 0)} reason={row['origin_trust']}",
+            file=sys.stderr,
+        )
 
 
 def _sanitize_missing_log_archive_detail(detail: str) -> str:
@@ -1042,6 +1126,10 @@ def compute_run_metrics(
     }
     if diagnostic_failure_reason is not None:
         _set_diagnostic_failure_reason(row, "jobs", diagnostic_failure_reason)
+    row["event"] = run.get("event")
+    row["head_repository"] = _run_head_repository_name(run)
+    row["origin_trust"] = _run_origin_trust(run, repository)
+    _apply_untrusted_origin_exclusion(row)
     return row
 
 
@@ -1139,10 +1227,18 @@ def _run_identity(run: dict[str, Any]) -> tuple[str, int]:
 
 
 def _eligible_runs_for_log_selection(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Issue #6637: untrusted-origin runs (fork PRs, unknown PR origin) never
+    # feed log download, excerpts, or the categorized export. Rows without an
+    # origin stamp are treated as trusted; every production row is stamped
+    # in main().
     return [
         run
         for run in runs
-        if isinstance(run, dict) and bool(run.get("repository")) and _to_int(run.get("run_id"), 0) > 0
+        if isinstance(run, dict)
+        and bool(run.get("repository"))
+        and _to_int(run.get("run_id"), 0) > 0
+        and run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
     ]
 
 
@@ -1381,11 +1477,20 @@ def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
-def _structured_cost_telemetry_line_key(line: str) -> str | None:
+def _foreign_mcp_telemetry_line(line: str, run_key: str | None) -> bool:
+    if not run_key or not re.search(r"(?:^|\s)(?:SEMBLE|SERENA)_(?:QUERY|FALLBACK|BOOTSTRAP|PROBE)(?:\s|$)", line):
+        return False
+    run_match = re.search(r"(?:^|\s)run=([^\s]+)", line)
+    return run_match is not None and run_match.group(1) != run_key
+
+
+def _structured_cost_telemetry_line_key(line: str, run_key: str | None = None) -> str | None:
     if not isinstance(line, str):
         return None
     line_text = line.rstrip()
     if not line_text:
+        return None
+    if _foreign_mcp_telemetry_line(line_text, run_key):
         return None
     if (
         validated_mcp_telemetry_event(line_text) is not None
@@ -1429,7 +1534,7 @@ def _step_name_has_descendant_match(step_name: str, candidate_step_names: set[st
     return False
 
 
-def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]]) -> list[dict[str, str]]:
+def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]], run_key: str | None = None) -> list[dict[str, str]]:
     if not isinstance(full_logs, list):
         return []
 
@@ -1445,7 +1550,7 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
         if not content:
             continue
         for line in content.splitlines(keepends=True):
-            line_key = _structured_cost_telemetry_line_key(line)
+            line_key = _structured_cost_telemetry_line_key(line, run_key)
             if line_key is None:
                 continue
             structured_line_step_names.setdefault(line_key, set()).add(step_name)
@@ -1460,7 +1565,9 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
 
         filtered_lines: list[str] = []
         for line in content.splitlines(keepends=True):
-            line_key = _structured_cost_telemetry_line_key(line)
+            if _foreign_mcp_telemetry_line(line, run_key):
+                continue
+            line_key = _structured_cost_telemetry_line_key(line, run_key)
             if line_key is not None and _step_name_has_descendant_match(
                 step_name,
                 structured_line_step_names.get(line_key, set()),
@@ -1475,8 +1582,8 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
     return deduped_full_logs
 
 
-def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]]) -> str:
-    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs))
+def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]], run_key: str | None = None) -> str:
+    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs, run_key))
 
 
 def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
@@ -1487,10 +1594,19 @@ def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
 
 
 def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    run_id = run.get("run_id")
+    run_attempt = run.get("run_attempt")
+    run_key = f"{run_id}-{run_attempt}" if type(run_id) is int and run_id > 0 and type(run_attempt) is int and run_attempt > 0 else None
     telemetry = build_run_cost_telemetry(
-        _cost_telemetry_text_from_full_logs(full_logs),
+        _cost_telemetry_text_from_full_logs(full_logs, run_key),
         fallback_wall_clock_ms=_run_wall_clock_ms(run),
+        run_key=run_key,
     )
+    if run_key:
+        telemetry["semble_echo_lines_dropped"] += sum(
+            _foreign_mcp_telemetry_line(line, run_key)
+            for step in full_logs for line in str(step.get("content") or "").splitlines()
+        )
     run["cost_telemetry"] = telemetry
 
 
@@ -1527,6 +1643,9 @@ def build_pat_budget_report(
     eligible = [
         run for run in runs
         if _to_int(run.get("run_id"), 0) > 0
+        # Issue #6637: never fetch a fork-origin or unknown-origin run's archive.
+        and run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
         and any(
             re.search(r"(?:^|/)\.github/workflows/" + re.escape(filename) + r"(?:@.*)?$", str(run.get("workflow_path") or ""))
             for filename in PAT_BUDGET_WORKFLOWS
@@ -1856,7 +1975,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 used_cached_runs = bool(run_meta.get("not_modified"))
                 if used_cached_runs:
-                    if cached_runs_snapshot:
+                    # Issue #6637: snapshots cached before the origin fields
+                    # were added lack "event"; reusing them would mark every
+                    # trusted run origin_unknown for as long as the ETag
+                    # matches. Refetch once without the ETag instead.
+                    if cached_runs_snapshot and all("event" in item for item in cached_runs_snapshot):
                         runs = [dict(item) for item in cached_runs_snapshot]
                     else:
                         runs, capped, run_meta = list_runs_for_repo(
@@ -1910,11 +2033,18 @@ def main(argv: list[str] | None = None) -> int:
                 row_copy = _ensure_run_diagnostics(dict(reused_row))
                 if (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                     row_copy["jobs_fetch_status"] = "cached"
+                # Re-stamp origin from the live run, never from the cached row,
+                # so a fork row cached before #6637 cannot re-emit its excerpts.
+                _stamp_run_origin(row_copy, run, repo)
                 cached_log_data_available = (
                     _cached_log_excerpts(row_copy) is not None
                     and _cached_cost_telemetry(row_copy) is not None
                 )
-                if cached_log_data_available:
+                if row_copy.get("origin_trust") != "trusted":
+                    # Excluded: _stamp_run_origin already stripped the log data
+                    # and set log_download_status=excluded_untrusted_origin.
+                    pass
+                elif cached_log_data_available:
                     row_copy["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(row_copy, "logs", None)
                 elif row_copy.get("log_download_status") not in {
@@ -1969,6 +2099,7 @@ def main(argv: list[str] | None = None) -> int:
                 jobs_fetch_status=jobs_fetch_status,
                 diagnostic_failure_reason=jobs_failure_reason,
             )
+            _stamp_run_origin(row, run, repo)
             run_rows.append(row)
             collected_rows_for_repo.append(dict(row))
 
