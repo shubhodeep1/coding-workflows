@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:Whole file | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The live hook reportedly differs from its template, causing the template-parity test and aggregate lint check to fail.\n  WHY: The reviewer rates this BLOCKER; other reviewers report that the live hook and template are now synchronized.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Sync the live .claude/hooks/gh_api_write_guard.py with the template.\"\n  expected_change_site: .claude/hooks/gh_api_write_guard.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The live file `.claude/hooks/gh_api_write_guard.py` reportedly lacks the three hunks added to the template in `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\n- requirement: \"Declare it wherever the #5174 guard differential check expects intended loosenings once that is on the base branch, and give the reason there.\"\n  expected_change_site: wherever the #5174 guard differential check reads its intended-loosenings table (not located in the repo search)\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk adds a #5174 declaration site; the issue makes this conditional (\"once that is on the base branch\") and a repo search finds no #5174 differential-check file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py:Whole file | severity=BLOCKER | confidence=5\n  PROBLEM: Parity mismatch between live hook and template.\n  WHY: CI test `test_live_copies_match_their_templates` fails because the live hook lacks the changes applied to `workflow-templates/.claude/hooks/gh_api_write_guard.py`. This mismatch also causes the aggregate `lint` check to fail.\n- Requirement: \"Sync the live .claude/hooks/gh_api_write_guard.py with the template.\"\n  Expected change site: .claude/hooks/gh_api_write_guard.py\n  Evidence of absence: The live file `.claude/hooks/gh_api_write_guard.py` lacks the three hunks added to the template in `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Declare it wherever the #5174 guard differential check expects intended loosenings once that is on the base branch, and give the reason there.\"\n  Expected change site: wherever the #5174 guard differential check reads its intended-loosenings table (not located in the repo search)\n  Evidence of absence: No diff hunk adds a #5174 declaration site. The issue makes this conditional (\"once that is on the base branch\") and a repo search finds no #5174 differential-check file. The changelog fragment at changelog.d/6668-gh-api-guard-bare-help.md already declares the intended loosening and cites operator decision Q1: A as the reason. Previous editor passes deferred this same gap for the same reason.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "82f3ab016e2f28e00699f77a56210b87bd1df4a40de9f8db8eeb90a2505cb867",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6674,
+    "run_id": "38076683529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38076683529",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010185839_002b65a627",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6674,
+    "run_id": "38076683529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T18:58:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
