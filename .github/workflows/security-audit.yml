@@ -65,6 +65,37 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Resolve trusted audit support commit
         id: resolve_support
         env:
@@ -73,6 +104,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
           source_ref='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@refs/heads/[^[:space:]]+$'
@@ -88,7 +121,7 @@ jobs:
           if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
             # The event/workflow SHA can follow a dispatched source branch.
             # No earlier step has read the protected main branch in this job.
-            if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
+            if ! support_main_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)" ||
                ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
               echo "::error::Security audit support main branch is not confirmed protected."
               exit 1
@@ -99,14 +132,14 @@ jobs:
           else
             # No existing lookup in this job resolves the release tag. A
             # commits/stable read is ambiguous when a branch shares its name.
-            if ! support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
+            if ! support_tag_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
               echo "::error::Security audit support stable tag is unavailable."
               exit 1
             fi
             support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
             support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-              if ! support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
+              if ! support_tag_json="$(gh_api_retry "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
                 echo "::error::Security audit support annotated tag is unavailable."
                 exit 1
               fi
@@ -156,6 +189,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           audit_branch="${AUDIT_TARGET_REF_INPUT:-${AUDIT_DEFAULT_BRANCH}}"
           if [ -z "${AUDIT_DEFAULT_BRANCH}" ] ||
              ! git check-ref-format --branch "${AUDIT_DEFAULT_BRANCH}" >/dev/null 2>&1 ||
@@ -173,7 +208,7 @@ jobs:
             # No other read supplies this head. Require a heads/ ref, never a
             # tag or prefix match; URL-encode even valid slash-bearing names.
             encoded_branch="$(jq -nr --arg ref "${audit_branch}" '$ref | @uri')"
-            if ! audit_ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${encoded_branch}")"; then
+            if ! audit_ref_json="$(gh_api_retry "repos/${GITHUB_REPOSITORY}/git/ref/heads/${encoded_branch}")"; then
               echo "::error::Security audit branch head is unavailable."
               exit 1
             fi

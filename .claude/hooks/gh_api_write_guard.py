@@ -23,6 +23,8 @@ otherwise) and classifies the call:
              A complete double-quoted `$(gh api ...)` REST read is also
              approvable in an `echo` argument, including a #4786 literal-ID
              loop whose variable occurs only in the endpoint path.
+             A bare `gh api --help` or `gh api -h` (no other argument)
+             only prints usage, so it is a read too.
   routine  — a CLAUDE.md §23.B write to the repository of the local checkout
              (or the `{owner}/{repo}` placeholders): create a PR, edit a PR's
              or issue's title/body, add or edit an issue/PR comment, reply to a
@@ -173,6 +175,19 @@ _BOOL_FLAGS = frozenset(
 	{"-i", "--include", "--paginate", "--silent", "--slurp", "--verbose", "--allow-escape-sequences"}
 )
 _SHORT_VALUE_FLAGS = frozenset(flag for flag in _VALUE_FLAGS if len(flag) == 2)
+
+# `gh api --help` / `gh api -h` with no other argument only prints usage and
+# sends no API request, so it is a read. Any other argument beside it (an
+# endpoint, a flag, `--`) keeps the call unreadable, so it still asks: the
+# guard does not rely on gh ignoring the rest (operator decision 2026-09-30,
+# Q1: A; issue #6668).
+_BARE_HELP_ARGS = frozenset({("--help",), ("-h",)})
+
+
+def _is_bare_gh_api_help(args: list[str]) -> bool:
+	"""True when the `gh api` arguments are exactly `--help` or exactly `-h`."""
+	return tuple(args) in _BARE_HELP_ARGS
+
 
 # A `-q` / `--jq` value that is one of jq's own command-line options
 # (`--arg`, `-r`, `--raw-output`, `-c`, ...), not a jq program. `gh api` has no
@@ -1485,6 +1500,9 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	results: list[tuple[str, str]] = []
 	malformed_jq_values: list[str] = []
 	for args in invocations:
+		if _is_bare_gh_api_help(args):
+			results.append((KIND_READ, f"usage text `gh api {args[0]}` (prints help, sends no API request)"))
+			continue
 		try:
 			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
 		except MalformedJq as exc:
