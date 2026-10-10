@@ -560,7 +560,7 @@ def run(argv: list[str] | None = None) -> dict:
 		return {"ops": regrant_ops(ctx, rejection.get("run", ""), rejection.get("paths") or [])}
 	if args.command == "fixup-escalate":
 		return {"ops": fixup_escalate_ops(ctx, args.origin)}
-	verdict =_read_json(args.verdict_file, "--verdict-file")
+	verdict = _read_json(args.verdict_file, "--verdict-file")
 	if not isinstance(verdict, dict):
 		raise UsageError("--verdict-file must hold a JSON object")
 	return {"ops": plan(verdict, ctx)}

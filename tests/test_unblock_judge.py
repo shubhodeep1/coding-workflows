@@ -2292,6 +2292,18 @@ def test_judge_escalates_a_blocked_fixup_instead_of_filing_another(tmp_path: Pat
 	assert entry["body"].startswith("<!-- ai:operator-step:entry key=unblock-fixup-7 -->")
 
 
+def test_judge_escalates_a_blocked_project_fixup_with_a_leading_blank_line(tmp_path: Path) -> None:
+	# The poller files a project fix-up from the request comment's lines[2:],
+	# so its body starts with the blank separator before the marker.
+	item = {"number": 7, "state": "open", "title": "Unblock operator step for #6548", "body": "\n" + FIXUP_BODY,
+		"user": {"login": BOT}, "labels": [{"name": "ai:blocked"}]}
+	result, state = _judge(tmp_path, item, [PLAN_COMMENT], verdict={"verdict": "descope", "reason": "r", "instructions": "x"},
+		FAKE_GH_OPERATOR_TRACKER="1")
+	assert "origin=6548 outcome=escalated reason=fixup_blocked" in result.stdout, result.stdout
+	assert state["created"] == []
+	assert "verdict=descope" not in result.stdout
+
+
 def test_failed_fixup_escalation_posts_no_marker_and_no_warning(tmp_path: Path) -> None:
 	item = {"number": 7, "state": "open", "title": "t", "body": FIXUP_BODY, "user": {"login": BOT}, "labels": [{"name": "ai:blocked"}]}
 	result, state = _judge(tmp_path, item, [PLAN_COMMENT], FAKE_GH_FAIL_OPERATOR="1")

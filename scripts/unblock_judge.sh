@@ -501,13 +501,14 @@ unblock_try_regrant()
 }
 
 # A blocked fix-up the judge filed for another item (Q56): the trusted fix-up
-# marker on the first line of an issue the pipeline login authored. Prints the
-# original item number.
+# marker on the first non-blank line of an issue the pipeline login authored
+# (a project fix-up the poller files from a request comment starts with a
+# blank line). Prints the original item number.
 unblock_fixup_origin()
 {
 	jq -r --arg login "${UNBLOCK_LOGIN}" '
 		select((.user.login // "") == $login)
-		| (.body // "") | split("\n") | first // "" | rtrimstr("\r")
+		| (.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // ""
 		| capture("^<!-- ai:unblock-fixup:v1 item=(?<item>[1-9][0-9]*) round=[1-9][0-9]* -->$")? | .item
 	' "${RUNTIME_DIR}/item.json" 2>/dev/null || true
 }
