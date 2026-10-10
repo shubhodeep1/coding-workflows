@@ -5,13 +5,27 @@
   "entry_id": "processed_command_7099_6100662144_approved",
   "issue_number": 7099,
   "metadata": {
+    "branch": "ai/issue-7099",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "agents.d/7099-provider-outage-activation-gaps.md",
+      "changelog.d/7099-provider-outage-activation-gaps.md",
+      "scripts/label_helpers.sh",
+      "tests/test_review_autofix_provider_outage_contract.py",
+      "workflow-templates/ai-review.yml"
+    ],
+    "issue_number": 7099,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7099",
+    "pr_number": 7101,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7101",
+    "run_attempt": "1",
+    "run_id": "38074981682",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38074981682"
   },
   "run_attempt": 1,
   "run_id": "38074981682",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-10T18:17:04Z",
+  "status": "completed",
+  "timestamp": "2026-10-10T18:43:49Z",
   "workflow": "implement"
 }
