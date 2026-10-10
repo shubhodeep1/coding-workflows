@@ -65,6 +65,12 @@ verdict, 2 unreadable input):
       and print the normalised verdict.
   rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
       Find the latest trusted, unused guard rejection on the blocked item.
+  protected-rejection --item <n> --comments-file <path> --trusted-login <login>
+      Find whether the newest trusted guard comment on the item is an
+      automation-path grant rejection, and whether a trusted operator-handoff
+      hold marker (<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff
+      run=<r> -->) already follows it. Read-only: it never makes
+      `override_guard` available (UNBLOCK_PROTECTED_HANDOFF_ENABLED, #7060).
   marker --item <n> --stop <id> --fingerprint <fp> --verdict <v> --round <k>
          [--override bulk_delete]
       The marker line to end the verdict comment with.
@@ -175,6 +181,23 @@ REJECTION_RE = re.compile(
 	r"^<!-- ai:guard-rejection:v1 item=(?P<item>[1-9][0-9]*) guard=(?P<guard>scope|scope-lock|destructive) "
 	r"reason=(?P<reason>[a-z-]+) run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) "
 	r"truncated=(?P<truncated>true|false) paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
+)
+# The automation-path grant guard's marker (scripts/implement_handle_guard_block.sh).
+# Deliberately separate from REJECTION_RE: an automation-path rejection must
+# never feed override_guard eligibility; it only drives the operator handoff.
+AUTOMATION_PATH_REJECTION_RE = re.compile(
+	r"^<!-- ai:guard-rejection:v1 item=(?P<item>[1-9][0-9]*) guard=automation-path reason=automation-path "
+	r"run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) truncated=(?P<truncated>true|false) "
+	r"paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
+)
+OPERATOR_HANDOFF_RE = re.compile(
+	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) reason=operator_handoff run=(?P<run>[0-9]+) -->$"
+)
+GUARD_REJECTION_HEADERS = (
+	"🚨 **files_touched scope guard rejected this implementation run.**",
+	"🚨 **Issue scope-lock rejected this implementation run.**",
+	"🚨 **Automation-path grant guard rejected this implementation run.**",
+	"🚨 **Destructive-commit guard rejected this implementation run.**",
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 
@@ -340,12 +363,7 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 			newest_verdict_index = index
 		if rejection_item and int(rejection_item.group(1)) == item:
 			newest_rejection = (index, match, comment)
-		elif lines[0] in (
-			"🚨 **files_touched scope guard rejected this implementation run.**",
-			"🚨 **Issue scope-lock rejected this implementation run.**",
-			"🚨 **Automation-path grant guard rejected this implementation run.**",
-			"🚨 **Destructive-commit guard rejected this implementation run.**",
-		):
+		elif lines[0] in GUARD_REJECTION_HEADERS:
 			# A later handler that could not encode its marker must not leave
 			# an older, otherwise-valid rejection available for override.
 			newest_rejection = (index, None, comment)
@@ -365,24 +383,82 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 	if match.group("truncated") == "true":
 		return {"status": "none", "reason": "truncated"}
 	try:
-		encoded = match.group("paths")
-		if len(encoded) > 512000:
-			raise ValueError("oversized rejection")
-		paths = json.loads(base64.b64decode(encoded, validate=True))
-		count = int(match.group("count"))
-		if not isinstance(paths, list) or not 0 < count < 100 or len(paths) != count:
-			raise ValueError("invalid rejection count")
-		if not all(isinstance(path, str) for path in paths):
-			raise ValueError("invalid rejection path")
-		cleaned = [_clean_path(path) for path in paths]
-		if len(set(cleaned)) != len(cleaned):
-			raise ValueError("duplicate rejection path")
+		cleaned = _decode_rejection_paths(match.group("paths"), int(match.group("count")), 99)
 	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
 		return {"status": "none", "reason": "malformed"}
 	return {
 		"status": "ok", "guard": match.group("guard"), "reason": match.group("reason"),
 		"run": match.group("run"), "paths": cleaned, "comment_id": comment.get("id"),
 		"created_at": comment.get("created_at", ""),
+	}
+
+
+def _decode_rejection_paths(encoded: str, count: int, max_count: int) -> list[str]:
+	"""Decode a guard-rejection marker's base64 path list; raise ValueError/UsageError when invalid."""
+	if len(encoded) > 512000:
+		raise ValueError("oversized rejection")
+	paths = json.loads(base64.b64decode(encoded, validate=True))
+	if not isinstance(paths, list) or not 0 < count <= max_count or len(paths) != count:
+		raise ValueError("invalid rejection count")
+	if not all(isinstance(path, str) for path in paths):
+		raise ValueError("invalid rejection path")
+	cleaned = [_clean_path(path) for path in paths]
+	if len(set(cleaned)) != len(cleaned):
+		raise ValueError("duplicate rejection path")
+	return cleaned
+
+
+def latest_protected_rejection(comments: object, trusted_login: str, item: int) -> dict:
+	"""The newest trusted guard comment on the item, when it is an automation-path rejection.
+
+	Unlike latest_rejection, a later verdict marker does not make the rejection
+	stale: the handoff only removes the automatic fix-up. `handoff_pending` is
+	true when a trusted operator-handoff hold marker follows the rejection.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest_guard = None
+	newest_handoff_index = -1
+	untrusted = False
+	for index, comment in enumerate(comments):
+		if not isinstance(comment, dict):
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		line = lines[-1]
+		rejection_item = re.match(r"^<!-- ai:guard-rejection:v1 item=([1-9][0-9]*)\b", line)
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		login = user.get("login") or comment.get("author_login") or ""
+		if login != trusted_login:
+			if rejection_item and int(rejection_item.group(1)) == item:
+				untrusted = True
+			continue
+		handoff = OPERATOR_HANDOFF_RE.fullmatch(line)
+		if handoff and int(handoff.group("item")) == item:
+			newest_handoff_index = index
+		elif rejection_item and int(rejection_item.group(1)) == item:
+			newest_guard = (index, AUTOMATION_PATH_REJECTION_RE.fullmatch(line), comment, line)
+		elif lines[0] in GUARD_REJECTION_HEADERS:
+			newest_guard = (index, None, comment, line)
+	if newest_guard is None:
+		return {"status": "none", "reason": "untrusted" if untrusted else "missing"}
+	index, match, comment, line = newest_guard
+	if match is None:
+		if line.startswith("<!-- ai:guard-rejection:v1 ") and " guard=automation-path " in line:
+			return {"status": "none", "reason": "malformed"}
+		return {"status": "none", "reason": "superseded"}
+	if int(match.group("item")) != item:
+		return {"status": "none", "reason": "malformed"}
+	try:
+		cleaned = _decode_rejection_paths(match.group("paths"), int(match.group("count")), 100)
+	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
+		return {"status": "none", "reason": "malformed"}
+	return {
+		"status": "ok", "guard": "automation-path", "reason": "automation-path",
+		"run": match.group("run"), "paths": cleaned, "truncated": match.group("truncated") == "true",
+		"comment_id": comment.get("id"), "created_at": comment.get("created_at", ""),
+		"handoff_pending": newest_handoff_index > index,
 	}
 
 
@@ -707,6 +783,10 @@ def build_parser() -> argparse.ArgumentParser:
 	rejection_cmd.add_argument("--stop", required=True)
 	rejection_cmd.add_argument("--comments-file", required=True)
 	rejection_cmd.add_argument("--trusted-login", required=True)
+	protected_cmd = sub.add_parser("protected-rejection")
+	protected_cmd.add_argument("--item", required=True)
+	protected_cmd.add_argument("--comments-file", required=True)
+	protected_cmd.add_argument("--trusted-login", required=True)
 	marker_cmd = sub.add_parser("marker")
 	marker_cmd.add_argument("--item", required=True)
 	marker_cmd.add_argument("--stop", required=True)
@@ -735,6 +815,11 @@ def run(argv: list[str] | None = None) -> dict:
 			raise UsageError("--trusted-login is not a GitHub login")
 		return latest_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
 			_check_item(args.item), _check_stop(args.stop))
+	if args.command == "protected-rejection":
+		if not LOGIN_RE.fullmatch(args.trusted_login):
+			raise UsageError("--trusted-login is not a GitHub login")
+		return latest_protected_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
+			_check_item(args.item))
 	if args.command == "decide":
 		if not LOGIN_RE.match(args.trusted_login):
 			raise UsageError(f"--trusted-login is not a GitHub login: {args.trusted_login!r}")
