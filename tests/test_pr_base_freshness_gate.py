@@ -583,6 +583,12 @@ class FreshnessSyncWiring(unittest.TestCase):
 		block = text.split("gate_freshness_sync_fast_path()", 1)[1].split("# Size check uses", 1)[0]
 		self.assertIn('bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}"', block)
 		self.assertIn('[ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1', block)
+		# The skip job runs no conflict resolver and no single-issue security
+		# pass, so both suppressors apply before any API call.
+		fast_path = block.split("if [ \"${FORCE_REVIEW}\" = \"true\" ]; then", 1)[0]
+		self.assertIn('reason=merge_conflict pr=${PR_NUMBER}', fast_path)
+		self.assertIn('reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync', fast_path)
+		self.assertLess(fast_path.index("reason=single_issue_security_pass"), fast_path.index("gate_fetch_marker_comments"))
 		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
 		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
 			self.assertIn(line, branch)

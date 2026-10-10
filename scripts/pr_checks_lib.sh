@@ -738,13 +738,18 @@ _pr_base_sync_marker_post()
 	local pr_number="$1" head_sha="$2" sync_number="$3" sync_max="$4"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body
+	local overlap_label="${PR_BASE_FRESHNESS_OVERLAP:-shared paths}"
+	# Keep the comment far below GitHub's 65,536-character body limit.
+	[ "${#overlap_label}" -le 2000 ] || overlap_label="${overlap_label:0:2000}, ..."
 	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha:-unknown} outcome=skipped reason=short_head_sha"
 		return 0
 	fi
 	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s of at most %s).\n\n`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first. This head was already approved for merge: the next review run only waits for CI on the updated head and then merges, without running the reviewers again. Once %s updates have happened, a green CI run on the latest head merges without another update.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s -->' \
-		"${base_label}" "${sync_number}" "${sync_max}" "${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${PR_BASE_FRESHNESS_OVERLAP:-shared paths}" "${sync_max}" "${pr_number}" "${head_sha}" "${sync_number}")"
-	if gh_retry _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
+		"${base_label}" "${sync_number}" "${sync_max}" "${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}" "${sync_max}" "${pr_number}" "${head_sha}" "${sync_number}")"
+	# One attempt only: a retried POST whose first response was lost would
+	# post a duplicate marker and exhaust the update cap early.
+	if _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
 		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=posted"
 	else
 		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"

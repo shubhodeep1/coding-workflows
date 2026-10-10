@@ -1308,6 +1308,21 @@ jobs:
               [ "${MERGE_BASE_SYNC_FAST_PATH_ENABLED:-true}" != "false" ] || return 1
               [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
               [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
+              # Same suppressors as the doc-only / small-diff skip: the skip
+              # job runs no conflict resolver and no single-issue security
+              # pass, and the updated head has no audit of its own.
+              if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
+                return 1
+              fi
+              if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+                && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
+                && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
+                && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
+                && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
+                return 1
+              fi
               gate_fetch_marker_comments
               [ "${gate_marker_fetch_state}" = "ok" ] || return 1
               bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
