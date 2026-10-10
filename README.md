@@ -1766,7 +1766,11 @@ through `clarify → plan → implement → review`.
   on a push to the default branch (`MAIN_CI_WORKFLOW_NAMES` in
   `scripts/workflow_failure_heal.py`). A red `main` fails every PR's CI, so the
   heal issue targets `main`, the failed run's branch. Pull-request CI failures
-  are skipped here; check-failure triage takes them. Fix PRs for all
+  are skipped here; check-failure triage takes them.
+- **Trigger (scheduled self-checks):** the same path for a failed
+  `Nightly Validation Self-Test` run on the default branch
+  (`SCHEDULED_CHECK_WORKFLOW_NAMES`), which carries the daily validation
+  harness sandbox check; runs on other branches are skipped. Fix PRs for all
   `ai:workflow-heal` issues into the default branch require a head-bound
   security audit, including release-workflow heal issues. A promote or
   auto-release run that failed only because the smoke gate failed is skipped
@@ -3620,6 +3624,8 @@ The refresh runner ALSO runs codex-driven discovery against each consumer's clon
 - The same run updates committed status file `analysis/validation-selftest-status.json` via `scripts/validation_selftest_status.py`.
 - Track `consecutive_green_runs`, `latest_run.overall_status`, `latest_run.generated_at`, and `latest_run.totals.{fixtures,passed,failed}`.
 - Streak semantics: a new passing run increments `consecutive_green_runs`; a failing run resets it to `0`; an identical rerun preserves the existing count.
+- Daily harness sandbox check: the `harness-sandbox-check` job runs `scripts/validation_harness_sandbox.sh provision`, then `checked-run` (the isolation self-check plus a staged run) with a probe that asks the sandbox user's rootless Docker for `docker info` and writes a log that must copy back, then `cleanup`. Smoke validations and the fixtures above skip the sandbox, so this is the only daily signal that a runner-image change broke provisioning (#6959 found it only after every project validation failed). Logs `VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok|fail`. The job runs only trusted checkout code with a `contents: read` token.
+- Failed runs on the default branch reach the workflow failure heal intake (`SCHEDULED_CHECK_WORKFLOW_NAMES` in `scripts/workflow_failure_heal.py`), which opens an `ai:workflow-heal` issue like a red main CI run. Runs on other branches are ignored.
 
 ### Consumer secrets propagation
 
