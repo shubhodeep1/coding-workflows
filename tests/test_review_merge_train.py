@@ -2251,7 +2251,7 @@ def test_release_keeps_pr_queued_behind_recently_released_old_blocker(tmp_path: 
 def test_merge_train_conflict_aware_settings_are_wired_in_every_caller() -> None:
 	expected = {
 		"MERGE_TRAIN_CONFLICT_CHECK_ENABLED": "${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}",
-		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}",
+		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}",
 		"MERGE_TRAIN_PRIORITY_LABELS": "${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}",
 	}
 	workflows = REPO_ROOT / ".github" / "workflows"

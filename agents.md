@@ -81,7 +81,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
    when `git merge-tree --write-tree` of the two heads conflicts outside `MERGE_TRAIN_IGNORE_PATHS`
    (`MERGE_TRAIN_CONFLICT_CHECK_ENABLED`; a conflict only in ignored files logs `conflict=ignored` and does not block; git errors
    keep the path rule; outside a checkout, as in the poller and PR-close `release`, the probe fetches both heads
-   into a private bare repository under `RUNNER_TEMP` and logs `MERGE_TRAIN_PROBE_REPO`), a blocker under review past `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` (default 24) that is not
+   into a private bare repository under `RUNNER_TEMP` and logs `MERGE_TRAIN_PROBE_REPO`), a blocker under review past `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` (default 6) that is not
    itself queued stops blocking, and a PR whose verified `ai/issue-<M>` closing issue carries a
    `MERGE_TRAIN_PRIORITY_LABELS` label passes verified non-priority PRs; the last two share one aliased
    GraphQL read, and gate and release apply the same rules (the queued marker is verified against the `GH_PAT` account before it can authorize a bypass; label

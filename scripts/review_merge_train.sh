@@ -47,7 +47,7 @@
 #   MERGE_TRAIN_HEAD_REF_PREFIX            default ai/issue-
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 #   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
-#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 24; 0 disables the age bypass;
+#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 6; 0 disables the age bypass;
 #                                          a non-integer warns and falls back to 24
 #   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
 #                                          (comma-separated); empty, none or off
@@ -171,10 +171,10 @@ case "$(printf '%s' "${MERGE_TRAIN_CONFLICT_CHECK_ENABLED:-true}" | tr '[:upper:
 	true|1|yes|on) MT_CONFLICT_CHECK="true" ;;
 	*) MT_CONFLICT_CHECK="false" ;;
 esac
-MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-24}"
+MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-6}"
 if ! [[ "${MT_HEAD_MAX_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
-	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 24."
-	MT_HEAD_MAX_AGE_HOURS=24
+	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 6."
+	MT_HEAD_MAX_AGE_HOURS=6
 fi
 MT_HEAD_MAX_AGE_HOURS=$((10#${MT_HEAD_MAX_AGE_HOURS}))
 # Unset means the default; an explicitly empty value disables the lane. A repo
