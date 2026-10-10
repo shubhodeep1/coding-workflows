@@ -3617,16 +3617,33 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 
 
 def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
-	"""Issues #6625/#6938: the gate and four failure-marker sites use the verified SHA.
+	"""Issues #6625/#6938: the gate and every failure-marker site use the verified SHA.
 
-	The gate SHA also reaches fingerprint-cap-block, codex-agent, and the
-	deterministic-skip-merge freshness-helper verification step.
+	Structural, not counted: every `autofix-failure-fingerprint` call passes
+	`--support-sha`, and the jobs that build markers or verify helper
+	checkouts take REVIEW_SUPPORT_SHA from the gate's verified output. A new
+	marker site or consumer then has to follow the rule instead of breaking
+	an occurrence count.
 	"""
 	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
-	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
-	assert wf.count("autofix-failure-fingerprint \\\n") == 4
-	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
-	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 3
+	calls = wf.split("autofix-failure-fingerprint \\\n")[1:]
+	assert calls, "no autofix-failure-fingerprint call sites found"
+	for call in calls:
+		# The call's continuation lines end at the first line without a trailing backslash.
+		block = call.split(")\"", 1)[0]
+		assert '--support-sha "${REVIEW_SUPPORT_SHA:-}"' in block, block[:400]
+	jobs = yaml.safe_load(wf)["jobs"]
+	gate_steps = {step.get("name"): step for step in jobs["gate"]["steps"]}
+	assert gate_steps["Evaluate review gate"]["env"]["REVIEW_SUPPORT_SHA"] == "${{ steps.resolve_support.outputs.review_support_sha }}"
+	verified = "${{ needs.gate.outputs.review_support_sha }}"
+	for job in ("fingerprint-cap-block", "codex-agent"):
+		assert jobs[job]["env"]["REVIEW_SUPPORT_SHA"] == verified, job
+	det_skip = {step.get("name"): step for step in jobs["deterministic-skip-merge"]["steps"]}
+	assert det_skip["Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"]["env"]["REVIEW_SUPPORT_SHA"] == verified
+	# No job may take the support SHA from anywhere but the verified outputs.
+	for line in wf.splitlines():
+		if line.strip().startswith("REVIEW_SUPPORT_SHA:"):
+			assert line.strip() in (f"REVIEW_SUPPORT_SHA: {verified}", "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}"), line
 	assert 'git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}"' in wf
 	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 
