@@ -424,7 +424,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     sandbox prepare (`deps_prepare`) is reported the same way as
     `sandbox_prepare_failed` (`sandbox_prepare_failure_evidence.txt`,
     `AUTOFIX_SANDBOX_PREPARE_FAILED=true`; the sandbox image build retries
-    Docker Hub and network failures, `REVIEW_SANDBOX_BUILD_ATTEMPTS`); the identical-failure cap's report lists the
+    Docker Hub and network failures, `REVIEW_SANDBOX_BUILD_ATTEMPTS`,
+    `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` / `_2`); the identical-failure cap's report lists the
     failed runs from the head's `review-autofix-failure:v1` markers
     (`AUTOFIX_FAILURE_MARKER_AUTHOR`) so the intake reads their logs; and a
     support script's self-named error line (`untrusted_process_sandbox: …`)
