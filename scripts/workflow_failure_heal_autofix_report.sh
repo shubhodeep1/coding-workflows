@@ -169,6 +169,9 @@ STREAK_AUTHOR_FILTER="off"
 if [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ] && grep -q 'autofix-failure-streak-author-login:v1' "${HEAL_PY}" 2>/dev/null; then
 	STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")
 	STREAK_AUTHOR_FILTER="on"
+elif [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ]; then
+	# Keep the legacy count, but make the reporter/helper drift observable.
+	log "warn reason=streak_author_filter_unavailable pr=${PR}; staged helper predates the author filter, counting every author"
 fi
 if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 	PRIOR_FAILURES="$(python3 "${HEAL_PY}" autofix-failure-streak "${STREAK_ARGS[@]}" 2>/dev/null || echo 0)"

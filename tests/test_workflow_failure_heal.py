@@ -4209,6 +4209,7 @@ def test_autofix_report_streak_counts_only_the_pipeline_author() -> None:
 		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
 		assert "streak_author_filter=off" in result.stdout
+		assert "warn reason=streak_author_filter_unavailable pr=4174" in result.stdout
 	text = AUTOFIX_REPORT_SCRIPT.read_text(encoding="utf-8")
 	assert "grep -q 'autofix-failure-streak-author-login:v1' \"${HEAL_PY}\"" in text
 	assert 'STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")' in text
