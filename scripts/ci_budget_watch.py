@@ -157,11 +157,18 @@ def main(argv: list[str] | None = None) -> int:
 		warn_bytes = int(os.environ.get("CI_BUDGET_WORKFLOW_WARN_BYTES", DEFAULT_WORKFLOW_WARN_BYTES))
 	except ValueError:
 		warn_bytes = DEFAULT_WORKFLOW_WARN_BYTES
+	# A threshold at or above the hard guard would only warn after CI already
+	# fails, so it falls back to the default instead of silently disabling the
+	# early warning.
+	if not 0 < warn_bytes < HARD_WORKFLOW_GUARD_BYTES:
+		print(f"::warning::ci_budget_watch: CI_BUDGET_WORKFLOW_WARN_BYTES={warn_bytes} is outside (0, {HARD_WORKFLOW_GUARD_BYTES}); using {DEFAULT_WORKFLOW_WARN_BYTES}.")
+		warn_bytes = DEFAULT_WORKFLOW_WARN_BYTES
 	try:
 		ratio = float(os.environ.get("CI_BUDGET_JOB_WARN_RATIO", DEFAULT_JOB_WARN_RATIO))
 	except ValueError:
 		ratio = DEFAULT_JOB_WARN_RATIO
-	if not 0 < ratio <= 1:
+	# A ratio of 1 would only warn once the job already hit its timeout.
+	if not 0 < ratio < 1:
 		ratio = DEFAULT_JOB_WARN_RATIO
 
 	findings = workflow_size_findings(root / ".github" / "workflows", warn_bytes)
