@@ -117,7 +117,7 @@ def test_branch_ahead_of_tag_dispatches_release_gate() -> None:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40))
 	assert proc.returncode == 0, proc.stderr
 	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
-	assert state["dispatches"] == [["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "stable"]]
+	assert state["dispatches"] == [["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "refs/heads/stable"]]
 	assert "dispatched=true" in state["github_output"]
 
 

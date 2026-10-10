@@ -36,8 +36,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -63,7 +67,8 @@ NOOP_GUARDED_STEPS = (
 
 
 def _review_autofix_text() -> str:
-	return REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	# Moved step bodies (scripts/review_autofix_step_*.sh) are inlined again.
+	return expanded_review_autofix_text()
 
 
 def _test_and_mark_stable_text() -> str:

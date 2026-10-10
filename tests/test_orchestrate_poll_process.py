@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
@@ -40,6 +41,55 @@ _TEST_RUNNER_HEARTBEAT_INTERVAL_SEC = 60.0
 _TEST_RUNNER_HEARTBEAT_THREAD_PREFIX = "orchestrate-test-heartbeat:"
 _TEST_RUNNER_SLOWEST_LIMIT = 10
 _TEST_RUNNER_OUTPUT_LOCK = threading.Lock()
+# On GitHub Actions a failing test also prints an `::error` workflow command,
+# so the job's annotations name the test (issue #6859: run 37883807697 showed
+# only "orchestrate-poll shard 1 failed" and triage could not tell which test).
+_TEST_RUNNER_FAILURE_ANNOTATION_TITLE = "orchestrate-poll test failed"
+_TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS = 500
+
+
+def _test_runner_escape_workflow_command_data(text: str) -> str:
+	r"""Escape text for the data part of a GitHub workflow command.
+
+	`%` goes first so the later escapes are not double-escaped; escaping `\r`
+	and `\n` keeps untrusted failure text from starting a second command.
+	"""
+	return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _test_runner_failure_annotation(name: str, failure: object) -> str | None:
+	"""Return an `::error` annotation line for a failed test, or None.
+
+	Only emitted when `GITHUB_ACTIONS` is exactly `true`, so local runs keep
+	their output unchanged. The message is cut before escaping so an escape
+	sequence is never split; the full text stays on the FAIL line.
+	"""
+	if os.environ.get("GITHUB_ACTIONS") != "true":
+		return None
+	failure_text = str(failure)
+	if len(failure_text) > _TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS:
+		failure_text = failure_text[:_TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS] + "..."
+	escaped_name = _test_runner_escape_workflow_command_data(str(name))
+	escaped_failure = _test_runner_escape_workflow_command_data(failure_text)
+	return (
+		f"::error title={_TEST_RUNNER_FAILURE_ANNOTATION_TITLE}::"
+		f"{escaped_name}: {escaped_failure}"
+	)
+
+
+def _test_runner_neutralize_workflow_commands(text: str) -> str:
+	"""Prefix lines of a FAIL line that GitHub would read as workflow commands.
+
+	Only on GitHub Actions (`GITHUB_ACTIONS` exactly `true`); local output is
+	unchanged. Multi-line failure text stays readable, but a continuation line
+	starting with `::` gets a `| ` prefix so it cannot start a workflow command.
+	"""
+	if os.environ.get("GITHUB_ACTIONS") != "true":
+		return text
+	return "".join(
+		"| " + line if line.lstrip().startswith("::") else line
+		for line in text.splitlines(keepends=True)
+	)
 
 
 # Directories and top-level files that the poller script under test needs
@@ -364,6 +414,8 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
 	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
@@ -712,6 +764,7 @@ def _run_poller(
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
 	fail_search_issues: bool = False,
+	default_branch_fail: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
 	pr_files_fail: bool = False,
@@ -1223,6 +1276,7 @@ esac
 			"fail_search_issues": bool(fail_search_issues),
 			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
+			"default_branch_fail": bool(default_branch_fail),
 			"prs": prs,
 			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -2653,6 +2707,11 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	if re.search(r'^repos/[^/]+/[^/]+$', path):
+		# Issue #6629: 'default_branch_fail' fails the read, so the
+		# PR-named review-run matchers fail closed.
+		if store.get('default_branch_fail'):
+			print('gh: Server Error (HTTP 502)', file=sys.stderr)
+			sys.exit(1)
 		if jq == '.default_branch':
 			print(store.get('default_branch', 'main'))
 		else:
@@ -2818,6 +2877,9 @@ if args[0] == 'api':
 					'display_title': run.get('displayTitle', ''),
 					'created_at': run.get('createdAt', ''),
 					'run_started_at': run.get('startedAt', run.get('createdAt', '')),
+					# Issue #6629: the provenance fields the trust rule checks.
+					'head_branch': run.get('headBranch', store.get('default_branch', 'main')),
+					'path': run.get('path', f'.github/workflows/{m.group(1)}'),
 				})
 			result = {'workflow_runs': runs[(page - 1) * per_page:page * per_page], 'total_count': len(runs)}
 			save()
@@ -5926,6 +5988,8 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert waived[0]["file"] == "scripts/example.py"
 	assert waived[0]["line"] == 1
 	assert waived[0]["owasp_or_stride_category"] == "A01: Broken Access Control"
+	assert waived[0]["exploit_scenario"] == remaining["exploit_scenario"]
+	assert len(waived[0]["exploit_scenario"]) <= 600
 	assert waived[0]["waived_at_cycle"] == 3
 	created = result.get("created_issues", [])
 	assert len(created) == 1
@@ -6264,8 +6328,11 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	Regression for #3965: the judge was consulted twice on a 5-cycle budget
 	and granted "one more" consolidated cycle both times (cycles 6 and 7),
 	and nothing bounded the sequence. Round 3 converts low/medium
-	keep_fixing decisions to deferred advisories; blocking findings
-	instead terminalize without being waived.
+	keep_fixing decisions to deferred advisories (#6517 / #6729: only low
+	and medium findings may be converted at the cap); a high, critical or
+	unrated keep_fixing finding instead terminalizes without being waived
+	(test_security_pass_cap_never_waives_a_high_finding and
+	test_security_pass_cap_does_not_record_advisories_before_terminal_failure).
 	"""
 	medium_finding = _security_pass_test_finding()
 	medium_finding["severity"] = "medium"
@@ -6325,7 +6392,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	assert len(judge_comments) == 1
 	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
 	assert (
-		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
+		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; high, critical and unrated findings are never waived by the cap."
 		in judge_comments[0]
 	)
 	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
@@ -6393,6 +6460,123 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 	assert "without recording any new waivers or follow-ups" in judge_comments[0]
 	assert "| SEC-TEST-1 | high |" in judge_comments[0]
 	assert "| SEC-TEST-2 | medium |" in judge_comments[0]
+
+
+def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
+	# Issue #6729: at the cap, low keep_fixing becomes an advisory just like
+	# medium; high, critical and unrated findings still block (see
+	# test_security_pass_cap_never_waives_a_high_finding).
+	# Low severity is still eligible for the round-cap conversion to an
+	# advisory follow-up (#6906 restored that rule after #6549 had turned it
+	# into fail; the heal PRs #6907 and #6916 rewrote this test to the fail rule
+	# while #6906 was in flight, which left main red with the new code and the
+	# old expectation).
+	# Keep the historical name for the CI shard selector.
+	low_finding = _security_pass_test_finding()
+	low_finding["severity"] = "low"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([low_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_judge_rounds"] == 3
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_active_fix_issues"] == []
+	waived = latest_state["security_pass_waived_findings"]
+	assert len(waived) == 1
+	assert waived[0]["finding_id"] == "SEC-TEST-1"
+	assert waived[0]["severity"] == "low"
+	assert waived[0]["justification"].startswith(
+		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
+	)
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-1 (low, scripts/example.py:1)"
+	assert sorted(latest_state["security_pass_followups_merge_checked"]) == [created[0]["number"]]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert "ai:security-pass-fixing" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
+	assert "accepted=1 keep_fixing=0 failed=0" in combined_log
+	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "blocking_findings_after_cap" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert (
+		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; high, critical and unrated findings are never waived by the cap."
+		in judge_comments[0]
+	)
+	assert "| SEC-TEST-1 | low | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+
+
+def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
+	# Issue #6729: a low finding converted at the cap must not ride through as a
+	# waiver when a high keep_fixing finding terminalizes the same round.
+	low_finding = _security_pass_second_test_finding()
+	low_finding["severity"] = "low"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), low_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "keep_fixing"))
+		)},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	assert "ai:security-pass-failed" in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "reason=blocking_findings_after_cap" in combined_log
+	# The low/medium rewrite runs before the terminal check; its result is discarded.
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "without recording any new waivers or follow-ups" in judge_comments[0]
+	assert "| SEC-TEST-1 | high |" in judge_comments[0]
+
+
+def test_security_pass_cap_keeps_explicit_judge_accept_of_high_finding() -> None:
+	# Issue #6729: the cap guard only blocks keep_fixing conversion; the judge's
+	# explicit accept_with_followup of a high finding is still honoured.
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
+		)},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert waived[0]["source"] == "judge"
+	assert waived[0]["severity"] == "high"
+	assert waived[0]["justification"].startswith("SEC-TEST-1: accept_with_followup")
+	assert "keep_fixing capped" not in waived[0]["justification"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "blocking_findings_after_cap" not in combined_log
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
@@ -6780,8 +6964,10 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	"""A waiver reaches the engine as accepted and is enforced poller-side too.
 
 	The mock engine ignores SECURITY_AUDIT_WAIVED_FINDINGS (an older staged
-	engine would), so the re-reports below prove the poller's own suppression:
-	exact id, and same file + category within the line window under a new id.
+	engine would), so the results below prove the poller's own suppression:
+	only an exact finding_id whose recorded category, severity and exploit
+	scenario also match is dropped.  A new id near a waived location, and the
+	waived id with a different severity, stay blocking (#6987).
 	"""
 	state = _security_pass_exhausted_state(
 		security_pass_cycle=0,
@@ -6792,6 +6978,7 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 				"line": 1,
 				"owasp_or_stride_category": "A01: Broken Access Control",
 				"severity": "high",
+				"exploit_scenario": _security_pass_test_finding()["exploit_scenario"],
 				"source": "judge",
 			},
 			{
@@ -6807,6 +6994,9 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	)
 	renamed_dos = _security_pass_second_test_finding()
 	renamed_dos["finding_id"] = "NEW-DOS-ID"
+	old_dos_new_severity = _security_pass_second_test_finding()
+	old_dos_new_severity["finding_id"] = "OLD-DOS"
+	old_dos_new_severity["severity"] = "high"
 	survivor = _security_pass_second_test_finding()
 	survivor["finding_id"] = "SURVIVOR"
 	survivor["owasp_or_stride_category"] = "A07: Identification and Authentication Failures"
@@ -6815,7 +7005,9 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), renamed_dos, survivor]),
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), renamed_dos, old_dos_new_severity, survivor]
+		),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
@@ -6824,18 +7016,41 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-TEST-1", "OLD-DOS"]
 	latest_state = result["latest_state"]
 	assert latest_state["status"] == "security-pass-fixing"
-	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SURVIVOR"]
+	assert sorted(row["finding_id"] for row in latest_state["security_pass_reported_findings"]) == [
+		"NEW-DOS-ID",
+		"OLD-DOS",
+		"SURVIVOR",
+	]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "waived_findings=2" in combined_log
-	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=2 ids=SEC-TEST-1,NEW-DOS-ID" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=1 ids=SEC-TEST-1" in combined_log
+	assert "::notice::SECURITY_AUDIT_WAIVER_LINE_WINDOW=40 no longer controls waiver suppression (exact finding_id match only)" in combined_log
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192" in combined_log
-	assert "findings=1 cycle=0" in combined_log
+	assert "findings=3 cycle=0" in combined_log
 	created = result.get("created_issues", [])
 	assert len(created) == 1
 	fix_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "| SURVIVOR |" in fix_body
+	assert "| NEW-DOS-ID |" in fix_body
+	assert "| OLD-DOS |" in fix_body
 	assert "| SEC-TEST-1 |" not in fix_body
-	assert "| NEW-DOS-ID |" not in fix_body
+
+
+def test_security_pass_invalid_waiver_line_window_warns_and_keeps_running() -> None:
+	state = _security_pass_exhausted_state(security_pass_cycle=0, security_pass_waived_findings=[{
+		"finding_id": "SEC-TEST-1", "file": "scripts/example.py", "line": 1,
+		"owasp_or_stride_category": "A01: Broken Access Control", "severity": "high",
+	}])
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_AUDIT_WAIVER_LINE_WINDOW": "abc"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "::warning::SECURITY_AUDIT_WAIVER_LINE_WINDOW=abc is invalid; it no longer controls waiver suppression" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=1 ids=SEC-TEST-1" in combined_log
+	assert result["latest_state"]["security_pass_reported_findings"] == []
 
 
 def test_security_pass_waiver_does_not_suppress_a_nearby_new_exploit() -> None:
@@ -6917,7 +7132,9 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert waived["SEC-OLD"]["waived_by"] == "octocat"
 	assert waived["SEC-OLD"]["file"] == "scripts/example.py"
 	assert waived["SEC-OLD"]["line"] == 1
+	assert waived["SEC-OLD"]["exploit_scenario"] == "Ledger growth by an authenticated caller."
 	assert waived["unknown.id-1"]["file"] == ""
+	assert waived["unknown.id-1"]["exploit_scenario"] == ""
 	# Operator waivers defer their advisory follow-up the same way the judge
 	# does: the known finding keeps its payload and pending flag, an id that
 	# matched nothing gets no follow-up at all, and no issue is filed until
@@ -9979,7 +10196,7 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 	assert result.get("git_push_calls", [])
 	assert any("HEAD:ai/issue-10" in call for call in result["git_push_calls"])
 	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED" in agents_text
@@ -15836,6 +16053,9 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:ready-to-merge"]},
+		# Issue #6631: the PR merged into orchestrator/project-192, so the
+		# issue must declare that branch for the merge to count.
+		issue_bodies={10: "Issue 10\n\n- Integration branch: orchestrator/project-192\n"},
 		issue_linked_prs={10: 901},
 		prs=[merged_pr],
 		mock_gh_issue_list_label_filter=True,
@@ -15957,6 +16177,196 @@ def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=951 origin=merged_label status=closed" in result["stdout"], (
 		"Missing CLOSE_MERGED_SWEEP closure log line in poller stdout"
 	)
+
+
+def _sweep_closing_pr(number: int, base: str) -> dict:
+	"""A merged PR on a non-conventional head whose body closes issue #10."""
+	return {
+		"number": number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-28T10:40:00Z",
+		"baseRefName": base,
+		"headRefName": "claude/implement-plan-issue-10-x-fix",
+		"headRefFromApi": "claude/implement-plan-issue-10-x-fix",
+		"body": "Completion PR.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def test_close_merged_issues_sweep_rejects_closing_pr_merged_into_non_target_base():
+	"""Issue #6631 (incident #4688 / PR #4748): a closing-keyword PR merged
+	into a branch that is neither the default branch nor the issue's declared
+	integration branch must not close the issue. It falls through to the
+	merged_label no_merged_pr_found policy."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 960},
+		prs=[_sweep_closing_pr(960, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert 10 not in result.get("closed_issues", []), (
+		f"Non-target-base merge must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=960 rejected=non_target_base "
+		"base=claude/implement-plan-issue-10-x declared=none"
+	) in result["stdout"]
+	assert "no_merged_pr_found non_target_base_seen=true" in combined
+
+
+def test_close_merged_issues_sweep_closes_closing_pr_merged_into_default_branch():
+	"""Issue #6631: a default-branch merge still closes the issue."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 961},
+		prs=[_sweep_closing_pr(961, "main")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=961 accepted reason=default_branch" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=961 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_closes_merge_into_declared_integration_branch():
+	"""Issue #6631: a merge into the issue's own declared `Integration
+	branch:` counts, even for a non-managed issue."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: "Follow-up.\n\n- Integration branch: orchestrator/project-192\n"},
+		issue_linked_prs={10: 962},
+		prs=[_sweep_closing_pr(962, "orchestrator/project-192")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=962 accepted reason=declared_integration_branch"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_rejects_merge_into_other_branch_than_declared():
+	"""Issue #6631: a declared integration branch narrows the accepted bases;
+	a merge into a different non-default branch does not count."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_bodies={10: "Child.\n\n- **Integration branch:** `orchestrator/project-192`\n"},
+		issue_linked_prs={10: 963},
+		prs=[_sweep_closing_pr(963, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert (
+		"rejected=non_target_base base=claude/implement-plan-issue-10-x declared=orchestrator/project-192"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_managed_child_without_metadata_still_closes():
+	"""Issue #6631: an orchestrator-managed child whose own body declares no
+	branch (the branch lives on the tracking issue) keeps the any-base
+	behaviour so waves are not stranded."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_linked_prs={10: 964},
+		prs=[_sweep_closing_pr(964, "orchestrator/project-192")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=964 accepted reason=managed_no_child_metadata"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_ready_label_non_target_base_stays_open_silently():
+	"""Issue #6631: an ai:ready-to-merge issue whose only merge is into a
+	non-target base stays open with no backfill and no Telegram alert."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 965},
+		prs=[_sweep_closing_pr(965, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert "ai:merged" not in result["issues"]["10"]["labels"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=ready_label no_merged_pr_found non_target_base_seen=true" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" not in result["stdout"]
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+
+
+def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
+	"""Issue #6631: when the default branch cannot be resolved the sweep
+	fails closed for the cycle."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	assert '_sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"' in body
+	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
+	# so the sweep must not reuse it.
+	assert "${FINAL_DEFAULT_BRANCH" not in body
+	assert "--jq '.default_branch'" in body
+	assert "|| echo main" not in body
+	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
+	skip_pos = body.index("reason=default_branch_unavailable")
+	assert body.index("return 0", skip_pos) < body.index("for ((idx=0; idx<count; idx++))")
+
+
+def test_pr_json_base_is_target_merge_helper_rules():
+	"""Issue #6631: unit-level check of _pr_json_base_is_target_merge."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	# The module's custom runner does not inject pytest fixtures such as
+	# tmp_path, so the test owns its temporary directory.
+	with tempfile.TemporaryDirectory() as _helper_tmp:
+		_run_target_merge_helper_rules(Path(_helper_tmp))
+
+
+def _run_target_merge_helper_rules(tmp_path: Path) -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	end = script.index("\n# Issue #6325:", start)
+	helper = tmp_path / "helper.sh"
+	helper.write_text(script[start:end] + "\n", encoding="utf-8")
+
+	def run(base: str, default: str, declared: str, managed: str) -> str:
+		pr_json = json.dumps({"base": {"ref": base}}) if base is not None else "{}"
+		proc = subprocess.run(
+			[
+				"bash", "-c",
+				'source "$1"; if _pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), pr_json, default, declared, managed,
+			],
+			check=True, capture_output=True, text=True,
+		)
+		return proc.stdout.strip()
+
+	assert run("main", "main", "", "false") == "yes:default_branch"
+	assert run("orchestrator/project-5", "main", "orchestrator/project-5", "false") == "yes:declared_integration_branch"
+	assert run("orchestrator/project-5", "main", "", "true") == "yes:managed_no_child_metadata"
+	assert run("orchestrator/project-5", "main", "orchestrator/project-6", "true") == "no"
+	assert run("feature/other", "main", "", "true") == "no"
+	assert run("claude/x", "main", "", "false") == "no"
+	assert run("", "main", "", "true") == "no"
+	assert run(None, "main", "", "true") == "no"
+	assert run("Main", "main", "", "false") == "no"
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
@@ -17169,6 +17579,119 @@ def test_untrusted_security_pass_reset_cannot_clear_findings():
 	assert result["latest_state"]["security_pass_reported_findings"] == state["security_pass_reported_findings"]
 
 
+# Issue #6506 (security finding unauthorized-project-reset-comments): reset
+# comments must come from the pipeline login or a human OWNER / MEMBER /
+# COLLABORATOR. Missing provenance, bot identities and non-member associations
+# are rejected; forged boundary markers and later outsider commands cannot
+# suppress or escalate an authorized reset.
+# CI runs this module through main(), which calls every test as func(), so
+# these cases loop inside argument-free tests instead of using
+# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+_UNAUTHORIZED_JUDGE_RESUME_COMMENTS = (
+	("missing_author_association", {"body": "/judge_resume --force", "user": {"login": "drive-by"}}),
+	(
+		"bot_with_member_association",
+		{"body": "/judge_resume --force", "user": {"login": "renovate[bot]", "type": "Bot"}, "author_association": "MEMBER"},
+	),
+	(
+		"contributor_association",
+		{"body": "/judge_resume --force", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+	),
+)
+
+_UNAUTHORIZED_REVALIDATE_COMMENTS = (
+	("missing_author_association", {"body": "/revalidate", "user": {"login": "drive-by"}}),
+	(
+		"contributor_association",
+		{"body": "/revalidate", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+	),
+)
+
+
+def test_judge_resume_from_unauthorized_author_is_ignored():
+	for case_id, untrusted_comment in _UNAUTHORIZED_JUDGE_RESUME_COMMENTS:
+		state = _base_state(status="failed")
+		state.update(judge_stall_cycles=8, recovery_count=4)
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:implementing"]},
+			tracking_comments=[untrusted_comment],
+		)
+		assert result["latest_state"]["status"] == "failed", case_id
+		assert result["latest_state"]["judge_stall_cycles"] == 8, case_id
+		assert result["latest_state"]["recovery_count"] == 4, case_id
+
+
+def test_revalidate_from_unauthorized_author_is_ignored():
+	for case_id, untrusted_comment in _UNAUTHORIZED_REVALIDATE_COMMENTS:
+		state = _base_state(status="failed")
+		result = _run_poller(
+			state=state, enable_validation="true", max_validate_cycles="3",
+			tracking_labels=["ai:validation-failed"],
+			tracking_comments=[untrusted_comment],
+		)
+		assert result["latest_state"]["status"] == "failed", case_id
+		assert result["validation_dispatches"] == [], case_id
+
+
+def test_revalidate_from_collaborator_is_accepted():
+	state = _base_state(status="failed")
+	state["validation_cycle"] = 3
+	state["validation_recovery_count"] = 2
+	state["validation_failure_reason"] = "Exceeded MAX_VALIDATE_CYCLES"
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[
+			{"body": "/revalidate", "user": {"login": "helper", "type": "User"}, "author_association": "COLLABORATOR"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating"
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_recovery_count"] == 0
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_forged_re_security_pass_dedup_marker_does_not_suppress_trusted_command():
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{"SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+		tracking_comments=[
+			"/re-security-pass retry after manual remediation",
+			{"body": "<!-- re-security-pass-dedup:1 -->", "user": {"login": "outsider"}, "author_association": "NONE"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["security_pass_cycle"] == 0
+	assert ls["security_pass_reported_findings"] != state["security_pass_reported_findings"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert any(
+		"re-security-pass-dedup:" in comment.get("body", "")
+		and (comment.get("user") or {}).get("login") != "outsider"
+		for comment in result["issues"]["192"]["comments"]
+	), "expected a pipeline-authored re-security-pass-dedup marker"
+
+
+def test_untrusted_judge_resume_after_trusted_one_does_not_mask_it():
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=2)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[
+			"/judge_resume --reset-recovery",
+			{"body": "/judge_resume --force", "user": {"login": "outsider"}, "author_association": "NONE"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["recovery_count"] == 0
+	assert ls["judge_stall_cycles"] == 8
+
+
 def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
 	state = _base_state(status="failed")
 	state["judge_stall_cycles"] = 9
@@ -17977,6 +18500,97 @@ def test_retrigger_review_ignores_pr_named_dispatch_run_of_another_pr():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, issue_entry
 	assert result.get("git_push_calls", []), "expected the empty-commit push to proceed"
+
+
+def _retrigger_review_spoof_run(pr_number: int, **overrides) -> dict:
+	run = {
+		"id": 26088869000 + pr_number,
+		"name": "Internal: AI Review & Autofix",
+		"display_title": f"Internal: AI Review & Autofix [pr:{pr_number}]",
+		"event": "workflow_dispatch",
+		"path": ".github/workflows/internal-review.yml",
+		"status": "in_progress",
+		"head_branch": "main",
+		"head_sha": "c" * 40,
+		"run_started_at": "2999-01-01T00:00:00Z",
+	}
+	run.update(overrides)
+	return run
+
+
+# CI runs this module through main(), which calls every test as func(), so
+# the spoof cases loop inside one argument-free test instead of using
+# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+_RETRIGGER_REVIEW_SPOOF_OVERRIDES = (
+	# (a) the same title on a branch copy of internal-review.yml.
+	{"head_branch": "attacker/branch"},
+	# (b) the title on the wrong wrapper path.
+	{"path": ".github/workflows/ai-review.yml"},
+	{"path": "other/repo/.github/workflows/internal-review.yml"},
+	# (c) the right title and path from another event.
+	{"event": "push", "head_branch": "main"},
+)
+
+
+def test_retrigger_review_pushes_past_spoofed_pr_named_run():
+	# Issue #6629: a run that fails the provenance rule must not hold the
+	# empty-commit push (an availability stall with nothing to show why).
+	for overrides in _RETRIGGER_REVIEW_SPOOF_OVERRIDES:
+		state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-spoof")
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			issue_labels={10: ["ai:done"]},
+			issue_linked_prs={10: 93},
+			prs=prs,
+			actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
+			mock_git_push_success=True,
+		)
+		issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+		assert issue_entry["stall_recovery_count"] == 1, (overrides, issue_entry)
+		assert result.get("git_push_calls", []), f"expected the empty-commit push to proceed for {overrides}"
+
+
+def test_retrigger_review_null_head_branch_pr_named_run_still_blocks_push():
+	# Issue #6629 (Q2): GitHub can report a null head_branch on a real
+	# default-branch dispatch (#4928); such a run stays trusted.
+	state, prs = _retrigger_review_pr_state(94, "claude/retrigger-review-pr-named-null")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 94},
+		prs=prs,
+		actions_runs_workflow_runs=[_retrigger_review_spoof_run(94, head_branch=None)],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
+
+
+def test_retrigger_review_skips_push_when_default_branch_is_unavailable():
+	# Issue #6629 (d): without the default branch no PR-named run can be
+	# ruled out, so the push is skipped (no `main` fallback).
+	state, prs = _retrigger_review_pr_state(95, "claude/retrigger-review-pr-named-no-default")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 95},
+		prs=prs,
+		actions_runs_workflow_runs=[],
+		mock_git_push_success=True,
+		default_branch_fail=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
+	combined = result.get("stdout", "") + result.get("stderr", "")
+	assert "REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable" in combined
 
 
 def test_retrigger_review_redispatches_when_pr_named_dispatch_run_failed():
@@ -19333,6 +19947,10 @@ def test_deferred_creation_relinks_issue_number_map_entry_without_creation_comme
 
 def test_truncated_comments_json_is_handled_gracefully():
 	"""Poller exits cleanly when the comments API returns invalid/truncated JSON."""
+	# The poller itself needs jq (it aborts with `jq: command not found`
+	# otherwise), so skip like the module's other poller tests (#6944).
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	with tempfile.TemporaryDirectory(prefix="poller-test-truncated-") as td:
 		tmp = Path(td)
 		bin_dir = tmp / "bin"
@@ -22233,7 +22851,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
@@ -23235,7 +23853,14 @@ def _run_selected_tests(
 			print(f"  PASS  {name}", file=runner_output, flush=True)
 			passed += 1
 		else:
-			print(f"  FAIL  {name}: {failure}", file=runner_output, flush=True)
+			print(
+				_test_runner_neutralize_workflow_commands(f"  FAIL  {name}: {failure}"),
+				file=runner_output,
+				flush=True,
+			)
+			failure_annotation = _test_runner_failure_annotation(name, failure)
+			if failure_annotation is not None:
+				print(failure_annotation, file=runner_output, flush=True)
 			failed += 1
 
 	for rank, (name, elapsed_ms, status) in enumerate(
@@ -23274,13 +23899,20 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	def synthetic_skip():
 		raise unittest.SkipTest("synthetic skip")
 
-	output = io.StringIO()
-	with contextlib.redirect_stdout(output):
-		exit_code = _run_selected_tests(
-			[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
-			heartbeat_interval_sec=0.005,
-			slowest_limit=2,
-		)
+	# Keep the exact-line assertions below valid on GitHub Actions, where the
+	# runner would otherwise add a failure annotation line.
+	saved_github_actions = os.environ.pop("GITHUB_ACTIONS", None)
+	try:
+		output = io.StringIO()
+		with contextlib.redirect_stdout(output):
+			exit_code = _run_selected_tests(
+				[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
+				heartbeat_interval_sec=0.005,
+				slowest_limit=2,
+			)
+	finally:
+		if saved_github_actions is not None:
+			os.environ["GITHUB_ACTIONS"] = saved_github_actions
 	assert exit_code == 1
 	assert "synthetic partial\nTEST_CASE_EVENT: " in output.getvalue()
 	lines = output.getvalue().splitlines()
@@ -23362,6 +23994,103 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert '"event":"slowest"' not in pass_output.getvalue()
 
 
+def test_custom_runner_emits_github_failure_annotation_only_on_actions():
+	import contextlib
+	import io
+
+	def synthetic_fail():
+		raise RuntimeError("a\nb%")
+
+	def synthetic_long_fail():
+		raise RuntimeError("x" * (_TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS * 4))
+
+	def synthetic_injection_fail():
+		raise RuntimeError("boom\r\n::error::fake")
+
+	annotation_prefix = f"::error title={_TEST_RUNNER_FAILURE_ANNOTATION_TITLE}::"
+	saved_github_actions = os.environ.pop("GITHUB_ACTIONS", None)
+	try:
+		os.environ["GITHUB_ACTIONS"] = "true"
+		output = io.StringIO()
+		with contextlib.redirect_stdout(output):
+			exit_code = _run_selected_tests(
+				[synthetic_fail], heartbeat_interval_sec=0, slowest_limit=0
+			)
+		assert exit_code == 1
+		lines = output.getvalue().splitlines()
+		fail_index = lines.index("  FAIL  synthetic_fail: a")
+		assert lines[fail_index + 1] == "b%"
+		assert lines[fail_index + 2] == f"{annotation_prefix}synthetic_fail: a%0Ab%25"
+		assert sum(1 for line in lines if line.startswith("::error")) == 1
+		assert lines[-1] == "0 passed, 1 failed, 1 total"
+
+		long_output = io.StringIO()
+		with contextlib.redirect_stdout(long_output):
+			assert _run_selected_tests(
+				[synthetic_long_fail], heartbeat_interval_sec=0, slowest_limit=0
+			) == 1
+		long_annotations = [
+			line for line in long_output.getvalue().splitlines()
+			if line.startswith("::error")
+		]
+		assert long_annotations == [
+			f"{annotation_prefix}synthetic_long_fail: "
+			+ "x" * _TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS
+			+ "..."
+		]
+
+		injection_output = io.StringIO()
+		with contextlib.redirect_stdout(injection_output):
+			assert _run_selected_tests(
+				[synthetic_injection_fail], heartbeat_interval_sec=0, slowest_limit=0
+			) == 1
+		injection_annotations = [
+			line for line in injection_output.getvalue().splitlines()
+			if line.startswith("::error title=")
+		]
+		assert injection_annotations == [
+			f"{annotation_prefix}synthetic_injection_fail: boom%0D%0A::error::fake"
+		]
+		# The raw FAIL line must not start a forged command either.
+		assert [
+			line for line in injection_output.getvalue().splitlines()
+			if line.lstrip().startswith("::")
+		] == injection_annotations
+		assert "| ::error::fake" in injection_output.getvalue().splitlines()
+
+		saved_argv = sys.argv
+		try:
+			sys.argv = ["test_orchestrate_poll_process.py", "test_no_such_name\n::warning::forged"]
+			main_output = io.StringIO()
+			with contextlib.redirect_stdout(main_output):
+				assert main() == 1
+		finally:
+			sys.argv = saved_argv
+		main_lines = main_output.getvalue().splitlines()
+		assert main_lines == [
+			"  FAIL  test_no_such_name",
+			"| ::warning::forged: unknown test name",
+			f"{annotation_prefix}test_no_such_name%0A::warning::forged: unknown test name",
+		]
+
+		assert _test_runner_failure_annotation("bad\r\nname%", "x\ry") == (
+			f"{annotation_prefix}bad%0D%0Aname%25: x%0Dy"
+		)
+
+		del os.environ["GITHUB_ACTIONS"]
+		quiet_output = io.StringIO()
+		with contextlib.redirect_stdout(quiet_output):
+			assert _run_selected_tests(
+				[synthetic_fail], heartbeat_interval_sec=0, slowest_limit=0
+			) == 1
+		assert "::error" not in quiet_output.getvalue()
+		assert _test_runner_failure_annotation("synthetic_fail", "x") is None
+	finally:
+		os.environ.pop("GITHUB_ACTIONS", None)
+		if saved_github_actions is not None:
+			os.environ["GITHUB_ACTIONS"] = saved_github_actions
+
+
 def test_custom_runner_tests_need_no_pytest_arguments():
 	import inspect
 
@@ -23394,6 +24123,8 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	PR whose body carries a close keyword, keep skipping non-open PRs,
 	and treat an API failure as unknown state — all with exactly one
 	``pulls/<n>`` request per candidate."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")
@@ -23517,7 +24248,13 @@ def main() -> int:
 	if selected_names:
 		missing = [name for name in selected_names if name not in tests_by_name]
 		for name in missing:
-			print(f"  FAIL  {name}: unknown test name", flush=True)
+			print(
+				_test_runner_neutralize_workflow_commands(f"  FAIL  {name}: unknown test name"),
+				flush=True,
+			)
+			missing_annotation = _test_runner_failure_annotation(name, "unknown test name")
+			if missing_annotation is not None:
+				print(missing_annotation, flush=True)
 		if missing:
 			return 1
 		test_funcs = [tests_by_name[name] for name in selected_names]
