@@ -169,10 +169,38 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			)
 
 
+def _refctx_step(wf: str) -> str:
+	start = wf.index("- name: Resolve integration ref")
+	end = wf.find("\n      - name:", start + 1)
+	return wf[start:] if end == -1 else wf[start:end]
+
+
+def test_required_workflows_fail_closed_on_ci_triage_routing_refusal() -> None:
+	"""Resolver exit 3 (CI-triage routing refused) must never fall back to main."""
+	env_line = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}"
+	forward = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \\'
+	capture = '})" || resolver_rc=$?'
+	refused_branch = 'elif [ "${resolver_rc}" -eq 3 ]; then'
+	fallback = 'echo "::warning::Canonical integration resolver failed; falling back to default branch."'
+	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
+		step = _refctx_step(_workflow_text(workflow_name))
+		assert env_line in step, f"{workflow_name} refctx missing routing flag env"
+		assert forward in step, f"{workflow_name} refctx does not forward the routing flag"
+		assert "resolver_rc=0" in step and capture in step, f"{workflow_name} refctx missing resolver rc capture"
+		assert 'if [ "${resolver_rc}" -eq 0 ]; then' in step, f"{workflow_name} refctx missing rc 0 branch"
+		assert refused_branch in step, f"{workflow_name} refctx missing exit-3 branch"
+		refused = step[step.index(refused_branch):step.index(fallback)]
+		assert "exit 1" in refused, f"{workflow_name} exit-3 branch must fail the step"
+		assert "GITHUB_OUTPUT" not in refused, f"{workflow_name} exit-3 branch must not write a ref"
+		assert fallback in step, f"{workflow_name} non-3 failure lost its default-branch fallback"
+		assert "${{ steps.refctx" not in step, f"{workflow_name} refctx interpolates its own output"
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
 	test_required_workflows_enforce_integration_ref_contract()
+	test_required_workflows_fail_closed_on_ci_triage_routing_refusal()
 	return 0
 
 
