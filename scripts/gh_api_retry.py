@@ -114,10 +114,17 @@ def endpoint_bucket(args: Sequence[str]) -> str:
 	return "core"
 
 
+_GRAPHQL_MUTATION_RE = re.compile(r"(^|\})\s*mutation(?![A-Za-z0-9_])", re.IGNORECASE)
+
+
 def graphql_doc_is_mutation(text: str) -> bool:
-	"""First operation keyword, after whitespace and # comments, is "mutation"."""
-	stripped = " ".join(line.split("#", 1)[0] for line in text.splitlines()).lstrip()
-	return stripped.lower().startswith("mutation")
+	"""Any operation keyword (document start or after "}"; # comments ignored) is "mutation".
+
+	Mirrors bash _gh_graphql_doc_is_mutation: a query followed by a mutation
+	that operationName may select counts as a mutation, so it is not retried.
+	"""
+	stripped = " ".join(line.split("#", 1)[0] for line in text.splitlines())
+	return _GRAPHQL_MUTATION_RE.search(stripped) is not None
 
 
 def _read_doc(path: str) -> str | None:
@@ -205,7 +212,7 @@ def is_unsafe_post(args: Sequence[str]) -> bool:
 			doc = _read_doc(value[len("query=@"):])
 			if doc is None or graphql_doc_is_mutation(doc):
 				mutation = True
-		elif value.startswith("query=") and value[len("query="):].lstrip().lower().startswith("mutation"):
+		elif value.startswith("query=") and graphql_doc_is_mutation(value[len("query="):]):
 			mutation = True
 	method = method.upper()
 	if method and method != "POST":

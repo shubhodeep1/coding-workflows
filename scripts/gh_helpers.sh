@@ -701,11 +701,9 @@ _gh_api_args_unsafe_post()
 				fi
 				;;
 			query=*)
-				_val="${_val#query=}"
-				_val="${_val#"${_val%%[![:space:]]*}"}"
-				case "${_val}" in
-					[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]*) _mutation=1 ;;
-				esac
+				if _gh_graphql_doc_is_mutation "${_val#query=}"; then
+					_mutation=1
+				fi
 				;;
 		esac
 	done
@@ -732,20 +730,20 @@ _gh_api_args_unsafe_post()
 	return 0
 }
 
-# _gh_graphql_doc_is_mutation <document> — true when the first operation
-# keyword, after leading whitespace and # comments, is "mutation". Pure bash:
-# no pipeline, so callers running under pipefail cannot see a SIGPIPE status.
+# _gh_graphql_doc_is_mutation <document> — true when any operation keyword
+# (at the start of the document or after a closing brace, ignoring whitespace
+# and # comments) is "mutation". A document holding a query and a mutation,
+# where operationName may select the mutation, therefore counts as a mutation.
+# A field named "mutation" after a "}" also matches; that only costs a retry.
+# Pure bash: no pipeline, so callers running under pipefail cannot see a
+# SIGPIPE status.
 _gh_graphql_doc_is_mutation()
 {
-	local _line _out=""
+	local _line _out="" _re='(^|\})[[:space:]]*[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]([^A-Za-z0-9_]|$)'
 	while IFS= read -r _line || [ -n "${_line}" ]; do
 		_out+="${_line%%#*} "
 	done <<< "$1"
-	_out="${_out#"${_out%%[![:space:]]*}"}"
-	case "${_out}" in
-		[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]*) return 0 ;;
-	esac
-	return 1
+	[[ "${_out}" =~ ${_re} ]]
 }
 
 # _gh_cmd_is_unsafe_post <full command…> — gh_retry-style command check.

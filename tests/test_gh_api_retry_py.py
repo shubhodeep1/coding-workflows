@@ -66,6 +66,8 @@ def test_bash_classify_parity(case: dict, tmp_path: Path) -> None:
 		(["repos/o/r/issues/1"], False),
 		(["graphql", "-f", "query={ viewer { login } }"], False),
 		(["graphql", "-f", "query=  mutation { x }"], True),
+		(["graphql", "-f", "query=query A { a } mutation B { b }", "-f", "operationName=B"], True),
+		(["graphql", "-f", "query={ repository { mutationCount } }"], False),
 		(["graphql", "-F", "query=@does-not-exist.graphql"], True),
 		(["graphql", "--input", "-"], True),
 		(["repos/o/r/pulls", "--jq", ".[] | select(.x == \"-f\")"], False),

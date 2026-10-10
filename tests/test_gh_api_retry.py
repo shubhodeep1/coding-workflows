@@ -241,6 +241,28 @@ def test_graphql_documents_in_files_are_classified(tmp_path: Path) -> None:
 	assert _gh_bash(tmp_path, "_gh_api_args_unsafe_post graphql -F query=@missing.graphql; echo rc=$?") == "rc=0"
 
 
+@pytest.mark.parametrize(
+	"doc,is_mutation",
+	[
+		("query { a }", False),
+		("mutation { a }", True),
+		("# leading comment\n  mutation X { a }", True),
+		("query A { a } mutation B { b }", True),
+		("query { mutationCount }", False),
+		("# mutation in a comment\nquery { a }", False),
+	],
+)
+def test_graphql_mutation_detection_matches_python_twin(tmp_path: Path, doc: str, is_mutation: bool) -> None:
+	"""A later mutation that operationName can select is not retried (bash and Python agree)."""
+	import sys
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import gh_api_retry as gar
+	(tmp_path / "doc.graphql").write_text(doc, encoding="utf-8")
+	got = _gh_bash(tmp_path, '_gh_graphql_doc_is_mutation "$(cat doc.graphql)"; echo rc=$?')
+	assert got == ("rc=0" if is_mutation else "rc=1"), doc
+	assert gar.graphql_doc_is_mutation(doc) is is_mutation
+
+
 def _gh_bash(tmp_path: Path, command: str) -> str:
 	script = f"set -uo pipefail; source '{GH_HELPERS}'; cd '{tmp_path}'; {command}"
 	return subprocess.run(["bash", "-c", script], capture_output=True, text=True).stdout.strip()
