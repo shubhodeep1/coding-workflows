@@ -3144,6 +3144,32 @@ def test_unrouted_reports_no_command_and_automation_bodies_are_not_human():
 	assert _unrouted(_unrouted_issue([plan])) == []
 
 
+def test_unrouted_ignores_pipeline_bookkeeping_comments():
+	# Issue #7013: the Telegram cleanup marker, posted one second after the
+	# ai:blocked label, was flagged as an unrouted human reply.
+	blocked = _unrouted_comment(2, "Planning blocked: human input required.\nReason: superseded", 20)
+	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:11613 -->", 19.98)
+	assert _unrouted(_unrouted_issue([blocked, cleanup], [("ai:blocked", 20)])) == []
+	for body in (
+		"<!-- workflow-failure-heal:occurrence -->\nAnother occurrence of this failure: run 1",
+		"<!-- tg_phase:plan:12 -->",
+		"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->\nPartial autofix",
+		"  <!-- a -->\n\n<!-- b -->  ",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(4, body, 30)])) == [], body
+
+
+def test_unrouted_bookkeeping_after_a_reply_does_not_hide_it():
+	answer = _unrouted_comment(2, "Pick option B.", 40)
+	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:1 -->", 30)
+	heal = _unrouted_comment(4, "<!-- workflow-failure-heal:occurrence -->\nAnother occurrence", 25)
+	assert _unrouted(_unrouted_issue([answer, cleanup, heal])) == [
+		{"issue": 7, "comment_id": 2, "reason": "no_command", "age_minutes": 40}]
+	# Visible text around an unrelated HTML comment is still a human reply.
+	quoted = _unrouted_comment(5, "Answer: B <!-- note to self -->", 20)
+	assert _unrouted(_unrouted_issue([quoted]))[0]["comment_id"] == 5
+
+
 def test_unrouted_cli_reads_stdin():
 	details = _unrouted_issue([_unrouted_comment(2, "answer\n\n/reclarify", 20)])
 	result = subprocess.run(
