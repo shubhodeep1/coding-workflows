@@ -47,8 +47,8 @@
 #   MERGE_TRAIN_HEAD_REF_PREFIX            default ai/issue-
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 #   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
-#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 24; 0 disables the age bypass;
-#                                          a non-integer warns and falls back to 24
+#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 6; 0 disables the age bypass;
+#                                          a non-integer warns and falls back to 6
 #   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
 #                                          (comma-separated); empty, none or off
 #                                          disables the priority lane
@@ -171,10 +171,10 @@ case "$(printf '%s' "${MERGE_TRAIN_CONFLICT_CHECK_ENABLED:-true}" | tr '[:upper:
 	true|1|yes|on) MT_CONFLICT_CHECK="true" ;;
 	*) MT_CONFLICT_CHECK="false" ;;
 esac
-MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-24}"
+MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-6}"
 if ! [[ "${MT_HEAD_MAX_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
-	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 24."
-	MT_HEAD_MAX_AGE_HOURS=24
+	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 6."
+	MT_HEAD_MAX_AGE_HOURS=6
 fi
 MT_HEAD_MAX_AGE_HOURS=$((10#${MT_HEAD_MAX_AGE_HOURS}))
 # Unset means the default; an explicitly empty value disables the lane. A repo
@@ -433,7 +433,7 @@ _mt_blockers_for_into() {
 			_mt_conflict_probe "${own_sha}" "${__mt_cand_sha[$idx]}"
 			conflict_state="${_MT_PROBE_RESULT}"
 			case "${conflict_state}" in
-				none)
+				none|ignored)
 					action="skip"
 					skipped_clean=$((skipped_clean + 1))
 					;;
@@ -610,8 +610,9 @@ _mt_blocker_is_stale()
 
 # Conflict probe (issue #6570). `_mt_conflict_probe <own_sha> <blocker_sha>`
 # sets _MT_PROBE_RESULT to none (the heads merge cleanly), conflict (git
-# reports a content conflict; _MT_PROBE_PATHS lists the paths) or unknown (any
-# other outcome). Runs in the caller's shell so its caches persist.
+# reports a content conflict; _MT_PROBE_PATHS lists the paths), ignored (every
+# conflicted path is in MERGE_TRAIN_IGNORE_PATHS; does not block) or unknown
+# (any other outcome). Runs in the caller's shell so its caches persist.
 # Missing heads are fetched by SHA with --no-write-fetch-head (FETCH_HEAD for
 # later steps is untouched) and --depth=200 only in an already-shallow clone,
 # so a full clone is never made shallow. merge-tree writes only objects; it
@@ -747,6 +748,13 @@ _mt_conflict_probe()
 		1)
 			_MT_PROBE_RESULT="conflict"
 			_MT_PROBE_PATHS="$(printf '%s\n' "${probe_out}" | sed '1d' | sed '/^$/d' | sort -u)"
+			# Conflicts only in MERGE_TRAIN_IGNORE_PATHS (the generated
+			# workspace manifest by default) do not block: the path-overlap
+			# rule already ignores those files, and the later merge
+			# regenerates them.
+			if [ -n "${_MT_PROBE_PATHS}" ] && [ -z "$(_mt_drop_ignored "${_MT_PROBE_PATHS}" | sed '/^$/d')" ]; then
+				_MT_PROBE_RESULT="ignored"
+			fi
 			;;
 		*) _MT_PROBE_RESULT="unknown" ;;
 	esac
@@ -1093,12 +1101,20 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            filter. Each is logged once on stderr
 #            (CLAUDE.md §8):
 #            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
+#            A shifted page is first re-read up to
+#            MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES times per listing (default 2,
+#            0-5; MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP seconds apart,
+#            default 2), each logged as
+#            MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted ... attempt=<n>/<max>
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
+	local __mt_runs_shift_retries=0 __mt_runs_shift_retry_max="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES:-2}" __mt_runs_shift_sleep="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP:-2}"
+	[[ "${__mt_runs_shift_retry_max}" =~ ^[0-5]$ ]] || __mt_runs_shift_retry_max=2
+	[[ "${__mt_runs_shift_sleep}" =~ ^[0-9]{1,2}$ ]] || __mt_runs_shift_sleep=2
 	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting in_progress; do
 		__mt_runs_page=1
 		__mt_runs_total=0
@@ -1142,6 +1158,17 @@ _mt_inflight_review_branches()
 				break
 			fi
 			if [ "${__mt_runs_page_len}" -lt 100 ]; then
+				# Runs changed status between GitHub's count and its listing. One
+				# run starting mid-read used to abort the whole release tick
+				# (run 38003551535); re-read the same query a bounded number of
+				# times (shared by every status of this listing) first. Runs
+				# already read stay in the union, so a re-read only adds runs.
+				if [ "${__mt_runs_shift_retries}" -lt "${__mt_runs_shift_retry_max}" ]; then
+					__mt_runs_shift_retries=$((__mt_runs_shift_retries + 1))
+					echo "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total} attempt=${__mt_runs_shift_retries}/${__mt_runs_shift_retry_max}" >&2
+					sleep "${__mt_runs_shift_sleep}"
+					continue
+				fi
 				__mt_runs_reason="listing_shifted"
 				break 2
 			fi
