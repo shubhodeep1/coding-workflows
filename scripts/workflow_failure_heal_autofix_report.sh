@@ -177,9 +177,22 @@ PRIOR_FAILURES=0
 # login, or with a staged helper that predates the filter, the streak counts
 # only this run (fail closed): an unfiltered count could be inflated by
 # forged comments to force heal dispatches.
+# Prints the sanitized login when it is a valid GitHub login, else nothing.
+# Each source is validated before the next is tried, so a malformed caller
+# value still falls through to the token's own login.
+streak_valid_login()
+{
+	local candidate
+	candidate="$(printf '%s' "${1:-}" | head -1 | tr -d '[:space:]')"
+	if [[ "${candidate}" =~ ^[A-Za-z0-9-]{1,39}(\[bot\])?$ ]]; then
+		printf '%s' "${candidate}"
+	fi
+	return 0
+}
 STREAK_AUTHOR_LOGIN="${AUTOFIX_FAILURE_MARKER_AUTHOR:-}"
+STREAK_AUTHOR_LOGIN="$(streak_valid_login "${STREAK_AUTHOR_LOGIN}")"
 if [ -z "${STREAK_AUTHOR_LOGIN}" ]; then
-	STREAK_AUTHOR_LOGIN="${AUTOFIX_STREAK_AUTHOR_LOGIN:-}"
+	STREAK_AUTHOR_LOGIN="$(streak_valid_login "${AUTOFIX_STREAK_AUTHOR_LOGIN:-}")"
 fi
 if [ -z "${STREAK_AUTHOR_LOGIN}" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 	# CLAUDE.md §15 / unattended §14: no call this reporter already makes
@@ -187,10 +200,7 @@ if [ -z "${STREAK_AUTHOR_LOGIN}" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${COMMENTS
 	# reads come from the run's start), and the gate resolves it only when its
 	# cap scan runs. One read, only on a failed run with PR comments to count.
 	STREAK_AUTHOR_LOGIN="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || echo "")"
-fi
-STREAK_AUTHOR_LOGIN="$(printf '%s' "${STREAK_AUTHOR_LOGIN}" | head -1 | tr -d '[:space:]')"
-if ! [[ "${STREAK_AUTHOR_LOGIN}" =~ ^[A-Za-z0-9-]{1,39}(\[bot\])?$ ]]; then
-	STREAK_AUTHOR_LOGIN=""
+	STREAK_AUTHOR_LOGIN="$(streak_valid_login "${STREAK_AUTHOR_LOGIN}")"
 fi
 STREAK_ARGS=(--comments-json "${COMMENTS_FILE}")
 STREAK_AUTHOR_FILTER="off"
