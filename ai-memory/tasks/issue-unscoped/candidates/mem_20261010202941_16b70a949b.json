@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:23378 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The raw failure text on the pre-existing `FAIL` line is not escaped, so a multiline failure can emit a forged workflow command despite the new annotation escaping.\n  WHY: CI replays the shard log, and the test only checks lines beginning with `::error title=`; reviewers rated this NIT where stated, noting the failure text comes from controlled sources and does not cross a new trust boundary.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: AD-1 asks for the unknown-test-name annotation path to be covered by a contract test.\n  expected_change_site: tests/test_orchestrate_poll_process.py, `main()` unknown-name branch\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: `test_custom_runner_emits_github_failure_annotation_only_on_actions` covers `_run_selected_tests`, but no test runs `main()` with an unknown test name.\n- requirement: The issue's \"Suggested fix\" asks to retrieve shard 1's full output, reproduce the failing test, and fix a demonstrated defect, or otherwise report that the cause is unverified.\n  expected_change_site: PR description or issue comment\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The diff does not establish the root cause of run 37883807697; the logs are not available to this review.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py | severity=NIT | confidence=3\n  PROBLEM: The new escaping covers only the `::error title=...` line; the raw `FAIL` line can still emit a workflow command from multiline failure text.\n  WHY: The shard log is replayed to stdout, while the test checks only lines starting with `::error title=`; the failure text comes from test code and poller output already running in the job, so no new trust boundary is crossed.\n\n- Requirement: AD-1 asks that the failure annotation name the failing test, including unknown test names, with a contract test.\n  Expected change site: tests/test_orchestrate_poll_process.py, `main()` unknown-name branch (`missing_annotation`).\n  Evidence of absence: The new test `test_custom_runner_emits_github_failure_annotation_only_on_actions` covers the `_run_selected_tests` path and the shared helper (shape, truncation, escaping, off-Actions silence). No test calls `main()` with an unknown test name, so the `missing_annotation` branch runs under no test.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n\n- Requirement: The issue's \"Suggested fix\" asks to retrieve shard 1's full output, reproduce the failing test, and fix a demonstrated defect, or otherwise report that the cause is unverified.\n  Expected change site: PR description or issue comment, not code.\n  Evidence of absence: The diff does not establish the root cause of run 37883807697. The logs are not available to this review. AD-1 deliberately limited the deliverable to making future failures self-identifying. I am not treating this as a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py | severity=NIT | confidence=3\n  PROBLEM: The pre-existing `FAIL` line prints raw multiline failure text, which can emit a workflow command even though the new annotation line is escaped.\n  WHY: `ci.yml:1427` replays the shard log, but the new test filters its injection-output assertions to lines starting with `::error title=`; reviewers characterize this as an information-only clarity / changelog-accuracy issue rather than a live security defect.\n\n- Requirement: Issue summary / AD-1 \u2014 \"Make future failures identify the test in the job log and GitHub annotations, including unknown test names\", with \"a contract test\" proposed alongside it.\n  Expected change site: tests/test_orchestrate_poll_process.py \u2014 both the `_run_selected_tests` annotation call and the `main()` unknown-name annotation call (~23747).\n  Evidence of absence: The new `test_custom_runner_emits_github_failure_annotation_only_on_actions` exercises `_run_selected_tests` directly. The `main()` branch that calls `_test_runner_failure_annotation(name, \"unknown test name\")` for missing CLI-supplied test names is only covered by the shared helper unit test, not by an end-to-end run of `main()` against a missing name.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py, line 23378\n  PROBLEM: The new annotation escapes failure text, but the preceding FAIL line prints it raw.\n  WHY: CI replays the shard log at .github/workflows/ci.yml:1427, so multiline failure text containing a workflow command can emit another command; the added injection test only inspects lines beginning with `::error title=`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ac2aa4528cbc0db09e4a30ca35a63a0fef0c5e07f114f44260b95cd415f95f6b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6861,
+    "run_id": "38081668704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38081668704",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010202941_16b70a949b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6861,
+    "run_id": "38081668704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T20:29:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
