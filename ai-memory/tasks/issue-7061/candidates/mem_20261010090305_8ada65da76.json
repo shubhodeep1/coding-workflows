@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which failing check does \"shard-1\" refer to?\nChoices:\nA. The `orchestrate-poll (1)` matrix job of `.github/workflows/ci.yml` (group index 1, all of its local shards) (RECOMMENDED)\nB. Local shard 1 (\"orchestrate-poll shard 1 failed\") inside whichever `orchestrate-poll (N)` group failed on PR #6576's recorded head; the failing group is named in #6886\nC. One of the four `tests-*` jobs (the first test job, `tests-hooks-and-orchestrator`)\nQ2: Which code should the reproduction run against?\nChoices:\nA. PR #6576's recorded head commit as named in #6886, on that PR's head branch, with any fix targeting that branch (RECOMMENDED)\nB. PR #6576's current head (the branch tip today), whether or not it still matches the recorded head\nC. The current default branch (`main`), as the earlier attempt did\n**Note:** C contradicts the issue's \"at the PR head\" instruction and repeats the attempt that ended BLOCKED.\nQ3: The implement sandbox has no network or GitHub token, so it cannot download the shard log or re-run the check. Where should the result go when no failure can be reproduced?\nChoices:\nA. Host-side steps (not the sandboxed editor) collect the failing job's log and re-run the check. The implementer then reproduces the failure locally with the same group and shard partition and fixes a demonstrated defect. If nothing reproduces, it commits a short report under `docs/` (tests run, run IDs, results) so the PR is not a no-op (RECOMMENDED)\nB. Same reproduction, but with no committed report: post the findings as an issue comment and close the issue as resolved without a PR\nC. Re-run only the local partition (`CI_POLL_TEST_GROUP_INDEX=1`, `CI_POLL_TEST_GROUP_COUNT=4`, shards 4) several times in the sandbox and report from that alone, without the original log\n**Note:** B and C may fall into the same no-change \u2192 BLOCKED/no-op path that stranded #6886.",
+  "fingerprint": "3a75145e7a5dbdd2de2aa3986a0907d79b63261a29fd3b5ba7c881ec0c305dcf",
+  "lineage": {
+    "issue_number": 7061,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38039650717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38039650717",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010090305_8ada65da76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7061,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38039650717"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7061 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T09:03:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
