@@ -474,5 +474,115 @@ class ShardJudgeTest(unittest.TestCase):
 				self.assertIn("orchestrate-poll shard 1 failed (exit 1)", result.stdout)
 
 
+	def green_shards(self) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+
+	def test_all_shards_green_emit_no_error_lines(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(step_run, self.green_shards())
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertNotIn("::error::", result.stdout)
+
+
+class ShardFailureNamesTest(unittest.TestCase):
+	"""A failing shard's FAIL lines are repeated at the end of the step (#6919).
+
+	Each shard's log group is printed in shard order, so a failure in an early
+	shard used to sit above the later shards' logs, out of the job log tail
+	that triage reads. Two triage generations of #6919 came back inconclusive
+	because only `shard N failed (exit 1)` reached the tail.
+	"""
+
+	step_runs = ShardJudgeTest.step_runs
+	green_shards = ShardJudgeTest.green_shards
+
+	def failing_shard(self, log: str, rc: str = "1\n") -> dict[int, dict[str, str]]:
+		shard_files = self.green_shards()
+		shard_files[1] = {"txt": "test_1\n", "log": log, "rc": rc}
+		return shard_files
+
+	def after_last_group(self, stdout: str) -> str:
+		return stdout[stdout.rindex("::endgroup::"):]
+
+	def test_fail_line_is_repeated_after_every_log_group(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(
+					step_run,
+					self.failing_shard("  PASS  test_a\n  FAIL  test_x: boom\n1 passed, 1 failed, 2 total\n"),
+				)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertIn("::error::orchestrate-poll shard 1 failed (exit 1)", result.stdout)
+				tail = self.after_last_group(result.stdout)
+				self.assertIn("::error::orchestrate-poll shard 1: FAIL  test_x: boom\n", tail)
+				self.assertLess(
+					tail.index("shard 1: FAIL  test_x"),
+					tail.index("1 orchestrate-poll shard(s) failed."),
+				)
+				self.assertNotIn("no FAIL line", result.stdout)
+
+	def test_fail_lines_are_capped_at_five_per_shard(self) -> None:
+		log = "".join(f"  FAIL  test_{i}: boom\n" for i in range(7))
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(step_run, self.failing_shard(log))
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				tail = self.after_last_group(result.stdout)
+				self.assertEqual(tail.count("::error::orchestrate-poll shard 1: FAIL  "), 5)
+				self.assertIn("shard 1: FAIL  test_4: boom", tail)
+				self.assertNotIn("shard 1: FAIL  test_5", tail)
+				self.assertIn("::error::orchestrate-poll shard 1: and 2 more FAIL line(s)", tail)
+
+	def test_percent_and_carriage_return_are_escaped(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(
+					step_run, self.failing_shard("  FAIL  test_x: 100% wrong\r\n")
+				)
+				tail = self.after_last_group(result.stdout)
+				self.assertIn("::error::orchestrate-poll shard 1: FAIL  test_x: 100%25 wrong\n", tail)
+
+	def test_long_fail_line_is_truncated(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(
+					step_run, self.failing_shard("  FAIL  test_x: " + "y" * 1000 + "\n")
+				)
+				line = next(
+					line
+					for line in result.stdout.splitlines()
+					if line.startswith("::error::orchestrate-poll shard 1: FAIL")
+				)
+				self.assertEqual(len(line), len("::error::orchestrate-poll shard 1: ") + 300)
+
+	def test_crash_without_fail_line_prints_the_log_tail(self) -> None:
+		log = "".join(f"line {i}\n" for i in range(40)) + "Traceback: boom\n"
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(step_run, self.failing_shard(log))
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				tail = self.after_last_group(result.stdout)
+				self.assertIn(
+					"::error::orchestrate-poll shard 1: no FAIL line in its log; last lines follow", tail
+				)
+				self.assertIn("--- orchestrate-poll shard 1 log tail ---", tail)
+				log_tail = tail[tail.index("--- orchestrate-poll shard 1 log tail ---"):]
+				self.assertIn("Traceback: boom", log_tail)
+				self.assertIn("line 11\n", log_tail)
+				self.assertNotIn("line 10\n", log_tail)
+				# The grep that finds nothing must not stop the step under pipefail.
+				self.assertIn("1 orchestrate-poll shard(s) failed.", tail)
+
+	def test_missing_rc_with_fail_line_still_names_the_test(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = self.green_shards()
+				shard_files[1] = {"txt": "test_1\n", "log": "  FAIL  test_x: boom\n"}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertIn("::error::orchestrate-poll shard 1: FAIL  test_x: boom", result.stdout)
+
+
 if __name__ == "__main__":
 	unittest.main()
