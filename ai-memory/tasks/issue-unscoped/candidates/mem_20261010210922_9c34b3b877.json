@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_dependency_registry_proxy.py:lines 37-42 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The request helper catches `BrokenPipeError` but not `ConnectionResetError` when `sendall` races with the server closing the socket.\n  WHY: A close reported as `ConnectionResetError` would escape before the helper reads the buffered 503 response; minimax_minimax-m3 rated this NIT, while the other reviewers did not state a severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_dependency_registry_proxy.py | location: request(), line 39 (`except BrokenPipeError:`)\n  PROBLEM: Only EPIPE is tolerated. A kernel or platform that reports the server's close-without-read as ECONNRESET on send would raise `ConnectionResetError`, and the test would fail before the buffered 503 is read.\n  WHY: This does not happen on the Linux CI runners.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_dependency_registry_proxy.py | Line or code reference: lines 37-42, the `except BrokenPipeError:` clause around `client.sendall(head)` | severity=NIT | confidence=2\n  PROBLEM: The except clause only catches `BrokenPipeError` (EPIPE). A platform, libc, or TCP-stack behaviour that reports the same remote-close race as `ConnectionResetError` (ECONNRESET) would not be caught and would propagate as an unhandled exception, re-failing the test.\n  WHY: The CI runner is `ubuntu-latest` and the busy path closes cleanly (FIN), so EPIPE is the typical signal and the current fix matches the observed failure. But a more defensive guard would also catch `ConnectionResetError`, which can occur when the remote side's close coincides with the client's sendall, or under different network/timing conditions. Both `BrokenPipeError` and `ConnectionResetError` inherit from `ConnectionError`, so catching that parent (or the tuple of both) covers both cases with one line and removes the cross-platform flakiness risk that a future macOS or non-default-Linux-lambda worker would re-introduce.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_dependency_registry_proxy.py | location: request(), lines 37-42\n  PROBLEM: The handler tolerates BrokenPipeError, but not ConnectionResetError if the socket close race is reported that way. The exception would escape before the helper reads the 503 response.\n  WHY: Catch ConnectionResetError alongside BrokenPipeError.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a9f37eaf61440f03b3e703f9b1f8a2271cae968c0ea602b6c16ab9639ad372f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6845,
+    "run_id": "38084889968",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38084889968",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010210922_9c34b3b877",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6845,
+    "run_id": "38084889968"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T21:09:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
