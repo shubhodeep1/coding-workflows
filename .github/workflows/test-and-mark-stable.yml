@@ -4931,6 +4931,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validation_harness_sandbox.py tests/test_validate_driver_credential_scrub.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
