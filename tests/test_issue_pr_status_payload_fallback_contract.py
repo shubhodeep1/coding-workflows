@@ -362,16 +362,19 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	) in text, "Loop must consult MANAGED_ISSUES for the current issue"
 	assert "is_managed_child=true" in text, "Loop must flip is_managed_child when matched"
 
-	# Close gate must include the managed-child branch — closing the
-	# issue when its PR merges into orchestrator/project-N (base != main).
+	# Issue #6631: a managed child merged into orchestrator/project-N still
+	# counts when its own body declares no integration branch (the branch
+	# lives on the tracking issue), so waves are not stranded.
 	assert (
-		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${managed_integration_merge}" = "true" ]; then'
-	) in text, (
+		'elif [ "${is_managed_child}" = "true" ] && [ -z "${declared_branch}" ]; then'
+	) in text, "Managed-child fallback must accept a merge when the child declares no branch"
+	assert 'target_merge_reason="managed_no_child_metadata"' in text
+	assert '[[ "${PR_BASE_REF}" == orchestrator/project-* ]]' in text
+	assert 'if [ "${PR_MERGED}" != "true" ]; then' in text, (
 		"Completion gate must hold on PR_MERGED!=true, PR_BASE_REF==default branch, "
 		"OR a managed child merged into its integration branch"
 	)
-	assert 'if [ "${is_managed_child}" = "true" ]; then' in text
-	assert '[[ "${PR_BASE_REF}" == orchestrator/project-* ]]' in text
+	assert 'target_merge_reason="closed_unmerged"' in text
 	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (
 		"Managed-child close path must emit a distinguishing log line"
 	)
@@ -384,6 +387,46 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	assert loop_check_pos != -1
 	assert label_call_pos != -1
 	assert managed_classify_pos < loop_check_pos < label_call_pos
+
+
+def test_merged_pr_counts_only_for_default_or_declared_integration_branch() -> None:
+	"""Issue #6631 (incident #4688 / PR #4748): a merged PR only labels the
+	issue ai:merged and closes it when its base is the repository default
+	branch, the issue's declared integration branch, or (managed child with
+	no declared branch) any base. Other merges leave labels unchanged."""
+	text = _workflow_text()
+	update_step = _step_script("Update linked issue labels when PR closes")
+	fetch_step = _step_script("Fetch memory helper scripts")
+
+	assert "PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in text
+	assert 'REPO_DEFAULT_BRANCH="${PR_DEFAULT_BRANCH:-}"' in update_step
+	assert '[ "${PR_BASE_REF}" = "main" ]' not in update_step, (
+		"The close gate must use the repository default branch, not a literal main"
+	)
+	assert '[ "${PR_BASE_REF}" != "main" ]' not in update_step
+
+	assert '[ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ]' in update_step
+	assert 'target_merge_reason="default_branch"' in update_step
+	assert '[ -n "${declared_branch}" ] && [ "${PR_BASE_REF}" = "${declared_branch}" ]' in update_step
+	assert 'target_merge_reason="declared_integration_branch"' in update_step
+	assert "labels, state and lineage left unchanged (not a target merge" in update_step
+
+	# The declared branch comes from bodies already fetched (no new API call)
+	# and is parsed by the shared orchestrate_lib.py parser.
+	assert "python3 scripts/orchestrate_lib.py extract-integration-branch" in update_step
+	assert update_step.count("add_issue_bodies_from_json \"$(printf") == 3
+	assert 'fetch_from_ref_or_local "scripts/orchestrate_lib.py" "scripts/orchestrate_lib.py"' in fetch_step
+	assert '_fetched_scripts+=("orchestrate_lib.py")' in fetch_step
+
+	# The target-merge decision must precede the label and close calls, and
+	# a non-target merge must `continue` before either.
+	decision_pos = update_step.find('declared_branch="$(declared_branch_for_issue "${issue_number}")"')
+	skip_pos = update_step.find("labels, state and lineage left unchanged (not a target merge")
+	continue_pos = update_step.find("continue", skip_pos)
+	label_pos = update_step.find('set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"')
+	close_pos = update_step.find('gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"')
+	assert -1 not in (decision_pos, skip_pos, continue_pos, label_pos, close_pos)
+	assert decision_pos < skip_pos < continue_pos < label_pos < close_pos
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +849,7 @@ if __name__ == "__main__":
 	test_merged_alert_fallback_preserves_managed_label_or_body_detection()
 	test_orchestrator_tracking_issues_are_skipped_in_label_close_loop()
 	test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge()
+	test_merged_pr_counts_only_for_default_or_declared_integration_branch()
 	test_non_default_merge_with_refs_and_comment_url_leaves_issue_untouched()
 	test_non_default_merge_with_closing_ref_does_not_label_or_finalize()
 	test_managed_child_integration_merge_still_labels_closes_and_finalizes()

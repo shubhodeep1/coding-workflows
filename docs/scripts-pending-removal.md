@@ -196,6 +196,18 @@ Copy this block when adding a new entry:
 - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
 - **Owner:** @shubhodeep1
 
+### `scripts/assemble_agents.py`
+
+- **Introduced in:** claude/elegant-mendel-5pli2i-agents-fragments (2026-10-10)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. The script is the only thing that folds `agents.d/` fragments into `agents.md` (this repo) and `AGENTS.md` (consumers); removing it without a replacement strands every fragment and hides the documentation it carries from the next release.
+- **Removal preflight checks:**
+  - `rg -n 'assemble_agents\.py' .github/workflows/ scripts/build_static_context.sh` returns no hits — no release step, consumer sync, CI check, staging list or static-context reader still uses it.
+  - `ls -A agents.d/` shows only `README.md` in this repo, and the same holds for every repo in `.github/ai/consumer_repos.json` — no unassembled fragment would be stranded.
+  - `rg -n 'agents\.d' CLAUDE.md prompts/mode-implement.txt prompts/_templates/mode-implement.txt` returns no hits — §30 and both implement prompts have been migrated, so agents are no longer told to write fragments nothing will fold.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_assemble_agents.py tests/test_agents_fragment_contract.py` — both suites removed or migrated with the script.
+- **Owner:** @shubhodeep1
+
 ### `scripts/assemble_changelog.py`
 
 - **Introduced in:** claude/validate-consumer-issue-1zebie (2026-08-06)

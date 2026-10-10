@@ -112,4 +112,6 @@ def test_conflict_resolver_reasoning_env_wired() -> None:
 	assert "xhigh|high|medium|none)" in resolver_script
 	assert "xhigh|high|medium|low|none" not in resolver_script
 	assert '"${_current_reasoning_effort}"' in resolver_script
-	assert 'opencode_run_cmd "$@"' in resolver_script
+	# The resolver runs only in the review sandbox (no host OpenCode
+	# fallback); the selected variant rides that call.
+	assert '"${MODEL_EDITOR}" "${_current_reasoning_effort}"' in resolver_script

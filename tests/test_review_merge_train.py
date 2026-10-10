@@ -149,6 +149,17 @@ case "${method}" in
         n="${path#*/collaborators/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/permission_${n}.json"
         [ -f "${fixture}" ] || exit 1 ;;
       repos/*/issues/comments/*) fixture="${FAKE_GH_DIR}/comment_body.json" ;;
+      repos/*)
+        # The repository itself: the default-branch read (issue #6629).
+        # default_branch_fail fails it; default_branch overrides "main".
+        if [[ "${path}" =~ ^repos/[^/]+/[^/]+$ ]]; then
+          if [ -f "${FAKE_GH_DIR}/default_branch_fail" ]; then exit 1; fi
+          db="main"
+          [ -f "${FAKE_GH_DIR}/default_branch" ] && db="$(cat "${FAKE_GH_DIR}/default_branch")"
+          printf '{"default_branch":"%s"}\n' "${db}" | jq -r "${jqf:-.}"
+          exit 0
+        fi
+        echo "unexpected GET ${path}" >&2; exit 1 ;;
       *) echo "unexpected GET ${path}" >&2; exit 1 ;;
     esac
     if [[ "${path}" == repos/*/issues/*/comments ]] && [[ "${jqf}" == *"merge-train:released"* ]] && [ -f "${FAKE_GH_DIR}/fail_released_comment_lookup" ]; then
@@ -1266,7 +1277,6 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent"},
 	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent",
 	 "path": ".github/workflows/review_autofix.yml"},
-	{"head_branch": "ai/issue-9999", "event": "workflow_dispatch", "display_title": "AI Review"},
 ])
 def test_release_leaves_pr_queued_when_a_review_run_has_no_key(tmp_path: Path, run_fields: dict) -> None:
 	"""PR #5451, review of head fd3ad67 (AD-14): a review run with no non-empty
@@ -1407,11 +1417,54 @@ def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
 		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
 		 "path": ".github/workflows/ci.yml"},
 	], total_count_override={"queued": 3})
-	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
 	assert result.returncode == 0, result.stderr
-	assert "reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	# A shift that persists is re-read twice (the default budget), then the
+	# listing is incomplete as before.
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "attempt=2/2" in result.stderr
+	assert "attempt=3/" not in result.stderr
+	assert "outcome=incomplete reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	assert log_text.count("actions/runs?status=queued") == 3
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+
+
+def test_release_rereads_a_listing_that_shifted_once(tmp_path: Path) -> None:
+	"""One run changing status mid-read no longer costs the release tick (run 38003551535)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = [{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push", "path": ".github/workflows/ci.yml"}]
+	_write_runs(fixtures, runs, total_count_override={"queued": 3})
+	# Calls 1-3 read requested, pending and queued (shifted); the re-read of
+	# queued (call 4) and every later call see a consistent listing.
+	(fixtures / "actions_runs_after_switch.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	(fixtures / "actions_runs_switch_at").write_text("4", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE" not in result.stdout
+	# No review run is in flight, so the queued PR is released this tick.
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+
+
+def test_listing_shift_retry_budget_is_configurable_and_validated(tmp_path: Path) -> None:
+	for value, expected_queued_reads in (("0", 1), ("1", 2), ("abc", 3), ("9", 3)):
+		case_dir = tmp_path / f"case-{value}"
+		case_dir.mkdir()
+		bin_dir, fixtures, log = _install_fake_gh(case_dir)
+		_queued_pr_4077(fixtures)
+		_write_runs(fixtures, [
+			{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
+			 "path": ".github/workflows/ci.yml"},
+		], total_count_override={"queued": 3})
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log,
+			MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES=value, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+		assert result.returncode == 0, result.stderr
+		assert log_text.count("actions/runs?status=queued") == expected_queued_reads, (value, log_text.count("actions/runs?status=queued"))
+		assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 
 
 def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
@@ -1776,6 +1829,104 @@ def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:
 	assert result.returncode == 2
 	assert "usage" in result.stderr
 
+
+# ---------------------------------------------------------------------------
+# Issue #6629 (re-issue of #5152): review-run provenance in the release listing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("run_fields", [
+	# (a) the same title on a branch copy of the wrapper.
+	{"head_branch": "attacker/branch", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/ai-review.yml"},
+	# (b) the title on the wrong wrapper path, or under another repository.
+	{"head_branch": "main", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/internal-review.yml"},
+	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
+	 "path": ".github/workflows/review_autofix.yml"},
+	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
+	 "path": "other/repo/.github/workflows/internal-review.yml@refs/heads/main"},
+	# An untitled dispatch on a non-default branch is not a trusted review run (Q3).
+	{"head_branch": "ai/issue-9999", "display_title": "AI Review", "path": ".github/workflows/ai-review.yml"},
+])
+def test_release_drops_spoofed_dispatch_runs(tmp_path: Path, run_fields: dict) -> None:
+	"""A dispatch run that fails the trust rule neither holds its PR nor makes
+	the listing incomplete: counting it would let a spoof hold every release."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [dict({"id": 6000, "status": "in_progress", "event": "workflow_dispatch"}, **run_fields)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_non_dispatch_pr_named_run_keeps_head_branch_keying(tmp_path: Path) -> None:
+	"""(c) A marker-titled run from another event is keyed by its head branch only."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 6001, "status": "in_progress", "event": "pull_request",
+		"head_branch": "ai/issue-9999", "display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_untitled_default_branch_dispatch_is_still_unattributed(tmp_path: Path) -> None:
+	"""review_autofix.yml self-dispatches carry no PR-named title; on the
+	default branch they still make the listing incomplete."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 6002, "status": "in_progress", "event": "workflow_dispatch",
+		"head_branch": "main", "display_title": "Codex PR Self-Healing Semantic Agent",
+		"path": ".github/workflows/review_autofix.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_honours_a_default_branch_other_than_main(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "default_branch").write_text("trunk", encoding="utf-8")
+	_write_runs(fixtures, [{"id": 6003, "status": "pending", "event": "workflow_dispatch",
+		"head_branch": "trunk", "display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_unresolvable_default_branch_leaves_pr_queued(tmp_path: Path) -> None:
+	"""(d) No `main` fallback: the listing is incomplete before any runs call."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "default_branch_fail").write_text("", encoding="utf-8")
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=default_branch_unavailable" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "actions/runs" not in log_text
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_reads_the_default_branch_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4078, "ai/issue-4065", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["a.py"])
+	_write_files(fixtures, 4078, ["b.py"])
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	reads = [line for line in log_text.splitlines() if line.rstrip().endswith("repos/acme/consumer --jq .default_branch")]
+	assert len(reads) == 1, log_text
 
 # ---------------------------------------------------------------------------
 # Issue #6570 (plan P1): real conflicts, bounded head, priority lane.

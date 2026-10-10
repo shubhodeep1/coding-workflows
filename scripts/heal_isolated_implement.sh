@@ -10,10 +10,18 @@ output="${2:?output required}"
 scope="${HEAL_SCOPE_FILE:-${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt}"
 support="${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts}"
 [ -s "${scope}" ] && [ -f "${support}/review_untrusted_workspace.py" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=scope_or_support_missing' >&2; exit 1; }
+# Claude engine: the heal editor runs through ai_engine.sh claude_run, which
+# starts the Claude Code CLI in codex_isolated_exec.sh's credential-free
+# write container on this script's snapshot (never on the host). The snapshot
+# then goes through the same syntax validation and scoped transfer as a codex
+# edit. Claude unavailable (exit 75) runs the isolated codex editor below.
+heal_engine=codex
 if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = claude ]; then
-	# There is no write-capable Claude image on this path; never run Claude on
-	# the credentialed host as a fallback. Use the isolated Codex engine.
-	echo 'AI_ENGINE_FALLBACK role=IMPLEMENT reason=isolated_claude_unavailable' >&2
+	if [ -f "${support}/ai_engine.sh" ] && [ ! -L "${support}/ai_engine.sh" ]; then
+		heal_engine=claude
+	else
+		echo 'AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing' >&2
+	fi
 fi
 root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-isolated.XXXXXXXX")"
 container="heal-editor-${GITHUB_RUN_ID:-local}-$$"
@@ -33,7 +41,13 @@ host_git_dir="${GIT_DIR:-}"
 snapshot_args=()
 [ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}"
-image="$(env -i PATH="${PATH}" docker build -q -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox/Dockerfile" "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox")"
+# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh).
+heal_sandbox_context="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox"
+if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+	image="$(env -i PATH="${PATH}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" bash "${support}/sandbox_image.sh" build --family clarify -f "${heal_sandbox_context}/Dockerfile" "${heal_sandbox_context}")" || image=""
+else
+	image="$(env -i PATH="${PATH}" docker build -q -f "${heal_sandbox_context}/Dockerfile" "${heal_sandbox_context}")"
+fi
 [ -n "${image}" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=image_build_failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY:?}" CLARIFY_MODEL="${MODEL_EDITOR:-openai/gpt-6-sol}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 "${support}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
@@ -47,9 +61,46 @@ done
 [ -S "${root}/socket/provider.sock" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=broker_timeout' >&2; exit 1; }
 wall="${HEAL_ISOLATED_EDITOR_WALL_SECS:-${EDITOR_MAX_WALL:-7800}}"
 [[ "${wall}" =~ ^[1-9][0-9]{0,5}$ ]] || exit 1
+run_editor_claude()
+{
+	local editor_prompt="$1" claude_rc=0
+	# The snapshot is this run's own workdir: never reuse the implement job's
+	# persistent workspace sandbox, which holds a different tree.
+	# shellcheck disable=SC2016  # expanded by the inner bash
+	env -u CODEX_ISOLATED_ROOT -u CODEX_ISOLATED_MODE timeout --kill-after=30s "${wall}" \
+		bash -c 'source "$1/ai_engine.sh" && claude_run IMPLEMENT "$2" "$3" "$4"' heal-claude-editor \
+		"${support}" "${editor_prompt}" "${root}/results/output" "${root}/source" || claude_rc=$?
+	case "${claude_rc}" in
+		0)
+			echo 'HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=success' >&2
+			return 0
+			;;
+		75)
+			# claude_run logged AI_ENGINE_FALLBACK role=IMPLEMENT reason=...
+			echo 'HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=unavailable action=codex' >&2
+			heal_engine=codex
+			return 75
+			;;
+		*)
+			# Any other exit (1 = editor failure, 124 = timeout, or anything
+			# unexpected) fails closed without a transfer. claude_run already
+			# maps its internal isolation-unavailable exit 76 to 75, so only
+			# 75 (no Docker/image, no credential, every account exhausted)
+			# runs the isolated codex editor.
+			echo "HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=failed reason=editor_exit_${claude_rc}" >&2
+			return 1
+			;;
+	esac
+}
 run_editor()
 {
 	local editor_prompt="$1" rc=0
+	if [ "${heal_engine}" = claude ]; then
+		run_editor_claude "${editor_prompt}" && return 0
+		rc=$?
+		[ "${rc}" -eq 75 ] || return 1
+		rc=0
+	fi
 	env -i PATH="${PATH}" timeout --kill-after=30s "${wall}" docker run --rm --init --name "${container}" \
 	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
 	--pids-limit 256 --memory 4g --cpus 2 \
@@ -97,13 +148,22 @@ validate_snapshot()
 	--workdir /source "${image}" /bin/bash /validator.sh > "${root}/results/validation.log" 2>&1 || validation_rc=$?
 	env -i PATH="${PATH}" docker rm -f "${container}" >/dev/null 2>&1 || true
 	if [ -n "$(env -i PATH="${PATH}" docker ps -aq --filter "name=^/${container}$")" ]; then
-		echo 'HEAL_ISOLATED_EDITOR phase=validate engine=codex outcome=container_survived' >&2
+		echo "HEAL_ISOLATED_EDITOR phase=validate engine=${heal_engine} outcome=container_survived" >&2
 		exit 1
 	fi
-	# timeout/docker failures are not syntax errors: never hand them to repair.
+	# The validator's findings, so a failed heal names the file and checker
+	# (#6982's two discarded attempts logged only reason=syntax). The log comes
+	# from the editor-modified snapshot: only its ::error lines are shown, each
+	# prefixed so the runner never reads one as a workflow command.
+	if [ "${validation_rc}" -ne 0 ]; then
+		grep -E '^::error' "${root}/results/validation.log" 2>/dev/null | head -n 20 | tr -d '\r' | cut -c1-300 \
+			| sed 's/^/HEAL_ISOLATED_EDITOR validation: /' >&2 || true
+	fi
+	# Timeout/docker failures and a missing checker (validator exit 3) are not
+	# syntax errors: never hand them to repair.
 	case "${validation_rc}" in
-		124|125|126|127|137)
-			echo "HEAL_ISOLATED_EDITOR phase=validate engine=codex outcome=failed reason=validator_unavailable rc=${validation_rc}" >&2
+		3|124|125|126|127|137)
+			echo "HEAL_ISOLATED_EDITOR phase=validate engine=${heal_engine} outcome=failed reason=validator_unavailable rc=${validation_rc}" >&2
 			exit 1
 			;;
 	esac
@@ -114,12 +174,12 @@ repair_limit="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-3}"
 repair_count=0
 while ! validate_snapshot; do
 	if [ "${repair_count}" -ge "${repair_limit}" ]; then
-		echo 'HEAL_ISOLATED_EDITOR phase=validate engine=codex outcome=failed reason=syntax' >&2
+		echo "HEAL_ISOLATED_EDITOR phase=validate engine=${heal_engine} outcome=failed reason=syntax" >&2
 		exit 1
 	fi
 	repair_count=$((repair_count + 1))
 	repair_template="${GITHUB_WORKSPACE}/.codex-workflow-src/prompts/mode-implement-repair-syntax.txt"
-	[ -f "${repair_template}" ] || { echo 'HEAL_ISOLATED_EDITOR phase=validate engine=codex outcome=failed reason=repair_template_missing' >&2; exit 1; }
+	[ -f "${repair_template}" ] || { echo "HEAL_ISOLATED_EDITOR phase=validate engine=${heal_engine} outcome=failed reason=repair_template_missing" >&2; exit 1; }
 	{
 		cat "${repair_template}"
 		printf '\n=== UNTRUSTED SYNTAX DIAGNOSTICS ===\n'
@@ -129,8 +189,8 @@ while ! validate_snapshot; do
 	run_editor "${root}/repair-prompt"
 done
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" --scope-file "${scope}"; then
-	echo 'HEAL_ISOLATED_EDITOR phase=transfer engine=codex outcome=failed reason=out_of_heal_scope' >&2
+	echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
 	exit 42
 fi
 install -m 0600 "${root}/results/output" "${output}"
-echo 'HEAL_ISOLATED_EDITOR phase=transfer engine=codex outcome=success reason=validated'
+echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=success reason=validated"

@@ -633,13 +633,70 @@ _gh_url() {
   printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
 }
 
+# tracking_issue_is_smoke_fixture <title> [<labels_json>]
+#
+# True for the projects the stable-release smoke gate creates
+# (.github/workflows/test-and-mark-stable.yml): every fixture title carries an
+# `[E2E ` marker (`[E2E Smoke Test] Review-Blocked Simulation (run N)`,
+# `[E2E Smoke Test alt-model] ...`, `[E2E Clarify Negative Test] ...`, and the
+# decomposed `[Orchestrator] [E2E Orchestrate Smoke N] ...`), and fixtures may
+# carry the `e2e-smoke-test` label. Reads only the tracking-issue list the
+# poller already fetched (no API call, CLAUDE.md §15).
+# tests/test_smoke_alert_silencing_contract.py derives the fixture titles from
+# the gate and fails when one of them is not detected.
+tracking_issue_is_smoke_fixture() {
+  local title="${1:-}"
+  local labels_json="${2:-[]}"
+  # Anchored like the workflows' issue-title detector (`^\[E2E `). A bare
+  # `[E2E ` prefix only occurs on issues the gate creates itself, because
+  # orchestrate.yml prefixes every decomposed tracking title with
+  # `[Orchestrator] `. After that prefix the title is model-written from the
+  # project description, so only the decompose fixture's own marker
+  # (`E2E Orchestrate Smoke`, bracketed or not, any case) counts: a real
+  # project such as `[Orchestrator] E2E tests for checkout` or
+  # `[Orchestrator] [E2E tests] for payments` keeps its alerts.
+  local title_lc="${title,,}"
+  case "${title}" in
+    "[E2E "*) return 0 ;;
+  esac
+  case "${title_lc}" in
+    "[orchestrator] [e2e orchestrate smoke "*|"[orchestrator] e2e orchestrate smoke "*) return 0 ;;
+  esac
+  printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "e2e-smoke-test")' >/dev/null 2>&1
+}
+
+# _smoke_fixture_alert_silenced <level>: true (and logged) when TRACKING_NUM
+# names a smoke-gate fixture project of this tick (SMOKE_FIXTURE_TRACKING_NUMS).
+# tg_notify and the project-scoped direct tg_send_msg alerts check it.
+_smoke_fixture_alert_silenced() {
+  local level="${1:-CRITICAL}"
+  [ -n "${TRACKING_NUM:-}" ] || return 1
+  case " ${SMOKE_FIXTURE_TRACKING_NUMS:-} " in
+    *" ${TRACKING_NUM} "*)
+      echo "TG_NOTIFY_SMOKE_SILENCED tracking_issue=${TRACKING_NUM} level=${level}"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
 # Automatically appends tracking issue link and Actions run link.
+# Smoke-gate fixture projects never page (operator decision Q42: A): the gate
+# closes its fixture PRs and issues while a poll it dispatched may still be
+# processing the project, which raised a CRITICAL "wave PR(s) closed without
+# merge" alert for project #7017 (release run 38010697715). The release
+# workflows silence their own sends through ALERT_MSG_LEVEL=SILENT, which the
+# scheduled poller does not inherit.
 tg_notify() {
   local msg="$1"
   local level="${2:-CRITICAL}"
   local tracking_url run_url
+
+  if _smoke_fixture_alert_silenced "${level}"; then
+    return 0
+  fi
 
   if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
     tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
@@ -1352,13 +1409,20 @@ assemble_judge_static_context() {
     echo "=== AI PIPELINE ==="
     cat ai_pipeline.md
     echo
+    local judge_agents_file="" judge_agents_render=""
     if [ -f AGENTS.md ]; then
-      echo "=== AGENTS.MD ==="
-      cat AGENTS.md
-      echo
+      judge_agents_file="AGENTS.md"
     elif [ -f agents.md ]; then
+      judge_agents_file="agents.md"
+    fi
+    if [ -n "${judge_agents_file}" ]; then
       echo "=== AGENTS.MD ==="
-      cat agents.md
+      # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+      if [ -d agents.d ] && [ ! -L agents.d ] && judge_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${judge_agents_file}" 2>/dev/null)"; then
+        printf '%s\n' "${judge_agents_render}"
+      else
+        cat "${judge_agents_file}"
+      fi
       echo
     fi
     cat "${judge_readme_context}"
@@ -4553,6 +4617,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # closing-keyword body reference — _pr_json_is_issue_implementation_pr).
 # A merged PR that merely mentions the issue (e.g. "Refs #<n>") does not
 # qualify and falls through to the no_merged_pr_found policy per origin.
+# Issue #6631: the PR must also have merged into the repository's default
+# branch or the issue's declared integration branch, with a fallback for
+# orchestrator-managed issues whose body declares no branch and whose PR
+# merged into an orchestrator/project-* branch
+# (_pr_json_base_is_target_merge); other bases log rejected=non_target_base.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
@@ -4577,13 +4646,13 @@ close_merged_issues_sweep() {
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
   ready_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:ready-to-merge" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
 
   # Build a single deduplicated list of {number, labels, origin} entries.
@@ -4596,7 +4665,7 @@ close_merged_issues_sweep() {
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
-          | {number: .number, labels: (.labels // []), origin: $origin}
+          | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
         );
       ($merged | normalize("merged_label")) as $m
       | ($ready | normalize("ready_label")) as $r
@@ -4614,9 +4683,33 @@ close_merged_issues_sweep() {
     return 0
   fi
 
+  # Issue #6631: a merge only counts when it lands on the repository's
+  # default branch or on the issue's own declared integration branch
+  # (_pr_json_base_is_target_merge). §14 audit: DEFAULT_BRANCH is assigned
+  # later in the tick (after this sweep runs), and CWS_DEFAULT_BRANCH is a
+  # per-tracking-issue value that is unset on sweep-only ticks, so reuse it
+  # when present and otherwise make one repos/<repo> read per sweep, only on
+  # ticks that have candidates. FINAL_DEFAULT_BRANCH is deliberately not
+  # reused: its lookups fall back to a literal "main" on API failure, which
+  # would let a main-based merge count in a repo whose default differs. An
+  # unresolvable default branch closes nothing this cycle (fail closed: the
+  # close is the destructive step); the next tick retries.
+  local _sweep_default_branch=""
+  _sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"
+  if [ -z "${_sweep_default_branch}" ]; then
+    _sweep_default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+  fi
+  _sweep_default_branch="$(printf '%s' "${_sweep_default_branch}" | tr -d '\r\n')"
+  if [ -z "${_sweep_default_branch}" ] || [ "${_sweep_default_branch}" = "null" ]; then
+    echo "::warning::CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable — closing nothing this cycle."
+    return 0
+  fi
+
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
-  local sweep_pr_fetch_failed
+  local sweep_pr_fetch_failed sweep_non_target_seen
+  local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
+  local _sweep_base_log _sweep_declared_log _sweep_non_target_note
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -4668,8 +4761,22 @@ close_merged_issues_sweep() {
     # the smallest sufficient call; candidates are the rare merged cross-refs
     # of an already-labeled issue (almost always exactly one, which the
     # conventional `ai/issue-<n>` head check accepts on the first fetch).
+    # Managed-child classification mirrors issue_pr_status.yml: the
+    # ai:orchestrator-managed label or the "Managed by: AI Orchestrator"
+    # body marker. The declared branch is parsed lazily (only once a
+    # candidate is the implementation PR) so most issues spawn no python.
+    _sweep_issue_body="$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].body // ""' 2>/dev/null || echo "")"
+    _sweep_is_managed=false
+    if echo "${issues_json}" | jq -e --argjson i "${idx}" '([.[$i].labels[]?.name] | index("ai:orchestrator-managed")) != null' >/dev/null 2>&1 \
+        || [[ "${_sweep_issue_body}" == *"Managed by: AI Orchestrator"* ]]; then
+      _sweep_is_managed=true
+    fi
+    _sweep_declared_branch=""
+    _sweep_declared_parsed=false
+
     merged_pr_num=""
     sweep_pr_fetch_failed=false
+    sweep_non_target_seen=false
     for _sweep_candidate_pr in ${merged_pr_candidates}; do
       [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
       _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
@@ -4679,8 +4786,20 @@ close_merged_issues_sweep() {
         continue
       fi
       if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
-        merged_pr_num="${_sweep_candidate_pr}"
-        break
+        if [ "${_sweep_declared_parsed}" != "true" ]; then
+          _sweep_declared_branch="$(printf '%s' "${_sweep_issue_body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null | head -n 1 || echo "")"
+          _sweep_declared_parsed=true
+        fi
+        if _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then
+          echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} accepted reason=${_TARGET_MERGE_REASON}"
+          merged_pr_num="${_sweep_candidate_pr}"
+          break
+        fi
+        _sweep_base_log="$(_close_sweep_log_ref "$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")" "unknown")"
+        _sweep_declared_log="$(_close_sweep_log_ref "${_sweep_declared_branch}" "none")"
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base base=${_sweep_base_log} declared=${_sweep_declared_log}"
+        sweep_non_target_seen=true
+        continue
       fi
       echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
     done
@@ -4694,13 +4813,17 @@ close_merged_issues_sweep() {
       if [ "${origin}" = "ready_label" ]; then
         # Normal pending state for ai:ready-to-merge. No alert — the
         # label is not a contract that a merged PR exists yet.
-        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — pending, leaving open."
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — pending, leaving open."
         skipped_count=$((skipped_count + 1))
         continue
       fi
       # ai:merged origin: stale-label path retained — alert and skip.
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — leaving open and alerting."
-      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline. The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — leaving open and alerting."
+      _sweep_non_target_note=""
+      if [ "${sweep_non_target_seen}" = "true" ]; then
+        _sweep_non_target_note=" Only merges into non-target branches were found (neither the default branch nor the issue's declared integration branch)."
+      fi
+      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline.${_sweep_non_target_note} The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
       alert_count=$((alert_count + 1))
       continue
     fi
@@ -6494,21 +6617,28 @@ security_pass_findings_rows_json() {
 # security_pass_apply_waivers_to_findings <findings_file>
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
-# result: drops re-reports of accepted findings (exact finding_id, or the
-# same file, category, severity and exploit scenario within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line) and rewrites the
-# findings file in place with the kept
-# rows and an updated counts.kept / counts.suppressed_waived.  The engine
-# applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
-# keeps an older staged engine honest.  Fail-open: any error leaves the file
-# untouched and logs a warning.
+# result: drops a re-report of an accepted finding only when its non-empty
+# finding_id exactly matches the waiver's and every category, severity and
+# exploit scenario the waiver recorded also matches (no proximity match: a
+# different finding_id is a new finding, even at the waived file and line),
+# and rewrites the findings file in place with the kept rows and an updated
+# counts.kept / counts.suppressed_waived.  The engine applies the same rule
+# when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this keeps an older staged
+# engine honest.  SECURITY_AUDIT_WAIVER_LINE_WINDOW is still accepted and
+# validated, but no longer controls suppression.  Fail-open: any error leaves
+# the file untouched (nothing is suppressed) and logs a warning.
 security_pass_apply_waivers_to_findings() {
   local findings_file="$1"
   local waived_count suppressed_summary
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+  if [ -n "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-}" ] && ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW} is invalid; it no longer controls waiver suppression"
+  else
+    echo "::notice::SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40} no longer controls waiver suppression (exact finding_id match only)"
+  fi
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6517,7 +6647,6 @@ from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-line_window = int(sys.argv[3])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -6528,33 +6657,42 @@ def norm_category(value: object) -> str:
 	return " ".join(str(value or "").lower().split())
 
 
+def norm_scenario(value: object) -> str:
+	# Backticks are dropped and whitespace collapsed (as the engine's prompt
+	# renders the scenario), then both sides are cut to 600 characters (the
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.replace("`", "").split())[:600]
+
+
 def waiver_for(finding: dict) -> str | None:
-	finding_id = str(finding.get("finding_id") or "")
+	finding_id = finding.get("finding_id")
+	if not isinstance(finding_id, str) or not finding_id.strip():
+		return None
+	finding_id = finding_id.strip()
 	for waiver in waivers:
-		waived_id = str(waiver.get("finding_id") or "")
+		waived_id = waiver.get("finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip():
+			continue
+		# Exact match on the recorded id only; a displayed (backtick-free)
+		# form is never an alias, so a distinct id cannot match.
+		if waived_id.strip() != finding_id:
+			continue
 		waived_finding = waiver.get("finding")
-		waived_scenario = norm_category(waiver.get("exploit_scenario") or (waived_finding.get("exploit_scenario") if isinstance(waived_finding, dict) else ""))
-		waived_severity = norm_category(waiver.get("severity"))
-		waived_category = norm_category(waiver.get("owasp_or_stride_category"))
-		if (waived_id and waived_id == finding_id
-			and (not waived_scenario or waived_scenario == norm_category(finding.get("exploit_scenario")))
-			and (not waived_severity or waived_severity == norm_category(finding.get("severity")))
-			and (not waived_category or waived_category == norm_category(finding.get("owasp_or_stride_category")))):
-			return waived_id
-		waived_line = waiver.get("line")
-		if (
-			str(waiver.get("file") or "")
-			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and waived_category
-			and waived_category == norm_category(finding.get("owasp_or_stride_category"))
-			and waived_severity == norm_category(finding.get("severity"))
-			and waived_scenario
-			and waived_scenario == norm_category(finding.get("exploit_scenario"))
-			and isinstance(waived_line, int)
-			and not isinstance(waived_line, bool)
-			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
-		):
-			return waived_id or "(unnamed waiver)"
+		waived_scenario = norm_scenario(waiver.get("exploit_scenario"))
+		if not waived_scenario and isinstance(waived_finding, dict):
+			waived_scenario = norm_scenario(waived_finding.get("exploit_scenario"))
+		waived_severity = norm_category(waiver.get("severity") if isinstance(waiver.get("severity"), str) else "")
+		waived_category = norm_category(waiver.get("owasp_or_stride_category") if isinstance(waiver.get("owasp_or_stride_category"), str) else "")
+		if waived_category and waived_category != norm_category(finding.get("owasp_or_stride_category")):
+			continue
+		if waived_severity and waived_severity != norm_category(finding.get("severity")):
+			continue
+		if waived_scenario and waived_scenario != norm_scenario(finding.get("exploit_scenario")):
+			continue
+		return finding_id
 	return None
 
 
@@ -6593,7 +6731,10 @@ PY
 # drop the same ids from security_pass_reported_findings so the next delta
 # audit does not ask the engine to re-verify them, and keep the array
 # bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
-# severity, justification, source, waived_by, waived_at_cycle, issue}.
+# severity, exploit_scenario (at most 600 characters), justification, source,
+# waived_by, waived_at_cycle, issue}.  Waivers match a later finding only by
+# exact finding_id plus the recorded category, severity and exploit scenario
+# (security_pass_apply_waivers_to_findings).
 security_pass_record_waivers() {
   local waivers_json="$1"
   if ! jq --argjson waivers "${waivers_json}" '
@@ -7262,7 +7403,7 @@ ${decisions_table}}"
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
         severity: .finding.severity,
-        exploit_scenario: .finding.exploit_scenario,
+        exploit_scenario: ((.finding.exploit_scenario // "") | tostring | .[0:600]),
         justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
@@ -11570,6 +11711,51 @@ Runbook: [Rebuild integration branch](${runbook_url})"
   return 0
 }
 
+# security_pass_sync_final_pr_if_unmergeable <integration_branch> <default_branch>
+#
+# The tick-level main -> integration sync skips security-pass and
+# security-pass-fixing: the pass is bound to the integration head
+# (security_pass_current_head_is_valid), so merging main on every tick would
+# move that head whenever main moves and the pass might never settle. The
+# finalizer heals an unmergeable final PR, but only after the pass ends, so a
+# conflict that main introduces during the pass sat for hours: project #6664's
+# final PR #6667 stayed dirty from 23:12 on 2026-10-09 through its whole
+# security pass (operator decision Q41: A). This helper syncs during the pass
+# only when the recorded final PR is open and GitHub reports it unmergeable;
+# sync_default_into_integration_branch then merges main or hands a real
+# conflict to heal_integration_branch_conflict, and the next audit re-checks
+# the moved head with the existing delta scope. A mergeable or still-computing
+# PR, a missing final PR, or an unreadable PR does nothing (fail open).
+#
+# API budget (CLAUDE.md §15): one REST read of the final PR per project in a
+# security-pass state per tick; the security-pass path reads no other PR data
+# to extend. The sync itself adds its usual calls only when it runs.
+# Logs: SECURITY_PASS_FINAL_PR_SYNC tracking_issue=<n> pr=<n> outcome=sync|skip reason=<token>
+security_pass_sync_final_pr_if_unmergeable() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr pr_json pr_state pr_mergeable
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=none outcome=skip reason=no_final_pr"
+    return 0
+  fi
+  pr_json="$(_fetch_pr_json "${final_pr}")"
+  pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed')"
+  pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+  if [ "${pr_state}" != "open" ]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=skip reason=pr_${pr_state:-unreadable}"
+    return 0
+  fi
+  if [ "${pr_mergeable}" != "false" ]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=skip reason=mergeable_${pr_mergeable:-unknown}"
+    return 0
+  fi
+  echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
+  return 0
+}
+
 finalize_integration_merge_if_needed() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -11871,7 +12057,9 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     _final_merge_alert_msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
     # Discard only stdout (the echoed message_id); keep stderr so
     # tg_send_msg's "Telegram send failed" warning stays in the logs.
-    tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
+    if ! _smoke_fixture_alert_silenced "CRITICAL"; then
+      tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
+    fi
     return 0
   fi
 
@@ -13274,7 +13462,9 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
-  tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  if ! _smoke_fixture_alert_silenced "DEBUG"; then
+    tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  fi
 }
 
 extract_fix_issues_from_comment() {
@@ -15175,13 +15365,25 @@ STALL_EOF
           # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
           _rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
           _rtr_push_succeeded="false"
+          # Provenance (issue #6629): a PR-named run counts only when it ran
+          # from the default branch (_pr_named_review_trust_jq_def). Without
+          # that branch no PR-named run can be ruled out, so the empty-commit
+          # push is skipped this cycle; the next poll cycle retries.
+          local _rtr_review_default_branch=""
+          if ! _rtr_review_default_branch="$(_review_run_default_branch)"; then
+            echo "  Issue #${issue_num} PR #${pr_num}: default branch unavailable; cannot verify review dispatch runs, skipping empty-commit push. The next poll cycle retries."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
           if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
               --arg pr "${pr_num}" \
+              --arg db "${_rtr_review_default_branch}" \
+              --arg repo "${GITHUB_REPOSITORY:-}" \
               --argjson now "${_rtr_now_epoch}" \
-              --argjson threshold "${_rtr_stall_secs}" '
+              --argjson threshold "${_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
               [.workflow_runs[]?
                | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
@@ -15189,11 +15391,7 @@ STALL_EOF
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
                     # A default-branch dispatch (issues #4618, #4701) is named
                     # for its PR; its head_branch is the default branch.
-                    or ($pr != "" and (.event // "") == "workflow_dispatch"
-                        and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                              and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
-                             or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
-                              and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
+                    or ($pr != "" and trusted_pr_named($pr; $db; $repo))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -15641,8 +15839,13 @@ invoke_stall_judge() {
   # has the default branch as head_branch/head_sha, so it is matched by
   # the run name the review wrappers give a workflow_dispatch run for its
   # PR instead. The cached blob carries event and display_title, so this
-  # adds no API call (§15).
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
+  # adds no API call (§15). Such a run counts only when it passes
+  # _pr_named_review_trust_jq_def (issue #6629); without the default branch
+  # none does, which only narrows the judge's evidence: every action it can
+  # pick still goes through the fail-closed in-flight guards.
+  local _wo_review_default_branch=""
+  _wo_review_default_branch="$(_review_run_default_branch)" || _wo_review_default_branch=""
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" --arg db "${_wo_review_default_branch}" --arg repo "${GITHUB_REPOSITORY:-}" "$(_pr_named_review_trust_jq_def)"'
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
@@ -15651,12 +15854,7 @@ invoke_stall_judge() {
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
        | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
-                or ($pr != ""
-                    and (.event // "") == "workflow_dispatch"
-                    and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                          and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
-                         or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
-                          and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
+                or ($pr != "" and trusted_pr_named($pr; $db; $repo)))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -16487,6 +16685,73 @@ _pr_json_is_issue_implementation_pr() {
   return 1
 }
 
+# _pr_json_base_is_target_merge — issue #6631. Decide whether a merged
+# implementation PR (full REST `pulls/N` JSON) landed on a branch that makes
+# the issue done.  The sweep used to close on a merge into ANY base: PR #4748
+# merged into its own `claude/implement-plan-issue-4688-*` project branch,
+# which still had to merge into project #4586's branch, and #4688 was closed
+# early.  GitHub itself only auto-closes on default-branch merges.
+#
+# Args: <issue_num> <pr_json> <default_branch> <declared_branch> <is_managed>
+# Accepts (rc=0, sets _TARGET_MERGE_REASON) when:
+#   - .base.ref equals the default branch            -> default_branch
+#   - .base.ref equals the issue's declared branch   -> declared_integration_branch
+#     (`Integration branch:` / `Target branch:` body line)
+#   - the issue is orchestrator-managed, declares no branch in its own
+#     body (its branch may live only on the tracking issue), and .base.ref
+#     is an `orchestrator/project-*` branch (same rule as issue_pr_status.yml)
+#                                                    -> managed_no_child_metadata
+# Anything else, including an empty or unparseable base, returns 1 (fail
+# closed: the caller's next step closes the issue).  Refs compare exactly.
+_TARGET_MERGE_REASON=""
+_pr_json_base_is_target_merge() {
+  local issue_num="$1"
+  local pr_json="$2"
+  local default_branch="$3"
+  local declared_branch="$4"
+  local is_managed="$5"
+  _TARGET_MERGE_REASON=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _target_base_ref
+  _target_base_ref="$(printf '%s' "${pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+  [ -n "${_target_base_ref}" ] || return 1
+  if [ -n "${default_branch}" ] && [ "${_target_base_ref}" = "${default_branch}" ]; then
+    _TARGET_MERGE_REASON="default_branch"
+    return 0
+  fi
+  if [ -n "${declared_branch}" ] && [ "${_target_base_ref}" = "${declared_branch}" ]; then
+    _TARGET_MERGE_REASON="declared_integration_branch"
+    return 0
+  fi
+  # Mirrors issue_pr_status.yml: the no-metadata fallback only accepts an
+  # orchestrator integration branch, never an arbitrary base.
+  if [ "${is_managed}" = "true" ] && [ -z "${declared_branch}" ] \
+      && [[ "${_target_base_ref}" == orchestrator/project-* ]]; then
+    _TARGET_MERGE_REASON="managed_no_child_metadata"
+    return 0
+  fi
+  return 1
+}
+
+# _close_sweep_log_ref <value> <empty_placeholder> — print a ref for a log
+# line with CR/LF removed, length capped at 200, and a leading `::` escaped
+# so an author-controlled branch line cannot fake workflow commands.
+_close_sweep_log_ref() {
+  local _log_ref
+  _log_ref="$(printf '%s' "${1:-}" | tr -d '\r\n' | cut -c1-200)"
+  if [ -z "${_log_ref}" ]; then
+    printf '%s' "${2:-none}"
+    return 0
+  fi
+  if [[ "${_log_ref}" == ::* ]]; then
+    _log_ref="\\${_log_ref}"
+  fi
+  printf '%s' "${_log_ref}"
+}
+
 # Issue #6325: a fork can give its head the name of a branch in this repo.
 # Never use a PR's head ref as a write target without verifying its owner.
 _pr_json_head_is_same_repo() {
@@ -17132,7 +17397,7 @@ unblock_handover_merge_deferral() {
   [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
   ensure_label_exists "ai:needs-human"
   if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
-    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
       || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
   fi
   if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then
@@ -18360,13 +18625,19 @@ STALL_EOF
 			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
 			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
 			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			# Provenance (issue #6629): see _pr_named_review_trust_jq_def. An
+			# empty value trusts no PR-named run; the push is then skipped
+			# below as for an incomplete listing.
+			_std_rtr_review_default_branch="$(_review_run_default_branch)" || _std_rtr_review_default_branch=""
 			if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
 			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
                 --arg pr "${pr_num}" \
+                --arg db "${_std_rtr_review_default_branch}" \
+                --arg repo "${GITHUB_REPOSITORY:-}" \
                 --argjson now "${_std_rtr_now_epoch}" \
-                --argjson threshold "${_std_rtr_stall_secs}" '
+                --argjson threshold "${_std_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
                 [.workflow_runs[]?
                  | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
@@ -18374,11 +18645,7 @@ STALL_EOF
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
                       # A default-branch dispatch (issues #4618, #4701) is named
                       # for its PR; its head_branch is the default branch.
-                      or ($pr != "" and (.event // "") == "workflow_dispatch"
-                          and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                                and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
-                               or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
-                                and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
+                      or ($pr != "" and trusted_pr_named($pr; $db; $repo))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -18406,7 +18673,11 @@ STALL_EOF
             # before the destructive empty-commit push.  Computed only on the
             # cache-miss path so the steady state adds zero API calls.
             _std_rtr_direct_inflight_id=""
-            if [ -z "${_std_rtr_inflight_id}" ]; then
+            if [ -z "${_std_rtr_inflight_id}" ] && [ -z "${_std_rtr_review_default_branch}" ]; then
+              # Default branch unavailable (issue #6629): PR-named runs cannot
+              # be verified, so treat the listing as incomplete (no push).
+              _std_rtr_direct_inflight_id="listing-incomplete"
+            elif [ -z "${_std_rtr_inflight_id}" ]; then
               _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
             fi
 			if [ -n "${_std_rtr_inflight_id}" ]; then
@@ -19243,6 +19514,126 @@ _has_active_autofix_run()
 }
 
 # ---------------------------------------------------------------
+# Helper: the repository's default branch, for review-run provenance
+# ---------------------------------------------------------------
+# Issue #6629 (re-issue of #5152): a PR-named review run is trusted only when
+# GitHub reports it ran from the default branch, so every matcher needs that
+# branch. This read has NO `main` fallback, unlike the DEFAULT_BRANCH reads
+# elsewhere in this file: a fallback would trust a spoofed run whenever the
+# read failed.
+#
+# Output:    the branch on stdout, return 0; or nothing, return 1.
+# Memo:      the matchers run inside $(...) subshells, so the result (also a
+#            failure) is memoized in
+#            ${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.<run id>.<pid>
+#            ($$ is the poller's own PID inside subshells too). A memo line
+#            that is not "ok <branch>" or "failed" is ignored and re-read.
+# API calls: at most one `GET repos/<repo>` per poller process (§14), made
+#            only when a matcher actually runs.
+# Failure:   one `::warning::REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable`
+#            on stderr; every matcher then fails closed.
+_REVIEW_RUN_DEFAULT_BRANCH="${_REVIEW_RUN_DEFAULT_BRANCH:-}"
+_REVIEW_RUN_DEFAULT_BRANCH_STATE="${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}"
+_review_run_default_branch()
+{
+	local _rrdb_file="" _rrdb_line="" _rrdb_value="" _rrdb_tmp=""
+	if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" = "ok" ] \
+		&& [[ "${_REVIEW_RUN_DEFAULT_BRANCH:-}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		printf '%s\n' "${_REVIEW_RUN_DEFAULT_BRANCH}"
+		return 0
+	fi
+	if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" = "failed" ]; then
+		return 1
+	fi
+	_rrdb_file="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.${GITHUB_RUN_ID:-0}.$$"
+	if [ -f "${_rrdb_file}" ] && [ ! -L "${_rrdb_file}" ]; then
+		_rrdb_line="$(head -n 1 "${_rrdb_file}" 2>/dev/null || true)"
+		case "${_rrdb_line}" in
+			"ok "*)
+				_rrdb_value="${_rrdb_line#ok }"
+				if [[ "${_rrdb_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_rrdb_value}" != "null" ]; then
+					_REVIEW_RUN_DEFAULT_BRANCH="${_rrdb_value}"
+					_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+					printf '%s\n' "${_rrdb_value}"
+					return 0
+				fi
+				;;
+			failed)
+				_REVIEW_RUN_DEFAULT_BRANCH_STATE="failed"
+				return 1
+				;;
+		esac
+	fi
+	_rrdb_value=""
+	if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+		_rrdb_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || true)"
+	fi
+	if [[ "${_rrdb_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_rrdb_value}" != "null" ]; then
+		_REVIEW_RUN_DEFAULT_BRANCH="${_rrdb_value}"
+		_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+		_rrdb_line="ok ${_rrdb_value}"
+	else
+		_REVIEW_RUN_DEFAULT_BRANCH=""
+		_REVIEW_RUN_DEFAULT_BRANCH_STATE="failed"
+		_rrdb_line="failed"
+		echo "::warning::REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable repo=${GITHUB_REPOSITORY:-unset} — PR-named review runs cannot be verified; matchers fail closed this poll." >&2
+	fi
+	if _rrdb_tmp="$(mktemp "${_rrdb_file}.XXXXXX" 2>/dev/null)"; then
+		if printf '%s\n' "${_rrdb_line}" > "${_rrdb_tmp}" 2>/dev/null \
+			&& mv -f "${_rrdb_tmp}" "${_rrdb_file}" 2>/dev/null; then
+			:
+		else
+			rm -f "${_rrdb_tmp}" 2>/dev/null || true
+		fi
+	fi
+	if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE}" = "ok" ]; then
+		printf '%s\n' "${_REVIEW_RUN_DEFAULT_BRANCH}"
+		return 0
+	fi
+	return 1
+}
+
+# ---------------------------------------------------------------
+# Helper: the jq trust rule for PR-named review runs (issue #6629)
+# ---------------------------------------------------------------
+# Prints jq definitions that every PR-named matcher in this file prepends to
+# its program, so the rule cannot drift between sites. A run is a trusted
+# PR-named review run only when all of these hold:
+#   - event == "workflow_dispatch";
+#   - head_branch equals the default branch ($db), or is null/empty (GitHub
+#     can report null on a real default-branch dispatch, issue #4928; a
+#     branch-copy spoof always reports its own non-empty branch);
+#   - the title and the path form an exact pair:
+#       .github/workflows/internal-review.yml  "Internal: AI Review & Autofix [pr:<N>]"
+#       .github/workflows/ai-review.yml        "AI Review [pr:<N>]"
+#     after stripping an "@<ref>" suffix and a leading "<this repo>/" prefix
+#     (case-insensitive) from the path. Any other prefix fails the pair.
+# An empty $db (unresolvable default branch) trusts nothing. Accepts both
+# REST field names (display_title, head_branch) and the camelCase names
+# _pr_named_review_dispatch_runs emits (displayTitle, headBranch).
+_pr_named_review_trust_jq_def()
+{
+	cat <<'JQ_DEF'
+def pr_named_review_path($repo):
+  ((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
+  | if $repo != "" and ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
+    then $p[(($repo | length) + 1):]
+    else $p
+    end;
+def trusted_pr_named($pr; $db; $repo):
+  ((if has("display_title") then .display_title else .displayTitle end) // "") as $t
+  | (if has("head_branch") then .head_branch else .headBranch end) as $hb
+  | pr_named_review_path($repo) as $p
+  | ($pr | test("^[1-9][0-9]*$"))
+    and ($db != "")
+    and ((.event // "") == "workflow_dispatch")
+    and ($hb == null or $hb == "" or $hb == $db)
+    and (($p == ".github/workflows/internal-review.yml" and $t == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
+         or ($p == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $pr + "]")));
+JQ_DEF
+}
+
+# ---------------------------------------------------------------
 # Helper: list the review dispatch runs named for one PR
 # ---------------------------------------------------------------
 # A review run dispatched from the default branch has head_branch (and
@@ -19251,9 +19642,14 @@ _has_active_autofix_run()
 #   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
 #   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
 # A workflow_dispatch run's name is evaluated from the dispatched ref's
-# workflow file, which is always the default branch now (issues #4618,
-# #4701), never from PR text, so an exact match on the name identifies
-# the PR.
+# workflow file. The pipeline always dispatches from the default branch
+# (issues #4618, #4701), but anyone who can push a branch copy of a wrapper
+# can dispatch a same-named run from that branch, so the name alone proves
+# nothing (issue #6629). A run counts only when it passes
+# _pr_named_review_trust_jq_def: workflow_dispatch, head_branch equal to the
+# default branch (from _review_run_default_branch) or null, the exact title
+# paired with its own wrapper path, and that path equal to the wrapper whose
+# listing returned it.
 #
 # Listing (security, issue #4927): only the two wrappers' own
 # workflow_dispatch runs are read, page by page, back to the review-run
@@ -19273,7 +19669,7 @@ _has_active_autofix_run()
 #            that used its whole 240-minute job budget and then failed would
 #            otherwise leave the default window minutes after it ended.
 # Output:    one JSON array on stdout, newest first, of the matching runs:
-#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
+#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt, headBranch, path}]
 # Returns:   0 = the listing is complete: an empty array means no run named
 #            for the PR was created inside the window.
 #            1 = the listing is incomplete. Stdout still carries the matches
@@ -19299,7 +19695,10 @@ _has_active_autofix_run()
 #            short page before total_count was reached (the listing shifted
 #            while it was read), or more runs than 10 pages hold. Each is
 #            logged once on stderr (CLAUDE.md §8):
-#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
+#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<default_branch_unavailable|cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
+#            An unresolvable default branch (issue #6629) is reported before
+#            any listing call; _review_run_default_branch makes at most one
+#            extra `GET repos/<repo>` per poller process.
 #
 # Usage: _pr_named_review_dispatch_runs <pr_number> [lookback_minutes]
 _pr_named_review_dispatch_runs()
@@ -19314,9 +19713,19 @@ _pr_named_review_dispatch_runs()
 	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
 	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
 	local _pnr_total=0 _pnr_read=0 _pnr_wrapper_runs='[]' _pnr_runs='[]' _pnr_matches=""
+	local _pnr_default_branch=""
 	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
 		printf '[]\n'
 		return 0
+	fi
+	# Provenance (issue #6629): without the default branch no PR-named run can
+	# be trusted, and a missing run proves nothing, so the listing is
+	# incomplete and every caller fails closed. No listing call is made.
+	if ! _pnr_default_branch="$(_review_run_default_branch)"; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=default_branch_unavailable wrapper=none page=0 read=0 total=0" >&2
+		echo "::warning::PR_NAMED_REVIEW_RUNS pr=${pr_number}: the default branch could not be resolved; review dispatch runs cannot be verified this poll." >&2
+		printf '[]\n'
+		return 1
 	fi
 	_pnr_now="$(date +%s 2>/dev/null || echo "")"
 	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
@@ -19351,7 +19760,7 @@ _pr_named_review_dispatch_runs()
 			# this function and its command substitutions inherit.
 			_pnr_page_json="$(gh_retry gh api -X GET \
 				"repos/${GITHUB_REPOSITORY}/actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}" \
-				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}]}' \
+				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at, headBranch: .head_branch, path: .path}]}' \
 				2>"${_pnr_err_file:-/dev/null}")" || _pnr_page_rc=$?
 			if [ "${_pnr_page_rc}" -ne 0 ]; then
 				# A wrapper this repo does not have: complete and empty.
@@ -19375,7 +19784,7 @@ _pr_named_review_dispatch_runs()
 			if ! _pnr_total="$(printf '%s' "${_pnr_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
 				|| ! _pnr_page_len="$(printf '%s' "${_pnr_page_json}" | jq -r '.workflow_runs | length' 2>/dev/null)" \
 				|| ! _pnr_wrapper_runs="$(printf '%s\n%s\n' "${_pnr_wrapper_runs}" "${_pnr_page_json}" \
-					| jq -cs '(.[0] + .[1].workflow_runs) | unique_by(.databaseId)' 2>/dev/null)" \
+					| jq -cs --arg w "${_pnr_wrapper}" '(.[0] + (.[1].workflow_runs | map(. + {listedWrapper: $w}))) | unique_by(.databaseId)' 2>/dev/null)" \
 				|| ! _pnr_read="$(printf '%s' "${_pnr_wrapper_runs}" | jq -r 'length' 2>/dev/null)" \
 				|| ! [[ "${_pnr_total}" =~ ^[0-9]+$ && "${_pnr_page_len}" =~ ^[0-9]+$ && "${_pnr_read}" =~ ^[0-9]+$ ]]; then
 				_pnr_wrapper_runs='[]'
@@ -19407,14 +19816,17 @@ _pr_named_review_dispatch_runs()
 		_pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)" \
 			|| _pnr_runs='[]'
 	fi
-	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" '
+	# The trust rule (_pr_named_review_trust_jq_def) plus one more check: the
+	# run's path must name the wrapper whose listing returned it.
+	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" \
+		--arg db "${_pnr_default_branch}" --arg repo "${GITHUB_REPOSITORY:-}" "$(_pr_named_review_trust_jq_def)"'
 		(if type == "array" then . else [] end)
 		| [ .[]? | select(type == "object") ]
 		| unique_by(.databaseId)
 		| [ .[]
-			| select((.event // "workflow_dispatch") == "workflow_dispatch")
-			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
+			| select(trusted_pr_named($pr; $db; $repo))
+			| select(pr_named_review_path($repo) == (".github/workflows/" + ((.listedWrapper // "") | tostring)))
+			| del(.listedWrapper)
 		  ]
 		| sort_by(.createdAt // "")
 		| reverse
@@ -19699,6 +20111,17 @@ fi
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
+# Smoke-gate fixture projects in this tick; tg_notify stays silent for them
+# whatever TRACKING_NUM currently names (Q42: A).
+SMOKE_FIXTURE_TRACKING_NUMS=""
+for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
+  smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
+  [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
+  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+    SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
+    echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+  fi
+done
 prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 write_state_snapshot_actions_runs_export || true
 
@@ -19903,6 +20326,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
 		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+		# The tick-level sync below skips both states; heal a final PR that
+		# main made unmergeable now instead of after the pass (Q41: A).
+		if [ -n "${INTEGRATION_BRANCH_TRACKING}" ]; then
+			if ! security_pass_sync_final_pr_if_unmergeable "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+				continue
+			fi
+			PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+			if [ "${PROJECT_STATUS}" = "failed" ]; then
+				continue
+			fi
+		fi
 	fi
 
   # ---------------------------------------------------------------
@@ -19985,7 +20419,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
                   severity: ($known.severity // ""),
-                  exploit_scenario: ($known.exploit_scenario // ""),
+                  exploit_scenario: (($known.exploit_scenario // "") | tostring | .[0:600]),
                   justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
@@ -20387,7 +20821,9 @@ The orchestrator detected that the integration PR was squash-merged outside the 
           if [ -n "${GITHUB_RUN_ID:-}" ]; then
             MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
           fi
-          tg_send_msg "${MSG}" >/dev/null
+          if ! _smoke_fixture_alert_silenced "DEBUG"; then
+            tg_send_msg "${MSG}" >/dev/null
+          fi
           PROJECT_STATUS="complete"
           continue
         fi
@@ -20484,7 +20920,9 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     if [ -n "${GITHUB_RUN_ID:-}" ]; then
       MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
     fi
-    tg_send_msg "${MSG}" >/dev/null
+    if ! _smoke_fixture_alert_silenced "DEBUG"; then
+      tg_send_msg "${MSG}" >/dev/null
+    fi
     continue
   fi
 
@@ -25235,7 +25673,9 @@ PRs to revert: ${REVERT_COUNT}"
         if [ -n "${GITHUB_RUN_ID:-}" ]; then
           MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
         fi
-        tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        if ! _smoke_fixture_alert_silenced "DEBUG"; then
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        fi
         continue
       fi
 

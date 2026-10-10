@@ -138,8 +138,17 @@ ai_engine_fallback()
 	local role="${1:-unknown}" reason="${2:-unknown}"
 	reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-60)"
 	echo "AI_ENGINE_FALLBACK role=${role} reason=${reason}" >&2
+	# The Claude review-panel slot has no codex path: it retries its pool
+	# fallback model or is skipped (skipped_pool), so say so in the alert.
+	local fallback_action="running codex"
+	[ "${role}" != "PANEL_REVIEWER" ] || fallback_action="the review-panel slot retries its pool fallback model or is skipped, no codex fallback"
 	local marker="${RUNNER_TEMP:-/tmp}/ai-engine-fallback-notified"
 	[ -e "${marker}" ] && return 0
+	# Claude pool capacity (issue #6633): the "Record Claude pool capacity"
+	# step already sent the one deduplicated capacity alert for this event.
+	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ] && [ "${PROVIDER_OUTAGE_CAPACITY_ALERTED:-false}" = "true" ]; then
+		return 0
+	fi
 	: > "${marker}" 2>/dev/null || return 0
 	(
 		if ! type tg_send_msg >/dev/null 2>&1 && [ -f "${_AI_ENGINE_DIR}/tg_helpers.sh" ]; then
@@ -147,7 +156,7 @@ ai_engine_fallback()
 			source "${_AI_ENGINE_DIR}/tg_helpers.sh"
 		fi
 		if type tg_send_msg >/dev/null 2>&1; then
-			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; running codex." "WARNING" >/dev/null
+			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; ${fallback_action}." "WARNING" >/dev/null
 		fi
 	) 2>/dev/null || true
 	return 0
