@@ -4659,6 +4659,11 @@ def test_latest_trusted_autofix_marker_is_host_only() -> None:
 	assert not check([_host_only_cap_comment(author="contributor")], CAP_AUTHOR)
 	assert not check([_host_only_cap_comment(), _failure_marker_comment("AI review/autofix failed", head=SHA_B, reason="editor_empty_noop")], CAP_AUTHOR)
 	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT}], CAP_AUTHOR)
+	# A newer trusted failure comment whose marker failed to render ends the scan.
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR, SHA_B)
+	# The same markerless text from another author is ignored.
+	assert check([_host_only_cap_comment(), {"author_login": "contributor", "body": "AI review/autofix failed"}], CAP_AUTHOR)
 	assert not check([_host_only_cap_comment()], "")
 	assert not check([], CAP_AUTHOR)
 	# An untrusted newer marker does not hide the trusted host-only one.

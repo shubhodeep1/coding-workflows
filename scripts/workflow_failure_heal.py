@@ -1829,6 +1829,12 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 				if head and fields.get("head", "").lower() != head:
 					return False
 				return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+		# A newer trusted failure comment posted without a marker (the marker
+		# failed to render) is a different, later failure: it ends the scan,
+		# as in count_identical_failures, so an older host-only marker cannot
+		# decide for it.
+		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
+			return False
 		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
 			return False
 	return False
