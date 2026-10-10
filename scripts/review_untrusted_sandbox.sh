@@ -343,15 +343,16 @@ config="$6"
 engine="${7:-codex}"
 case "${engine}" in codex|claude) ;; *) exit 2 ;; esac
 claude_role="${8:-REVIEW_EDITOR}"
-case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) ;; *) exit 2 ;; esac
+case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER) ;; *) exit 2 ;; esac
 claude_access="${9:-write}"
 if [ "$#" -lt 9 ] && [ "${claude_role}" = REVIEW_CONSOLIDATOR ]; then
 	claude_access=read
 fi
 case "${claude_access}" in read|write) ;; *) exit 2 ;; esac
-# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the Claude review-panel
+# slot (PANEL_REVIEWER) are read-only sandbox roles; never transfer.
 case "${claude_role}" in
-	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE)
+	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER)
 		[ "${claude_access}" = read ] || exit 2 ;;
 esac
 
