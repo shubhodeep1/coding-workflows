@@ -107,6 +107,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
+| `UNBLOCK_JUDGE_REGRANT_ENABLED` | No | `true` | unblock_judge | Re-check a scope-blocked issue's automation-path rejection with the current grant guard before asking the judge, and resume it without a verdict when every rejected path is now granted (once per rejection run). `false` sends every such item to the judge. The re-check reads `ALLOW_WORKFLOW_EDITS` with the same `true` default as `implement.yml`. |
 | `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (both Codex and Claude run in a read-only, network-isolated container; their credentials stay in host-side relays. The Claude path follows `.github/ai/claude_engine.json` and falls back to isolated Codex only when unavailable). |
 | `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
 | `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
@@ -1614,6 +1615,16 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **Base-branch gate:** the issue is implemented as a new PR off the default
+  branch, so it can only fix a failure the base branch shares. After the
+  open-issue dedup, the script reads the base branch's result for the same
+  check (two reads for a failed CI workflow run, one for a non-Actions check).
+  A `success` there means the failure is PR-specific: the run logs
+  `skip reason=pr_specific_failure base=<ref> base_conclusion=success` and
+  files nothing, leaving the failure to the PR's review/autofix loop. Any
+  other result, a pending or missing base run, or a failed read files the issue
+  as before (`base_gate outcome=file base_conclusion=<c|unknown> reason=…`).
+  `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED=false` turns the gate off.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2228,6 +2239,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress counts as unknown, never as an older success), a non-Actions check with that check's newest run on the base branch tip. When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. `false` files every failure. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
@@ -3356,6 +3368,25 @@ and resolver chains, a failed project) now goes to the unblock judge
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
+  An `operator_step` fix-up gates only the new code path behind its
+  placeholder flag; existing paths (releases, tagging, dispatches, merges)
+  keep running while the flag is unset.
+- **Before a verdict.** Two deterministic exits run before the judge is asked.
+  (1) A scope-blocked issue whose newest trusted rejection comes from the
+  automation-path grant guard is re-checked with today's
+  `scripts/files_touched_scope_guard.py` (same issue body, author and
+  `ALLOW_WORKFLOW_EDITS`). When it grants every rejected path, the judge posts
+  a comment ending in `<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->` and
+  the stop's resume command, with no verdict and no operator step; the
+  implementation run checks the grant again before it commits. Each rejection
+  run is re-granted at most once (`UNBLOCK_JUDGE op=regrant ... outcome=regranted`,
+  or `outcome=skip reason=still_denied|already_regranted|not_automation_path|disabled`).
+  (2) A blocked issue that is itself a fix-up the judge filed (first line
+  `<!-- ai:unblock-fixup:v1 item=<n> ...`, authored by the pipeline login)
+  never gets a fix-up of its own: the judge adds one `unblock-fixup-<n>` entry
+  to the `ai:operator-step` issue, comments
+  `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->` and sends one WARNING
+  (`outcome=escalated reason=fixup_blocked`); later runs stop at that marker.
   A malformed pipeline-authored project fix-up request is skipped with
   `UNBLOCK_PROJECT action=fixup comment=<id> outcome=invalid_request` in the
   poll log; a failed request-list parse logs `outcome=request_parse_failed`.

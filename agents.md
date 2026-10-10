@@ -300,6 +300,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    Files nothing when the base branch passes the same check
+    (`CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED`, default `true`; log
+    `CHECK_TRIAGE skip reason=pr_specific_failure`): a base-branch fix cannot
+    repair a PR-specific failure, which the PR's autofix loop owns.
     The PR-head checkout does not persist credentials; collection uses a
     GitHub token before Codex runs from a trusted support directory in a
     separate, GitHub-token-free step. Missing trusted support fails closed.
@@ -2109,7 +2113,7 @@ and shipped:
 - `RECLARIFY_UNROUTED` (`detect_unrouted_blocked_comments` in `scripts/orchestrate_poll_process.sh`: `issue= comment= reason=command_unrouted|no_command age_minutes= outcome=flagged|post_failed`, `outcome=skip reason=budget_low|issue_list_unavailable|graphql_unavailable|classifier_failed`)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `UNBLOCK_SCAN` (`run_unblock_scan` in `scripts/orchestrate_poll_process.sh`: `candidates= dispatched= skipped= outcome=idle|done|skip reason=`, and `item= kind= outcome=dispatched|dispatch_failed`)
-- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation)
+- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation; `op=regrant run= paths= outcome=regranted`, `op=regrant [run=] outcome=skip reason=still_denied|already_regranted|not_automation_path|missing|truncated|malformed|grant_unavailable|rejection_unreadable|disabled`, `op=regrant run= outcome=failed reason=actuation_failed`; `origin= outcome=escalated reason=fixup_blocked`, `origin= outcome=skip reason=fixup_escalated`, `origin= outcome=failed reason=fixup_escalation_failed`)
 - `UNBLOCK_PROJECT` (`handle_unblock_judge_project_hooks`: `tracking_issue= action=abandoned|fixup id= item= issue= outcome=`)
 - `UNBLOCK_HANDOVER` (poller and `review_autofix.yml`: `tracking_issue=|pr= stop=judge_output|rb_judge reason= failures= outcome=counted|failed|labelled`)
 - `UNBLOCK_BULK_DELETE_OVERRIDE` (`implement.yml` "Unblock judge bulk-delete override" and the destructive guard: `outcome=enabled|skip reason= marker=`, `applied deletions=`)
