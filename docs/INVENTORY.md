@@ -179,6 +179,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/generate_codex_model_reference.py` — Generate the Codex model reference markdown from the catalog and optional overrides.
 - `scripts/generate_resource_id.py` — Generate stable-format resource IDs via the ai-memory record-ID helper.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
+- `scripts/gh_api_retry.py` — Rate-limit-aware `gh api` retry helper; Python twin of `gh_api_retry` in gh_helpers.sh.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.

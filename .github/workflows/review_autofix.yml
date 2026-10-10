@@ -322,6 +322,37 @@ jobs:
       fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Record GH_PAT budget at review gate start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -344,6 +375,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_event_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
@@ -366,11 +399,11 @@ jobs:
           elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
             # No existing gate lookup resolves the release tag. /commits/stable
             # selects the branch when both a branch and tag have that name.
-            support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_tag_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
             support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
             support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-              support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_tag_json="$(gh_api_retry "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
               support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
               support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             fi
@@ -382,7 +415,7 @@ jobs:
           else
             # The job workflow SHA follows a same-repo PR head. Read protected main independently.
             # Gate PR metadata lookups do not include source-repository branch protection or SHA.
-            support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            support_main_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)"
             support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
             if ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
               echo "::error::Review support main branch is not confirmed protected."
@@ -669,9 +702,28 @@ jobs:
             # mergeable/mergeable_state (deterministic-skip conflict
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
-              2>/dev/null)"; then
+            source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+            type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+            # Classified retry (issue #6634): a 404 keeps the pr_state_unknown
+            # skip below; an exhausted transient error or a rate limit fails the
+            # gate loudly instead of silently skipping the review. A permanent
+            # error other than 404 (exit 2, e.g. a non-limit 403) fails too; the
+            # helper's GH_API_RETRY stderr line carries the status.
+            _pr_gate_rc=0
+            _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
+            _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
+            cat "${_pr_gate_err}" >&2 2>/dev/null || true
+            _pr_gate_not_found=false
+            if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
+            rm -f "${_pr_gate_err}"
+            if [ "${_pr_gate_rc}" -eq 75 ] \
+              || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; } \
+              || { [ "${_pr_gate_rc}" -eq 2 ] && declare -F _gh_api_classify >/dev/null && [ "${_pr_gate_not_found}" != "true" ]; }; then
+              echo "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}"
+              exit 1
+            fi
+            if [ "${_pr_gate_rc}" -eq 0 ]; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
@@ -2367,7 +2419,7 @@ jobs:
           # (avoids the heavyweight workflow-source checkout); the inline
           # definitions must stay in lockstep with the catalog.
           ensure_label_exists "ai:review-skipped" "${REPOSITORY}" "c2e0c6" "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
-          if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
+          if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
             -f "labels[]=ai:review-skipped" >/dev/null 2>&1; then
             echo "::warning::Failed to add ai:review-skipped label to PR #${PR_NUMBER}."
           fi
@@ -2407,7 +2459,7 @@ jobs:
             while IFS= read -r issue_number; do
               [ -n "${issue_number}" ] || continue
               echo "Setting ai:ready-to-merge on issue #${issue_number}"
-              if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
                 -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1; then
                 echo "::warning::Failed to set ai:ready-to-merge on issue #${issue_number}."
               fi
@@ -2574,7 +2626,7 @@ jobs:
           if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
             set_issue_phase_label_resilient() {
               ensure_label_exists "$2" "$3" || true
-              gh_retry gh api -X POST "repos/$3/issues/$1/labels" -f "labels[]=$2" >/dev/null 2>&1 \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/$3/issues/$1/labels" -f "labels[]=$2" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #$1."
             }
           fi
@@ -2648,7 +2700,7 @@ jobs:
             done <<< "${issue_numbers}"
             labeled_summary="linked issue(s) ${labeled_summary}"
           else
-            if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null 2>&1; then
+            if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null 2>&1; then
               echo "::warning::Failed to add ai:review-blocked to PR #${PR_NUMBER}."
             fi
             labeled_summary="this pull request (no linked issue found)"
@@ -5528,7 +5580,7 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #${issue_number}."
             }
@@ -5539,7 +5591,7 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #${issue_number}."
             }
@@ -5747,7 +5799,7 @@ jobs:
                 local target_label="$2"
                 local repo="$3"
                 ensure_label_exists "${target_label}" "${repo}" || true
-                gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                   -f "labels[]=${target_label}" >/dev/null 2>&1 \
                   || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
               }
@@ -5759,7 +5811,7 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
             }

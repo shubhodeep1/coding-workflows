@@ -206,7 +206,7 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 	assert 'ISSUE_PAYLOAD_FILE="${EARLY_CACHE_DIR}/issue_payload.json"' in metadata_block
 	assert 'TRACKING_PAYLOAD_FILE="${EARLY_CACHE_DIR}/tracking_issue_payload.json"' in metadata_block
 	assert 'printf \'%s\' "${ISSUE_PAYLOAD}" > "${ISSUE_PAYLOAD_FILE}"' in metadata_block
-	assert 'if TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
+	assert 'if TRACKING_PAYLOAD="$(gh_api_retry --optional "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
 	assert 'printf \'%s\' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"' in metadata_block
 	assert 'TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null || echo "")"' not in metadata_block
 
