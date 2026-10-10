@@ -5,13 +5,29 @@
   "entry_id": "processed_command_7060_6095959228_approved",
   "issue_number": 7060,
   "metadata": {
+    "branch": "ai/issue-7060",
+    "changed_files": [
+      ".github/workflows/unblock_judge.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/7060-unblock-protected-handoff.md",
+      "scripts/unblock_actions.py",
+      "scripts/unblock_judge.sh",
+      "scripts/unblock_ledger.py",
+      "tests/test_unblock_judge.py"
+    ],
+    "issue_number": 7060,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7060",
+    "pr_number": 7066,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7066",
+    "run_attempt": "1",
+    "run_id": "38040219253",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38040219253"
   },
   "run_attempt": 1,
   "run_id": "38040219253",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-10T09:10:38Z",
+  "status": "completed",
+  "timestamp": "2026-10-10T09:31:57Z",
   "workflow": "implement"
 }
