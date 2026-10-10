@@ -15,8 +15,10 @@
 #   2. Counts how many review runs in a row failed on this pull request from
 #      the PR comments the run fetched at its start. Editor summaries paired
 #      with a later failure comment from the same run do not end the streak.
-#      The reporter adds one for this run and makes zero API reads (CLAUDE.md
-#      §15). A streak of at least WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK
+#      The reporter adds one for this run and makes no API reads for the count
+#      (CLAUDE.md §15), except one `gh api user` read for the pipeline login
+#      when the caller passes none (AUTOFIX_STREAK_AUTHOR_LOGIN below) and
+#      there are PR comments to count. A streak of at least WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK
 #      (default 1, so every failed run) is reported.
 #   3. Builds the `autofix_failure` payload (scripts/workflow_failure_heal.py
 #      build-autofix-payload) with the run summary line and the tail of the
