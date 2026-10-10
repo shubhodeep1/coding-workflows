@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py: entire file | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The live hook is missing the bare-help support present in the template, so the intended behavior does not apply in interactive sessions and parity and related CI tests fail.\n  WHY: Both reviewers rate this BLOCKER; CI parity and bare-help tests fail until the live hook matches the template.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\"\n  expected_change_site: .claude/hooks/gh_api_write_guard.py (byte-for-byte copy of workflow-templates/.claude/hooks/gh_api_write_guard.py)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The live file has no `_is_bare_gh_api_help` and no `_BARE_HELP_ARGS` (confirmed by grep), and the parity test fails on hooks/gh_api_write_guard.py; `tests-hooks-and-orchestrator` failed on PR head `602e01f7290e42fd3da52d50cf5403bb1b8a551e` (`pr_check_runs_context.txt` failed[1].log_tail) with `AssertionError: Live .claude/ copies differ from workflow-templates/.claude/ for: hooks/gh_api_write_guard.py`, which in turn fails the aggregate `lint` job (failed[0]); The live file lacks all three #6668 hunks (the docstring note, the _BARE_HELP_ARGS / _is_bare_gh_api_help block, and the shortcut in the invocation loop). CI parity test test_live_copies_match_their_templates fails, and the new bare-help tests load the live copy through GUARD_PATH so they also fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/hooks/gh_api_write_guard.py | severity=critical | confidence=5\n  PROBLEM: The live hook still lacks all three #6668 hunks, so the live hook and its template are no longer byte-identical.\n  WHY: Interactive sessions in this repo run the live hook, where `gh api --help` still raises Unreadable, is classed as KIND_WRITE, and prompts; parity and new bare-help tests also fail.\n- TASK_GAP\n  Requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\"\n  Expected change site: .claude/hooks/gh_api_write_guard.py, as a byte-for-byte copy of the template.\n  Evidence of absence: The live file has no `_is_bare_gh_api_help` and no `_BARE_HELP_ARGS` (confirmed by grep), and the parity test fails on hooks/gh_api_write_guard.py. The issue deliberately leaves this copy to a separate master-session commit, so it is not something this PR's editor should author. It is still unfinished work that blocks the merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py: Entire file | severity=critical | confidence=5\n  PROBLEM: The live hook copy does not match the template copy in workflow-templates/.claude/hooks/gh_api_write_guard.py, as it is missing the hunks for bare help support (#6668).\n  WHY: CI lint and parity tests fail, blocking the merge. Furthermore, the intended loosening for bare gh api --help does not take effect in interactive sessions that use the live hook copy.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"the new tests in `tests/test_gh_api_write_guard.py` and the parity check at `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` must pass\" \u2014 implicit in the issue's \"Add tests\" deliverable and in the repo's CI gate; without the live copy update, both fail.\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` (byte-for-byte copy of `workflow-templates/.claude/hooks/gh_api_write_guard.py`).\n  Evidence of absence: `tests-hooks-and-orchestrator` failed on PR head `602e01f7290e42fd3da52d50cf5403bb1b8a551e` (`pr_check_runs_context.txt` failed[1].log_tail) with `AssertionError: Live .claude/ copies differ from workflow-templates/.claude/ for: hooks/gh_api_write_guard.py`, which in turn fails the aggregate `lint` job (failed[0]). The new bare-help tests at `tests/test_gh_api_write_guard.py:1136-1190` import `guard` from the live copy via `GUARD_PATH = REPO_ROOT / \".claude\" / \"hooks\" / \"gh_api_write_guard.py\"` (defined at `tests/test_gh_api_write_guard.py:32`) and will assert \"allow\" against a hook whose `evaluate()` still raises `Unreadable(\"unknown gh api flag \\`--help\\`\")`. The issue's \"Delivery constraints\" section assigns this sync to the master session's `[claude-twin-sync]` commit (Q40 / CLAUDE.md \u00a728.C), so the PR's authored scope is correct; the gap is that the dependent commit has not landed, which blocks merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\"\n  Expected change site: .claude/hooks/gh_api_write_guard.py (a byte-for-byte copy of the template)\n  Evidence of absence: The live file lacks all three #6668 hunks (the docstring note, the _BARE_HELP_ARGS / _is_bare_gh_api_help block, and the shortcut in the invocation loop). CI parity test test_live_copies_match_their_templates fails, and the new bare-help tests load the live copy through GUARD_PATH so they also fail. The issue explicitly assigns this sync to the master session's [claude-twin-sync] commit, and the review editor sandbox excludes .claude/hooks/**, so this is a documented deferral rather than a defect in the PR's authored scope. CI stays red until the master session lands that commit.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "bbf84ac326991feaaaccc54d3254b0480b383a4738d25962ab7375e87861d7c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6674,
+    "run_id": "38069996619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38069996619",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010171433_dac5c35b00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6674,
+    "run_id": "38069996619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T17:14:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
