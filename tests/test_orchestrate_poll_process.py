@@ -15968,6 +15968,9 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:ready-to-merge"]},
+		# Issue #6631: the PR merged into orchestrator/project-192, so the
+		# issue must declare that branch for the merge to count.
+		issue_bodies={10: "Issue 10\n\n- Integration branch: orchestrator/project-192\n"},
 		issue_linked_prs={10: 901},
 		prs=[merged_pr],
 		mock_gh_issue_list_label_filter=True,
@@ -16089,6 +16092,196 @@ def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=951 origin=merged_label status=closed" in result["stdout"], (
 		"Missing CLOSE_MERGED_SWEEP closure log line in poller stdout"
 	)
+
+
+def _sweep_closing_pr(number: int, base: str) -> dict:
+	"""A merged PR on a non-conventional head whose body closes issue #10."""
+	return {
+		"number": number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-28T10:40:00Z",
+		"baseRefName": base,
+		"headRefName": "claude/implement-plan-issue-10-x-fix",
+		"headRefFromApi": "claude/implement-plan-issue-10-x-fix",
+		"body": "Completion PR.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def test_close_merged_issues_sweep_rejects_closing_pr_merged_into_non_target_base():
+	"""Issue #6631 (incident #4688 / PR #4748): a closing-keyword PR merged
+	into a branch that is neither the default branch nor the issue's declared
+	integration branch must not close the issue. It falls through to the
+	merged_label no_merged_pr_found policy."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 960},
+		prs=[_sweep_closing_pr(960, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert 10 not in result.get("closed_issues", []), (
+		f"Non-target-base merge must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=960 rejected=non_target_base "
+		"base=claude/implement-plan-issue-10-x declared=none"
+	) in result["stdout"]
+	assert "no_merged_pr_found non_target_base_seen=true" in combined
+
+
+def test_close_merged_issues_sweep_closes_closing_pr_merged_into_default_branch():
+	"""Issue #6631: a default-branch merge still closes the issue."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 961},
+		prs=[_sweep_closing_pr(961, "main")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=961 accepted reason=default_branch" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=961 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_closes_merge_into_declared_integration_branch():
+	"""Issue #6631: a merge into the issue's own declared `Integration
+	branch:` counts, even for a non-managed issue."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: "Follow-up.\n\n- Integration branch: orchestrator/project-192\n"},
+		issue_linked_prs={10: 962},
+		prs=[_sweep_closing_pr(962, "orchestrator/project-192")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=962 accepted reason=declared_integration_branch"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_rejects_merge_into_other_branch_than_declared():
+	"""Issue #6631: a declared integration branch narrows the accepted bases;
+	a merge into a different non-default branch does not count."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_bodies={10: "Child.\n\n- **Integration branch:** `orchestrator/project-192`\n"},
+		issue_linked_prs={10: 963},
+		prs=[_sweep_closing_pr(963, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert (
+		"rejected=non_target_base base=claude/implement-plan-issue-10-x declared=orchestrator/project-192"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_managed_child_without_metadata_still_closes():
+	"""Issue #6631: an orchestrator-managed child whose own body declares no
+	branch (the branch lives on the tracking issue) keeps the any-base
+	behaviour so waves are not stranded."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_linked_prs={10: 964},
+		prs=[_sweep_closing_pr(964, "orchestrator/project-192")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=964 accepted reason=managed_no_child_metadata"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_ready_label_non_target_base_stays_open_silently():
+	"""Issue #6631: an ai:ready-to-merge issue whose only merge is into a
+	non-target base stays open with no backfill and no Telegram alert."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 965},
+		prs=[_sweep_closing_pr(965, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert "ai:merged" not in result["issues"]["10"]["labels"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=ready_label no_merged_pr_found non_target_base_seen=true" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" not in result["stdout"]
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+
+
+def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
+	"""Issue #6631: when the default branch cannot be resolved the sweep
+	fails closed for the cycle."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	assert '_sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"' in body
+	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
+	# so the sweep must not reuse it.
+	assert "${FINAL_DEFAULT_BRANCH" not in body
+	assert "--jq '.default_branch'" in body
+	assert "|| echo main" not in body
+	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
+	skip_pos = body.index("reason=default_branch_unavailable")
+	assert body.index("return 0", skip_pos) < body.index("for ((idx=0; idx<count; idx++))")
+
+
+def test_pr_json_base_is_target_merge_helper_rules():
+	"""Issue #6631: unit-level check of _pr_json_base_is_target_merge."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	# The module's custom runner does not inject pytest fixtures such as
+	# tmp_path, so the test owns its temporary directory.
+	with tempfile.TemporaryDirectory() as _helper_tmp:
+		_run_target_merge_helper_rules(Path(_helper_tmp))
+
+
+def _run_target_merge_helper_rules(tmp_path: Path) -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	end = script.index("\n# Issue #6325:", start)
+	helper = tmp_path / "helper.sh"
+	helper.write_text(script[start:end] + "\n", encoding="utf-8")
+
+	def run(base: str, default: str, declared: str, managed: str) -> str:
+		pr_json = json.dumps({"base": {"ref": base}}) if base is not None else "{}"
+		proc = subprocess.run(
+			[
+				"bash", "-c",
+				'source "$1"; if _pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), pr_json, default, declared, managed,
+			],
+			check=True, capture_output=True, text=True,
+		)
+		return proc.stdout.strip()
+
+	assert run("main", "main", "", "false") == "yes:default_branch"
+	assert run("orchestrator/project-5", "main", "orchestrator/project-5", "false") == "yes:declared_integration_branch"
+	assert run("orchestrator/project-5", "main", "", "true") == "yes:managed_no_child_metadata"
+	assert run("orchestrator/project-5", "main", "orchestrator/project-6", "true") == "no"
+	assert run("feature/other", "main", "", "true") == "no"
+	assert run("claude/x", "main", "", "false") == "no"
+	assert run("", "main", "", "true") == "no"
+	assert run(None, "main", "", "true") == "no"
+	assert run("Main", "main", "", "false") == "no"
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():

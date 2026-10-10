@@ -4553,6 +4553,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # closing-keyword body reference — _pr_json_is_issue_implementation_pr).
 # A merged PR that merely mentions the issue (e.g. "Refs #<n>") does not
 # qualify and falls through to the no_merged_pr_found policy per origin.
+# Issue #6631: the PR must also have merged into the repository's default
+# branch or the issue's declared integration branch, with a fallback for
+# orchestrator-managed issues whose body declares no branch and whose PR
+# merged into an orchestrator/project-* branch
+# (_pr_json_base_is_target_merge); other bases log rejected=non_target_base.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
@@ -4577,13 +4582,13 @@ close_merged_issues_sweep() {
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
   ready_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:ready-to-merge" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
 
   # Build a single deduplicated list of {number, labels, origin} entries.
@@ -4596,7 +4601,7 @@ close_merged_issues_sweep() {
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
-          | {number: .number, labels: (.labels // []), origin: $origin}
+          | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
         );
       ($merged | normalize("merged_label")) as $m
       | ($ready | normalize("ready_label")) as $r
@@ -4614,9 +4619,33 @@ close_merged_issues_sweep() {
     return 0
   fi
 
+  # Issue #6631: a merge only counts when it lands on the repository's
+  # default branch or on the issue's own declared integration branch
+  # (_pr_json_base_is_target_merge). §14 audit: DEFAULT_BRANCH is assigned
+  # later in the tick (after this sweep runs), and CWS_DEFAULT_BRANCH is a
+  # per-tracking-issue value that is unset on sweep-only ticks, so reuse it
+  # when present and otherwise make one repos/<repo> read per sweep, only on
+  # ticks that have candidates. FINAL_DEFAULT_BRANCH is deliberately not
+  # reused: its lookups fall back to a literal "main" on API failure, which
+  # would let a main-based merge count in a repo whose default differs. An
+  # unresolvable default branch closes nothing this cycle (fail closed: the
+  # close is the destructive step); the next tick retries.
+  local _sweep_default_branch=""
+  _sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"
+  if [ -z "${_sweep_default_branch}" ]; then
+    _sweep_default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+  fi
+  _sweep_default_branch="$(printf '%s' "${_sweep_default_branch}" | tr -d '\r\n')"
+  if [ -z "${_sweep_default_branch}" ] || [ "${_sweep_default_branch}" = "null" ]; then
+    echo "::warning::CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable — closing nothing this cycle."
+    return 0
+  fi
+
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
-  local sweep_pr_fetch_failed
+  local sweep_pr_fetch_failed sweep_non_target_seen
+  local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
+  local _sweep_base_log _sweep_declared_log _sweep_non_target_note
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -4668,8 +4697,22 @@ close_merged_issues_sweep() {
     # the smallest sufficient call; candidates are the rare merged cross-refs
     # of an already-labeled issue (almost always exactly one, which the
     # conventional `ai/issue-<n>` head check accepts on the first fetch).
+    # Managed-child classification mirrors issue_pr_status.yml: the
+    # ai:orchestrator-managed label or the "Managed by: AI Orchestrator"
+    # body marker. The declared branch is parsed lazily (only once a
+    # candidate is the implementation PR) so most issues spawn no python.
+    _sweep_issue_body="$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].body // ""' 2>/dev/null || echo "")"
+    _sweep_is_managed=false
+    if echo "${issues_json}" | jq -e --argjson i "${idx}" '([.[$i].labels[]?.name] | index("ai:orchestrator-managed")) != null' >/dev/null 2>&1 \
+        || [[ "${_sweep_issue_body}" == *"Managed by: AI Orchestrator"* ]]; then
+      _sweep_is_managed=true
+    fi
+    _sweep_declared_branch=""
+    _sweep_declared_parsed=false
+
     merged_pr_num=""
     sweep_pr_fetch_failed=false
+    sweep_non_target_seen=false
     for _sweep_candidate_pr in ${merged_pr_candidates}; do
       [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
       _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
@@ -4679,8 +4722,20 @@ close_merged_issues_sweep() {
         continue
       fi
       if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
-        merged_pr_num="${_sweep_candidate_pr}"
-        break
+        if [ "${_sweep_declared_parsed}" != "true" ]; then
+          _sweep_declared_branch="$(printf '%s' "${_sweep_issue_body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null | head -n 1 || echo "")"
+          _sweep_declared_parsed=true
+        fi
+        if _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then
+          echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} accepted reason=${_TARGET_MERGE_REASON}"
+          merged_pr_num="${_sweep_candidate_pr}"
+          break
+        fi
+        _sweep_base_log="$(_close_sweep_log_ref "$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")" "unknown")"
+        _sweep_declared_log="$(_close_sweep_log_ref "${_sweep_declared_branch}" "none")"
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base base=${_sweep_base_log} declared=${_sweep_declared_log}"
+        sweep_non_target_seen=true
+        continue
       fi
       echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
     done
@@ -4694,13 +4749,17 @@ close_merged_issues_sweep() {
       if [ "${origin}" = "ready_label" ]; then
         # Normal pending state for ai:ready-to-merge. No alert — the
         # label is not a contract that a merged PR exists yet.
-        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — pending, leaving open."
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — pending, leaving open."
         skipped_count=$((skipped_count + 1))
         continue
       fi
       # ai:merged origin: stale-label path retained — alert and skip.
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — leaving open and alerting."
-      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline. The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — leaving open and alerting."
+      _sweep_non_target_note=""
+      if [ "${sweep_non_target_seen}" = "true" ]; then
+        _sweep_non_target_note=" Only merges into non-target branches were found (neither the default branch nor the issue's declared integration branch)."
+      fi
+      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline.${_sweep_non_target_note} The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
       alert_count=$((alert_count + 1))
       continue
     fi
@@ -16493,6 +16552,73 @@ _pr_json_is_issue_implementation_pr() {
     return 0
   fi
   return 1
+}
+
+# _pr_json_base_is_target_merge — issue #6631. Decide whether a merged
+# implementation PR (full REST `pulls/N` JSON) landed on a branch that makes
+# the issue done.  The sweep used to close on a merge into ANY base: PR #4748
+# merged into its own `claude/implement-plan-issue-4688-*` project branch,
+# which still had to merge into project #4586's branch, and #4688 was closed
+# early.  GitHub itself only auto-closes on default-branch merges.
+#
+# Args: <issue_num> <pr_json> <default_branch> <declared_branch> <is_managed>
+# Accepts (rc=0, sets _TARGET_MERGE_REASON) when:
+#   - .base.ref equals the default branch            -> default_branch
+#   - .base.ref equals the issue's declared branch   -> declared_integration_branch
+#     (`Integration branch:` / `Target branch:` body line)
+#   - the issue is orchestrator-managed, declares no branch in its own
+#     body (its branch may live only on the tracking issue), and .base.ref
+#     is an `orchestrator/project-*` branch (same rule as issue_pr_status.yml)
+#                                                    -> managed_no_child_metadata
+# Anything else, including an empty or unparseable base, returns 1 (fail
+# closed: the caller's next step closes the issue).  Refs compare exactly.
+_TARGET_MERGE_REASON=""
+_pr_json_base_is_target_merge() {
+  local issue_num="$1"
+  local pr_json="$2"
+  local default_branch="$3"
+  local declared_branch="$4"
+  local is_managed="$5"
+  _TARGET_MERGE_REASON=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _target_base_ref
+  _target_base_ref="$(printf '%s' "${pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+  [ -n "${_target_base_ref}" ] || return 1
+  if [ -n "${default_branch}" ] && [ "${_target_base_ref}" = "${default_branch}" ]; then
+    _TARGET_MERGE_REASON="default_branch"
+    return 0
+  fi
+  if [ -n "${declared_branch}" ] && [ "${_target_base_ref}" = "${declared_branch}" ]; then
+    _TARGET_MERGE_REASON="declared_integration_branch"
+    return 0
+  fi
+  # Mirrors issue_pr_status.yml: the no-metadata fallback only accepts an
+  # orchestrator integration branch, never an arbitrary base.
+  if [ "${is_managed}" = "true" ] && [ -z "${declared_branch}" ] \
+      && [[ "${_target_base_ref}" == orchestrator/project-* ]]; then
+    _TARGET_MERGE_REASON="managed_no_child_metadata"
+    return 0
+  fi
+  return 1
+}
+
+# _close_sweep_log_ref <value> <empty_placeholder> — print a ref for a log
+# line with CR/LF removed, length capped at 200, and a leading `::` escaped
+# so an author-controlled branch line cannot fake workflow commands.
+_close_sweep_log_ref() {
+  local _log_ref
+  _log_ref="$(printf '%s' "${1:-}" | tr -d '\r\n' | cut -c1-200)"
+  if [ -z "${_log_ref}" ]; then
+    printf '%s' "${2:-none}"
+    return 0
+  fi
+  if [[ "${_log_ref}" == ::* ]]; then
+    _log_ref="\\${_log_ref}"
+  fi
+  printf '%s' "${_log_ref}"
 }
 
 # Issue #6325: a fork can give its head the name of a branch in this repo.
