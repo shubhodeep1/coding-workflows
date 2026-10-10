@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this heal change, given that the failing conflicted path in the consumer PR is unknown and every rejected case must still fail closed?\nChoices:\nA) Diagnostics only. Keep `sandbox_path_unsupported`, but have `check_paths` write a path-free category for each rejection (`symlink`, `unreportable_name`, `non_regular`, `unreadable`), plus `report_unavailable` when the path list or report fails. Report the categories and their counts when the resolver fails. Add a regression test in `tests/test_review_conflict_resolve_sandbox_only.py` for each category; on today's code the test sees only the bare `unsafe` entry, so it fails. (RECOMMENDED)\nB) A, plus treat plain regular files with an unreportable name (spaces, `@`, non-ASCII, too long) as host-only. The resolver would fail with `sandbox_path_host_only` and a count, without printing the name, and the new token would be added to `NON_RETRYABLE_FAILURE_REASONS`. Symlinks and non-regular entries would stay `sandbox_path_unsupported`.\nC) File no code fix. Close this heal issue as needing a manual merge of the consumer PR, since every possible cause already fails closed and needs a human.\n**Note:** C cannot be combined with any Q2 choice. It also does not meet the issue's constraint that the fix must include a regression test.\nQ2: Where should the new path-free category appear?\nChoices:\nA) Add `category=<c> count=<n>` to the existing `AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER ...` stderr line, which already reaches the failure-evidence tail. Leave the `::error::Conflict resolver isolation unavailable (reason=...)` line unchanged, so the heal fingerprint and this lineage stay continuous. (RECOMMENDED)\nB) Add the category to the `::error::` line itself, so the failure comment's \"First error\" shows it. This changes the error signature, so later failures will start a new heal lineage instead of escalating this one at generation 3.\nC) Both: put it on the `AI_ENGINE_FALLBACK` line and add a separate new `::error::` line after the existing one.\n**Note:** B and C start a new heal lineage for this failure.",
+  "fingerprint": "9cd161ace9795ca63c32598aae760126ef7ca01287c85c2bec00c69b71432f89",
+  "lineage": {
+    "issue_number": 7082,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38050951856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38050951856",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010121555_69d9928ee5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7082,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38050951856"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7082 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T12:15:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
