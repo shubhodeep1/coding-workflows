@@ -2351,15 +2351,17 @@ jobs:
     # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
     # plan job has finished and the intake reads its complete log. Only a
     # `failure` result is reported: a cancelled run was superseded or timed
-    # out. `permissions: {}` keeps the job inside any caller's grant;
-    # GH_PAT does the work. The reporter always exits 0.
+    # out. The job is granted only `id-token: write` (every caller wrapper
+    # grants it) so the reporter can attach the OIDC report identity the heal
+    # intake verifies; GH_PAT does the work. The reporter always exits 0.
     needs: plan
     if: >-
       always() && needs.plan.result == 'failure' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions: {}
+    permissions:
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}

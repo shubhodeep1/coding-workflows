@@ -284,12 +284,10 @@ case "${REPORT_ORIGIN}" in
 				REPORT_AUTH="verified"
 				;;
 			*)
-				# phase_failure reports come from the heal-report job of the
-				# clarify / plan / implement workflows, which runs with
-				# `permissions: {}` and so carries no identity; the provenance
-				# gate below binds them to a run of that workflow in source_repo
-				# linked from the issue by a trusted author.
-				if [ "${REQUIRE_REPORT_AUTH}" = "true" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
+				# Every repository_dispatch report, phase_failure included (its
+				# heal-report job is granted id-token: write), needs a verified
+				# identity when enforcement is on (issue #6834).
+				if [ "${REQUIRE_REPORT_AUTH}" = "true" ]; then
 					_report_auth_reject "unauthenticated_report"
 				fi
 				REPORT_AUTH="absent"

@@ -4761,11 +4761,25 @@ def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "yes"})
 	assert "WORKFLOW_HEAL warn invalid_require_report_auth value=yes; using false" in result.stdout
 	assert "report_auth=absent reason=bound" in result.stdout
-	# Phase reports carry no identity (heal-report runs with permissions: {});
-	# the provenance gate binds them, so enforcement does not skip them.
+	# Phase reports get no exemption (issue #6834): heal-report is granted
+	# id-token: write, so a tokenless phase report is rejected under
+	# enforcement before the provenance gate runs...
 	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
 	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"report_auth=rejected reason=unauthenticated_report source={CONSUMER_REPO} kind=phase_failure" in result.stdout
+	assert "provenance_verified" not in result.stdout
+	assert _api_writes(state) == []
+	# ...and still accepted through the provenance gate by default.
+	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
 	assert "unauthenticated_report" not in result.stdout and "provenance_verified" in result.stdout
+	# A phase report carrying a valid identity passes under enforcement.
+	with tempfile.TemporaryDirectory(prefix="heal-identity-phase-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name), run_id="500", job_workflow_ref=f"{SELF_REPO}/.github/workflows/plan.yml@refs/heads/main")
+		result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", **_identity_env(token_file, jwks_file)})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "report_auth=verified" in result.stdout and "provenance_verified" in result.stdout
+		assert token not in result.stdout + result.stderr
 	# Manual re-runs are bound but never need an identity.
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", "WORKFLOW_HEAL_REPORT_ORIGIN": "workflow_dispatch"})
 	assert "report_auth=manual reason=bound" in result.stdout
@@ -5588,7 +5602,7 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		condition = " ".join(job["if"].split())
 		assert condition.startswith(f"always() && needs.{job_name}.result == 'failure' &&")
 		assert "!contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)" in condition
-		assert job["permissions"] == {}
+		assert job["permissions"] == {"id-token": "write"}
 		assert job["env"]["WORKFLOW_HEAL_PHASE"] == name
 		assert job["env"]["WORKFLOW_HEAL_PHASE_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}"
 		assert job["env"]["WORKFLOW_HEAL_ISSUE_NUMBER"] == "${{ github.event.issue.number }}"
@@ -5599,6 +5613,16 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		report = next(step["run"] for step in job["steps"] if step.get("name") == "Report the failed run to workflow failure heal")
 		assert ".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh" in report and "reason=reporter_missing" in report
 		assert "${{" not in report
+	# A reusable-workflow job asking for more than its caller grants fails the
+	# whole run at startup, so every caller must grant id-token: write.
+	for name in ("clarify", "plan", "implement"):
+		for caller in (REPO_ROOT / "workflow-templates" / f"ai-{name}.yml", REPO_ROOT / ".github" / "workflows" / f"internal-{name}.yml"):
+			doc = yaml.safe_load(caller.read_text(encoding="utf-8"))
+			calling = [job for job in (doc.get("jobs") or {}).values() if f"/.github/workflows/{name}.yml@" in str(job.get("uses") or "")]
+			assert calling, caller
+			for job in calling:
+				granted = job["permissions"] if "permissions" in job else (doc.get("permissions") or {})
+				assert granted == "write-all" or (isinstance(granted, dict) and granted.get("id-token") == "write"), caller
 	implement = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
 	assert "needs.implement.outputs.heal_report == 'true'" in implement["jobs"]["heal-report"]["if"]
 	assert implement["jobs"]["implement"]["outputs"]["heal_report"] == "${{ steps.heal_report_gate.outputs.report }}"
