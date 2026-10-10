@@ -47,7 +47,12 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'shubhodeep1/coding-workflows'
+    # workflow_dispatch runs the workflow file from the dispatched ref and
+    # takes no `branches:` filter, so a dispatch from any branch other than
+    # main would run unreviewed steps with packages: write. Only main's copy
+    # may publish on dispatch. (Branch protection and package access remain
+    # the boundary against a writer who adds a new workflow of their own.)
+    if: github.repository == 'shubhodeep1/coding-workflows' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:

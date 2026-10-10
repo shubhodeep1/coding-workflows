@@ -301,7 +301,10 @@ def test_publish_workflow_is_scoped_and_least_privilege() -> None:
 	workflow = yaml.safe_load((ROOT / ".github/workflows/publish-sandbox-images.yml").read_text())
 	assert workflow["permissions"] == {"contents": "read", "packages": "write"}
 	job = workflow["jobs"]["publish"]
-	assert job["if"] == "github.repository == 'shubhodeep1/coding-workflows'"
+	assert job["if"] == (
+		"github.repository == 'shubhodeep1/coding-workflows' && "
+		"(github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')"
+	)
 	triggers = workflow["on"]
 	assert triggers["push"]["branches"] == ["main", "stable"]
 	assert "schedule" in triggers and "workflow_dispatch" in triggers
