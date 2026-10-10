@@ -735,6 +735,7 @@ _gh_api_args_unsafe_post()
 # and # comments) is "mutation". A document holding a query and a mutation,
 # where operationName may select the mutation, therefore counts as a mutation.
 # A field named "mutation" after a "}" also matches; that only costs a retry.
+# Commas are insignificant in GraphQL, so "}, mutation" also matches.
 # String literals ("…" and """…""") are skipped before comments are cut, so a
 # "#" inside a string cannot hide a later mutation (scripts/gh_api_retry.py
 # graphql_doc_is_mutation uses the same scan).
@@ -743,7 +744,7 @@ _gh_api_args_unsafe_post()
 _gh_graphql_doc_is_mutation()
 {
 	local _line _out="" _rest _pre _in_block=0
-	local _re='(^|\})[[:space:]]*[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]([^A-Za-z0-9_]|$)'
+	local _re='(^|\})[[:space:],]*[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]([^A-Za-z0-9_]|$)'
 	local _str_re='^"([^"\\]|\\.)*"(.*)$'
 	while IFS= read -r _line || [ -n "${_line}" ]; do
 		_rest="${_line}"

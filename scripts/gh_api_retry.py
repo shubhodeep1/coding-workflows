@@ -114,7 +114,7 @@ def endpoint_bucket(args: Sequence[str]) -> str:
 	return "core"
 
 
-_GRAPHQL_MUTATION_RE = re.compile(r"(^|\})\s*mutation(?![A-Za-z0-9_])", re.IGNORECASE)
+_GRAPHQL_MUTATION_RE = re.compile(r"(^|\})[\s,]*mutation(?![A-Za-z0-9_])", re.IGNORECASE)
 
 
 def graphql_doc_is_mutation(text: str) -> bool:
