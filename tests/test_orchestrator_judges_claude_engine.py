@@ -322,6 +322,24 @@ def test_all_poller_judges_are_read_only_and_never_use_host_fallback(tmp_path: P
 	assert _read(Path(f"{calls}.claude")) == ""
 
 
+def test_poller_capability_markers_exist_in_the_real_sandbox_helper() -> None:
+	"""Every literal the poller greps in review_untrusted_sandbox.sh must be in the real helper.
+
+	The tests above stage FAKE_RB_SANDBOX, so rewording a marker comment in the
+	real helper passed CI while every WAVE/STALL/INTEGRATION/SECURITY judge
+	deferred as sandbox_helper_outdated in production (#7024 broke project #6664).
+	"""
+	poller = POLLER.read_text(encoding="utf-8")
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	markers = re.findall(r"""grep -F[cq] '([^']+)' "\$\{rb_support_dir\}/review_untrusted_sandbox\.sh\"""", poller)
+	assert len(markers) >= 3, markers
+	missing = [marker for marker in markers if marker not in helper]
+	assert missing == [], f"poller capability markers missing from scripts/review_untrusted_sandbox.sh: {missing}"
+	count_marker = 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then'
+	assert count_marker in markers
+	assert helper.count(count_marker) >= 2
+
+
 FAKE_RB_SANDBOX = r"""#!/usr/bin/env bash
 # Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
 # if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
