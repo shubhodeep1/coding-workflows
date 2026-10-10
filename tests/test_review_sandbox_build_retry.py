@@ -106,6 +106,8 @@ def test_first_build_succeeds_without_a_retry(tmp_path):
 	"ERROR: toomanyrequests: You have reached your pull rate limit. too many requests",
 	"ERROR: failed to do request: Head \"https://example.invalid/v2/\": net/http: TLS handshake timeout",
 	"npm error code ECONNRESET\nnpm error network aborted: socket hang up",
+	"npm error code ECONNREFUSED\nnpm error request to https://registry.npmjs.org/opencode-ai failed, reason: connect ECONNREFUSED 104.16.0.35:443",
+	"ERROR: failed to do request: Head \"https://registry.example.invalid/v2/\": dial tcp 10.0.0.1:443: connect: connection refused",
 ))
 def test_registry_failure_is_retried_then_the_prepare_succeeds(tmp_path, message):
 	proc, builds = _prepare(tmp_path, [message])
