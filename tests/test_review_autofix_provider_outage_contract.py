@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 from review_autofix_step_scripts import REVIEW_AUTOFIX_STEP_SCRIPTS, expanded_review_autofix_text
@@ -135,3 +138,135 @@ def test_sweep_probe_honours_dry_run() -> None:
 	step = _step(SWEEP, "Provider outage probe and resume")
 	assert "DRY_RUN: ${{ inputs.dry_run }}" in step
 	assert 'sweep_mode_args=(--status-only)' in step
+
+
+# --- Issue #7099: activation gaps left by PR #6655 -------------------------
+
+
+def _job(text: str, name: str) -> str:
+	start = text.index(f"  {name}:\n")
+	match = re.search(r"\n  [a-z][a-z0-9_-]*:\n", text[start + 3:])
+	return text[start:] if match is None else text[start:start + 3 + match.start()]
+
+
+def _run_body(step: str) -> str:
+	return textwrap.dedent(step[step.index("        run: |\n") + len("        run: |\n"):])
+
+
+def test_consumer_security_hold_sweep_waits_for_outage_pause() -> None:
+	outage = _job(CONSUMER, "provider-outage-resume")
+	assert "    outputs:\n      paused: ${{ steps.provider_outage.outputs.paused }}\n" in outage
+	assert "        id: provider_outage\n" in outage
+	for reason in ("gh_pat_missing", "helper_missing"):
+		branch = outage[outage.index(f"reason={reason}"):]
+		assert branch.index('echo "paused=false" >> "$GITHUB_OUTPUT"') < branch.index("exit 0")
+	sweep = _job(CONSUMER, "security-hold-sweep")
+	assert "    needs: provider-outage-resume\n" in sweep
+	condition = re.search(r"\n    if: (.*)\n", sweep).group(1)
+	assert condition.startswith("${{ !cancelled() && ")
+	assert "needs.provider-outage-resume.outputs.paused != 'true'" in condition
+	assert "vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true'" in condition
+
+
+def test_exhaustion_label_step_exports_labelled_set() -> None:
+	label = _step(REVIEW, "Mark linked issues review-blocked (autofix exhaustion)")
+	assert "        id: mark_review_blocked_exhaustion\n" in label
+	no_issues = label[label.index("No linked issues found"):]
+	assert no_issues.index("labelled_issue_numbers_resolved=true") < no_issues.index("exit 0")
+	loop = label[label.index("labelled=()"):]
+	assert 'SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=""' in loop
+	assert 'echo "labelled_issue_numbers=${labelled_csv}"' in loop
+	assert label.count('SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"') == 2
+	marker = _step(REVIEW, "Mark outage-caused review-blocked labels (autofix exhaustion)")
+	assert "REVIEW_BLOCKED_LABELLED_ISSUES: ${{ steps.mark_review_blocked_exhaustion.outputs.labelled_issue_numbers }}" in marker
+	assert "REVIEW_BLOCKED_LABELLED_RESOLVED: ${{ steps.mark_review_blocked_exhaustion.outputs.labelled_issue_numbers_resolved }}" in marker
+	assert marker.index("REVIEW_BLOCKED_LABELLED_RESOLVED:-") < marker.index("reason=labelled_set_unavailable") < marker.index("LINKED_ISSUES_JSON")
+
+
+def _run_marker(tmp_path: Path, **env: str) -> tuple[list[str], str]:
+	support = tmp_path / "support"
+	support.mkdir()
+	log = tmp_path / "calls.txt"
+	(support / "provider_outage.py").write_text(
+		"import sys\n"
+		f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n",
+		encoding="utf-8",
+	)
+	body = _run_body(_step(REVIEW, "Mark outage-caused review-blocked labels (autofix exhaustion)"))
+	run_env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"SUPPORT_SCRIPTS_DIR": str(support),
+		"REPOSITORY": "o/r",
+		"PR_NUMBER": "77",
+		"RB_JUDGE_PROVIDER_STATUS": "402",
+		**env,
+	}
+	result = subprocess.run(["bash", "-c", body], env=run_env, capture_output=True, text=True, check=False, timeout=60)
+	assert result.returncode == 0, result.stderr
+	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	return calls, result.stdout
+
+
+def _marked(calls: list[str]) -> list[str]:
+	return [call.split("--item ")[1].split()[0] for call in calls if call.startswith("mark-label")]
+
+
+def test_marker_step_marks_exactly_the_labelled_set(tmp_path: Path) -> None:
+	calls, _ = _run_marker(tmp_path, REVIEW_BLOCKED_LABELLED_ISSUES="12,34", REVIEW_BLOCKED_LABELLED_RESOLVED="true", LINKED_ISSUES_JSON="[]")
+	assert _marked(calls) == ["12", "34"]
+	assert any(call.startswith("open ") for call in calls)
+
+
+def test_marker_step_empty_labelled_set_still_opens_tracker(tmp_path: Path) -> None:
+	calls, _ = _run_marker(tmp_path, REVIEW_BLOCKED_LABELLED_ISSUES="", REVIEW_BLOCKED_LABELLED_RESOLVED="true")
+	assert _marked(calls) == []
+	assert any(call.startswith("open ") for call in calls)
+
+
+def test_marker_step_unresolved_set_uses_legacy_derivation(tmp_path: Path) -> None:
+	calls, out = _run_marker(tmp_path, LINKED_ISSUES_JSON="[]", LINKED_ISSUE_FALLBACK_NUMBERS_JSON="[]")
+	assert _marked(calls) == ["77"]
+	assert "reason=labelled_set_unavailable" in out
+
+
+def test_marker_step_drops_non_numeric_items(tmp_path: Path) -> None:
+	calls, _ = _run_marker(tmp_path, REVIEW_BLOCKED_LABELLED_ISSUES="12,x;rm", REVIEW_BLOCKED_LABELLED_RESOLVED="true")
+	assert _marked(calls) == ["12"]
+
+
+_FAKE_GH = """#!/usr/bin/env bash
+case "$*" in
+  "label create"*) exit 0 ;;
+  *"-X PUT"*) cat >/dev/null; [ "${FAKE_PUT:-ok}" = ok ] ;;
+  *"-X POST"*) [ "${FAKE_POST:-ok}" = ok ] ;;
+  *--paginate*) echo '[]' ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+def _label_outcome(tmp_path: Path, args: str, **env: str) -> tuple[int, str]:
+	scripts = tmp_path / "scripts"
+	scripts.mkdir(exist_ok=True)
+	(scripts / "label_helpers.sh").write_text((REPO_ROOT / "scripts" / "label_helpers.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	bindir = tmp_path / "bin"
+	bindir.mkdir(exist_ok=True)
+	gh = bindir / "gh"
+	gh.write_text(_FAKE_GH, encoding="utf-8")
+	gh.chmod(0o755)
+	script = (
+		f'source "{scripts}/label_helpers.sh"\n'
+		f"set_issue_phase_label_resilient {args}\n"
+		'rc=$?\nprintf "%s %s" "$rc" "${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME}"\n'
+	)
+	run_env = {"PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}", "GITHUB_REPOSITORY": "o/r", **env}
+	result = subprocess.run(["bash", "-c", script], env=run_env, capture_output=True, text=True, check=False, timeout=60)
+	rc, _, outcome = result.stdout.partition(" ")
+	return int(rc), outcome
+
+
+def test_label_helper_reports_outcome_without_changing_return_code(tmp_path: Path) -> None:
+	assert _label_outcome(tmp_path, "5 ai:review-blocked") == (0, "applied")
+	assert _label_outcome(tmp_path, "5 ai:review-blocked", FAKE_PUT="fail") == (0, "applied")
+	assert _label_outcome(tmp_path, "5 ai:review-blocked", FAKE_PUT="fail", FAKE_POST="fail") == (0, "failed")
+	assert _label_outcome(tmp_path, "''") == (0, "skipped")
