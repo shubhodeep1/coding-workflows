@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_changed_files_syntax.sh:line 266\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The YAML validation one-liner does not close its file if `yaml.safe_load_all(f)` raises an exception before `f.close()` is reached.\n  WHY: The exception skips the explicit close, leaking the file descriptor until the short-lived process exits.\n- scripts/validate_changed_files_syntax.sh:lines 247-248\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The YAML validation one-liner does not close its file if `yaml.safe_load_all(f)` raises an exception before `f.close()` is reached.\n  WHY: The exception skips the explicit close, leaking the file descriptor until the process exits.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/validate_changed_files_syntax.sh\n  Location: line 266\n  PROBLEM: The inline Python uses `f=open(...); list(yaml.safe_load_all(f)); f.close()` without a context manager. If `yaml.safe_load_all(f)` raises before the list is fully consumed, `f.close()` is never reached and the file descriptor leaks. Though this is a one-shot process in a short-lived container, the line directly below it (line 283 for JSON) uses the same pattern.\n  Suggested minimal fix: Replace with `with open(sys.argv[1], 'rb') as f: list(yaml.safe_load_all(f))` on line 266 and `with open(sys.argv[1], 'rb') as f: json.load(f)` on line 283.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: scripts/validate_changed_files_syntax.sh\n  Location: lines 247-248 (inside the python3 -c block)\n  PROBLEM: Potential file descriptor leak if `yaml.safe_load_all(f)` raises an exception before `f.close()` is reached.\n  Suggested minimal fix: Use `with open(sys.argv[1], 'rb') as f: list(yaml.safe_load_all(f))` to ensure the file is closed automatically.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/validate_changed_files_syntax.sh\n  Location: line 266 (existing code inside the YAML loop; not modified by this PR)\n  PROBLEM: The python -c one-liner opens a file with `f=open(...)` and only closes it on the success path via `list(yaml.safe_load_all(f)); f.close()`. A `yaml.YAMLError` raised before the list() materializes would skip the close; the OS reclaims the FD at process exit, but the script walks many YAML files per run.\n  Suggested minimal fix: switch to `with open(sys.argv[1], 'rb') as f: list(yaml.safe_load_all(f))`.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "a35f2d6dcc4bea3f84e6e986c0eefe0c771edf88acb5a44355a924f3497b23be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7030,
+    "run_id": "38025103712",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38025103712",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010064347_97de55a6ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7030,
+    "run_id": "38025103712"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T06:43:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
