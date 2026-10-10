@@ -150,9 +150,18 @@ validate_snapshot()
 		echo "HEAL_ISOLATED_EDITOR phase=validate engine=${heal_engine} outcome=container_survived" >&2
 		exit 1
 	fi
-	# timeout/docker failures are not syntax errors: never hand them to repair.
+	# The validator's findings, so a failed heal names the file and checker
+	# (#6982's two discarded attempts logged only reason=syntax). The log comes
+	# from the editor-modified snapshot: only its ::error lines are shown, each
+	# prefixed so the runner never reads one as a workflow command.
+	if [ "${validation_rc}" -ne 0 ]; then
+		grep -E '^::error' "${root}/results/validation.log" 2>/dev/null | head -n 20 | tr -d '\r' | cut -c1-300 \
+			| sed 's/^/HEAL_ISOLATED_EDITOR validation: /' >&2 || true
+	fi
+	# Timeout/docker failures and a missing checker (validator exit 3) are not
+	# syntax errors: never hand them to repair.
 	case "${validation_rc}" in
-		124|125|126|127|137)
+		3|124|125|126|127|137)
 			echo "HEAL_ISOLATED_EDITOR phase=validate engine=${heal_engine} outcome=failed reason=validator_unavailable rc=${validation_rc}" >&2
 			exit 1
 			;;
