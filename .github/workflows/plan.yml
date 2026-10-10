@@ -58,6 +58,11 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
+      # Issue #6769: while off (the default), plans listing automation paths
+      # (.github/, .claude/, scripts/, prompts/, workflow-templates/) get no
+      # automatic /approved. When on, every listed protected path needs a
+      # trusted, exact files_touched grant in the issue body.
+      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -283,7 +288,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_isolated_run.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_isolated_run.sh files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2083,6 +2088,7 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2131,6 +2137,68 @@ jobs:
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
+              # Automation-path plan gate (issue #6769). Plans listing
+              # .github/, .claude/, scripts/, prompts/ or workflow-templates/
+              # paths are held while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED
+              # is off; when it is on, every such path needs a trusted, exact
+              # issue-body grant (the open pipeline-author grant does not
+              # count). Every error holds. A held plan keeps ai:awaiting-approval
+              # for a human /approved; the implement-time guard still applies.
+              plan_gate_file="${PLAN_FILE:-${CODEX_OUTPUT_FILE:-}}"
+              plan_gate_guard="scripts/files_touched_scope_guard.py"
+              plan_gate_login=""
+              plan_gate_result=""
+              plan_gate_allow_edits="false"
+              case "$(printf '%s' "${ALLOW_WORKFLOW_EDITS:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+                1|true|yes|on) plan_gate_allow_edits="true" ;;
+              esac
+              if [ -f "${plan_gate_guard}" ]; then
+                plan_gate_meta_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX")"
+                printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_gate_meta_file}"
+                run_plan_gate() {
+                  PYTHONDONTWRITEBYTECODE=1 python3 "${plan_gate_guard}" --plan-auto-approval-gate \
+                    --plan-file "${plan_gate_file}" \
+                    --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" \
+                    --issue-meta-file "${plan_gate_meta_file}" \
+                    --pipeline-login "${plan_gate_login}" \
+                    --allow-workflow-edits "${plan_gate_allow_edits}" \
+                    --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true
+                }
+                plan_gate_result="$(run_plan_gate)"
+                # The pipeline login is read only when the flag is on and the
+                # plan lists protected paths (the guard then reports
+                # identity_unavailable without one).
+                if printf '%s' "${plan_gate_result}" | jq -e '.decision == "hold" and .reason == "identity_unavailable"' >/dev/null 2>&1; then
+                  plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+                  if [ -n "${plan_gate_login}" ]; then
+                    plan_gate_result="$(run_plan_gate)"
+                  fi
+                fi
+                rm -f "${plan_gate_meta_file}"
+                plan_gate_decision="$(printf '%s' "${plan_gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+                plan_gate_reason="$(printf '%s' "${plan_gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+                plan_gate_paths="$(printf '%s' "${plan_gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+              else
+                plan_gate_decision="hold"
+                plan_gate_reason="plan_gate_helper_unavailable"
+                plan_gate_paths="none"
+              fi
+              # Reason and paths are sanitized so model-written plan text
+              # cannot inject workflow commands or forge gate log lines.
+              plan_gate_reason="$(printf '%s' "${plan_gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+              plan_gate_paths="$(printf '%s' "${plan_gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+              if [ "${plan_gate_decision}" != "approve" ]; then
+                echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=${plan_gate_reason:-plan_gate_error} outcome=defer issue=${ISSUE_NUMBER} paths=${plan_gate_paths:-none}"
+                echo "auto_approve_hold_reason=${plan_gate_reason:-plan_gate_error}" >> "$GITHUB_OUTPUT"
+                {
+                  echo "### Automatic plan approval held"
+                  echo ""
+                  echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
+                  echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"
+                  echo "A maintainer can review the plan and reply \`/approved\`."
+                } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                exit 0
+              fi
               # Brief pause so the plan comment is fully indexed by GitHub before
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.

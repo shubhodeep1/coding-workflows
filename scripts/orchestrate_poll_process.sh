@@ -2320,6 +2320,10 @@ else
   ALLOW_WORKFLOW_EDITS="false"
 fi
 
+# Issue #6769: automatic /approved for plans that list automation paths stays
+# off until an operator enables this flag (see _plan_auto_approval_gate).
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -14806,6 +14810,121 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
+# Issue #6769: comments for the plan auto-approval gate. Reuses the batched
+# GraphQL cache entry when it conclusively holds the whole history, otherwise
+# the paginated REST read in _staged_support_comments_for_guard. Prints `[]`
+# on any failure, which makes the gate hold (plan_comment_unavailable).
+_plan_auto_approval_gate_comments()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local cached_comments='[]'
+  local cache_available="false"
+  local comments_out=""
+
+  if [ -n "${details_map_json}" ] \
+    && printf '%s' "${details_map_json}" | jq -e --arg n "${issue_num}" \
+      'has($n) and (.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+    cached_comments="$(printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].comments' 2>/dev/null || printf '[]')"
+    cache_available="true"
+  fi
+  if comments_out="$(_staged_support_comments_for_guard "${issue_num}" "${cached_comments}" "${cache_available}")"; then
+    printf '%s' "${comments_out}"
+  else
+    printf '[]'
+  fi
+}
+
+# Issue #6769: hold automatic /approved posts from stall recovery for plans
+# that list automation paths (.github/, .claude/, scripts/, prompts/,
+# workflow-templates/). The plan is the newest comment carrying the
+# `<!-- ai:plan-proposal:v1 -->` marker line posted by the pipeline login, so
+# a forged marker from anyone else is ignored. scripts/files_touched_scope_guard.py
+# decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off every such
+# plan is held; when on, every protected path needs a trusted, exact
+# issue-body grant (the open pipeline-author grant does not count). Every
+# error holds. A hold leaves the issue in its phase for a human /approved and
+# does not increment the recovery count; the implement-time guard still runs.
+# Args: <issue_num> <details_map_json> <comments_json> <phase>
+# Returns 0 to approve, 1 to hold (after logging).
+_plan_auto_approval_gate()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local comments_json="$3"
+  local phase="$4"
+  local guard_py=""
+  local gate_login=""
+  local gate_plan_file=""
+  local gate_meta_file=""
+  local gate_meta_arg=""
+  local gate_result=""
+  local gate_decision="hold"
+  local gate_reason=""
+  local gate_paths="none"
+
+  guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
+  if [ ! -f "${guard_py}" ]; then
+    gate_reason="plan_gate_helper_unavailable"
+  else
+    gate_login="$(unblock_trusted_login)"
+    if [ -z "${gate_login}" ]; then
+      gate_reason="identity_unavailable"
+    else
+      gate_plan_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_plan.XXXXXX" 2>/dev/null || true)"
+      gate_meta_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX" 2>/dev/null || true)"
+      if [ -z "${gate_plan_file}" ] || [ -z "${gate_meta_file}" ]; then
+        gate_reason="plan_gate_error"
+      elif ! printf '%s' "${comments_json:-[]}" | jq -er --arg login "${gate_login}" '
+          [ .[]?
+            | select(type == "object")
+            | select((.user.login // "") == $login)
+            | select(((.body // "") | split("\n") | map(sub("\r$"; "") | gsub("^[ \t]+|[ \t]+$"; "")) | any(. == "<!-- ai:plan-proposal:v1 -->")))
+          ]
+          | sort_by(.created_at // "")
+          | last
+          | .body
+          | strings
+        ' > "${gate_plan_file}" 2>/dev/null || [ ! -s "${gate_plan_file}" ]; then
+        gate_reason="plan_comment_unavailable"
+      else
+        # Issue metadata comes from the batched GraphQL cache (author fields
+        # added for this gate). The guard needs it only when the flag is on
+        # and the plan lists protected paths; otherwise an empty argument
+        # makes it hold with issue_meta_unavailable in that case alone.
+        if printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" '
+            .[$n]
+            | select(type == "object")
+            | select((.body | type) == "string" and (.author_login | type) == "string" and .author_login != "")
+            | {number: ($n | tonumber), body: .body, user: {login: .author_login}, author_association: (.author_association // "")}
+          ' > "${gate_meta_file}" 2>/dev/null; then
+          gate_meta_arg="${gate_meta_file}"
+        fi
+        gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 "${guard_py}" --plan-auto-approval-gate \
+          --plan-file "${gate_plan_file}" \
+          --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" \
+          --issue-meta-file "${gate_meta_arg}" \
+          --pipeline-login "${gate_login}" \
+          --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" \
+          --issue-number "${issue_num}" 2>/dev/null || true)"
+        gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+        gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        gate_paths="$(printf '%s' "${gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+      fi
+    fi
+  fi
+  rm -f "${gate_plan_file}" "${gate_meta_file}" 2>/dev/null || true
+  if [ "${gate_decision}" = "approve" ]; then
+    return 0
+  fi
+  # Sanitize model-derived values before logging.
+  gate_reason="$(printf '%s' "${gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  gate_paths="$(printf '%s' "${gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+  echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
+  echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
+  return 1
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -14932,6 +15051,10 @@ STALL_EOF
           return 1
           ;;
       esac
+      if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
+        "${_managed_staged_support_comments}" "${phase}"; then
+        return 1
+      fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -14961,6 +15084,16 @@ STALL_EOF
         tg_notify "Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return 0
+      fi
+      if [ "${phase}" = "ai:awaiting-approval" ]; then
+        # Issue #6769: this arm posts the same /approved, so a stall-judge
+        # choice cannot skip the plan auto-approval gate.
+        local _managed_rti_gate_comments='[]'
+        _managed_rti_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_current_wave_details_json:-}")"
+        if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
+          "${_managed_rti_gate_comments}" "${phase}"; then
+          return 1
+        fi
       fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
       # The implement workflow precheck (implement.yml) skips when
@@ -16198,6 +16331,8 @@ _fetch_candidate_issue_details_graphql() {
           number
           state
           body
+          author { login }
+          authorAssociation
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -16250,6 +16385,8 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
+            author_login: (.value.author.login // ""),
+            author_association: (.value.authorAssociation // ""),
             labels: [(.value.labels.nodes // [])[]?.name],
             labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
@@ -18373,6 +18510,12 @@ STALL_EOF
         took_action="true"
         ;;
       auto_approve)
+        # Issue #6769: a held plan logs STALL_SKIP and takes no action, so
+        # the recovery count is not incremented.
+        local _std_plan_gate_comments='[]'
+        _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
+        if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
+          "${_std_plan_gate_comments}" "${phase}"; then
         local _std_auto_approve_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -18386,8 +18529,21 @@ STALL_EOF
         tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-approved plan (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
+        fi
         ;;
       retrigger_implement)
+        # Issue #6769: before the first approval this arm posts the same
+        # /approved as auto_approve, so it passes the same plan gate.
+        local _std_rti_gate_ok="true"
+        if [ "${phase}" = "ai:awaiting-approval" ]; then
+          local _std_rti_gate_comments='[]'
+          _std_rti_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
+          if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
+            "${_std_rti_gate_comments}" "${phase}"; then
+            _std_rti_gate_ok="false"
+          fi
+        fi
+        if [ "${_std_rti_gate_ok}" = "true" ]; then
         # Same precheck gate as the managed arm in execute_stall_recovery_action:
         # without this swap the /approved below fires an implement run that
         # exits at "Precheck approval phase label" with
@@ -18406,6 +18562,7 @@ STALL_EOF
         tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered implementation (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
+        fi
         ;;
       retrigger_review)
         local pr_num
