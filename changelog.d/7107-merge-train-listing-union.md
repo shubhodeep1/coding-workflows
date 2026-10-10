@@ -9,4 +9,4 @@
 | Pages the new check covers | first page of each status |
 | Re-read budget (`MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES`) | unchanged, default `2` |
 
-What this means for operators: fewer merge-train ticks end with `MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE` while the pipeline is busy. A run that changed status between reads can keep one PR queued for one more tick.
+What this means for operators: fewer merge-train ticks end with `MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE` while the pipeline is busy. The check is best-effort: a run that changed status between reads stays in the count, so it can keep one PR queued for one more tick, or hide a live run that no read returned, in which case a review already in flight can be dispatched again.
