@@ -20,7 +20,8 @@ implement pipeline picks it up and does the split or rebalance before the
 hard limit breaks CI.
 
 API calls (CLAUDE.md §15): one `actions/runs/{run_id}/jobs` read (skipped when
-no run id), one open-issue listing for the label, and one create per new
+no run id), one open-issue listing for the label, one label create when a
+new finding needs an issue (HTTP 422 when it exists), and one create per new
 finding. Fail-open: any API error is a warning; the job never fails.
 """
 
@@ -182,6 +183,16 @@ def main(argv: list[str] | None = None) -> int:
 		print(f"::warning::ci_budget_watch: could not list open {LABEL} issues ({exc}); not opening any.")
 		return 0
 	existing = "\n".join(str(issue.get("body") or "") for issue in open_issues)
+	if any(marker(f["kind"], f["subject"]) not in existing for f in findings):
+		# The open-issue listing filters on LABEL, so an issue whose label was
+		# dropped would be invisible to the dedup and re-opened on every push.
+		# Create the label first; "already exists" (HTTP 422) is the normal case.
+		try:
+			_gh([f"repos/{args.repo}/labels", "-X", "POST"], data={"name": LABEL, "color": "d93f0b", "description": "CI budget early warning (scripts/ci_budget_watch.py)"})
+			print(f"CI_BUDGET_LABEL name={LABEL} action=created")
+		except Exception as exc:  # noqa: BLE001 - fail-open; 422 means it exists
+			if "already_exists" not in str(exc) and "422" not in str(exc):
+				print(f"::warning::ci_budget_watch: could not ensure the {LABEL} label ({exc}).")
 	for f in findings:
 		if marker(f["kind"], f["subject"]) in existing:
 			print(f"CI_BUDGET_ISSUE kind={f['kind']} subject={f['subject']} action=exists")

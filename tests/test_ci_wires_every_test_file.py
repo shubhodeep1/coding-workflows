@@ -25,13 +25,20 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 UNWIRED_ALLOWLIST: dict[str, str] = {}
 
 
+def _strip_comment(line: str) -> str:
+	"""Drop a full-line comment or a trailing ` #` comment (YAML or shell), so a path named only in a comment is not wired."""
+	if line.lstrip().startswith("#"):
+		return ""
+	cut = line.find(" #")
+	return line if cut < 0 else line[:cut]
+
+
 def _workflow_text() -> str:
-	"""All workflow text minus full-line YAML comments, so a path named only in a comment does not count as wired."""
+	"""All workflow text minus comments, so a path named only in a comment does not count as wired."""
 	return "\n".join(
-		line
+		_strip_comment(line)
 		for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
 		for line in path.read_text(encoding="utf-8").splitlines()
-		if not line.lstrip().startswith("#")
 	)
 
 
@@ -70,3 +77,9 @@ def test_the_guard_sees_the_test_tree() -> None:
 	assert len(files) > 100
 	assert "tests/test_ci_wires_every_test_file.py" in files
 	assert _is_wired("tests/test_ci_wires_every_test_file.py", _workflow_text())
+
+
+def test_comments_do_not_count_as_wiring() -> None:
+	assert _strip_comment("  # tests/test_x.py") == ""
+	assert "tests/test_x.py" not in _strip_comment("  run: echo ok  # tests/test_x.py")
+	assert _strip_comment("  python3 tests/test_x.py  # why") == "  python3 tests/test_x.py "

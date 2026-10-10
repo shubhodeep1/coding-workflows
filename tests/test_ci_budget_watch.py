@@ -79,6 +79,8 @@ elif "issues?state=open" in path:
     print(json.dumps({json.dumps(issues)}))
 elif path.endswith("/issues"):
     print(json.dumps({{"number": 77}}))
+elif path.endswith("/labels"):
+    print(json.dumps({{"name": "ai:ci-budget"}}))
 else:
     sys.exit(1)
 """, encoding="utf-8")
@@ -107,6 +109,9 @@ def test_opens_one_issue_per_new_finding_and_skips_existing(tmp_path: Path) -> N
 	assert all(c["token"] == "job-token" for c in calls if c not in created)
 	payload = json.loads(created[0]["stdin"])
 	assert payload["labels"] == ["ai:ci-budget"]
+	labels = [c for c in calls if c["args"][1].endswith("/labels")]
+	assert len(labels) == 1 and calls.index(labels[0]) < calls.index(created[0])
+	assert json.loads(labels[0]["stdin"])["name"] == "ai:ci-budget"
 	assert payload["title"].startswith("CI budget: CI job tests-a took 19m00s")
 	assert "::warning::CI_BUDGET kind=workflow_size" in result.stdout
 	assert "action=opened number=77" in result.stdout
