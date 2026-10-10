@@ -568,6 +568,10 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          # Freshness-update fast path (#7084, Q60): a head that is only
+          # GitHub's merge of an already-approved head with the base skips the
+          # reviewers and goes to deterministic-skip-merge (CI wait, then merge).
+          MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
@@ -969,7 +973,7 @@ jobs:
             # shellcheck disable=SC2016
             if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
               -f per_page=100 \
-              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:"))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
               2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
               && [ -s "${gate_marker_comments_file}" ]; then
               gate_marker_fetch_state="ok"
@@ -1295,8 +1299,28 @@ jobs:
             fi
             FORCE_FULL_REVIEW_TIER="${FORCE_REVIEW}"
 
+            # Freshness-update fast path (#7084, Q60): see
+            # scripts/review_head_gate.sh freshness-sync. Reuses the marker
+            # comments read above; a missing helper or comments read keeps
+            # the normal review.
+            gate_freshness_sync_fast_path()
+            {
+              [ "${MERGE_BASE_SYNC_FAST_PATH_ENABLED:-true}" != "false" ] || return 1
+              [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
+              [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
+              gate_fetch_marker_comments
+              [ "${gate_marker_fetch_state}" = "ok" ] || return 1
+              bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
+                "${pr_head_sha_gate}" "${pr_base_ref_gate:-${pr_base_ref:-}}" "${gate_marker_author_login}" "${gate_marker_comments_file}"
+            }
             if [ "${FORCE_REVIEW}" = "true" ]; then
               echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
+            elif gate_freshness_sync_fast_path; then
+              DETERMINISTIC_SKIP="true"
+              DET_SKIP_REASON="freshness_sync"
+              SHOULD_RUN="false"
+              SKIP_REASON="deterministic_skip_freshness_sync"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
             else
               # Size check uses the .additions/.deletions totals already
               # returned by the PR-state fetch above (no extra API call).
@@ -2164,6 +2188,7 @@ jobs:
       # decision Q35: A), read from the same verified support commit the
       # gate resolved.
       MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+      MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
       # Required-checks wait before `gh pr merge --auto` (pr_checks_lib.sh):
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
@@ -5535,6 +5560,7 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
@@ -5711,6 +5737,7 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
