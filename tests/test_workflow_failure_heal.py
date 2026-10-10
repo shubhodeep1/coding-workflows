@@ -4227,7 +4227,8 @@ def test_autofix_report_streak_counts_only_the_pipeline_author() -> None:
 		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
 		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"]
 		assert not any(call[:2] == ["api", "user"] for call in _state(state_file)["calls"])
-	# An older staged helper without the sentinel keeps the legacy call.
+	# An older staged helper without the sentinel cannot filter by author, so
+	# the streak counts only this run (fail closed) and the drift is logged.
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-old-helper-") as tmp_name:
 		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags=flags)
 		staged_helper = work / "scripts" / "workflow_failure_heal.py"
