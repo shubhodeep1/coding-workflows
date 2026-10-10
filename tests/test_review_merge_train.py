@@ -247,6 +247,10 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 		"GITHUB_ENV": str(github_env),
 		"GH_TOKEN": "x",
 		"PYTHONDONTWRITEBYTECODE": "1",
+		# Outside a checkout the conflict probe fetches from
+		# ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git; keep tests offline.
+		"GITHUB_SERVER_URL": f"file://{tmp_path}/no-such-server",
+		"RUNNER_TEMP": str(tmp_path),
 	})
 	run_env.update(env)
 	result = subprocess.run(
@@ -1925,6 +1929,111 @@ def test_gate_conflict_probe_failure_keeps_path_overlap_rule(tmp_path: Path, whe
 	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
 
 
+def _probe_server(tmp_path: Path) -> str:
+	"""A file:// server root whose acme/consumer.git is the fixture origin."""
+	server = tmp_path / "srv"
+	(server / "acme").mkdir(parents=True)
+	(server / "acme" / "consumer.git").symlink_to(tmp_path / "origin.git")
+	return f"file://{server}"
+
+
+@pytest.mark.parametrize(("own", "expected"), [("clean", "conflict=none"), ("conflict", "conflict=conflict")])
+def test_conflict_probe_outside_a_checkout_uses_a_private_repository(tmp_path: Path, own: str, expected: str) -> None:
+	"""The poller and PR-close callers run `release` with no checkout; the probe must still decide."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas[own]))
+	result, _log_text, _env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", GITHUB_SERVER_URL=_probe_server(tmp_path),
+		GH_TOKEN="probe-token-must-not-leak", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"MERGE_TRAIN_PROBE_REPO outcome=created origin=file://{tmp_path}/srv/acme/consumer.git" in result.stdout
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	# The private repository is removed on exit, and the token is never printed.
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+	assert "probe-token-must-not-leak" not in result.stdout + result.stderr
+	assert not (plain / ".git").exists()
+
+
+def test_conflict_probe_outside_a_checkout_keeps_the_blocker_when_the_fetch_fails(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["clean"]))
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_PROBE_REPO outcome=created" in result.stdout
+	assert "older=4075 overlap=paths conflict=unknown" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+
+
+def test_https_probe_fetch_passes_the_token_through_environment_only() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	fetch = text[text.index("_mt_git_fetch()\n"):text.index("_mt_probe_repo_cleanup()\n")]
+	assert "export GIT_CONFIG_COUNT=1" in fetch
+	assert 'export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"' in fetch
+	assert "[[ \"${server}\" =~ ^https:// ]]" in fetch
+	assert "-c http" not in fetch and "config --" not in fetch
+
+
+def _manifest_conflict_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+	"""Two heads that merge cleanly in app.txt but both rewrite the generated manifest."""
+	seed = tmp_path / "mseed"
+	seed.mkdir()
+	_git(seed, "init", "-q", "-b", "main")
+	(seed / "app.txt").write_text("".join(f"line {i}\n" for i in range(1, 21)), encoding="utf-8")
+	(seed / ".ai").mkdir()
+	(seed / ".ai" / ".workspace_source_manifest.txt").write_text("base\n", encoding="utf-8")
+	_git(seed, "add", "-A")
+	_git(seed, "commit", "-q", "-m", "base")
+	shas: dict[str, str] = {}
+	for branch, line_no in (("older", 1), ("younger", 15)):
+		_git(seed, "checkout", "-q", "-b", branch, "main")
+		lines = (seed / "app.txt").read_text(encoding="utf-8").splitlines()
+		lines[line_no - 1] = f"{branch} edit"
+		(seed / "app.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+		(seed / ".ai" / ".workspace_source_manifest.txt").write_text(f"{branch}\n", encoding="utf-8")
+		_git(seed, "commit", "-q", "-am", branch)
+		shas[branch] = _git(seed, "rev-parse", "HEAD")
+	origin = tmp_path / "morigin.git"
+	_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
+	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+	work = tmp_path / "mwork"
+	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
+	return work, shas
+
+
+@pytest.mark.parametrize(("ignore", "expected", "queued"), [
+	(None, "conflict=ignored", False),
+	("none", "conflict=conflict", True),
+])
+def test_conflict_only_in_ignored_paths_does_not_block(tmp_path: Path, ignore: str | None, expected: str, queued: bool) -> None:
+	"""The generated manifest is ignored by the path rule, so a conflict only there does not block either."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _manifest_conflict_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["younger"]))
+	extra = {} if ignore is None else {"MERGE_TRAIN_IGNORE_PATHS": ignore}
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **extra, **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	if queued:
+		assert "result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	else:
+		assert "skipped_clean=1" in result.stdout
+		assert "result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_MERGE_QUEUED" not in env_out
+
+
 def test_gate_conflict_check_off_queues_on_overlap_without_fetch(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	work, shas = _git_fixture(tmp_path)
@@ -2142,7 +2251,7 @@ def test_release_keeps_pr_queued_behind_recently_released_old_blocker(tmp_path: 
 def test_merge_train_conflict_aware_settings_are_wired_in_every_caller() -> None:
 	expected = {
 		"MERGE_TRAIN_CONFLICT_CHECK_ENABLED": "${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}",
-		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}",
+		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}",
 		"MERGE_TRAIN_PRIORITY_LABELS": "${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}",
 	}
 	workflows = REPO_ROOT / ".github" / "workflows"

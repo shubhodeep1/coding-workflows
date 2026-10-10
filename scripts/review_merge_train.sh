@@ -47,8 +47,8 @@
 #   MERGE_TRAIN_HEAD_REF_PREFIX            default ai/issue-
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 #   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
-#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 24; 0 disables the age bypass;
-#                                          a non-integer warns and falls back to 24
+#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 6; 0 disables the age bypass;
+#                                          a non-integer warns and falls back to 6
 #   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
 #                                          (comma-separated); empty, none or off
 #                                          disables the priority lane
@@ -171,10 +171,10 @@ case "$(printf '%s' "${MERGE_TRAIN_CONFLICT_CHECK_ENABLED:-true}" | tr '[:upper:
 	true|1|yes|on) MT_CONFLICT_CHECK="true" ;;
 	*) MT_CONFLICT_CHECK="false" ;;
 esac
-MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-24}"
+MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-6}"
 if ! [[ "${MT_HEAD_MAX_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
-	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 24."
-	MT_HEAD_MAX_AGE_HOURS=24
+	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 6."
+	MT_HEAD_MAX_AGE_HOURS=6
 fi
 MT_HEAD_MAX_AGE_HOURS=$((10#${MT_HEAD_MAX_AGE_HOURS}))
 # Unset means the default; an explicitly empty value disables the lane. A repo
@@ -433,7 +433,7 @@ _mt_blockers_for_into() {
 			_mt_conflict_probe "${own_sha}" "${__mt_cand_sha[$idx]}"
 			conflict_state="${_MT_PROBE_RESULT}"
 			case "${conflict_state}" in
-				none)
+				none|ignored)
 					action="skip"
 					skipped_clean=$((skipped_clean + 1))
 					;;
@@ -610,16 +610,91 @@ _mt_blocker_is_stale()
 
 # Conflict probe (issue #6570). `_mt_conflict_probe <own_sha> <blocker_sha>`
 # sets _MT_PROBE_RESULT to none (the heads merge cleanly), conflict (git
-# reports a content conflict; _MT_PROBE_PATHS lists the paths) or unknown (any
-# other outcome). Runs in the caller's shell so its caches persist.
+# reports a content conflict; _MT_PROBE_PATHS lists the paths), ignored (every
+# conflicted path is in MERGE_TRAIN_IGNORE_PATHS; does not block) or unknown
+# (any other outcome). Runs in the caller's shell so its caches persist.
 # Missing heads are fetched by SHA with --no-write-fetch-head (FETCH_HEAD for
 # later steps is untouched) and --depth=200 only in an already-shallow clone,
 # so a full clone is never made shallow. merge-tree writes only objects; it
 # runs no hooks and no PR-supplied merge driver. No API calls.
+#
+# Outside a git checkout (the `release` callers in orchestrate_poll.yml and
+# cancel_on_pr_close.yml run before or without one), the probe uses a private
+# bare repository under RUNNER_TEMP (or TMPDIR) whose origin is
+# ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git, fetches the two heads by SHA
+# with --depth=200, and removes the repository when the script exits. GH_TOKEN
+# (or GITHUB_TOKEN) authenticates the fetch through GIT_CONFIG_* environment
+# entries, never argv or a config file. Without that fallback every probe in
+# those callers returned `unknown` and kept the blocker. Logs
+# MERGE_TRAIN_PROBE_REPO outcome=created|unavailable once per run.
 declare -A _MT_FETCHED_SHA=()
 _MT_GIT_PROBE_OK=""
 _MT_PROBE_RESULT="unknown"
 _MT_PROBE_PATHS=""
+_MT_PROBE_GIT_DIR=""
+
+# git in the probe repository when one was created, else in the cwd checkout.
+_mt_git()
+{
+	if [ -n "${_MT_PROBE_GIT_DIR}" ]; then
+		git --git-dir="${_MT_PROBE_GIT_DIR}" "$@"
+	else
+		git "$@"
+	fi
+}
+
+# `_mt_git_fetch <seconds> <fetch args...>`: git fetch under `timeout`, in the
+# probe repository when one exists. For an https origin the token rides as an
+# HTTP extraheader through GIT_CONFIG_* variables exported in a subshell, so it
+# never reaches argv (ps) or a config file.
+_mt_git_fetch()
+{
+	local fetch_timeout="$1"
+	shift
+	(
+		local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}" server="${GITHUB_SERVER_URL:-https://github.com}" basic
+		local -a git_dir_args=()
+		if [ -n "${_MT_PROBE_GIT_DIR}" ]; then
+			git_dir_args=(--git-dir="${_MT_PROBE_GIT_DIR}")
+			if [ -n "${token}" ] && [[ "${server}" =~ ^https:// ]]; then
+				basic="$(printf 'x-access-token:%s' "${token}" | base64 | tr -d '\n')"
+				export GIT_CONFIG_COUNT=1
+				export GIT_CONFIG_KEY_0="http.${server%/}/.extraheader"
+				export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+			fi
+		fi
+		GIT_TERMINAL_PROMPT=0 timeout "${fetch_timeout}" git ${git_dir_args[@]+"${git_dir_args[@]}"} fetch "$@"
+	)
+}
+
+_mt_probe_repo_cleanup()
+{
+	if [ -n "${_MT_PROBE_GIT_DIR}" ] && [[ "${_MT_PROBE_GIT_DIR}" == */merge-train-probe.* ]]; then
+		rm -rf -- "${_MT_PROBE_GIT_DIR}"
+	fi
+}
+
+# Create the private probe repository; returns 1 (probe stays unknown) when
+# the repository slug is unusable or git cannot create it.
+_mt_probe_repo_init()
+{
+	local server="${GITHUB_SERVER_URL:-https://github.com}" probe_dir
+	if ! [[ "${MT_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		_mt_log "MERGE_TRAIN_PROBE_REPO outcome=unavailable reason=invalid_repository"
+		return 1
+	fi
+	if ! probe_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/merge-train-probe.XXXXXX" 2>/dev/null)" \
+		|| ! git init -q --bare "${probe_dir}" >/dev/null 2>&1 \
+		|| ! git --git-dir="${probe_dir}" remote add origin "${server%/}/${MT_REPO}.git" >/dev/null 2>&1; then
+		[ -n "${probe_dir:-}" ] && rm -rf -- "${probe_dir}"
+		_mt_log "MERGE_TRAIN_PROBE_REPO outcome=unavailable reason=init_failed"
+		return 1
+	fi
+	_MT_PROBE_GIT_DIR="${probe_dir}"
+	trap _mt_probe_repo_cleanup EXIT
+	_mt_log "MERGE_TRAIN_PROBE_REPO outcome=created origin=${server%/}/${MT_REPO}.git"
+	return 0
+}
 _mt_conflict_probe()
 {
 	local own_sha="$1" other_sha="$2" probe_sha probe_out="" probe_rc=0
@@ -632,22 +707,26 @@ _mt_conflict_probe()
 	if [ -z "${_MT_GIT_PROBE_OK}" ]; then
 		if git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
 			_MT_GIT_PROBE_OK="yes"
+		elif ! git rev-parse --git-dir >/dev/null 2>&1 && _mt_probe_repo_init; then
+			# No checkout here: probe in the private repository instead.
+			_MT_GIT_PROBE_OK="yes"
 		else
 			_MT_GIT_PROBE_OK="no"
 		fi
 	fi
 	[ "${_MT_GIT_PROBE_OK}" = "yes" ] || return 0
 	for probe_sha in "${own_sha}" "${other_sha}"; do
-		if ! git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+		if ! _mt_git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
 			[ "${_MT_FETCHED_SHA[${probe_sha}]:-}" = "failed" ] && return 0
 			probe_missing+=("${probe_sha}")
 		fi
 	done
 	if [ "${#probe_missing[@]}" -gt 0 ]; then
-		if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+		# The private probe repository starts empty: fetch shallow there too.
+		if [ -n "${_MT_PROBE_GIT_DIR}" ] || [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
 			probe_depth=(--depth=200)
 		fi
-		if ! GIT_TERMINAL_PROMPT=0 timeout 120 git fetch --no-tags --quiet --no-write-fetch-head \
+		if ! _mt_git_fetch 120 --no-tags --quiet --no-write-fetch-head \
 			${probe_depth[@]+"${probe_depth[@]}"} origin "${probe_missing[@]}" >/dev/null 2>&1; then
 			for probe_sha in "${probe_missing[@]}"; do
 				_MT_FETCHED_SHA[${probe_sha}]="failed"
@@ -655,7 +734,7 @@ _mt_conflict_probe()
 			return 0
 		fi
 		for probe_sha in "${probe_missing[@]}"; do
-			if git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+			if _mt_git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
 				_MT_FETCHED_SHA[${probe_sha}]="ok"
 			else
 				_MT_FETCHED_SHA[${probe_sha}]="failed"
@@ -663,12 +742,19 @@ _mt_conflict_probe()
 			fi
 		done
 	fi
-	probe_out="$(git merge-tree --write-tree --name-only --no-messages "${own_sha}" "${other_sha}" 2>/dev/null)" || probe_rc=$?
+	probe_out="$(_mt_git merge-tree --write-tree --name-only --no-messages "${own_sha}" "${other_sha}" 2>/dev/null)" || probe_rc=$?
 	case "${probe_rc}" in
 		0) _MT_PROBE_RESULT="none" ;;
 		1)
 			_MT_PROBE_RESULT="conflict"
 			_MT_PROBE_PATHS="$(printf '%s\n' "${probe_out}" | sed '1d' | sed '/^$/d' | sort -u)"
+			# Conflicts only in MERGE_TRAIN_IGNORE_PATHS (the generated
+			# workspace manifest by default) do not block: the path-overlap
+			# rule already ignores those files, and the later merge
+			# regenerates them.
+			if [ -n "${_MT_PROBE_PATHS}" ] && [ -z "$(_mt_drop_ignored "${_MT_PROBE_PATHS}" | sed '/^$/d')" ]; then
+				_MT_PROBE_RESULT="ignored"
+			fi
 			;;
 		*) _MT_PROBE_RESULT="unknown" ;;
 	esac

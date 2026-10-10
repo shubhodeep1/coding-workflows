@@ -3074,6 +3074,87 @@ def test_increment_stall_recovery_without_phase_is_backward_compatible():
 
 
 # ---------------------------------------------------------------------------
+# Unrouted replies on blocked issues (issue #6630)
+# ---------------------------------------------------------------------------
+
+def _unrouted_now():
+	from datetime import datetime, timezone
+	return datetime(2026, 10, 7, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _unrouted_ts(minutes_ago: float) -> str:
+	from datetime import timedelta
+	return (_unrouted_now() - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _unrouted_comment(cid: int, body: str, minutes_ago: float, assoc: str = "OWNER", kind: str = "User", login: str = "owner") -> dict:
+	return {"databaseId": cid, "body": body, "createdAt": _unrouted_ts(minutes_ago),
+		"authorAssociation": assoc, "author": {"login": login, "__typename": kind}}
+
+
+def _unrouted_issue(comments: list, label_events: list | None = None, labels: tuple = ("ai:blocked",)) -> dict:
+	events = label_events if label_events is not None else [("ai:blocked", 120)]
+	return {"7": {"number": 7, "labels": {"nodes": [{"name": n} for n in labels]},
+		"comments": {"nodes": comments},
+		"timelineItems": {"nodes": [{"createdAt": _unrouted_ts(m), "label": {"name": n}} for n, m in events]}}}
+
+
+def _unrouted(details: dict) -> list:
+	return orchestrate_lib.classify_unrouted_blocked_issues(details, _unrouted_now(), 15, 168)
+
+
+def test_unrouted_flags_trailing_reclarify_after_grace():
+	blocked = _unrouted_comment(1, "Clarification blocked: human input required.\n\nRun: x", 119)
+	answer = _unrouted_comment(2, "Here is the answer.\n\n/reclarify", 20)
+	assert _unrouted(_unrouted_issue([blocked, answer])) == [
+		{"issue": 7, "comment_id": 2, "reason": "command_unrouted", "age_minutes": 20}]
+
+
+def test_unrouted_crlf_and_same_login_as_automation():
+	answer = _unrouted_comment(2, "Answer\r\n/reclarify", 30, login="shubhodeep1")
+	marker = _unrouted_comment(3, "/answer [auto-answered-by-clarify]", 90, login="shubhodeep1")
+	assert _unrouted(_unrouted_issue([marker, answer]))[0]["reason"] == "command_unrouted"
+
+
+def test_unrouted_respects_grace_and_max_age():
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer\n/reclarify", 10)])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 169 * 60)], [("ai:blocked", 170 * 60)])) == []
+
+
+def test_unrouted_skips_when_later_automation_or_routing_exists():
+	answer = _unrouted_comment(2, "answer\n/reclarify", 40)
+	later_auto = _unrouted_comment(3, "Clarification required\n\n<!-- ai:clarification-questions -->", 30)
+	assert _unrouted(_unrouted_issue([answer, later_auto])) == []
+	flagged = _unrouted_comment(4, "still blocked\n\n<!-- ai:reclarify-unrouted:v1 comment=2 -->", 20)
+	assert _unrouted(_unrouted_issue([answer, flagged])) == []
+	assert _unrouted(_unrouted_issue([answer], [("ai:blocked", 120), ("ai:clarification", 35)])) == []
+
+
+def test_unrouted_ignores_untrusted_bots_and_replies_before_the_block():
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 30, assoc="NONE")])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 30, kind="Bot")])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 60)], [("ai:blocked", 30)])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 30)], labels=("ai:planning",))) == []
+
+
+def test_unrouted_reports_no_command_and_automation_bodies_are_not_human():
+	result = _unrouted(_unrouted_issue([_unrouted_comment(2, "The answer is B. Please mention /reclarify inline.", 25)]))
+	assert result == [{"issue": 7, "comment_id": 2, "reason": "no_command", "age_minutes": 25}]
+	plan = _unrouted_comment(3, "Implementation Plan\n\nTo restart clarification reply:\n\n/reclarify", 25)
+	assert _unrouted(_unrouted_issue([plan])) == []
+
+
+def test_unrouted_cli_reads_stdin():
+	details = _unrouted_issue([_unrouted_comment(2, "answer\n\n/reclarify", 20)])
+	result = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "unrouted-blocked-comments",
+			"--now", "2026-10-07T12:00:00Z"],
+		input=json.dumps(details), capture_output=True, text=True, check=True,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert json.loads(result.stdout) == [{"issue": 7, "comment_id": 2, "reason": "command_unrouted", "age_minutes": 20}]
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
