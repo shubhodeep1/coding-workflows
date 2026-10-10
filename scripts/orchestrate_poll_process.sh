@@ -6553,21 +6553,28 @@ security_pass_findings_rows_json() {
 # security_pass_apply_waivers_to_findings <findings_file>
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
-# result: drops re-reports of accepted findings (exact finding_id, or the
-# same file, category, severity and exploit scenario within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line) and rewrites the
-# findings file in place with the kept
-# rows and an updated counts.kept / counts.suppressed_waived.  The engine
-# applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
-# keeps an older staged engine honest.  Fail-open: any error leaves the file
-# untouched and logs a warning.
+# result: drops a re-report of an accepted finding only when its non-empty
+# finding_id exactly matches the waiver's and every category, severity and
+# exploit scenario the waiver recorded also matches (no proximity match: a
+# different finding_id is a new finding, even at the waived file and line),
+# and rewrites the findings file in place with the kept rows and an updated
+# counts.kept / counts.suppressed_waived.  The engine applies the same rule
+# when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this keeps an older staged
+# engine honest.  SECURITY_AUDIT_WAIVER_LINE_WINDOW is still accepted and
+# validated, but no longer controls suppression.  Fail-open: any error leaves
+# the file untouched (nothing is suppressed) and logs a warning.
 security_pass_apply_waivers_to_findings() {
   local findings_file="$1"
   local waived_count suppressed_summary
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+  if [ -n "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-}" ] && ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW} is invalid; it no longer controls waiver suppression"
+  else
+    echo "::notice::SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40} no longer controls waiver suppression (exact finding_id match only)"
+  fi
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6576,7 +6583,6 @@ from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-line_window = int(sys.argv[3])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -6587,33 +6593,42 @@ def norm_category(value: object) -> str:
 	return " ".join(str(value or "").lower().split())
 
 
+def norm_scenario(value: object) -> str:
+	# Backticks are dropped and whitespace collapsed (as the engine's prompt
+	# renders the scenario), then both sides are cut to 600 characters (the
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.replace("`", "").split())[:600]
+
+
 def waiver_for(finding: dict) -> str | None:
-	finding_id = str(finding.get("finding_id") or "")
+	finding_id = finding.get("finding_id")
+	if not isinstance(finding_id, str) or not finding_id.strip():
+		return None
+	finding_id = finding_id.strip()
 	for waiver in waivers:
-		waived_id = str(waiver.get("finding_id") or "")
+		waived_id = waiver.get("finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip():
+			continue
+		# Exact match on the recorded id only; a displayed (backtick-free)
+		# form is never an alias, so a distinct id cannot match.
+		if waived_id.strip() != finding_id:
+			continue
 		waived_finding = waiver.get("finding")
-		waived_scenario = norm_category(waiver.get("exploit_scenario") or (waived_finding.get("exploit_scenario") if isinstance(waived_finding, dict) else ""))
-		waived_severity = norm_category(waiver.get("severity"))
-		waived_category = norm_category(waiver.get("owasp_or_stride_category"))
-		if (waived_id and waived_id == finding_id
-			and (not waived_scenario or waived_scenario == norm_category(finding.get("exploit_scenario")))
-			and (not waived_severity or waived_severity == norm_category(finding.get("severity")))
-			and (not waived_category or waived_category == norm_category(finding.get("owasp_or_stride_category")))):
-			return waived_id
-		waived_line = waiver.get("line")
-		if (
-			str(waiver.get("file") or "")
-			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and waived_category
-			and waived_category == norm_category(finding.get("owasp_or_stride_category"))
-			and waived_severity == norm_category(finding.get("severity"))
-			and waived_scenario
-			and waived_scenario == norm_category(finding.get("exploit_scenario"))
-			and isinstance(waived_line, int)
-			and not isinstance(waived_line, bool)
-			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
-		):
-			return waived_id or "(unnamed waiver)"
+		waived_scenario = norm_scenario(waiver.get("exploit_scenario"))
+		if not waived_scenario and isinstance(waived_finding, dict):
+			waived_scenario = norm_scenario(waived_finding.get("exploit_scenario"))
+		waived_severity = norm_category(waiver.get("severity") if isinstance(waiver.get("severity"), str) else "")
+		waived_category = norm_category(waiver.get("owasp_or_stride_category") if isinstance(waiver.get("owasp_or_stride_category"), str) else "")
+		if waived_category and waived_category != norm_category(finding.get("owasp_or_stride_category")):
+			continue
+		if waived_severity and waived_severity != norm_category(finding.get("severity")):
+			continue
+		if waived_scenario and waived_scenario != norm_scenario(finding.get("exploit_scenario")):
+			continue
+		return finding_id
 	return None
 
 
@@ -6652,7 +6667,10 @@ PY
 # drop the same ids from security_pass_reported_findings so the next delta
 # audit does not ask the engine to re-verify them, and keep the array
 # bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
-# severity, justification, source, waived_by, waived_at_cycle, issue}.
+# severity, exploit_scenario (at most 600 characters), justification, source,
+# waived_by, waived_at_cycle, issue}.  Waivers match a later finding only by
+# exact finding_id plus the recorded category, severity and exploit scenario
+# (security_pass_apply_waivers_to_findings).
 security_pass_record_waivers() {
   local waivers_json="$1"
   if ! jq --argjson waivers "${waivers_json}" '
@@ -7321,7 +7339,7 @@ ${decisions_table}}"
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
         severity: .finding.severity,
-        exploit_scenario: .finding.exploit_scenario,
+        exploit_scenario: ((.finding.exploit_scenario // "") | tostring | .[0:600]),
         justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
@@ -20266,7 +20284,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
                   severity: ($known.severity // ""),
-                  exploit_scenario: ($known.exploit_scenario // ""),
+                  exploit_scenario: (($known.exploit_scenario // "") | tostring | .[0:600]),
                   justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
