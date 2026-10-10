@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The prerequisite (#6667 merged into the default branch) is missing. How should this issue proceed?\nChoices:\nA. Wait. Keep this issue parked until #6667 is on the default branch, then continue as the plan says (D11 / Q27 A). (RECOMMENDED)\nB. Close this issue now as not actionable. Pick up the work again after #6667 merges.\nC. Rebuild `claude_run_selected`, `AI_ENGINE_FALLBACK_POLICY` and exit 76 in this issue without #6667. **Note:** this goes against plan decision D11 and will probably conflict with #6667 when it merges.\nQ2: Once the prerequisite is met, how should the four phases (capacity tiers, `MEMORY_LEARNINGS`, `SOFT_ERROR_ANALYZER`, `JUDGE_INTERIM`) be delivered?\nChoices:\nA. Run them as an orchestrator project from the plan document, one PR per phase (plan D10). Close this issue with a reference to that tracking issue. (RECOMMENDED)\nB. Do all four phases in this one standalone issue and one PR. **Note:** goes against D10 and is likely to run past the 60-minute implement budget.\nC. Do only Phase 1 (capacity tiers) here, and file Phases 2\u20134 as separate standalone issues.",
+  "fingerprint": "0d28d91e45dad1023fb9ee8e6788507810d03d65f1cee142fa55c2418ab620cf",
+  "lineage": {
+    "issue_number": 7047,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38031316849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38031316849",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010063855_af3b154352",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7047,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38031316849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7047 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T06:38:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
