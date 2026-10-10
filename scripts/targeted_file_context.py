@@ -179,6 +179,14 @@ def _normalized_semble_log_context() -> str | None:
 
 def _log_semble_event(prefix: str, **fields: object) -> None:
 	rendered_fields = dict(fields)
+	run_id = os.getenv("GITHUB_RUN_ID", "")
+	run_attempt = os.getenv("GITHUB_RUN_ATTEMPT", "1")
+	if run_id.isascii() and run_id.isdecimal() and run_attempt.isascii() and run_attempt.isdecimal():
+		rendered_fields["run"] = f"{run_id}-{run_attempt}"
+	if prefix == "SEMBLE_FALLBACK":
+		rendered_fields["sources"] = 0
+		if os.getenv("SEMBLE_STATIC_CONTEXT_FILE") and Path(os.environ["SEMBLE_STATIC_CONTEXT_FILE"]).is_file() and os.access(os.environ["SEMBLE_STATIC_CONTEXT_FILE"], os.R_OK):
+			rendered_fields["static_dup_bytes"] = 0
 	if "context" not in rendered_fields:
 		context = _normalized_semble_log_context()
 		if context:
@@ -193,6 +201,22 @@ def _log_semble_event(prefix: str, **fields: object) -> None:
 		parts.append(f"{key}={rendered}")
 	print(" ".join(parts), file=sys.stderr)
 	_mirror_event(prefix, **rendered_fields)
+
+
+def _semble_contribution_fields(payload: str) -> dict[str, int]:
+	paths = set(re.findall(r"^\[\d+\] (\S+):\d+-\d+", payload, re.MULTILINE))
+	fields = {"sources": len(paths)}
+	static_file = os.getenv("SEMBLE_STATIC_CONTEXT_FILE", "")
+	if static_file:
+		try:
+			static_lines = set(Path(static_file).read_text(encoding="utf-8", errors="replace").splitlines())
+			fields["static_dup_bytes"] = sum(
+				len(line.encode("utf-8")) for line in payload.splitlines()
+				if len(line.strip()) >= 40 and line in static_lines
+			)
+		except OSError:
+			pass
+	return fields
 
 
 def _is_probable_root_level_path_core(value: str) -> bool:
@@ -633,6 +657,7 @@ def emit_context(
 							chunks=semble_max_chunks,
 							bytes=rendered_bytes,
 							ms=elapsed_ms,
+							**_semble_contribution_fields(clamped_payload),
 						)
 						overflow_rendered_bytes += rendered_bytes
 						used_bytes += rendered_bytes

@@ -505,6 +505,52 @@ def test_choose_cli_uses_config_gate_and_rejects_bad_input() -> None:
 	assert _run("choose", "--gate", "2", stdin="[]").returncode == 2
 
 
+def test_pool_health_is_quiet_while_every_account_is_below_the_gate() -> None:
+	probes = [ce.parse_probe(_probe_text(0.85, 0.1), "A"), ce.parse_probe(_probe_text(None, None), "B")]
+	report = ce.pool_health(probes, 0.9)
+	assert report["alert"] is False and report["text"] == ""
+	assert (report["accounts"], report["usable"], report["gated"], report["auth_failed"], report["probe_failed"]) == (2, ["A", "B"], [], [], [])
+
+
+def test_pool_health_names_gated_accounts_with_both_windows_and_reset_times() -> None:
+	probes = [
+		ce.parse_probe(_probe_text(0.2, 0.95), "B"),
+		ce.parse_probe(_probe_text(0.9, 0.1), "A"),
+		ce.parse_probe(_probe_text(0.3, 0.2), "C"),
+		ce.parse_probe(_probe_text(None, None, status="rejected", ok=False), "D"),
+		{"account": "E", "error": "probe_failed"},
+	]
+	report = ce.pool_health(probes, 0.9)
+	assert report["alert"] is True
+	assert report["gated"] == ["A", "B", "D"] and report["usable"] == ["C"] and report["probe_failed"] == ["E"]
+	assert report["text"].splitlines() == [
+		"Claude pool: 3 of 5 account(s) at or above the 90% usage gate; 1 usable.",
+		"A: 5h 90% (resets 1970-01-01 00:16 UTC), 7d 10%",
+		"B: 5h 20%, 7d 95% (resets 1970-01-01 00:33 UTC)",
+		"D: usage limit reached (resets unknown)",
+		"Probe failed (not counted): E",
+	]
+
+
+def test_pool_health_alerts_on_a_rejected_token() -> None:
+	probes = [ce.parse_probe(_probe_text(0.1, 0.1), "A"), ce.parse_probe(_probe_text(0.1, 0.1, ok=False).replace('"OK"', '"API Error: 401 OAuth access token is invalid"'), "B")]
+	report = ce.pool_health(probes, 0.9)
+	assert report["auth_failed"] == ["B"] and report["gated"] == [] and report["alert"] is True
+	assert report["text"].splitlines() == [
+		"Claude pool: 0 of 2 account(s) at or above the 90% usage gate, 1 with a rejected token; 1 usable.",
+		"B: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_B",
+	]
+
+
+def test_pool_health_cli_uses_the_config_gate_and_rejects_bad_input() -> None:
+	probes = [ce.parse_probe(_probe_text(0.85, 0.1), "A")]
+	assert json.loads(_run("pool-health", stdin=json.dumps(probes)).stdout)["alert"] is False
+	result = _run("pool-health", "--gate", "0.8", stdin=json.dumps(probes))
+	assert json.loads(result.stdout)["gated"] == ["A"]
+	assert _run("pool-health", stdin="{}").returncode == 2
+	assert _run("pool-health", "--gate", "0", stdin="[]").returncode == 2
+
+
 # --- trust and support files ---------------------------------------------------
 
 
