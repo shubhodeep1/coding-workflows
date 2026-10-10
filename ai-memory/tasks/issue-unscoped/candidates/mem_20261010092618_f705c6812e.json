@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:4230-4246 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The test comment incorrectly says the old-helper path keeps the legacy call, while the assertions verify fail-closed behavior that counts only this run.\n  WHY: The stale comment misleads maintainers about the behavior tested; it does not affect runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_workflow_failure_heal.py\n  Line or code reference: line 4230\n  Problem: The comment \"An older staged helper without the sentinel keeps the legacy call\" describes the old pre-PR behavior (count every author). The actual code now counts only this run \u2014 assert `streak=1`, assert `streak_author_filter=off`, assert `warn reason=streak_author_filter_unavailable`. The assertions in lines 4236\u20134238 are correct; the comment is wrong.\n  Why it fails at runtime: Does not affect runtime \u2014 this is a stale test-code comment. Misleads future maintainers reading the test.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: tests/test_workflow_failure_heal.py\n  Line or code reference: test_autofix_report_streak_counts_only_the_pipeline_author (lines 4230-4246)\n  Problem: The test comment \"An older staged helper without the sentinel keeps the legacy call\" is misleading.\n  Why it fails at runtime: The code correctly implements a fail-closed behavior (counting only the current run) when the staged helper lacks the failure-marker sentinel, but the comment incorrectly implies it retains the legacy behavior (counting all comments).\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: tests/test_workflow_failure_heal.py\n  Line or code reference: 4230\n  Problem: The comment says \"An older staged helper without the sentinel keeps the legacy call\" but the assertion on line 4236 expects `streak=1` (fail closed, counting only this run). The comment describes the pre-PR behavior (legacy unfiltered count), not the new fail-closed behavior the assertion verifies.\n  Why it fails at runtime: The test assertion is correct; only the comment misleads future readers about what the old-helper path does under the new code. A reader would expect `streak=2` (legacy count) from the comment but the code produces `streak=1`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b483a96b8bd793f2dd6e383d4d8f4d5448b9ec126462cb882d383340f7c22c20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7051,
+    "run_id": "38035301529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035301529",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010092618_f705c6812e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7051,
+    "run_id": "38035301529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T09:26:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
