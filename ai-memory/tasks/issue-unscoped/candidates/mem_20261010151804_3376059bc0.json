@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py: entire file | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The live hook lacks the bare-help handling implemented in the template, so bare `gh api --help` and `gh api -h` are still classified as permission prompts.\n  WHY: The new tests load the live copy and CI reports template/live parity drift; both reviewers rated this BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit.\" The live hook must be synced byte-for-byte from the template.\n  expected_change_site: .claude/hooks/gh_api_write_guard.py\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The live copy lacks `_BARE_HELP_ARGS`, `_is_bare_gh_api_help`, and the invocation-loop shortcut; CI reports parity drift; tests load the live copy through GUARD_PATH and will fail until it is synced.\n- requirement: \"Add tests to `tests/test_gh_api_write_guard.py`: bare `--help` and bare `-h` are reads; `--help` combined with an endpoint, `-X`, `-f` or `--input` still asks; `gh api --help | grep x` gives no decision.\"\n  expected_change_site: tests/test_gh_api_write_guard.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The tests were added, but fail against the current live `.claude/hooks/gh_api_write_guard.py` because the live file lacks the bare-help logic.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/hooks/gh_api_write_guard.py | severity=BLOCKER | confidence=5\n  PROBLEM: The #6668 change is only in the template. The live hook, which tests/test_gh_api_write_guard.py loads through GUARD_PATH (line 27), still sends `gh api --help` to parse_gh_api_args. That raises Unreadable, so the call is still classed as a write and prompts.\n  WHY: CI already shows the failure. tests-hooks-and-orchestrator fails tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates with drift on hooks/gh_api_write_guard.py, and the aggregate lint check fails with it. The same drift will fail test_template_parity in tests/test_gh_api_write_guard.py, and the new cases there run against the live copy. test_bare_help_is_a_read will get \"ask\" instead of \"allow\", and test_bare_help_piped_to_grep_gets_no_decision will get \"ask\" instead of None. Sessions in this repo also keep prompting on `gh api --help`. The issue's delivery constraint (Q40 / CLAUDE.md \u00a728.C) gives this sync to the master session's `[claude-twin-sync]` commit. That commit is a byte-for-byte copy of the template over the live file. The PR cannot go green or merge until it lands. The editor cannot write this path, so this is a merge prerequisite and not an edit for this pass.\n- Requirement: \"The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit.\" The tests the issue lists must also pass.\n  Expected change site: .claude/hooks/gh_api_write_guard.py, synced byte-for-byte from workflow-templates/.claude/hooks/gh_api_write_guard.py\n  Evidence of absence: The live copy has no `_BARE_HELP_ARGS`, `_is_bare_gh_api_help` or bare-help shortcut, and the CI parity check reports the drift. The issue gives this step to the master session, so it is outside the editor's scope but blocks merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py | severity=BLOCKER | confidence=5\n  PROBLEM: The live hook file does not contain the bare-help handling implemented in the template.\n  Runtime impact: Bare gh api --help or gh api -h will continue to trigger permission prompts, failing the requirement of issue #6668.\n- Requirement: \"the master session copies the file into `.claude/` in a `[claude-twin-sync]` commit\".\n  Expected change site: .claude/hooks/gh_api_write_guard.py\n  Evidence of absence: The live file lacks the _BARE_HELP_ARGS and _is_bare_gh_api_help implementations, and CI reports parity drift between the template and the live hook.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add tests to `tests/test_gh_api_write_guard.py`: bare `--help` and bare `-h` are reads; `--help` combined with an endpoint, `-X`, `-f` or `--input` still asks; `gh api --help | grep x` gives no decision.\"\n  Expected change site: tests/test_gh_api_write_guard.py\n  Evidence of absence: While the tests were added, they fail when run against the current live .claude/hooks/gh_api_write_guard.py because the live file has not been updated with the bare-help logic.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit `workflow-templates/.claude/hooks/gh_api_write_guard.py` only. The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit.\"\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` (live copy) must match `workflow-templates/.claude/hooks/gh_api_write_guard.py` (template)\n  Evidence of absence: The PR changes only the template copy. The live file `.claude/hooks/gh_api_write_guard.py` has no `_BARE_HELP_ARGS`, no `_is_bare_gh_api_help`, and no invocation-loop shortcut. CI run 38061664827 (job 114241003554) fails `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` with drift on `hooks/gh_api_write_guard.py`. The new tests in `tests/test_gh_api_write_guard.py` load the live copy via `GUARD_PATH` (line 27), so `test_bare_help_is_a_read` and `test_bare_help_piped_to_grep_gets_no_decision` will fail until the live copy is synced. The issue assigns this to the master session's `[claude-twin-sync]` commit, but the PR cannot merge until CI is green. The editor summaries (entries 5, 6, 7) correctly identify this as a sandbox-excluded path that was denied, and document it as `TASK_GAP_DEFERRED`. This is a documented hand-off, not an editor gap, but it is a blocker for merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1dfe8aac540fda94ebef5707baf30fc59d43813ae7bed58cba12389950a51489",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6674,
+    "run_id": "38061665066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38061665066",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010151804_3376059bc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6674,
+    "run_id": "38061665066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T15:18:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
