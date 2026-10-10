@@ -1579,6 +1579,20 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **Integration branch line (off by default):** with
+  `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true`, a failing PR whose head is an
+  `orchestrator/project-<N>` branch of this repository gets a
+  `- **Integration branch:** \`orchestrator/project-<N>\`` line in its triage
+  issue, so the fix is planned and implemented against that branch instead of
+  the default branch. The branch comes only from the GitHub API's PR head
+  (same repository, digits-only name) and must exist (`git/ref/heads`, one
+  call); logs, model output and the PR body are never read for it. Fork heads,
+  other branch names, a missing branch and a failed lookup leave the line out
+  (`CHECK_TRIAGE integration_branch outcome=added|skip reason=…`). The value
+  travels to the diagnose step in `triage_metadata.json`
+  (`integration_branch`); a value that fails validation there stops the run
+  (`integration_branch_metadata_invalid`), and the body validator accepts
+  exactly that one line in the header and rejects every other routing key.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2169,6 +2183,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` | `false` | Add an API-verified `Integration branch:` line to a check-failure triage issue when the failing PR's head is an existing `orchestrator/project-<N>` branch of this repository (issue #6726). Off until the operator enables it. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
