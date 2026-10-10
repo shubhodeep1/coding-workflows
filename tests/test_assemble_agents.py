@@ -115,6 +115,15 @@ def test_log_prefixes_extend_both_registries(tmp_path: Path) -> None:
 	assert text.replace("- `GAMMA` (`scripts/g.sh`: `outcome=`)\n  wrapped description\n", "").replace("LOG_PREFIX.name=GAMMA\n", "") == AGENTS
 
 
+def test_empty_registry_keeps_bullets_before_names(tmp_path: Path) -> None:
+	agents = "## Stable log prefixes (contractual)\n\nPrefixes:\n\n## Other\n\nx\n"
+	text, _ = _assembled(tmp_path, {"1-p.md": (
+		'<!-- agents: section="Stable log prefixes (contractual)" -->\n- `NEW`\nLOG_PREFIX.name=NEW\n'
+	)}, agents=agents)
+	assert text.index("- `NEW`") < text.index("LOG_PREFIX.name=NEW")
+	assert "Prefixes:\n\n- `NEW`\n\nLOG_PREFIX.name=NEW\n\n## Other" in text
+
+
 def test_fragments_fold_in_filename_order(tmp_path: Path) -> None:
 	text, _ = _assembled(tmp_path, {
 		"7200-later.md": '<!-- agents: section="Workflow architecture" -->\nSecond.\n',

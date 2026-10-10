@@ -310,7 +310,13 @@ def apply_block(lines: list[str], block: Block) -> None:
 		start, end = _section_bounds(lines, block.heading)  # type: ignore[misc]
 		first_name = next((index for index in range(start, end) if REGISTRY_NAME.match(lines[index])), end)
 		at = _last_matching(lines, start, first_name, REGISTRY_BULLET, continuation=True)
-		if at is None:
+		if at is None and first_name < end:
+			# No bullet registry yet but name lines exist: keep bullets first.
+			payload = list(bullets) + [""]
+			if first_name - 1 > start and lines[first_name - 1].strip():
+				payload.insert(0, "")
+			lines[first_name:first_name] = payload
+		elif at is None:
 			_append_to_section(lines, start, end, bullets)
 		else:
 			lines[at:at] = bullets
