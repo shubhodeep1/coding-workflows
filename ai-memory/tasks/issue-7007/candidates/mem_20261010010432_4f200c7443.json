@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: Issue 2 (`issue-2-canary-b`) of tracking issue #7005\n\n**Planning ref:** `orchestrator/project-7005` at `af7d2fb8118e43be0c565fa3d7c9677e0f1a7a79`. This matches the integration branch named in the issue metadata.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one exact two-line text file and nothing else. The file already exists, and its first line already reads `status: ok`. Only line 2 needs to change, from `decompose-run: 25567947079` to `decompose-run: 38010697715`. There is no helper or pattern to reuse, and widening the scope would break the issue's \"no other file modified\" rule.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary_b.txt` (it exists, so this is an edit, not a create).\n\n### 2. Functions or modules\nNone.\n\n### 3. Data structures affected\nNone.\n\n### 4. API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 in place\n- Chosen: Replace line 2 exactly and keep line 1 (`status: ok`) and the trailing newline as they are.\n- Alternatives considered: Rewrite the whole file. Rejected because the minimal-edit rule applies.\n- Why: The issue asks for the smallest change, and the existing file is already in the right two-line shape.\n\n## Security considerations\nThis is a plain test-fixture text file. It touches no trust boundaries, endpoints, external input or secrets, and I see no way to abuse the change.\n\n### 5. Risks and edge cases\n- **Whitespace:** Leading or trailing spaces or a CRLF line ending would break the \"exactly\" requirement. The file currently uses LF line endings, which should be kept.\n- **Sibling file:** Do not touch `tests/e2e_smoke_canary.txt`; the parallel sibling issue owns it.\n\n### 6. Testing considerations\n1. `sed -n '1p;2p' tests/e2e_smoke_canary_b.txt` should print exactly `status: ok` and then `decompose-run: 38010697715`.\n2. `git diff --stat` should show only this one file.\n\n### 7. Pre-execution self-check\nThe only change is the line-2 value on this one file, which meets every acceptance criterion. It needs no external inputs.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "55131c358f4168bbc21e4a089a6be40b91e4720bd269412df3364569bc639d57",
+  "lineage": {
+    "issue_number": 7007,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38011202923",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38011202923",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7007"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261010010432_4f200c7443",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7007,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38011202923"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7007",
+  "timestamps": {
+    "created_at": "2026-10-10T01:04:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
