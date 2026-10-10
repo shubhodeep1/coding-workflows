@@ -3154,32 +3154,6 @@ def test_unrouted_cli_reads_stdin():
 	)
 	assert json.loads(result.stdout) == [{"issue": 7, "comment_id": 2, "reason": "command_unrouted", "age_minutes": 20}]
 
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
-
-def main() -> int:
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-	passed = 0
-	failed = 0
-	for func in test_funcs:
-		name = func.__name__
-		try:
-			func()
-			print(f"  PASS  {name}")
-			passed += 1
-		except Exception as e:
-			print(f"  FAIL  {name}: {e}")
-			failed += 1
-
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
-	return 1 if failed > 0 else 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def _run_extract_integration_branch_cli(body: str) -> subprocess.CompletedProcess:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -3216,3 +3190,30 @@ def test_extract_integration_branch_cli_reads_body_from_stdin() -> None:
 		assert proc.stdout.strip() == expected, (body, proc.stdout)
 		if not expected:
 			assert proc.stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
+

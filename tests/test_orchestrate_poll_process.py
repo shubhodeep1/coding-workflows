@@ -16231,10 +16231,17 @@ def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
 	assert body.index("return 0", skip_pos) < body.index("for ((idx=0; idx<count; idx++))")
 
 
-def test_pr_json_base_is_target_merge_helper_rules(tmp_path):
+def test_pr_json_base_is_target_merge_helper_rules():
 	"""Issue #6631: unit-level check of _pr_json_base_is_target_merge."""
 	if shutil.which("jq") is None:
-		pytest.skip("jq binary not available in test environment")
+		raise unittest.SkipTest("jq binary not available in test environment")
+	# The module's custom runner does not inject pytest fixtures such as
+	# tmp_path, so the test owns its temporary directory.
+	with tempfile.TemporaryDirectory() as _helper_tmp:
+		_run_target_merge_helper_rules(Path(_helper_tmp))
+
+
+def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
 	end = script.index("\n# Issue #6325:", start)
@@ -16257,6 +16264,7 @@ def test_pr_json_base_is_target_merge_helper_rules(tmp_path):
 	assert run("orchestrator/project-5", "main", "orchestrator/project-5", "false") == "yes:declared_integration_branch"
 	assert run("orchestrator/project-5", "main", "", "true") == "yes:managed_no_child_metadata"
 	assert run("orchestrator/project-5", "main", "orchestrator/project-6", "true") == "no"
+	assert run("feature/other", "main", "", "true") == "no"
 	assert run("claude/x", "main", "", "false") == "no"
 	assert run("", "main", "", "true") == "no"
 	assert run(None, "main", "", "true") == "no"

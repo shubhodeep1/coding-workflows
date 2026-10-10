@@ -4555,7 +4555,8 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # qualify and falls through to the no_merged_pr_found policy per origin.
 # Issue #6631: the PR must also have merged into the repository's default
 # branch or the issue's declared integration branch, with a fallback for
-# orchestrator-managed issues whose body declares no branch
+# orchestrator-managed issues whose body declares no branch and whose PR
+# merged into an orchestrator/project-* branch
 # (_pr_json_base_is_target_merge); other bases log rejected=non_target_base.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
@@ -16555,8 +16556,9 @@ _pr_json_is_issue_implementation_pr() {
 #   - .base.ref equals the default branch            -> default_branch
 #   - .base.ref equals the issue's declared branch   -> declared_integration_branch
 #     (`Integration branch:` / `Target branch:` body line)
-#   - the issue is orchestrator-managed and declares no branch in its own
-#     body (its branch may live only on the tracking issue)
+#   - the issue is orchestrator-managed, declares no branch in its own
+#     body (its branch may live only on the tracking issue), and .base.ref
+#     is an `orchestrator/project-*` branch (same rule as issue_pr_status.yml)
 #                                                    -> managed_no_child_metadata
 # Anything else, including an empty or unparseable base, returns 1 (fail
 # closed: the caller's next step closes the issue).  Refs compare exactly.
@@ -16583,7 +16585,10 @@ _pr_json_base_is_target_merge() {
     _TARGET_MERGE_REASON="declared_integration_branch"
     return 0
   fi
-  if [ "${is_managed}" = "true" ] && [ -z "${declared_branch}" ]; then
+  # Mirrors issue_pr_status.yml: the no-metadata fallback only accepts an
+  # orchestrator integration branch, never an arbitrary base.
+  if [ "${is_managed}" = "true" ] && [ -z "${declared_branch}" ] \
+      && [[ "${_target_base_ref}" == orchestrator/project-* ]]; then
     _TARGET_MERGE_REASON="managed_no_child_metadata"
     return 0
   fi
