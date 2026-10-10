@@ -4865,9 +4865,10 @@ jobs:
               shard_failures=$((shard_failures + 1))
               # Prefer the runner's FAIL line (it carries the exception); fall back
               # to its "complete" fail events; else say no failure was recorded.
-              mapfile -t shard_fail_matches < <(grep -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null | head -n 20 || true)
+              # Every match is kept so the "... and <k> more" count below is exact.
+              mapfile -t shard_fail_matches < <(grep -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
               if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
-                mapfile -t shard_fail_matches < <(grep -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -F '"status":"fail"' | head -n 20 || true)
+                mapfile -t shard_fail_matches < <(grep -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -F '"status":"fail"' || true)
               fi
               if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
                 shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")

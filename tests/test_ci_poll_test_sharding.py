@@ -593,10 +593,20 @@ class ShardFailureSummaryTest(unittest.TestCase):
 				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 				summary = self.summary_lines(result.stdout)
 				named = [line for line in summary if line.startswith(self.FAILING + "shard ")]
-				# 20 per shard collected (40), 20 shown, 20 more reported.
+				# 30 per shard collected (60), 20 shown, 40 more reported.
 				self.assertEqual(len(named), 20)
-				self.assertEqual(summary[-1], self.FAILING + "... and 20 more (see the shard groups above)")
+				self.assertEqual(summary[-1], self.FAILING + "... and 40 more (see the shard groups above)")
 				self.assertIn("2 orchestrate-poll shard(s) failed.", result.stdout)
+
+	def test_single_shard_overflow_is_reported(self) -> None:
+		log = "".join(f"  FAIL  test_{i:02d}: boom\n" for i in range(25))
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {"txt": "test_s\n", "log": log, "rc": "1\n"})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				summary = self.summary_lines(result.stdout)
+				self.assertEqual(len(summary), 21, summary)
+				self.assertEqual(summary[-1], self.FAILING + "... and 5 more (see the shard groups above)")
 
 	def test_passing_shards_are_not_scanned(self) -> None:
 		for workflow_name, step_run in self.step_runs().items():
