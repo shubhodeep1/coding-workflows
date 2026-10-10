@@ -105,6 +105,7 @@ def test_first_build_succeeds_without_a_retry(tmp_path):
 	"ERROR: failed to solve: failed to fetch oauth token: unexpected status from GET request to https://auth.docker.io/token: 504 Gateway Timeout",
 	"ERROR: toomanyrequests: You have reached your pull rate limit. too many requests",
 	"ERROR: failed to do request: Head \"https://example.invalid/v2/\": net/http: TLS handshake timeout",
+	"npm error code ECONNRESET\nnpm error network aborted: socket hang up",
 ))
 def test_registry_failure_is_retried_then_the_prepare_succeeds(tmp_path, message):
 	proc, builds = _prepare(tmp_path, [message])
@@ -163,6 +164,8 @@ def _step(name: str) -> str:
 def test_workflow_keeps_the_prepare_stderr_and_names_a_failed_prepare():
 	install = _step("Install project dependencies (best-effort)")
 	assert "id: deps_prepare" in install
+	for knob, default in (("REVIEW_SANDBOX_BUILD_ATTEMPTS", "3"), ("REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1", "10"), ("REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2", "30")):
+		assert f"{knob}: ${{{{ vars.{knob} || '{default}' }}}}" in install
 	tee = '2> >(tee -a "${sandbox_prepare_log}" >&2)'
 	assert install.count(tee) == 3
 	assert install.count('review_untrusted_sandbox.sh" prepare') == 3

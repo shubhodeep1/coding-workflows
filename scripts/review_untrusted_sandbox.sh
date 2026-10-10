@@ -47,7 +47,7 @@ _review_sandbox_build_image()
 			printf '%s\n' "${built}"
 			return 0
 		fi
-		if [ "${attempt}" -lt "${attempts}" ] && grep -qiE 'auth\.docker\.io|registry-1\.docker\.io|failed to resolve source metadata|too many requests|(status|code)[: ]+(429|5[0-9][0-9])|: (429|50[0-9]) [A-Za-z]|tls handshake timeout|i/o timeout|connection reset by peer|unexpected EOF' "${err_file}"; then
+		if [ "${attempt}" -lt "${attempts}" ] && grep -qiE 'auth\.docker\.io|registry-1\.docker\.io|failed to resolve source metadata|too many requests|(status|code)[: ]+(429|5[0-9][0-9])|: (429|50[0-9]) [A-Za-z]|tls handshake timeout|i/o timeout|connection reset by peer|unexpected EOF|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up' "${err_file}"; then
 			echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=retry rc=${rc}" >&2
 			if [ "${attempt}" -eq 1 ]; then sleep "${retry_sleep_1}"; else sleep "${retry_sleep_2}"; fi
 			attempt=$((attempt + 1))

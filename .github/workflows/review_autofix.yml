@@ -4542,6 +4542,9 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           DEPENDENCY_INSTALL_TIMEOUT_SECONDS: ${{ vars.DEPENDENCY_INSTALL_TIMEOUT_SECONDS || '600' }}
+          REVIEW_SANDBOX_BUILD_ATTEMPTS: ${{ vars.REVIEW_SANDBOX_BUILD_ATTEMPTS || '3' }}
+          REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 || '10' }}
+          REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2 || '30' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
