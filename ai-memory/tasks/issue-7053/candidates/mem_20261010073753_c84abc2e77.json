@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The issue says the pipeline cannot do the live-hook copy: its editors cannot write `.claude/**`, and CI leaves security hooks untouched on purpose. It also forbids bypassing CI, so that rules out B and C. There is already a precedent for this: `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` (see `agents.md` around line 555 and `changelog.d/6755-merged-pr-guard-shell-wrappers.md`). It was a documented, unread `*_UNSET_OPERATOR_STEP` placeholder recorded next to the merged-PR guard notes. Option A follows that pattern without changing any behaviour.\nQ2: GITHUB FACTS shows that #6832 is an open issue (\"CI failure: CI on PR #6830\"), not a PR, so there is no \"#6832 head\" branch to target. The docs note does not depend on the drifted head. The default branch is the safe target, and it avoids putting a change on a branch whose CI is known to be red.\n\nSETUP REQUIRED:\n- MERGE_GUARD_LIVE_PARITY_UNSET_OPERATOR_STEP (variable): an interactive operator copies `workflow-templates/.claude/hooks/pr_merge_status_guard.py` over `.claude/hooks/pr_merge_status_guard.py`, byte for byte, keeping the fresh PR lookup. They commit it on the branch that carries the drift (PR #6830's head, or `main` if the drift has already landed there), then remove the placeholder note. Until that happens, no code reads the variable and nothing changes in the pipeline. The `tests/test_claude_template_live_parity.py` CI failure keeps showing the drift; it is not allowlisted or bypassed.",
+  "fingerprint": "835c87b31685cbce39b75d1463a5881cf20700bc0c58655aa4c720af5317f64a",
+  "lineage": {
+    "issue_number": 7053,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38034640153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38034640153",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7053"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010073753_c84abc2e77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7053,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38034640153"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7053",
+  "timestamps": {
+    "created_at": "2026-10-10T07:37:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
