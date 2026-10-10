@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2697-2700 | confidence not reported\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `SECURITY_AUDIT_WAIVER_LINE_WINDOW` description says \u201cthe poller warns,\u201d but the poller emits `::notice::` when the value is valid or unset and `::warning::` only when it is non-integer.\n  WHY: The documented behavior does not match the poller\u2019s runtime behavior; the reviewer\u2019s explanation is truncated.\n- tests/test_security_audit_workflow_contract.py:1877-1920 | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test expects `waived-by-location` to be suppressed, but its category does not exactly match the finding\u2019s category as required by waiver matching.\n  WHY: The finding will not be suppressed, so `suppressed_waived` will be 2 rather than the expected 3.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cPut this literal standalone block in the issue body\u201d listing the six allowed paths, and do not attempt implementation until it is present.\n  expected_change_site: Issue #6987 body\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The linked issue body contains the paths in prose but has no standalone `files_touched:` block; the PR diff modifies both scripts despite the clarification/setup context stating that implementation must not proceed without that block.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:2697-2700 | confidence not reported\n  PROBLEM: The description says \"the poller warns\" but `scripts/orchestrate_poll_process.sh:6389-6394` only emits `::warning::` when `SECURITY_AUDIT_WAIVER_LINE_WINDOW` is set to a non-integer; when the value is valid (or unset), the poller emits `::notice::` instead.\n  WHY: This is [source text truncated].\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cPut this literal standalone block in the issue body\u201d listing the six allowed paths, and do not attempt implementation until it is present.\n  Expected change site: Issue #6987 body, before implementation of `scripts/orchestrate_poll_process.sh` and `scripts/security_audit.sh`.\n  Evidence of absence: The linked issue body contains the paths in prose but has no standalone `files_touched:` block. The PR diff nevertheless modifies both scripts, despite the clarification/setup context stating that implementation must not proceed without that block.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_security_audit_workflow_contract.py:1877-1920 | severity=BLOCKER | confidence=5\n  PROBLEM: The test expects `waived-by-location` to be suppressed (`suppressed_waived == 3`), but the waiver's category (`\"A04:2021-Insecure Design\"`) does not match the finding's category (`\"A04:2021-Insecure Design / STRIDE: Denial of Service\"`). The matching logic in `scripts/security_audit.sh:matching_waiver` requires exact category match after normalization, so this waiver should not suppress the finding.\n  WHY: The test will fail when run because the actual `suppressed_waived` count will be 2 (only `waived-exact` and `waived-id-only`), not 3. The finding `waived-by-location` will appear in the `findings` list, not in the suppressed count.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "46ac3c2b12d280b64178a7ceecd40666fffb143abf01338313376256d9167788",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6999,
+    "run_id": "38011652915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38011652915",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010013910_93bda137f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6999,
+    "run_id": "38011652915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T01:39:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
