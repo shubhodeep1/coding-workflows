@@ -127,6 +127,36 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   **Model-provider outages (issue #6633).** A review/autofix failure whose
+   pipeline logs show a provider error (OpenRouter 402 / "Insufficient
+   credits", 401, 429, 5xx, or the provider's JSON `error.code`) *and* whose
+   live probe (`scripts/provider_outage.py`: key check plus a 1-token
+   completion with `PROVIDER_OUTAGE_PROBE_MODEL`) also fails gets reason
+   `provider_unavailable`. Evidence alone never classifies, because PR text
+   can quote such errors. Those markers count toward neither the
+   identical-failure cap nor the heal streak; no `ai:review-blocked` label,
+   force tick, per-PR Telegram alert or heal report follows, and the PR gets
+   a "paused — model provider unavailable" comment instead. The first such
+   failure opens one `ai:provider-outage` tracker issue (`AI Provider Outage`,
+   marker `<!-- ai:provider-outage:v1 kind=outage … -->`, trusted only when
+   authored by the `GH_PAT` login; a create race keeps the lowest number) and
+   sends one CRITICAL alert naming the provider, the status and the secret
+   name `OPENROUTER_API_KEY`. While it is open, `review_autofix_sweep.yml`
+   (`*/30`) probes before enumerating: down or inconclusive skips review
+   dispatches (`AUTOFIX_SWEEP_SKIP reason=provider_outage`); up re-dispatches
+   every open PR whose newest current-head marker is `provider_unavailable`,
+   removes `ai:review-blocked` only where a trusted
+   `ai:provider-outage-label:v1` marker (written when a failed judge applied
+   the label during the outage) is not superseded by a later real failure or
+   cap marker, reports release runs the heal intake recorded on the tracker
+   (re-runs them only with `PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED=true`, this
+   repo only), records progress in the tracker's resume marker, closes it and
+   sends one "recovered" alert. Consumers get the same pass from the
+   `provider-outage-resume` job of `ai-review.yml` (hourly schedule,
+   `GH_PAT` only). A Claude pool run with every account gated
+   (`claude-pool-token` reason `all_gated`) opens a separate `kind=capacity`
+   tracker with one WARNING, never pauses reviews, and closes on the next run
+   that gets an account. Log prefix `PROVIDER_OUTAGE`.
    Failure and cap markers carry `support=<sha>`, the gate's verified review
    support SHA (#6625); the gate, the cap job and the sweep ignore markers of
    another or no support version, so a support fix lets the scheduled sweep
@@ -2454,6 +2484,7 @@ and shipped:
 - `INTEGRATION_JUDGE_SCOPE`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
+- `PROVIDER_OUTAGE` (`scripts/provider_outage.py`: `op=classify|open|close|mark_label|sweep|resume outcome= …`)
 - `GH_API_RETRY` (`gh_api_retry` in `scripts/gh_helpers.sh` and `scripts/gh_api_retry.py`: `outcome=retry|gave_up|permanent|skipped kind=primary|secondary|transient|permanent|breaker bucket= status= attempt=<i>/<n> wait_secs= endpoint=`)
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
@@ -2716,6 +2747,7 @@ LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
+LOG_PREFIX.name=PROVIDER_OUTAGE
 LOG_PREFIX.name=GH_API_RETRY
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
