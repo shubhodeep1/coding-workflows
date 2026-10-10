@@ -1,0 +1,6 @@
+<!-- changelog: changed -->
+- **The `gh api` permission guard no longer prompts for a bare `gh api --help` or `gh api -h`.** The guard's flag parser did not know `--help`, so `gh api --help` was classed as an unreadable call and forced a permission prompt, which stopped unattended sessions until a human answered. A call whose only argument is `--help` or `-h` only prints usage and sends no API request, so it is now a read and follows the normal read rules: alone or piped into the safe helpers it is approved, and next to other commands (for example piped into `grep`) the hook leaves the decision to the allow list or the Auto-mode classifier. This is an intended loosening of the guard, made on the operator's decision of 2026-09-30 (Q1: A).
+
+`--help` or `-h` next to anything else (an endpoint, `-X`, `-f`, `--input`, a second help flag) is still unreadable and still prompts, and a help call inside a substitution, `bash -c`, `xargs` or a heredoc fed to an interpreter still prompts. The safe-helper list is unchanged.
+
+What this means for operators: sessions that look up `gh api` usage no longer stop at a permission prompt. Consumer repos get the change on the next `@stable` sync of `.claude/hooks/gh_api_write_guard.py`.
