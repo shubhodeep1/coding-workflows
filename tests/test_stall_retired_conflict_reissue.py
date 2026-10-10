@@ -223,6 +223,8 @@ def _extract_function(name: str) -> str:
 
 
 HELPER_SOURCE = "\n".join(_extract_function(n) for n in (
+	"_pr_json_closes_issue",
+	"_pr_json_is_issue_implementation_pr",
 	"_list_integration_conflict_files",
 	"_stall_retired_conflict_branch_ok",
 	"_stall_retired_host_only_conflict_check",
@@ -300,8 +302,8 @@ def _run_helper(tmp_path: Path, poller: Path, pr: dict, *, support: bool = True,
 	return subprocess.run(["bash", "-c", script], cwd=poller, env=env, capture_output=True, text=True, check=False)
 
 
-def _pr(head_sha: str, *, repo: str = "o/r") -> dict:
-	return {"state": "open", "head": {"ref": "ai/issue-7", "sha": head_sha, "repo": {"full_name": repo}}, "base": {"ref": "main"}}
+def _pr(head_sha: str, *, repo: str = "o/r", body: str = "") -> dict:
+	return {"state": "open", "body": body, "head": {"ref": "ai/issue-7", "sha": head_sha, "repo": {"full_name": repo}}, "base": {"ref": "main"}}
 
 
 needs_tools = pytest.mark.skipif(shutil.which("jq") is None or shutil.which("git") is None, reason="jq and git are required")
@@ -315,6 +317,7 @@ def test_helper_reissues_retired_conflict_absent_from_base(tmp_path: Path) -> No
 	assert f"PATHS={RETIRED}" in result.stdout and "BASE=main" in result.stdout and "ISSUE=7" in result.stdout
 	assert f"`{RETIRED}`" in result.stdout and "`scripts/a.py`" in result.stdout
 	assert "outcome=reissue" in result.stdout
+	assert "branch `ai/issue-7` kept" in result.stdout
 
 
 @needs_tools
@@ -350,3 +353,21 @@ def test_helper_missing_support_fails_closed(tmp_path: Path) -> None:
 	poller, head_sha = _scratch(tmp_path, base_deletes=RETIRED)
 	result = _run_helper(tmp_path, poller, _pr(head_sha), support=False)
 	assert "RC=1" in result.stdout and "reason=support_unavailable" in result.stdout
+
+
+@needs_tools
+def test_helper_cross_reference_pr_fails_closed(tmp_path: Path) -> None:
+	# A PR that only mentions issue 7 (head ai/issue-8, no closing keyword)
+	# is not issue 7's implementation PR, so it keeps the resolver path.
+	poller, head_sha = _scratch(tmp_path, base_deletes=RETIRED)
+	pr_other = _pr(head_sha, body="Refs #7")
+	pr_other["head"]["ref"] = "ai/issue-8"
+	result = _run_helper(tmp_path, poller, pr_other)
+	assert "RC=1" in result.stdout and "reason=not_implementation_pr" in result.stdout, result.stdout + result.stderr
+
+
+def test_helper_fails_closed_on_oversized_conflict_set() -> None:
+	body = _extract_function("_stall_retired_host_only_conflict_check")
+	assert "head -n 500" not in body
+	assert "_srcc_skip too_many_conflicts" in body
+	assert body.index("_srcc_skip too_many_conflicts") < body.index("retired-conflict-check")

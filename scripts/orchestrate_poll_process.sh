@@ -10390,6 +10390,13 @@ _stall_retired_host_only_conflict_check() {
     _srcc_skip pr_not_open
     return 1
   fi
+  # Only the issue's own implementation PR (ai/issue-<n> head or a closing
+  # keyword) may be closed and re-issued; a mention-only cross-reference
+  # keeps the existing resolver path.
+  if ! _pr_json_is_issue_implementation_pr "${issue_num}" "${pr_json}"; then
+    _srcc_skip not_implementation_pr
+    return 1
+  fi
   if [ -z "${head_repo}" ] || [ "${head_repo,,}" != "${GITHUB_REPOSITORY,,}" ]; then
     _srcc_skip head_not_same_repo
     return 1
@@ -10415,7 +10422,14 @@ _stall_retired_host_only_conflict_check() {
   work_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/retired-conflict.XXXXXX" 2>/dev/null)" || { _srcc_skip probe_unavailable; return 1; }
   # Drop the merge-tree tree OID line even where awk lacks interval support
   # (mawk), so it is never mistaken for a conflicted path.
-  printf '%s\n' "${conflicts}" | sed '/^$/d' | sed '1{/^[0-9a-f]\{40\}$/d;/^[0-9a-f]\{64\}$/d;}' | head -n 500 > "${work_dir}/conflicts.txt"
+  printf '%s\n' "${conflicts}" | sed '/^$/d' | sed '1{/^[0-9a-f]\{40\}$/d;/^[0-9a-f]\{64\}$/d;}' > "${work_dir}/conflicts.txt"
+  # Classify only a complete conflict set: a truncated list could hide a
+  # live host-only path, so an oversized set keeps the resolver dispatch.
+  if [ "$(wc -l < "${work_dir}/conflicts.txt")" -gt 500 ]; then
+    rm -rf "${work_dir}" 2>/dev/null || true
+    _srcc_skip too_many_conflicts
+    return 1
+  fi
   : > "${work_dir}/base_present.txt"
   local conflict_path
   while IFS= read -r conflict_path; do
@@ -10466,7 +10480,7 @@ _stall_retired_host_only_conflict_check() {
   retired_md="$(printf '%s' "${result}" | jq -r '(.retired_paths // []) | map("`" + . + "`") | join(", ")' 2>/dev/null || echo "")"
   STALL_RETIRED_CONFLICT_PATHS="${retired_csv}"
   STALL_RETIRED_CONFLICT_BASE="${base_ref}"
-  STALL_REISSUE_EXTRA_GUIDANCE="**Closed PR #${pr_num} conflicts with \`${base_ref}\` on retired file(s):** ${retired_md}. These files are listed in \`workflow-templates/retired_files.txt\` and \`${base_ref}\` no longer has them, so the conflict resolver cannot merge them in its sandbox. Recreate this PR's still-relevant changes against the current \`${base_ref}\`. Files the closed PR changed: ${changed_list}. Its edits to the retired file(s) are not carried over automatically: move any intent that still matters into the file that replaced them, or say in the PR why it is obsolete. Closed PR for reference: #${pr_num} (branch kept)."
+  STALL_REISSUE_EXTRA_GUIDANCE="**Closed PR #${pr_num} conflicts with \`${base_ref}\` on retired file(s):** ${retired_md}. These files are listed in \`workflow-templates/retired_files.txt\` and \`${base_ref}\` no longer has them, so the conflict resolver cannot merge them in its sandbox. Recreate this PR's still-relevant changes against the current \`${base_ref}\`. Files the closed PR changed: ${changed_list}. Its edits to the retired file(s) are not carried over automatically: move any intent that still matters into the file that replaced them, or say in the PR why it is obsolete. Closed PR for reference: #${pr_num} (branch \`${head_ref}\` kept)."
   STALL_RETIRED_CONFLICT_CLOSE_MESSAGE="Closed by orchestrator stall recovery — this PR conflicts with \`${base_ref}\` on retired host-only file(s) ${retired_md}, which the conflict resolver cannot merge in its sandbox. Issue #${issue_num} is re-issued against the current \`${base_ref}\`; the replacement lists this PR's changed files. The branch is kept for reference."
   STALL_REISSUE_EXTRA_GUIDANCE_ISSUE="${issue_num}"
   echo "STALL_RETIRED_CONFLICT_REISSUE issue=${issue_num} pr=${pr_num} outcome=reissue reason=${reason} retired_paths=${retired_csv}"

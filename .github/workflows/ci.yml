@@ -943,6 +943,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
 
+      - name: Stall retired host-only conflict reissue tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_retired_conflict_reissue.py
+
       - name: Stall-freshness branch-fallback unit tests
         run: |
           set -euo pipefail
