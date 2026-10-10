@@ -1206,11 +1206,14 @@ _mt_inflight_review_branches()
 				break
 			fi
 			if [ "${__mt_runs_page_len}" -lt 100 ]; then
-				# Re-reads of the same first-page query accumulate in the union:
-				# once the union holds at least as many runs as the latest
-				# total_count, every run the query matched has been seen (runs
-				# that left the status since are extra entries, which only keep
-				# a PR queued one more tick). GitHub's count and its listing
+				# Re-reads of the same first-page query accumulate in the union;
+				# once it holds at least as many runs as the latest total_count
+				# the listing is accepted as a best-effort cover. This is a
+				# count, not proof: a run that left the status since stays in
+				# the union and can mask a live run no read returned, so the
+				# release may re-dispatch a review that is already in flight
+				# (bounded by the second status pass and the pr-autofix
+				# concurrency group; accepted trade-off, Q59). GitHub's count and its listing
 				# disagree for several seconds while runs churn, so three reads
 				# 2 s apart all came back short (run 38043169762, Q59). Later
 				# pages carry their own created bound, so this is page 1 only.
