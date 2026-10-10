@@ -1927,6 +1927,8 @@ and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact non-empty `finding_id` only, and only when every category, severity
 and exploit scenario the waiver recorded also matches; no proximity match since
 #6987, so a different id at the waived location is a new, blocking finding.
+A field the waiver left empty is not compared, so a legacy row with no exploit
+scenario still matches by exact id plus any recorded category and severity.
 `SECURITY_AUDIT_WAIVER_LINE_WINDOW` is still validated but no longer used).
 `/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
