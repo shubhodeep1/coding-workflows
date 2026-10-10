@@ -155,6 +155,10 @@ jobs:
           UNBLOCK_JUDGE_REASONING: ${{ vars.THINKING_LEVEL_UNBLOCK_JUDGE || 'high' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           UNBLOCK_JUDGE_FIXUP_WAIT_HOURS: ${{ vars.UNBLOCK_JUDGE_FIXUP_WAIT_HOURS || '72' }}
+          # The automation-path re-check runs the implement guard with the
+          # same ALLOW_WORKFLOW_EDITS default implement.yml uses.
+          UNBLOCK_JUDGE_REGRANT_ENABLED: ${{ vars.UNBLOCK_JUDGE_REGRANT_ENABLED || 'true' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_UNBLOCK_JUDGE: ${{ vars.AI_ENGINE_UNBLOCK_JUDGE || '' }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md

@@ -885,6 +885,11 @@ if endpoint.startswith("repos/o/r/actions/runs/"):
 if os.environ.get("FAKE_GH_FAIL_OPERATOR") and endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
 	json.dump(state, open(state_path, "w"))
 	sys.exit(1)
+if os.environ.get("FAKE_GH_OPERATOR_TRACKER") and endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
+	done(json.dumps([{"number": 950, "author_association": "OWNER", "user": {"login": "pipeline-bot"},
+		"body": "<!-- ai:operator-step:v1 -->\nSteps", "html_url": "https://example.test/950"}]))
+if os.environ.get("FAKE_GH_OPERATOR_TRACKER") and endpoint == "repos/o/r/issues/950/comments?per_page=100":
+	done("[[]]")
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
@@ -2209,3 +2214,180 @@ def test_needs_human_exhaustion_parks_in_the_digest_end_to_end(tmp_path: Path) -
 	digest = [fields for fields in state["created"] if fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->")]
 	assert len(digest) == 1 and digest[0]["labels[]"] == "ai:operator-step"
 	assert "ai:needs-human-latch" not in digest[0]["body"]
+# Q54: an automation-path latch the current guard would not set is re-granted
+# without a verdict, once per rejection run.
+
+AUTOMATION_PATHS = [".github/workflows/ci.yml", "scripts/check_failure_triage.sh"]
+
+
+def _automation_rejection(paths: list[str] | None = None, run: str = "555", **extra) -> dict:
+	marker = _rejection_marker(paths or AUTOMATION_PATHS, guard="automation-path", reason="automation-path", run=run, **extra)
+	return _comment("🚨 **Automation-path grant guard rejected this implementation run.**\n\n- details\n" + marker)
+
+
+def test_automation_rejection_reads_the_newest_trusted_automation_marker() -> None:
+	result = ledger.latest_automation_rejection([_automation_rejection()], BOT, 7)
+	assert result == {"status": "ok", "run": "555", "paths": AUTOMATION_PATHS}
+
+
+def test_automation_rejection_needs_the_newest_rejection_to_be_automation_path() -> None:
+	scope = _comment("🚨 **files_touched scope guard rejected this implementation run.**\n" + _rejection_marker(["a.py"]))
+	assert ledger.latest_automation_rejection([_automation_rejection(), scope], BOT, 7)["reason"] == "not_automation_path"
+	unencoded = _comment("🚨 **Automation-path grant guard rejected this implementation run.**\n\nno marker")
+	assert ledger.latest_automation_rejection([_automation_rejection(), unencoded], BOT, 7)["reason"] == "not_automation_path"
+	assert ledger.latest_automation_rejection([scope, _automation_rejection()], BOT, 7)["status"] == "ok"
+
+
+def test_automation_rejection_ignores_untrusted_other_item_truncated_and_regranted_runs() -> None:
+	forged = _automation_rejection()
+	forged["user"] = {"login": "mallory"}
+	assert ledger.latest_automation_rejection([forged], BOT, 7)["reason"] == "missing"
+	# A rejection header naming another item still counts as an unreadable rejection here.
+	assert ledger.latest_automation_rejection([_automation_rejection()], BOT, 8)["status"] == "none"
+	truncated = _comment(_rejection_marker(AUTOMATION_PATHS, guard="automation-path", reason="automation-path", truncated=True))
+	assert ledger.latest_automation_rejection([truncated], BOT, 7)["reason"] == "truncated"
+	regranted = _comment("resumed\n\n<!-- ai:unblock-regrant:v1 item=7 run=555 -->")
+	assert ledger.latest_automation_rejection([_automation_rejection(), regranted], BOT, 7) == {
+		"status": "none", "reason": "already_regranted", "run": "555"}
+	# A new rejection run after a re-grant is checked again.
+	assert ledger.latest_automation_rejection([_automation_rejection(), regranted, _automation_rejection(run="556")], BOT, 7)["run"] == "556"
+	forged_regrant = _comment("x\n<!-- ai:unblock-regrant:v1 item=7 run=555 -->", login="mallory")
+	assert ledger.latest_automation_rejection([_automation_rejection(), forged_regrant], BOT, 7)["status"] == "ok"
+
+
+def test_automation_rejection_cli_round_trip(tmp_path: Path) -> None:
+	comments = tmp_path / "c.json"
+	comments.write_text(json.dumps([_automation_rejection()]), encoding="utf-8")
+	rc, out = _cli("automation-rejection", "--item", "7", "--comments-file", str(comments), "--trusted-login", BOT)
+	assert rc == 0 and out["status"] == "ok" and out["paths"] == AUTOMATION_PATHS
+
+
+def test_regrant_posts_the_marker_first_then_resumes() -> None:
+	ops = actions.regrant_ops(_ctx(stop="scope-blocked", has_plan=True), "555", AUTOMATION_PATHS)
+	assert [op["op"] for op in ops] == ["comment", "add_labels", "remove_label", "comment"]
+	assert ops[0]["body"].splitlines()[-1] == "<!-- ai:unblock-regrant:v1 item=7 run=555 -->"
+	assert ops[2] == {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"}
+	assert _bodies(ops)[-1] == "/approved"
+	assert not COMMAND_LINE.search(ops[0]["body"])
+	with pytest.raises(actions.UsageError):
+		actions.regrant_ops(_ctx(stop="destructive-blocked"), "555", AUTOMATION_PATHS)
+	with pytest.raises(actions.UsageError):
+		actions.regrant_ops(_ctx(stop="scope-blocked"), "x", AUTOMATION_PATHS)
+
+
+def test_fixup_escalation_lists_the_step_once_and_warns() -> None:
+	ops = actions.fixup_escalate_ops(_ctx(stop="scope-blocked"), 6548)
+	assert [op["op"] for op in ops] == ["operator_step", "comment", "telegram"]
+	assert ops[0]["key"] == "unblock-fixup-7" and "6548" in ops[0]["steps"][0]["instructions"]
+	assert ops[1]["body"].splitlines()[-1] == "<!-- ai:unblock-fixup-escalated:v1 item=7 -->"
+	assert ops[2]["level"] == "WARNING"
+
+
+def test_operator_step_fixup_never_gates_an_existing_path() -> None:
+	ops = actions.plan(
+		_verdict("operator_step", instructions="gate it", placeholder="RELEASE_TAGGING_ENABLED", operator_instructions="set it"),
+		_ctx(stop="scope-blocked"),
+	)
+	body = next(op["body"] for op in ops if op["op"] == "create_issue")
+	assert "gate only the new code path behind `RELEASE_TAGGING_ENABLED`" in body
+	assert "Never put an existing path behind it" in body
+	for prompt in ("prompts/mode-judge-unblock.txt", "prompts/_templates/mode-judge-unblock.txt"):
+		assert "never put an existing path" in (ROOT / prompt).read_text(encoding="utf-8")
+
+
+PLAN_COMMENT = {"id": 1, "user": {"login": BOT}, "author_association": "OWNER", "body": "Implementation Plan\n\nsteps", "created_at": "2026-10-04T09:00:00Z"}
+
+
+def _scope_blocked_issue(body: str = "Do it", author: str = BOT) -> dict:
+	return {"number": 7, "state": "open", "title": "Fix triage", "body": body, "user": {"login": author},
+		"author_association": "OWNER", "labels": [{"name": "ai:scope-blocked"}]}
+
+
+def _rejection_comment(run: str = "555") -> dict:
+	comment = _automation_rejection(run=run)
+	comment.update(id=2, author_association="OWNER", created_at="2026-10-04T10:00:00Z")
+	return comment
+
+
+def test_judge_regrants_an_automation_latch_the_current_guard_grants(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, _scope_blocked_issue(), [PLAN_COMMENT, _rejection_comment()], ALLOW_WORKFLOW_EDITS="true")
+	assert "op=regrant run=555 paths=2 outcome=regranted" in result.stdout, result.stdout
+	bodies = [c["body"] for c in state["comments"]]
+	assert bodies[0].splitlines()[-1] == "<!-- ai:unblock-regrant:v1 item=7 run=555 -->"
+	assert bodies[-1] == "/approved"
+	assert state["labels_removed"] == ["repos/o/r/issues/7/labels/ai%3Ascope-blocked"]
+	assert not any("ai:unblock:v1" in body for body in bodies)
+
+
+@pytest.mark.parametrize(
+	("env", "issue", "reason"),
+	[
+		({"ALLOW_WORKFLOW_EDITS": "false"}, _scope_blocked_issue(), "still_denied rc=30"),
+		({"ALLOW_WORKFLOW_EDITS": "true"}, _scope_blocked_issue(author="mallory"), "still_denied rc=30"),
+		({"ALLOW_WORKFLOW_EDITS": "true", "UNBLOCK_JUDGE_REGRANT_ENABLED": "false"}, _scope_blocked_issue(), "disabled"),
+	],
+)
+def test_judge_falls_back_to_a_verdict_when_the_guard_still_denies(tmp_path: Path, env: dict, issue: dict, reason: str) -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": "retry"}
+	result, state = _judge(tmp_path, issue, [PLAN_COMMENT, _rejection_comment()], verdict=verdict, **env)
+	assert f"op=regrant outcome=skip reason={reason}" in result.stdout or f"op=regrant run=555 outcome=skip reason={reason}" in result.stdout, result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any("ai:unblock-regrant:v1" in c["body"] for c in state["comments"])
+
+
+def test_judge_regrants_a_rejection_run_only_once(tmp_path: Path) -> None:
+	regranted = {"id": 3, "user": {"login": BOT}, "body": "resumed\n\n<!-- ai:unblock-regrant:v1 item=7 run=555 -->", "created_at": "2026-10-04T10:30:00Z"}
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": "retry"}
+	result, _state = _judge(tmp_path, _scope_blocked_issue(), [PLAN_COMMENT, _rejection_comment(), regranted], verdict=verdict, ALLOW_WORKFLOW_EDITS="true")
+	assert "op=regrant outcome=skip reason=already_regranted" in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+
+
+FIXUP_BODY = "<!-- ai:unblock-fixup:v1 item=6548 round=1 -->\n## Unblock operator step for #6548\n\nChange: x"
+
+
+def test_judge_escalates_a_blocked_fixup_instead_of_filing_another(tmp_path: Path) -> None:
+	item = {"number": 7, "state": "open", "title": "Unblock operator step for #6548", "body": FIXUP_BODY,
+		"user": {"login": BOT}, "labels": [{"name": "ai:blocked"}]}
+	result, state = _judge(tmp_path, item, [PLAN_COMMENT], verdict={"verdict": "descope", "reason": "r", "instructions": "x"},
+		FAKE_GH_OPERATOR_TRACKER="1")
+	assert "origin=6548 outcome=escalated reason=fixup_blocked" in result.stdout, result.stdout
+	assert state["created"] == []
+	assert any(c["body"].splitlines()[-1] == "<!-- ai:unblock-fixup-escalated:v1 item=7 -->" for c in state["comments"])
+	assert "verdict=descope" not in result.stdout
+	entry = next(c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/950/comments")
+	assert entry["body"].startswith("<!-- ai:operator-step:entry key=unblock-fixup-7 -->")
+
+
+def test_judge_escalates_a_blocked_project_fixup_with_a_leading_blank_line(tmp_path: Path) -> None:
+	# The poller files a project fix-up from the request comment's lines[2:],
+	# so its body starts with the blank separator before the marker.
+	item = {"number": 7, "state": "open", "title": "Unblock operator step for #6548", "body": "\n" + FIXUP_BODY,
+		"user": {"login": BOT}, "labels": [{"name": "ai:blocked"}]}
+	result, state = _judge(tmp_path, item, [PLAN_COMMENT], verdict={"verdict": "descope", "reason": "r", "instructions": "x"},
+		FAKE_GH_OPERATOR_TRACKER="1")
+	assert "origin=6548 outcome=escalated reason=fixup_blocked" in result.stdout, result.stdout
+	assert state["created"] == []
+	assert "verdict=descope" not in result.stdout
+
+
+def test_failed_fixup_escalation_posts_no_marker_and_no_warning(tmp_path: Path) -> None:
+	item = {"number": 7, "state": "open", "title": "t", "body": FIXUP_BODY, "user": {"login": BOT}, "labels": [{"name": "ai:blocked"}]}
+	result, state = _judge(tmp_path, item, [PLAN_COMMENT], FAKE_GH_FAIL_OPERATOR="1")
+	assert "origin=6548 outcome=failed reason=fixup_escalation_failed" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+
+
+def test_judge_escalates_a_fixup_only_once(tmp_path: Path) -> None:
+	item = {"number": 7, "state": "open", "title": "t", "body": FIXUP_BODY, "user": {"login": BOT}, "labels": [{"name": "ai:blocked"}]}
+	escalated = {"id": 4, "user": {"login": BOT}, "body": "listed\n\n<!-- ai:unblock-fixup-escalated:v1 item=7 -->", "created_at": "2026-10-04T10:00:00Z"}
+	result, state = _judge(tmp_path, item, [PLAN_COMMENT, escalated])
+	assert "origin=6548 outcome=skip reason=fixup_escalated" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+
+
+def test_untrusted_fixup_marker_is_judged_normally(tmp_path: Path) -> None:
+	item = {"number": 7, "state": "open", "title": "t", "body": FIXUP_BODY, "user": {"login": "mallory"}, "labels": [{"name": "ai:blocked"}]}
+	result, _state = _judge(tmp_path, item, [PLAN_COMMENT], verdict={"verdict": "retry_budget", "reason": "r", "instructions": "x"})
+	assert "fixup_blocked" not in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout

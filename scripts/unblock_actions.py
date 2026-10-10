@@ -25,6 +25,16 @@ the network; the shell only executes.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
+  regrant --context-file PATH --rejection-file PATH
+      For a scope-blocked issue whose newest automation-path rejection
+      (`unblock_ledger.py automation-rejection`) the current guard now grants:
+      a comment ending in `<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->`,
+      then the stop's resume command. No verdict, no operator step.
+  fixup-escalate --context-file PATH --origin N
+      For a blocked fix-up issue the judge filed for item N: one entry in the
+      `ai:operator-step` issue, a comment ending in
+      `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, and one WARNING. The
+      judge never files a fix-up for a fix-up.
 
 Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "comment", "issue": n, "body": s}
@@ -292,8 +302,10 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 	if verdict.get("placeholder"):
 		lines += [
 			"",
-			f"Keep the new behaviour off until a person finishes the operator step: gate it behind `{verdict['placeholder']}`"
-			" (a feature flag that defaults off, or a placeholder env var that makes the code skip safely).",
+			f"Keep the new behaviour off until a person finishes the operator step: gate only the new code path behind `{verdict['placeholder']}`"
+			" (a feature flag that defaults off, or a placeholder env var that makes the new code skip safely)."
+			" Never put an existing path behind it: with the flag unset, everything that runs today (releases, tagging,"
+			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
 	if _provenance_line(ctx):
@@ -469,6 +481,64 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	return ops
 
 
+def regrant_ops(ctx: dict, run_id: str, paths: list[str]) -> list[dict]:
+	"""Clear an automation-path latch the current guard no longer sets (Q54).
+
+	The marker comment goes first: it is the once-per-rejection-run record, so
+	a resume that fails afterwards is never retried for the same run.
+	"""
+	if ctx["kind"] != "issue" or ctx["stop"] != "scope-blocked":
+		raise UsageError("regrant applies only to a scope-blocked issue")
+	if not re.fullmatch(r"[0-9]+", str(run_id)) or not paths or not all(isinstance(path, str) for path in paths):
+		raise UsageError("regrant needs the rejection run and its paths")
+	item = ctx["item"]
+	listing = "\n".join(f"- `{path}`" for path in paths)
+	body = "\n".join([
+		f"The automation-path grant guard rejected run {run_id}. The current guard grants every path it rejected,"
+		" so the unblock judge cleared the latch without a verdict and resumed this issue. The implementation run"
+		" checks the grant again before it commits.",
+		"",
+		listing,
+		"",
+		f"<!-- ai:unblock-regrant:v1 item={item} run={run_id} -->",
+	])
+	return [{"op": "comment", "issue": item, "body": body}] + reset_ops(ctx, f"current guard grants rejection run {run_id}")
+
+
+def fixup_escalate_ops(ctx: dict, origin: int) -> list[dict]:
+	"""A blocked unblock fix-up goes to the operator once, never to another fix-up (Q56)."""
+	if ctx["kind"] != "issue" or origin < 1:
+		raise UsageError("fixup-escalate needs a fix-up issue and its original item")
+	item = ctx["item"]
+	return [
+		{
+			"op": "operator_step",
+			"key": f"unblock-fixup-{item}",
+			"source": f"Unblock judge, fix-up #{item}",
+			"steps": [
+				{
+					"title": f"Unblock fix-up #{item} is blocked ({ctx['stop']})",
+					"instructions": (
+						f"#{item} is the unblock judge's fix-up for #{origin}, and it is blocked itself. The judge never files"
+						f" a fix-up for a fix-up. Clear the block on #{item}, or close #{item} and decide #{origin} directly."
+					),
+				}
+			],
+		},
+		{
+			"op": "comment",
+			"issue": item,
+			"body": "\n".join([
+				f"This is the unblock judge's fix-up for #{origin}, and it is blocked ({ctx['stop']}). The judge does not file"
+				" another fix-up for it; it is listed in the `ai:operator-step` issue instead.",
+				"",
+				f"<!-- ai:unblock-fixup-escalated:v1 item={item} -->",
+			]),
+		},
+		{"op": "telegram", "level": "WARNING", "text": f"Unblock fix-up #{item} (for #{origin}) is blocked ({ctx['stop']}); listed under Operator steps"},
+	]
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = _Parser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
@@ -478,6 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	regrant_cmd = sub.add_parser("regrant")
+	regrant_cmd.add_argument("--context-file", required=True)
+	regrant_cmd.add_argument("--rejection-file", required=True)
+	escalate_cmd = sub.add_parser("fixup-escalate")
+	escalate_cmd.add_argument("--context-file", required=True)
+	escalate_cmd.add_argument("--origin", required=True, type=int)
 	return parser
 
 
@@ -488,6 +564,13 @@ def run(argv: list[str] | None = None) -> dict:
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
 		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	if args.command == "regrant":
+		rejection = _read_json(args.rejection_file, "--rejection-file")
+		if not isinstance(rejection, dict) or rejection.get("status") != "ok":
+			raise UsageError("--rejection-file must hold an ok automation-path rejection")
+		return {"ops": regrant_ops(ctx, rejection.get("run", ""), rejection.get("paths") or [])}
+	if args.command == "fixup-escalate":
+		return {"ops": fixup_escalate_ops(ctx, args.origin)}
 	verdict = _read_json(args.verdict_file, "--verdict-file")
 	if not isinstance(verdict, dict):
 		raise UsageError("--verdict-file must hold a JSON object")

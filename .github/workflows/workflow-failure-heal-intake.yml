@@ -32,6 +32,10 @@ name: Workflow Failure Heal Intake
       # CI on pushes to main (Q51); the job skips CI runs for pull requests
       # and other branches, which check-failure triage covers.
       - "CI"
+      # Scheduled self-checks (SCHEDULED_CHECK_WORKFLOW_NAMES), default
+      # branch only: the nightly self-test and its daily validation harness
+      # sandbox check (Q39: C).
+      - "Nightly Validation Self-Test"
     types:
       - completed
   workflow_dispatch:
@@ -66,7 +70,9 @@ jobs:
        (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
         (github.event.workflow_run.name != 'CI' ||
          (github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == github.event.repository.default_branch))))
+          github.event.workflow_run.head_branch == github.event.repository.default_branch)) &&
+        (github.event.workflow_run.name != 'Nightly Validation Self-Test' ||
+         github.event.workflow_run.head_branch == github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:

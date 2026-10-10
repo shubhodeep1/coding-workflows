@@ -2135,9 +2135,19 @@ resolver_pairing_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_
 if [ ! -f "${resolver_pairing_workspace_py}" ]; then
   _resolver_fail_closed sandbox_support_missing
 fi
+# review_conflict_prepare.sh writes CONFLICTED_PATHS_FILE only on the workflow
+# source repo, for its touched-set gate. A consumer repo has the merge-replay
+# allowlist instead: the unmerged paths the model is asked to resolve. Reading
+# the absent file made every consumer conflict fail closed with
+# sandbox_path_unsupported before any model ran (drhyg_ecommerce_automation
+# PR #66, run 38035623653).
+resolver_sandbox_conflict_set="${CONFLICTED_PATHS_FILE}"
+if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && [ ! -e "${CONFLICTED_PATHS_FILE}" ]; then
+  resolver_sandbox_conflict_set="${RESOLVER_ALLOWLIST_FILE}"
+fi
 if ! git ls-files -u -z > "${RESOLVER_UNMERGED_INDEX_FILE}" \
    || ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_pairing_workspace_py}" paired-live-copies "$(pwd)" \
-        "${CONFLICTED_PATHS_FILE}" "${RESOLVER_UNMERGED_INDEX_FILE}" "${RESOLVER_PAIRED_LIVE_FILE}" "${RESOLVER_MODEL_PATHS_FILE}"; then
+        "${resolver_sandbox_conflict_set}" "${RESOLVER_UNMERGED_INDEX_FILE}" "${RESOLVER_PAIRED_LIVE_FILE}" "${RESOLVER_MODEL_PATHS_FILE}"; then
   echo '::error::Conflict resolver paired live copy check failed; refusing to start the model.' >&2
   _resolver_fail_closed sandbox_path_unsupported
 fi

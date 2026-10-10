@@ -364,6 +364,110 @@ def test_plan_falls_back_to_orchestrator_parent_title() -> None:
 	assert 'echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"' in block
 
 
+# Poller silencing (operator decision Q42: A). The scheduled orchestrator
+# poller does not inherit the release workflows' ALERT_MSG_LEVEL=SILENT, so a
+# poll that processed a smoke fixture project while the gate cleaned it up
+# paged CRITICAL ("wave PR(s) closed without merge", project #7017, release
+# run 38010697715).
+
+_POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+
+
+def _poller_function(name: str) -> str:
+	text = _POLLER.read_text(encoding="utf-8")
+	match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", text, re.S | re.M)
+	assert match, name
+	return match.group(0)
+
+
+def _smoke_fixture_project_titles() -> list[str]:
+	"""Every orchestrator project title the stable gate creates, run id filled in."""
+	gate = (WORKFLOWS / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	titles = []
+	for match in re.finditer(r'(?:TITLE=|"title": )"(\[E2E [^"]+)"', gate):
+		titles.append(match.group(1))
+	# The decompose fixture's tracking title is model-written from the project
+	# description, which starts with this marker; the orchestrator prefixes it.
+	for match in re.finditer(r'PROJECT_DESC="(\[E2E [^\]]+\])', gate):
+		titles.append("[Orchestrator] " + match.group(1) + " Update two smoke canary files in parallel")
+	return [title.replace("${GITHUB_RUN_ID}", "38010697715").replace("${RUN_ID}", "38010697715") for title in titles]
+
+
+def _is_smoke(title: str, labels_json: str = "[]") -> bool:
+	script = _poller_function("tracking_issue_is_smoke_fixture") + '\ntracking_issue_is_smoke_fixture "$1" "$2"\n'
+	result = subprocess.run(["bash", "-c", script, "smoke", title, labels_json], capture_output=True, text=True, timeout=30)
+	return result.returncode == 0
+
+
+def test_poller_detects_every_gate_fixture_project() -> None:
+	titles = _smoke_fixture_project_titles()
+	assert any("Review-Blocked Simulation" in title for title in titles), titles
+	assert any(title.startswith("[Orchestrator] [E2E Orchestrate Smoke ") for title in titles), titles
+	for title in titles:
+		assert _is_smoke(title), title
+
+
+def test_poller_does_not_treat_real_projects_as_smoke() -> None:
+	for title in ("[Orchestrator] Unattended Claude pipeline completion", "E2E tests for the checkout flow", "[Orchestrator] Add [E2E] docs", "[Orchestrator] Add [E2E tests] for payments", "Fix [E2E Smoke Test] flake", "[Orchestrator] E2E tests for checkout", "[Orchestrator] [E2E tests] for payments", "[Orchestrator] [E2E Smoke Test] flake"):
+		assert not _is_smoke(title, '[{"name":"ai:orchestrator-tracking"}]'), title
+	# The decompose fixture's model-written title may drop the brackets.
+	assert _is_smoke("[Orchestrator] E2E Orchestrate Smoke 38010697715: update two canary files")
+	assert _is_smoke("[Orchestrator] anything", '[{"name":"ai:orchestrator-tracking"},{"name":"e2e-smoke-test"}]')
+	assert not _is_smoke("[Orchestrator] anything", "not json")
+
+
+def test_gate_labels_the_decompose_fixture_tracking_issue() -> None:
+	"""The decompose fixture's tracking title is model-written and may drop the
+	smoke marker, so the gate must also bind the e2e-smoke-test label."""
+	gate = (WORKFLOWS / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	start = gate.index('--field "project_description=${PROJECT_DESC}"')
+	assert '--field "tracking_labels=e2e-smoke-test"' in gate[start:start + 200]
+	assert "tracking_labels: ${{ inputs.tracking_labels }}" in (WORKFLOWS / "internal-orchestrate.yml").read_text(encoding="utf-8")
+	assert _is_smoke("[Orchestrator] Update two smoke canary files in parallel", '[{"name":"ai:orchestrator-tracking"},{"name":"e2e-smoke-test"}]')
+
+
+def _tg_notify_run(tracking_num: str, smoke_nums: str, level: str = "CRITICAL") -> subprocess.CompletedProcess:
+	script = "\n".join([
+		"set -euo pipefail",
+		_poller_function("_smoke_fixture_alert_silenced"),
+		_poller_function("tg_notify"),
+		'_gh_url() { echo "https://github.com/o/r/$1"; }',
+		'tg_send_tracked() { echo "SENT tracked=$1 level=$3"; }',
+		'tg_send_msg() { echo "SENT untracked level=$2"; }',
+		f"TRACKING_NUM={tracking_num}",
+		f"SMOKE_FIXTURE_TRACKING_NUMS={smoke_nums!r}",
+		f'tg_notify "Project #{tracking_num}: one or more wave PR(s) closed without merge" {level}',
+	])
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+
+
+def test_poller_tg_notify_is_silent_for_smoke_projects_only() -> None:
+	silenced = _tg_notify_run("7017", " 7005 7017")
+	assert silenced.returncode == 0, silenced.stderr
+	assert "TG_NOTIFY_SMOKE_SILENCED tracking_issue=7017 level=CRITICAL" in silenced.stdout
+	assert "SENT" not in silenced.stdout
+	# A prefix of a smoke number is a different project.
+	sent = _tg_notify_run("701", " 7005 7017")
+	assert "SENT tracked=701 level=CRITICAL" in sent.stdout
+	assert "SENT tracked=6664 level=CRITICAL" in _tg_notify_run("6664", "").stdout
+
+
+def test_poller_builds_the_smoke_set_once_and_guards_direct_project_alerts() -> None:
+	text = _POLLER.read_text(encoding="utf-8")
+	build = text.index('SMOKE_FIXTURE_TRACKING_NUMS=""')
+	assert build < text.index('for ((tidx=0; tidx<COUNT; tidx++)); do')
+	assert 'SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"' in text
+	assert text.count('if ! _smoke_fixture_alert_silenced "') == 5
+	for message in (
+		'tg_send_msg "${_final_merge_alert_msg}" "CRITICAL"',
+		'MSG="✅ Project #${TRACKING_NUM} completed successfully."',
+		'MSG="Project #${TRACKING_NUM} completed after validation pass',
+		'MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."',
+	):
+		site = text.index(message)
+		assert "_smoke_fixture_alert_silenced" in text[site - 200:site + 400], message
+
+
 def _run() -> None:
 	import inspect
 	import sys

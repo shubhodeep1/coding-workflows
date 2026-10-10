@@ -138,6 +138,10 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		self.helper = text[helper_start:text.index("\n}\n", helper_start)]
 		judge_start = text.index("invoke_stall_judge() {")
 		self.judge = text[judge_start:text.index("\n}\n", judge_start)]
+		# Issue #6629: the run names and the provenance rule live in one jq
+		# definition that every PR-named matcher prepends.
+		trust_start = text.index("_pr_named_review_trust_jq_def()\n{")
+		self.trust = text[trust_start:text.index("\n}\n", trust_start)]
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
 		# Issue #4701: the lookup lives in the shared helper, which matches
@@ -154,8 +158,9 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		)
 		self.assertNotIn("gh run list", self.helper)
 		self.assertNotIn("--limit 100", self.helper)
-		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.helper)
-		self.assertIn('("AI Review [pr:" + $pr + "]")', self.helper)
+		self.assertIn("select(trusted_pr_named($pr; $db; $repo))", self.helper)
+		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.trust)
+		self.assertIn('("AI Review [pr:" + $pr + "]")', self.trust)
 
 	def test_pr_named_lookup_follows_the_head_branch_lookups(self) -> None:
 		self.assertLess(self.body.index('--branch "${head_ref}"'), self.body.index("_pr_named_review_dispatch_runs"))
@@ -166,15 +171,18 @@ class PollerPrNamedRunContract(unittest.TestCase):
 
 	def test_run_name_prefix_matches_internal_review(self) -> None:
 		self.assertIn(DISPATCH_RUN_NAME, INTERNAL_REVIEW_WF.read_text(encoding="utf-8"))
-		self.assertIn(DISPATCH_RUN_NAME, self.helper)
+		self.assertIn(DISPATCH_RUN_NAME, self.trust)
 
 	def test_stall_judge_scopes_named_runs_to_review_wrapper_and_dispatch_event(self) -> None:
 		self.assertIn('workflow_outcomes="$(printf', self.judge)
-		self.assertIn('(.event // "") == "workflow_dispatch"', self.judge)
-		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.judge)
-		self.assertIn('internal-review\\\\.yml(@.*)?$', self.judge)
-		self.assertIn('("AI Review [pr:" + $pr + "]")', self.judge)
-		self.assertIn('ai-review\\\\.yml(@.*)?$', self.judge)
+		self.assertIn('"$(_pr_named_review_trust_jq_def)"', self.judge)
+		self.assertIn('or ($pr != "" and trusted_pr_named($pr; $db; $repo))', self.judge)
+		# Issue #6629: dispatch event, default branch (or null), and the exact
+		# title paired with its own wrapper path.
+		self.assertIn('((.event // "") == "workflow_dispatch")', self.trust)
+		self.assertIn('($hb == null or $hb == "" or $hb == $db)', self.trust)
+		self.assertIn('$p == ".github/workflows/internal-review.yml" and $t == ("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.trust)
+		self.assertIn('$p == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $pr + "]")', self.trust)
 
 
 class ForwardMergeDispatchRefContract(unittest.TestCase):
