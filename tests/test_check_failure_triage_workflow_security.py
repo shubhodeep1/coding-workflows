@@ -1235,7 +1235,7 @@ case "$*" in
   "api repos/owner/repo/actions/runs/1 --jq .workflow_id "*)
     [ -n "${MOCK_BASE_WORKFLOW_ID:-}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_WORKFLOW_ID}" ;;
-  "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&status=completed&per_page=1 --jq "*)
+  "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&per_page=1 --jq "*)
     [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CONCLUSION}" ;;
   "api -X GET repos/owner/repo/commits/"*"/check-runs -f check_name="*)
@@ -1426,7 +1426,7 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 		self.assertIn(
-			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&status=completed&per_page=1 --jq .workflow_runs[0].conclusion // \"\"",
+			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | select(.status == \"completed\") | .conclusion // \"\"",
 			calls,
 		)
 
@@ -1466,6 +1466,22 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 				self.assertIn("CHECK_TRIAGE " + expected, proc.stdout)
 				self.assertEqual(outputs.get("ready"), "true")
+
+	def test_pending_newest_base_run_is_not_read_as_an_older_success(self) -> None:
+		# The query must not filter on status=completed: that would skip a pending
+		# newest run and return an older success, wrongly skipping triage.
+		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
+		self.assertNotIn("&status=completed", source)
+		jq_filter = '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""'
+		self.assertIn(jq_filter, source)
+		for payload, expected in (
+			({"workflow_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, ""),
+			({"workflow_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
+			({"workflow_runs": []}, ""),
+		):
+			with self.subTest(payload=payload):
+				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
+				self.assertEqual(out.stdout.strip(), expected)
 
 	def test_duplicate_issue_is_checked_before_the_base_gate(self) -> None:
 		# The gate's reads come after the open-issue dedup, so a duplicate costs nothing extra.

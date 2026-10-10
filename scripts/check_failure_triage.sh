@@ -368,7 +368,8 @@ fi
 # when the base branch fails the same check, or when its result is unknown.
 # API budget (CLAUDE.md §15): the PR payload above supplies the base ref. A
 # failed CI workflow run costs two reads (the failing run's workflow id, then
-# that workflow's newest completed push run on the base branch); a check_run
+# that workflow's newest push run on the base branch, used only once it has
+# completed, so a pending newest run never yields an older success); a check_run
 # event costs one (that check's newest run on the base branch tip). Fails open:
 # any read failure, a pending or missing base result, or a conclusion other
 # than success files the issue as before.
@@ -389,8 +390,8 @@ else
 			base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
-			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&status=completed&per_page=1" \
-				--jq '.workflow_runs[0].conclusion // ""' 2>/dev/null || true)"
+			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
+				--jq '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""' 2>/dev/null || true)"
 			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
 		else
 			base_gate_reason="workflow_unresolved"
@@ -401,7 +402,7 @@ else
 			--jq '[.check_runs[]? | select(.status == "completed")][0].conclusion // ""' 2>/dev/null || true)"
 		[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_check"
 	fi
-	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion}" | tr -cd 'a-z_' | cut -c1-40)"
+	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
 	if [ "${base_gate_conclusion}" = "success" ]; then
 		log "skip reason=pr_specific_failure base=${BASE_REF} base_conclusion=success pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
 		exit 0
