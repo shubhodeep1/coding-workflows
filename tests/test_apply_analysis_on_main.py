@@ -570,3 +570,16 @@ def test_open_tracking_issue_list_reads_every_page() -> None:
 	assert proc.returncode == 0, proc.stderr
 	list_calls = [call for call in final["calls"] if any("/issues?state=open" in a for a in call)]
 	assert list_calls and all("--paginate" in call and "--slurp" in call for call in list_calls)
+
+
+def test_in_flight_docs_reads_every_comment_page() -> None:
+	# A marker past the first 100 comments must still keep its doc from the purge.
+	trusted = {"user": {"login": "github-actions[bot]"}, "author_association": "NONE"}
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	state = {"open_tracking": [_tracking(7021)], "comments_by_issue": {"7021": [{**trusted, "body": "apply-analysis-source-doc: " + doc}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == [doc]
+	comment_calls = [call for call in final["calls"] if any(a.endswith("/comments?per_page=100") for a in call)]
+	assert comment_calls and all("--paginate" in call and "--slurp" in call for call in comment_calls)

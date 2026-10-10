@@ -65,7 +65,7 @@
 # In-flight-docs mode (APPLY_ANALYSIS_IN_FLIGHT_DOCS=true) prints, one per
 # line, every doc a trusted marker comment on an OPEN tracking issue names,
 # so the log analysis purge can keep the docs live projects still read: 1 issue
-# list call per page, 1 comments read per open tracking issue, and 1
+# list call per page, 1 comments read per page per open tracking issue, and 1
 # orchestrator runs read. Exit 2 when any read fails, or while an orchestrator
 # run is queued or running (a just-dispatched project's tracking issue and
 # marker comment do not exist until that run creates them).
@@ -283,10 +283,11 @@ in_flight_docs()
 	printf '%s' "${open_json}" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
 	while IFS= read -r issue_number; do
 		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
-		comments_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" 2>/dev/null)" || return 2
+		# Every page: a marker past the first 100 comments must still keep its doc.
+		comments_json="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" 2>/dev/null)" || return 2
 		docs+="$(printf '%s' "${comments_json}" | jq -r --arg prefix "${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: " --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
 			($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
-			| .[]?
+			| .[]? | .[]?
 			| select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)
 			| (.body // "") | split("\n")[] | select(startswith($prefix)) | ltrimstr($prefix)
 			| select(test("^[A-Za-z0-9._/-]+$"))' 2>/dev/null)" || return 2
