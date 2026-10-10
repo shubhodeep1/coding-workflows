@@ -145,6 +145,8 @@ def test_explicit_none_counts_as_success(tmp_path: Path) -> None:
 		{"FAKE_SONNET_RC": "124"},  # wall-clock timeout
 		{"FAKE_SONNET_RC": "0", "FAKE_SONNET_OUT": "I could not finish the review."},  # malformed output
 		{"FAKE_SONNET_RC": "75", "FAKE_SONNET_REASON": "all_accounts_failed"},  # usage limit on every account
+		{"FAKE_SONNET_RC": "75", "FAKE_SONNET_REASON": "all_usage_limit"},  # capacity reason (capacity-only policy)
+		{"FAKE_SONNET_RC": "76", "FAKE_SONNET_REASON": "all_accounts_failed"},  # refused, but per-model
 	],
 )
 def test_failed_sonnet_run_retries_on_haiku_in_the_pool(tmp_path: Path, sonnet_env: dict[str, str]) -> None:
@@ -161,9 +163,12 @@ def test_fallback_model_is_configurable(tmp_path: Path) -> None:
 	assert result["runs"] == ["claude-sonnet-5-5", "claude-haiku-6"]
 
 
-@pytest.mark.parametrize("reason", ["no_credential", "sandbox_not_prepared", "policy_unavailable", "support_missing"])
-def test_pool_wide_outage_skips_the_slot_without_the_fallback_model(tmp_path: Path, reason: str) -> None:
-	result = _run(tmp_path, FAKE_SONNET_RC="75", FAKE_SONNET_REASON=reason, FAKE_HAIKU_OUT=FINDINGS)
+@pytest.mark.parametrize("rc", ["75", "76"])
+@pytest.mark.parametrize("reason", ["no_credential", "sandbox_not_prepared", "policy_unavailable", "support_missing", "isolation_unavailable"])
+def test_pool_wide_outage_skips_the_slot_without_the_fallback_model(tmp_path: Path, reason: str, rc: str) -> None:
+	# Exit 76 is a fallback the capacity-only AI_ENGINE_FALLBACK_POLICY refused;
+	# the slot has no codex path, so it is read like 75.
+	result = _run(tmp_path, FAKE_SONNET_RC=rc, FAKE_SONNET_REASON=reason, FAKE_HAIKU_OUT=FINDINGS)
 	assert result["status"] == "skipped_pool"
 	assert result["runs"] == ["claude-sonnet-5-5"]
 	assert f"AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason={reason} action=skip" in result["log"]

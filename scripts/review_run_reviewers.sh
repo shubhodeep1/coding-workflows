@@ -5094,6 +5094,8 @@ run_reviewer() {
 # -> claude-sonnet-5-5). A Sonnet run that does not succeed (crash, timeout,
 # refusal, malformed output, or a usage limit on every account) retries once
 # on REVIEWER_POOL_FALLBACK_MODEL (default claude-haiku-5-5) in the same pool.
+# Exit 75 and exit 76 (a fallback the capacity-only AI_ENGINE_FALLBACK_POLICY
+# refused) are read the same way: the AI_ENGINE_FALLBACK reason decides.
 # A pool-wide outage (role resolved to codex, sandbox preparation failed, no
 # credential, support or policy missing) skips the slot with status
 # skipped_pool, because the pool gate is account-wide and the fallback model
@@ -5280,12 +5282,18 @@ run_pool_reviewer() {
       2)
         pool_skip_reason="sandbox_helper_outdated"
         ;;
-      75)
+      75|76)
+        # 75: Claude unavailable, fall back. 76: the capacity-only fallback
+        # policy (AI_ENGINE_FALLBACK_POLICY=capacity) refused a non-capacity
+        # fallback. The slot has no codex path either way; the reason decides.
         pool_last_reason="$({ grep -Eo 'AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason=[a-z_]+' "${pool_attempt_stderr}" 2>/dev/null || true; } | tail -n 1 | sed 's/.*reason=//')"
         pool_last_reason="${pool_last_reason:-claude_unavailable}"
         # Every account usage-limited or rejected for this model: the next
         # model may still run. Anything else is pool-wide.
-        [ "${pool_last_reason}" = "all_accounts_failed" ] || pool_skip_reason="${pool_last_reason}"
+        case "${pool_last_reason}" in
+          all_accounts_failed|all_usage_limit) ;;
+          *) pool_skip_reason="${pool_last_reason}" ;;
+        esac
         ;;
       124|137)
         pool_last_reason="timeout"
