@@ -324,6 +324,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     before either the posting step or a direct caller may create the issue.
     Issue posting is separate and requires the `CHECK_TRIAGE_ISSUES_TOKEN`
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
+    With `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true` (default `false`) a new
+    triage issue carries one `Target branch: <head ref>` line, written only for a
+    verified open same-repository PR head that is not the default branch; the
+    final body check allows exactly that line, once, above the first `---`.
     Fix PRs linked to triage issues run the single-issue security pass at their
     current head; the triage label and fingerprint do not exempt them.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,

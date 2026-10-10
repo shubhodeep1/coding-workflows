@@ -48,6 +48,9 @@
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, or diagnose
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
+#   CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED    "true" adds a "Target branch: <head ref>"
+#                                            line for a verified open same-repo PR
+#                                            head (default false: no routing line)
 
 set -euo pipefail
 
@@ -89,6 +92,25 @@ value = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", value, fla
 value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
 print(value[:200] or "(unnamed check)")
 ' "$1"
+}
+
+# Strict branch-name check for the trusted "Target branch:" routing line.
+# Fails closed: anything outside a conservative charset, or anything
+# git rejects, is not routed. The same rule is enforced again in the final
+# body validator below.
+triage_routing_ref_is_safe()
+{
+	local candidate_ref="${1-}"
+	[[ "${candidate_ref}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || return 1
+	case "${candidate_ref}" in
+		*..*|*//*|*/|*.|*.lock|*@\{*)
+			return 1
+			;;
+	esac
+	if command -v git >/dev/null 2>&1; then
+		git check-ref-format --branch "${candidate_ref}" >/dev/null 2>&1 || return 1
+	fi
+	return 0
 }
 
 # --- Helpers (fail open if unavailable) ------------------------------------
@@ -148,6 +170,9 @@ TRUSTED_SUPPORT_DIR="${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:-}"
 TRIAGE_STAGE="${CHECK_TRIAGE_STAGE:-all}"
 TRIAGE_METADATA_FILE="${RUNTIME_DIR}/triage_metadata.json"
 PR_CHECK_RUNS_CONTEXT_FILE="${RUNTIME_DIR}/pr_check_runs_context.txt"
+# Verified PR head branch for the trusted "Target branch:" line; empty means
+# no routing line (the default, and whenever verification fails).
+ROUTING_TARGET_BRANCH=""
 if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	[ ! -f "${TRUSTED_SUPPORT_DIR}/unattended_system_instructions.md" ] ||
 	[ ! -f "${TRUSTED_SUPPORT_DIR}/prompts/mode-check-failure-triage.txt" ]; then
@@ -172,6 +197,8 @@ if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 	HEAD_REF="$(jq -r '.head_ref' "${TRIAGE_METADATA_FILE}")"
 	PR_TITLE="$(jq -r '.title' "${TRIAGE_METADATA_FILE}")"
 	PR_URL="$(jq -er '.url' "${TRIAGE_METADATA_FILE}")"
+	# Older metadata files have no routing field: no routing line.
+	ROUTING_TARGET_BRANCH="$(jq -r 'if (.routing_target_branch | type) == "string" then .routing_target_branch else "" end' "${TRIAGE_METADATA_FILE}")"
 	FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
 fi
 
@@ -262,6 +289,31 @@ if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ];
 	exit 0
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
+
+# Opt-in routing (CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED, default off): route
+# the triage issue's fix to the failing PR's own branch, but only for an open
+# PR whose head and base are this repository, read from the PR payload fetched
+# above (a failed fetch leaves an empty state, which never verifies).
+if [ "${CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" != "true" ]; then
+	log "routing outcome=skip reason=disabled"
+elif [ "${PR_STATE}" != "open" ]; then
+	log "routing outcome=skip reason=pr_not_verified_open"
+elif [ -z "${HEAD_REPO_FULL_NAME}" ] || [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
+	log "routing outcome=skip reason=head_repo_unverified"
+else
+	ROUTING_BASE_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.full_name // ""')"
+	ROUTING_DEFAULT_BRANCH="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.default_branch // ""')"
+	if [ -z "${ROUTING_BASE_REPO_FULL_NAME}" ] || [ "${ROUTING_BASE_REPO_FULL_NAME}" != "${REPO}" ] || [ -z "${ROUTING_DEFAULT_BRANCH}" ]; then
+		log "routing outcome=skip reason=base_repo_unverified"
+	elif ! triage_routing_ref_is_safe "${HEAD_REF}"; then
+		log "routing outcome=skip reason=invalid_ref"
+	elif [ "${HEAD_REF}" = "${ROUTING_DEFAULT_BRANCH}" ]; then
+		log "routing outcome=skip reason=head_is_default_branch"
+	else
+		ROUTING_TARGET_BRANCH="${HEAD_REF}"
+		log "routing outcome=emit target_branch=${ROUTING_TARGET_BRANCH}"
+	fi
+fi
 
 # A fix PR opened by the pipeline uses branch ai/issue-<N>. If this failing PR
 # is such a branch, read its source issue's triage markers to derive the
@@ -403,12 +455,25 @@ if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \
 		--arg fingerprint "${FP}" --arg generation "${GEN}" --arg root "${ROOT}" \
 		--arg head_ref "${HEAD_REF}" --arg title "${PR_TITLE}" --arg url "${PR_URL}" \
-		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url}' > "${TRIAGE_METADATA_FILE}"
+		--arg routing_target_branch "${ROUTING_TARGET_BRANCH}" \
+		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_target_branch: $routing_target_branch}' > "${TRIAGE_METADATA_FILE}"
 	if [ -n "${GITHUB_OUTPUT:-}" ]; then
 		echo "ready=true" >> "${GITHUB_OUTPUT}"
 	fi
 	exit 0
 fi
+fi
+
+# Defence in depth: the routing value crossed a file hand-off, so check the
+# flag and the ref shape again before it can reach the issue body.
+if [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+	if [ "${CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" != "true" ]; then
+		log "routing outcome=skip reason=disabled"
+		ROUTING_TARGET_BRANCH=""
+	elif ! triage_routing_ref_is_safe "${ROUTING_TARGET_BRANCH}"; then
+		log "routing outcome=skip reason=invalid_ref"
+		ROUTING_TARGET_BRANCH=""
+	fi
 fi
 
 # --- Run the diagnosis model -----------------------------------------------
@@ -632,6 +697,12 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo "- **Check details:** ${CHECK_DETAILS_URL_DISPLAY}"
 	echo "- **Head SHA:** \`${HEAD_SHA_DISPLAY}\`"
 	echo "- **Triage run:** ${RUN_URL}"
+	if [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+		# The only routing line the body may carry; the validator below allows
+		# exactly this line, once, before the first separator.
+		echo
+		echo "Target branch: ${ROUTING_TARGET_BRANCH}"
+	fi
 	echo
 	echo "---"
 	echo
@@ -664,13 +735,22 @@ then
 	exit 1
 fi
 
-if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" <<'PY'
+if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${ROUTING_TARGET_BRANCH}" <<'PY'
 import pathlib
 import re
 import sys
 
 body = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 lines = body.split("\n")
+expected_branch = sys.argv[6] if len(sys.argv) > 6 else ""
+
+
+def routing_ref_is_safe(ref):
+	return (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", ref) is not None
+		and ".." not in ref and "//" not in ref and "@{" not in ref
+		and not ref.endswith(("/", ".", ".lock")))
+
+
 expected = [sys.argv[2], f"<!-- check-failure-triage:gen={sys.argv[3]} -->",
             f"<!-- check-failure-triage:root={sys.argv[4]} -->",
             f"<!-- check-failure-triage:pr={sys.argv[5]} -->"]
@@ -678,7 +758,8 @@ if (not re.fullmatch(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->", expected[
         or not re.fullmatch(r"[0-9]+", sys.argv[3])
         or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[4])
         or not re.fullmatch(r"[1-9][0-9]*", sys.argv[5])
-        or lines[:4] != expected or "<!--" in "\n".join(lines[4:])):
+        or lines[:4] != expected or "<!--" in "\n".join(lines[4:])
+        or (expected_branch and not routing_ref_is_safe(expected_branch))):
 	print("marker")
 elif re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
 	print("reissue")
@@ -686,7 +767,21 @@ else:
 	# Cover resolve_integration_ref.sh, security_dependency.py and
 	# orchestrate_lib.py's TARGET_BRANCH_LINE_RE, including Unicode newlines.
 	key = re.compile(r"^\s*(?:[-*>]\s*)*\**\s*(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:", re.IGNORECASE)
-	print("routing_key" if any(key.match(line) for line in body.splitlines() + lines) else "")
+	if not expected_branch:
+		print("routing_key" if any(key.match(line) for line in body.splitlines() + lines) else "")
+	else:
+		# Exactly one trusted routing line, verbatim, before the first separator.
+		allowed = f"Target branch: {expected_branch}"
+		routing_ok = True
+		for line_list in (body.splitlines(), lines):
+			if [line for line in line_list if key.match(line)] != [allowed]:
+				routing_ok = False
+				break
+			separator_index = line_list.index("---") if "---" in line_list else len(line_list)
+			if line_list.index(allowed) > separator_index:
+				routing_ok = False
+				break
+		print("" if routing_ok else "routing_key")
 PY
 )"; then
 	body_validation_reason="marker"
