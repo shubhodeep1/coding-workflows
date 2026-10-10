@@ -1930,9 +1930,12 @@ ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
-(exact id, or same file, category, severity and exploit scenario within
-`SECURITY_AUDIT_WAIVER_LINE_WINDOW`, default 40 lines; legacy waivers with no
-scenario match by id only when any recorded category and severity also match).
+(exact non-empty `finding_id` only, and only when every category, severity
+and exploit scenario the waiver recorded also matches; no proximity match since
+#6987, so a different id at the waived location is a new, blocking finding.
+A field the waiver left empty is not compared, so a legacy row with no exploit
+scenario still matches by exact id plus any recorded category and severity.
+`SECURITY_AUDIT_WAIVER_LINE_WINDOW` is still validated but no longer used).
 `/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
 `<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
