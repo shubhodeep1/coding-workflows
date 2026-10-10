@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:382-394 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The base-run lookup filters for completed runs before selecting one, so a pending latest base-branch run can be missed in favor of an older successful run.\n  WHY: The gate may treat stale success as proof that a failure is PR-specific and skip filing an issue, even though the documented behavior is to file when the base result is pending or unknown.\n- scripts/check_failure_triage.sh:404 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The conclusion sanitization would prevent an uppercase conclusion from matching \"success\".\n  WHY: Known GitHub conclusions are lowercase, so this is not a current bug; it could matter only if GitHub changes its API to return uppercase conclusions.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/check_failure_triage.sh:392-393 | severity=MAJOR | confidence=4\n  PROBLEM: The base-branch gate workflow-run query filters to `status=completed` in the API call: `?branch=${BASE_REF}&event=push&status=completed&per_page=1`. When the base branch has an older completed run (e.g. success) and a newer still-pending run, the API returns the older success, and the gate skips triage. The documented behavior in the comment at lines 371-374 and in README.md says that any pending base result should file the issue, but `status=completed` lets the API skip past a pending latest run to an older completed one. The check_run path at line 399-402 already handles this correctly: it uses `filter=latest` (returns the latest run regardless of status), then jq filters to `select(.status == \"completed\")`, so a pending latest run produces empty conclusion and `no_completed_base_check` reason. The workflow_run path should match: remove `status=completed` from the URL and check the returned run's `.status` before using its `.conclusion`.\n  WHY: If main's CI from yesterday passed and today's push is still running when a PR CI fails, triage sees the old success, calls the failure PR-specific, and files nothing. The base-branch failure (if the pending run eventually fails) gets no triage issue from this trigger.\n- scripts/check_failure_triage.sh:404 | severity=NIT | confidence=2\n  PROBLEM: `tr -cd 'a-z_'` strips every character that is not a lowercase letter or underscore from the conclusion string before comparing to \"success\". If GitHub ever returned an uppercase conclusion (e.g. \"Success\"), the sanitized value would become \"uccess\" and never match. In practice every known GitHub conclusion (\"success\", \"failure\", \"cancelled\", \"skipped\", \"timed_out\", \"startup_failure\", \"action_required\", \"stale\", \"neutral\") is already all-lowercase, so no bug exists today. The comment at lines 371-374 says \"a conclusion other than success files the issue as before\", and the code achieves this even with the sanitization.\n  WHY: Not a current failure \u2014 all real conclusions pass through `tr -cd 'a-z_'` unmodified. Only a future GitHub API change to uppercase conclusions would hit this.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:382 | severity and confidence not stated\n  PROBLEM: The base-run lookup explicitly filters for `status=completed`. If the latest run on the base branch is currently `pending`, the query may return an older, successful run or nothing at all, causing the gate to incorrectly skip triage or file an issue based on stale data.\n  WHY: The goal is to avoid filing issues for failures that are PR-specific. If the base branch has a `pending` run that might fail, we should not skip filing the issue. Relying on an older successful run when the current status is ambiguous is incorrect.\n- scripts/check_failure_triage.sh:395 | hardening suggestion; HARDENING_RISK_SCORE: 0\n  PROBLEM: Conclusion string comparison is case-sensitive, although GitHub API conclusions are typically lowercase.\n  WHY: Suggested minimal fix: Use case-insensitive comparison in Bash, e.g., `[[ \"${base_gate_conclusion,,}\" == \"success\" ]]`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:392-394 | severity=MAJOR | confidence=5\n  PROBLEM: The workflow-run lookup filters to `status=completed` before selecting one result. If the newest base-branch run is pending but an earlier run succeeded, the query returns that earlier success.\n  WHY: The gate treats the stale success as proof that the failure is PR-specific and exits without filing an issue, even though the base result is still pending. The documented behavior is to file when the base result is pending or unknown.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "a72164e8e3013c5ea32add51035f1fc8cc947e6b7dd5badd8810fa3a590b52a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7037,
+    "run_id": "38025675410",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38025675410",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010054639_cb3a3bb8d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7037,
+    "run_id": "38025675410"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T05:46:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
