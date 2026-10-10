@@ -61,6 +61,12 @@
 #                                          marker, sent as failure_fingerprint when 64 hex
 #   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
 #                                          already wrote; sent as changed_files (absent is fine)
+#   AUTOFIX_STREAK_AUTHOR_LOGIN            login the workflow posts failure comments as, used only
+#                                          to filter the streak count (default empty; the workflow
+#                                          passes the gate's resolved login). When neither this nor
+#                                          AUTOFIX_FAILURE_MARKER_AUTHOR is set, the reporter reads
+#                                          the token's login (one `gh api user`); without a login
+#                                          the streak counts only this run (fail closed)
 #   AUTOFIX_FAILURE_MARKER_AUTHOR          login the workflow posts failure comments as (default
 #                                          empty). When set, the runs named by that author's
 #                                          review-autofix-failure:v1 markers for the PR head in
@@ -160,20 +166,45 @@ fi
 
 COMMENTS_FILE="${PR_ISSUE_COMMENTS_FILE:-}"
 PRIOR_FAILURES=0
-# Count only the pipeline identity's comments when the caller names it and the
-# staged helper supports the filter (an older copy would reject the flag and
-# the streak would read 0): another commenter's failure / summary text must
-# neither inflate nor end the streak.
+# Security-pass finding autofix-streak-counts-untrusted-comments: only the
+# pipeline identity's comments may count toward or end the streak, because any
+# PR commenter can post text that starts like a failure comment or an editor
+# summary. The login comes from the caller (the cap path's
+# AUTOFIX_FAILURE_MARKER_AUTHOR, else the gate's resolved login in
+# AUTOFIX_STREAK_AUTHOR_LOGIN), else from the token itself. Without a valid
+# login, or with a staged helper that predates the filter, the streak counts
+# only this run (fail closed): an unfiltered count could be inflated by
+# forged comments to force heal dispatches.
+STREAK_AUTHOR_LOGIN="${AUTOFIX_FAILURE_MARKER_AUTHOR:-}"
+if [ -z "${STREAK_AUTHOR_LOGIN}" ]; then
+	STREAK_AUTHOR_LOGIN="${AUTOFIX_STREAK_AUTHOR_LOGIN:-}"
+fi
+if [ -z "${STREAK_AUTHOR_LOGIN}" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
+	# CLAUDE.md §15 / unattended §14: no call this reporter already makes
+	# returns the identity authenticated by GH_TOKEN (the PR and comments
+	# reads come from the run's start), and the gate resolves it only when its
+	# cap scan runs. One read, only on a failed run with PR comments to count.
+	STREAK_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || echo "")"
+fi
+STREAK_AUTHOR_LOGIN="$(printf '%s' "${STREAK_AUTHOR_LOGIN}" | head -1 | tr -d '[:space:]')"
+if ! [[ "${STREAK_AUTHOR_LOGIN}" =~ ^[A-Za-z0-9-]{1,39}(\[bot\])?$ ]]; then
+	STREAK_AUTHOR_LOGIN=""
+fi
 STREAK_ARGS=(--comments-json "${COMMENTS_FILE}")
 STREAK_AUTHOR_FILTER="off"
-if [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ] && grep -q 'autofix-failure-streak-author-login:v1' "${HEAL_PY}" 2>/dev/null; then
-	STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")
+STREAK_COUNT_PRIOR="false"
+if [ -n "${STREAK_AUTHOR_LOGIN}" ] && grep -q 'autofix-failure-streak-author-login:v1' "${HEAL_PY}" 2>/dev/null; then
+	STREAK_ARGS+=(--author-login "${STREAK_AUTHOR_LOGIN}")
 	STREAK_AUTHOR_FILTER="on"
-elif [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ]; then
-	# Keep the legacy count, but make the reporter/helper drift observable.
-	log "warn reason=streak_author_filter_unavailable pr=${PR}; staged helper predates the author filter, counting every author"
+	STREAK_COUNT_PRIOR="true"
+elif [ -n "${STREAK_AUTHOR_LOGIN}" ]; then
+	log "warn reason=streak_author_filter_unavailable pr=${PR}; staged helper predates the author filter, counting this run only"
+else
+	log "warn reason=streak_author_login_unavailable pr=${PR}; counting this run only"
 fi
-if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
+if [ "${STREAK_COUNT_PRIOR}" != "true" ]; then
+	:
+elif [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 	PRIOR_FAILURES="$(python3 "${HEAL_PY}" autofix-failure-streak "${STREAK_ARGS[@]}" 2>/dev/null || echo 0)"
 	[[ "${PRIOR_FAILURES}" =~ ^[0-9]+$ ]] || PRIOR_FAILURES=0
 else

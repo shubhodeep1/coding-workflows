@@ -2568,7 +2568,7 @@ def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, s
 def test_autofix_report_dispatches_past_streak_threshold() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-") as tmp_name:
 		tmp = Path(tmp_name)
-		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_SUMMARY_COMMENT}, {"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_NOOP_SUSPICIOUS": "true"})
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"user": {"login": "workflow-bot"}, "body": AUTOFIX_SUMMARY_COMMENT}, {"user": {"login": "workflow-bot"}, "body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_NOOP_SUSPICIOUS": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
 		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched pr=4174 failure=editor_empty_noop streak=2 workflow=AI Review" in result.stdout
@@ -2612,10 +2612,10 @@ def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 		work, state_file, env = _stage_autofix_report(
 			tmp,
 			comments=[
-				{"body": AUTOFIX_SUMMARY_COMMENT},
-				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
-				{"body": AUTOFIX_SUMMARY_COMMENT},
-				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_SUMMARY_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_SUMMARY_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
 			],
 			flags={"EDITOR_CHANGES_LOST": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "3"},
 		)
@@ -2630,7 +2630,7 @@ def test_autofix_report_skip_paths() -> None:
 		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "2"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
 		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
 		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
-		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
+		("dispatch_denied", [{"user": {"login": "workflow-bot"}, "body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
 	]
 	for name, comments, flags, expected in cases:
 		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-{name}-") as tmp_name:
@@ -2687,6 +2687,7 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert "${{" not in step["run"]
 	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '1' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
+	assert step["env"]["AUTOFIX_STREAK_AUTHOR_LOGIN"] == "${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
 	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
 	expanded_steps = yaml.safe_load(expanded_review_autofix_text())["jobs"]["codex-agent"]["steps"]
@@ -4195,12 +4196,37 @@ def test_autofix_report_streak_counts_only_the_pipeline_author() -> None:
 		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 		assert "dispatched pr=4174 failure=editor_empty_noop streak=2 " in result.stdout, result.stdout + result.stderr
 		assert "streak_author_filter=on" in result.stdout
-	# Without the pipeline login the legacy count applies.
-	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-legacy-") as tmp_name:
-		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+	# Without a resolvable pipeline login the streak counts only this run (fail
+	# closed): two untrusted failure comments must not raise it to 3.
+	forged = [{"user": {"login": "drive-by-user"}, "body": AUTOFIX_NOOP_COMMENT}] * 2
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-no-login-") as tmp_name:
+		work, state_file, env = _stage_autofix_report(Path(tmp_name), comments=forged, flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		state_file.write_text(json.dumps({"user_fetch_fail": True}), encoding="utf-8")
 		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
 		assert "streak_author_filter=off" in result.stdout
+		assert "warn reason=streak_author_login_unavailable pr=4174" in result.stdout
+	# A login that fails the format check is treated as unavailable.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-bad-login-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(
+			Path(tmp_name), comments=forged, flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "drive-by-user;rm"}
+		)
+		env["GH_TOKEN"] = ""
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
+		assert "warn reason=streak_author_login_unavailable pr=4174" in result.stdout
+	# The gate's login (AUTOFIX_STREAK_AUTHOR_LOGIN) filters the streak without
+	# changing run_refs, which list only this run on the normal path.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-gate-login-") as tmp_name:
+		work, state_file, env = _stage_autofix_report(
+			Path(tmp_name), comments=[*forged, *trusted, untrusted], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": CAP_AUTHOR}
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=2 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=on" in result.stdout
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"]
+		assert not any(call[:2] == ["api", "user"] for call in _state(state_file)["calls"])
 	# An older staged helper without the sentinel keeps the legacy call.
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-old-helper-") as tmp_name:
 		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags=flags)
@@ -4212,7 +4238,8 @@ def test_autofix_report_streak_counts_only_the_pipeline_author() -> None:
 		assert "warn reason=streak_author_filter_unavailable pr=4174" in result.stdout
 	text = AUTOFIX_REPORT_SCRIPT.read_text(encoding="utf-8")
 	assert "grep -q 'autofix-failure-streak-author-login:v1' \"${HEAL_PY}\"" in text
-	assert 'STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")' in text
+	assert 'STREAK_ARGS+=(--author-login "${STREAK_AUTHOR_LOGIN}")' in text
+	assert 'STREAK_AUTHOR_LOGIN="${AUTOFIX_FAILURE_MARKER_AUTHOR:-}"' in text
 
 
 def test_reviewer_failure_evidence_names_exit_codes_and_self_named_errors() -> None:
