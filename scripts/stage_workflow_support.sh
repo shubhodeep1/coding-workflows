@@ -851,6 +851,62 @@ stage_self_repo_validation_renderer_entry()
 	echo "VALIDATE_TRUSTED_RENDERER path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
 }
 
+# The renderer fix above generalised (Q39: C): self-repo runs without an
+# explicit target take every support script from the validation checkout (an
+# integration branch), so a branch that had not synced the default branch ran
+# the harness with its own older infrastructure. Project #6664 revalidated at
+# 21:10 with an integration-branch scripts/validation_harness_sandbox.sh that
+# lacked the rootless-package fix (#6959) and could not provision the sandbox;
+# the branch synced only at 21:34. The scripts listed under the manifest's
+# `self_repo_trusted_scripts` run or isolate the harness rather than being the
+# project's subject, so they come from the verified support commit, like the
+# templates and the renderer, and a missing trusted copy fails closed.
+stage_self_repo_trusted_support_entry()
+{
+	local repo_path="$1"
+	local trusted_path inspected_support_path
+
+	case "${repo_path}" in
+		scripts/*) ;;
+		*)
+			echo "::error::Refusing trusted support path '${repo_path}' outside scripts/." >&2
+			exit 1
+			;;
+	esac
+	case "/${repo_path}/" in
+		*/../*|*/./*|*//*)
+			echo "::error::Refusing unsafe trusted support path '${repo_path}'." >&2
+			exit 1
+			;;
+	esac
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ] || [ -L "${trusted_path}" ]; then
+		echo "::error::Required trusted validation support script ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	inspected_support_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_support_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation support path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_support_path}" == */* ]] || break
+		inspected_support_path="${inspected_support_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file or symlinked validation support path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_SUPPORT_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	chmod +x "${repo_path}"
+	echo "VALIDATE_TRUSTED_SUPPORT path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+}
+
 stage_copy_if_missing_silent_entry()
 {
 	local repo_path="$1"
@@ -1032,6 +1088,17 @@ stage_validate_support()
 		fi
 		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "${require_remote_when_external}"
 	done < <(json_array_lines "required_remote_when_external_scripts")
+
+	# Harness infrastructure comes from the verified support commit on
+	# self-repo runs without an explicit target (see
+	# stage_self_repo_trusted_support_entry). The loops above already staged
+	# these paths, so other runs keep exactly what they staged.
+	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		while IFS= read -r repo_path; do
+			[ -n "${repo_path}" ] || continue
+			stage_self_repo_trusted_support_entry "${repo_path}"
+		done < <(json_array_lines "self_repo_trusted_scripts")
+	fi
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue

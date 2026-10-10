@@ -413,6 +413,11 @@ jobs:
               "scripts/validate_driver.sh",
               "scripts/validate_process.sh"
             ],
+            "self_repo_trusted_scripts": [
+              "scripts/validation_harness_sandbox.sh",
+              "scripts/codex_isolated_workspace.py",
+              "scripts/validate_driver.sh"
+            ],
             "schema_files_if_missing": [
               "ai-memory/schemas/memory_record.v1.json",
               "ai-memory/schemas/processed_command_entry.v1.json",

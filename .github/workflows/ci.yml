@@ -621,6 +621,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
 
+      - name: Security-pass final PR sync tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_final_pr_sync.py
+
       - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
@@ -1637,6 +1642,12 @@ jobs:
           done
 
           shard_failures=0
+          # One line per failed shard, printed after the loop (outside every
+          # ::group::) so the failing test names reach the log tail and the
+          # job annotations (#6889). Only names matching [A-Za-z0-9_] are
+          # printed, so test output cannot inject workflow commands here.
+          shard_failure_summaries=()
+          failed_shard_ids=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             # A shard with tests but no log died before its runner started, so
@@ -1644,6 +1655,8 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_summaries+=("orchestrate-poll shard ${shard} exit none failed tests: no log (tests did not run)")
+              failed_shard_ids+=("${shard}")
               continue
             fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
@@ -1658,9 +1671,50 @@ jobs:
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
               shard_failures=$((shard_failures + 1))
+              # `|| true`: under pipefail a grep with no match would abort the
+              # step before the tally below.
+              shard_failed_names="$(grep -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
+                | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | awk '!seen[$0]++' || true)"
+              if [ -z "${shard_failed_names}" ]; then
+                shard_failed_list="no FAIL lines (process failure)"
+              else
+                shard_failed_count="$(printf '%s\n' "${shard_failed_names}" | wc -l | tr -d '[:space:]')"
+                shard_failed_list="$(printf '%s\n' "${shard_failed_names}" | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
+                if [ "${shard_failed_count}" -gt 20 ]; then
+                  shard_failed_list="${shard_failed_list} (+$((shard_failed_count - 20)) more)"
+                fi
+              fi
+              shard_failure_summaries+=("orchestrate-poll shard ${shard} exit ${shard_rc} failed tests: ${shard_failed_list}")
+              failed_shard_ids+=("${shard}")
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
+            # Issue #6946 (triage of PR #6940): each shard log above sits in a
+            # collapsed group, so the log tail showed only the last shard's
+            # passing summary and never the failing test. Repeat each failed
+            # shard's FAIL lines and log tail here, after the last group.
+            # Copied log lines are prefixed so they cannot act as workflow
+            # commands; the annotation carries only [A-Za-z0-9_] test names.
+            echo "orchestrate-poll failed-shard summary (full shard logs are in the groups above):"
+            for failed_shard in "${failed_shard_ids[@]}"; do
+              failed_shard_log="/tmp/poll_shard_${failed_shard}.log"
+              if [ ! -f "${failed_shard_log}" ]; then
+                echo "  shard ${failed_shard}: no log; its tests did not run"
+                continue
+              fi
+              failed_test_names="$({ grep -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
+                | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | tr '\n' ' ')"
+              if [ -n "${failed_test_names// /}" ]; then
+                echo "::error::orchestrate-poll shard ${failed_shard} failing tests: ${failed_test_names% }"
+              fi
+              echo "  shard ${failed_shard}: FAIL lines (first 50):"
+              { grep -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
+              echo "  shard ${failed_shard}: last 20 log lines:"
+              tail -n 20 "${failed_shard_log}" | sed 's/^/    | /'
+            done
+            for shard_failure_summary in "${shard_failure_summaries[@]}"; do
+              echo "::error::${shard_failure_summary}"
+            done
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi
