@@ -1030,16 +1030,33 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # outside the repository's own workflow directory); the suffix is stripped
 # before the workflow-file match.
 #
+# Provenance (issue #6629, re-issue of #5152): a workflow_dispatch run's
+# title comes from the dispatched ref's workflow file, so anyone who can push
+# a branch copy of a wrapper can dispatch a same-named run from that branch.
+# A workflow_dispatch review run is therefore keyed "pr:<N>" only when it is
+# trusted: head_branch is the default branch (read once by
+# _mt_resolve_default_branch, no fallback) or null, and the title is paired
+# with its own wrapper path (".github/workflows/internal-review.yml" with
+# "Internal: AI Review & Autofix [pr:<N>]", ".github/workflows/ai-review.yml"
+# with "AI Review [pr:<N>]", after stripping "@<ref>" and a leading
+# "<this repo>/" prefix). A dispatch run on any other non-empty branch, or a
+# PR-named one whose title and path do not pair, is dropped: it is not a
+# trusted review run, and counting it as unattributed would let a spoof hold
+# every release (Q3). An untitled dispatch on the default branch (or null)
+# is still unattributed (review_autofix.yml self-dispatches).
+#
 # Input:     none (MT_REPO).
 # Output:    one key per line on stdout, sorted and unique: the head branch
 #            of each active review run that is not a workflow_dispatch run,
-#            and "pr:<N>" for a workflow_dispatch run named for PR <N>.
+#            and "pr:<N>" for a trusted workflow_dispatch run named for PR <N>.
 #            Every run an active-status query returned counts as active,
 #            whatever its own status field says.
 # Returns:   0 = the listing is complete: a PR with no key has no active run.
 #            1 = the listing is incomplete. Stdout carries nothing; the caller
 #            must not release on it, and the next invocation retries.
-# API calls: one `GET actions/runs?status=<s>&per_page=100&page=1` for each
+# API calls: one `GET repos/<repo>` for the default branch, before any
+#            listing call (_mt_resolve_default_branch), then
+#            one `GET actions/runs?status=<s>&per_page=100&page=1` for each
 #            non-terminal status, requested, pending, queued, waiting,
 #            in_progress (PR #5451 review round 3: `requested` is a new run's
 #            state before it is queued; `waiting` is only reached through a
@@ -1100,15 +1117,43 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            review of head fd3ad67 and review round 2), or a failed key
 #            filter. Each is logged once on stderr
 #            (CLAUDE.md §8):
-#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
+#            An unresolvable default branch is incomplete too
+#            (reason=default_branch_unavailable status=none), reported before
+#            any actions/runs call.
+#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<default_branch_unavailable|page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
 #            A shifted page is first re-read up to
 #            MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES times per listing (default 2,
 #            0-5; MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP seconds apart,
 #            default 2), each logged as
 #            MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted ... attempt=<n>/<max>
+# The repository's default branch for review-run provenance (issue #6629).
+# One `GET repos/<repo>` per process; no fallback, so a failed read is never
+# mistaken for "main". Output-variable API: `_mt_resolve_default_branch
+# <varname>` assigns the branch and returns 0, or returns 1. Runs in the
+# caller's shell (not $(...)) so MT_DEFAULT_BRANCH memoizes the result.
+MT_DEFAULT_BRANCH=""
+_mt_resolve_default_branch()
+{
+	local __mt_db_dest="$1" __mt_db_value=""
+	if [ -z "${MT_DEFAULT_BRANCH}" ]; then
+		__mt_db_value="$(gh_retry gh api -X GET "repos/${MT_REPO}" --jq '.default_branch' 2>/dev/null)" || return 1
+		if ! [[ "${__mt_db_value}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${__mt_db_value}" = "null" ]; then
+			return 1
+		fi
+		MT_DEFAULT_BRANCH="${__mt_db_value}"
+	fi
+	printf -v "${__mt_db_dest}" '%s' "${MT_DEFAULT_BRANCH}"
+}
+
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
+	local __mt_runs_default_branch=""
+	if ! _mt_resolve_default_branch __mt_runs_default_branch; then
+		_mt_warn "merge-train release: could not resolve the default branch; review dispatch runs cannot be verified." >&2
+		echo "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=default_branch_unavailable status=none page=0 read=0 total=0" >&2
+		return 1
+	fi
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
@@ -1205,7 +1250,29 @@ _mt_inflight_review_branches()
 		# issue #4701), never the PR it reviews, so a dispatch without a
 		# PR-named title (review_autofix.yml has no run-name and re-dispatches
 		# itself) is unattributed (PR #5451 review round 2, AD-16).
-		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c '[.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | if (.event // "") == "workflow_dispatch" then [(.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)"] else [.head_branch | select(type == "string" and length > 0)] end]' 2>/dev/null)"; then
+		# Issue #6629: only a trusted dispatch run (see the header) gets its
+		# "pr:<N>" key; a dispatch on another non-empty branch, or a PR-named
+		# one whose title and path do not pair, is dropped (no key, not counted).
+		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c --arg db "${__mt_runs_default_branch}" --arg repo "${MT_REPO}" '
+			def mt_review_path:
+				((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
+				| if $repo != "" and ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
+					then $p[(($repo | length) + 1):]
+					else $p
+					end;
+			[.[]?
+			| select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| if (.event // "") == "workflow_dispatch" then
+				((.display_title // "") | if type == "string" then . else "" end) as $t
+				| [$t | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | .pr] as $prs
+				| if ((.head_branch | type) == "string" and .head_branch != "" and .head_branch != $db) then empty
+					elif ($prs | length) == 0 then []
+					elif (mt_review_path == ".github/workflows/internal-review.yml" and $t == ("Internal: AI Review & Autofix [pr:" + $prs[0] + "]"))
+						or (mt_review_path == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $prs[0] + "]")) then ["pr:" + $prs[0]]
+					else empty
+					end
+				else [.head_branch | select(type == "string" and length > 0)]
+				end]' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
 			__mt_runs_reason="unattributed_run"

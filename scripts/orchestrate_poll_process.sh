@@ -15252,13 +15252,25 @@ STALL_EOF
           # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
           _rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
           _rtr_push_succeeded="false"
+          # Provenance (issue #6629): a PR-named run counts only when it ran
+          # from the default branch (_pr_named_review_trust_jq_def). Without
+          # that branch no PR-named run can be ruled out, so the empty-commit
+          # push is skipped this cycle; the next poll cycle retries.
+          local _rtr_review_default_branch=""
+          if ! _rtr_review_default_branch="$(_review_run_default_branch)"; then
+            echo "  Issue #${issue_num} PR #${pr_num}: default branch unavailable; cannot verify review dispatch runs, skipping empty-commit push. The next poll cycle retries."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
           if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
               --arg pr "${pr_num}" \
+              --arg db "${_rtr_review_default_branch}" \
+              --arg repo "${GITHUB_REPOSITORY:-}" \
               --argjson now "${_rtr_now_epoch}" \
-              --argjson threshold "${_rtr_stall_secs}" '
+              --argjson threshold "${_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
               [.workflow_runs[]?
                | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
@@ -15266,11 +15278,7 @@ STALL_EOF
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
                     # A default-branch dispatch (issues #4618, #4701) is named
                     # for its PR; its head_branch is the default branch.
-                    or ($pr != "" and (.event // "") == "workflow_dispatch"
-                        and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                              and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
-                             or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
-                              and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
+                    or ($pr != "" and trusted_pr_named($pr; $db; $repo))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -15718,8 +15726,13 @@ invoke_stall_judge() {
   # has the default branch as head_branch/head_sha, so it is matched by
   # the run name the review wrappers give a workflow_dispatch run for its
   # PR instead. The cached blob carries event and display_title, so this
-  # adds no API call (§15).
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
+  # adds no API call (§15). Such a run counts only when it passes
+  # _pr_named_review_trust_jq_def (issue #6629); without the default branch
+  # none does, which only narrows the judge's evidence: every action it can
+  # pick still goes through the fail-closed in-flight guards.
+  local _wo_review_default_branch=""
+  _wo_review_default_branch="$(_review_run_default_branch)" || _wo_review_default_branch=""
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" --arg db "${_wo_review_default_branch}" --arg repo "${GITHUB_REPOSITORY:-}" "$(_pr_named_review_trust_jq_def)"'
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
@@ -15728,12 +15741,7 @@ invoke_stall_judge() {
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
        | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
-                or ($pr != ""
-                    and (.event // "") == "workflow_dispatch"
-                    and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                          and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
-                         or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
-                          and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
+                or ($pr != "" and trusted_pr_named($pr; $db; $repo)))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -18504,13 +18512,19 @@ STALL_EOF
 			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
 			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
 			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			# Provenance (issue #6629): see _pr_named_review_trust_jq_def. An
+			# empty value trusts no PR-named run; the push is then skipped
+			# below as for an incomplete listing.
+			_std_rtr_review_default_branch="$(_review_run_default_branch)" || _std_rtr_review_default_branch=""
 			if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
 			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
                 --arg pr "${pr_num}" \
+                --arg db "${_std_rtr_review_default_branch}" \
+                --arg repo "${GITHUB_REPOSITORY:-}" \
                 --argjson now "${_std_rtr_now_epoch}" \
-                --argjson threshold "${_std_rtr_stall_secs}" '
+                --argjson threshold "${_std_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
                 [.workflow_runs[]?
                  | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
@@ -18518,11 +18532,7 @@ STALL_EOF
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
                       # A default-branch dispatch (issues #4618, #4701) is named
                       # for its PR; its head_branch is the default branch.
-                      or ($pr != "" and (.event // "") == "workflow_dispatch"
-                          and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                                and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
-                               or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
-                                and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
+                      or ($pr != "" and trusted_pr_named($pr; $db; $repo))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -18550,7 +18560,11 @@ STALL_EOF
             # before the destructive empty-commit push.  Computed only on the
             # cache-miss path so the steady state adds zero API calls.
             _std_rtr_direct_inflight_id=""
-            if [ -z "${_std_rtr_inflight_id}" ]; then
+            if [ -z "${_std_rtr_inflight_id}" ] && [ -z "${_std_rtr_review_default_branch}" ]; then
+              # Default branch unavailable (issue #6629): PR-named runs cannot
+              # be verified, so treat the listing as incomplete (no push).
+              _std_rtr_direct_inflight_id="listing-incomplete"
+            elif [ -z "${_std_rtr_inflight_id}" ]; then
               _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
             fi
 			if [ -n "${_std_rtr_inflight_id}" ]; then
@@ -19387,6 +19401,126 @@ _has_active_autofix_run()
 }
 
 # ---------------------------------------------------------------
+# Helper: the repository's default branch, for review-run provenance
+# ---------------------------------------------------------------
+# Issue #6629 (re-issue of #5152): a PR-named review run is trusted only when
+# GitHub reports it ran from the default branch, so every matcher needs that
+# branch. This read has NO `main` fallback, unlike the DEFAULT_BRANCH reads
+# elsewhere in this file: a fallback would trust a spoofed run whenever the
+# read failed.
+#
+# Output:    the branch on stdout, return 0; or nothing, return 1.
+# Memo:      the matchers run inside $(...) subshells, so the result (also a
+#            failure) is memoized in
+#            ${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.<run id>.<pid>
+#            ($$ is the poller's own PID inside subshells too). A memo line
+#            that is not "ok <branch>" or "failed" is ignored and re-read.
+# API calls: at most one `GET repos/<repo>` per poller process (§14), made
+#            only when a matcher actually runs.
+# Failure:   one `::warning::REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable`
+#            on stderr; every matcher then fails closed.
+_REVIEW_RUN_DEFAULT_BRANCH="${_REVIEW_RUN_DEFAULT_BRANCH:-}"
+_REVIEW_RUN_DEFAULT_BRANCH_STATE="${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}"
+_review_run_default_branch()
+{
+	local _rrdb_file="" _rrdb_line="" _rrdb_value="" _rrdb_tmp=""
+	if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" = "ok" ] \
+		&& [[ "${_REVIEW_RUN_DEFAULT_BRANCH:-}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		printf '%s\n' "${_REVIEW_RUN_DEFAULT_BRANCH}"
+		return 0
+	fi
+	if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" = "failed" ]; then
+		return 1
+	fi
+	_rrdb_file="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.${GITHUB_RUN_ID:-0}.$$"
+	if [ -f "${_rrdb_file}" ] && [ ! -L "${_rrdb_file}" ]; then
+		_rrdb_line="$(head -n 1 "${_rrdb_file}" 2>/dev/null || true)"
+		case "${_rrdb_line}" in
+			"ok "*)
+				_rrdb_value="${_rrdb_line#ok }"
+				if [[ "${_rrdb_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_rrdb_value}" != "null" ]; then
+					_REVIEW_RUN_DEFAULT_BRANCH="${_rrdb_value}"
+					_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+					printf '%s\n' "${_rrdb_value}"
+					return 0
+				fi
+				;;
+			failed)
+				_REVIEW_RUN_DEFAULT_BRANCH_STATE="failed"
+				return 1
+				;;
+		esac
+	fi
+	_rrdb_value=""
+	if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+		_rrdb_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || true)"
+	fi
+	if [[ "${_rrdb_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_rrdb_value}" != "null" ]; then
+		_REVIEW_RUN_DEFAULT_BRANCH="${_rrdb_value}"
+		_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+		_rrdb_line="ok ${_rrdb_value}"
+	else
+		_REVIEW_RUN_DEFAULT_BRANCH=""
+		_REVIEW_RUN_DEFAULT_BRANCH_STATE="failed"
+		_rrdb_line="failed"
+		echo "::warning::REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable repo=${GITHUB_REPOSITORY:-unset} — PR-named review runs cannot be verified; matchers fail closed this poll." >&2
+	fi
+	if _rrdb_tmp="$(mktemp "${_rrdb_file}.XXXXXX" 2>/dev/null)"; then
+		if printf '%s\n' "${_rrdb_line}" > "${_rrdb_tmp}" 2>/dev/null \
+			&& mv -f "${_rrdb_tmp}" "${_rrdb_file}" 2>/dev/null; then
+			:
+		else
+			rm -f "${_rrdb_tmp}" 2>/dev/null || true
+		fi
+	fi
+	if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE}" = "ok" ]; then
+		printf '%s\n' "${_REVIEW_RUN_DEFAULT_BRANCH}"
+		return 0
+	fi
+	return 1
+}
+
+# ---------------------------------------------------------------
+# Helper: the jq trust rule for PR-named review runs (issue #6629)
+# ---------------------------------------------------------------
+# Prints jq definitions that every PR-named matcher in this file prepends to
+# its program, so the rule cannot drift between sites. A run is a trusted
+# PR-named review run only when all of these hold:
+#   - event == "workflow_dispatch";
+#   - head_branch equals the default branch ($db), or is null/empty (GitHub
+#     can report null on a real default-branch dispatch, issue #4928; a
+#     branch-copy spoof always reports its own non-empty branch);
+#   - the title and the path form an exact pair:
+#       .github/workflows/internal-review.yml  "Internal: AI Review & Autofix [pr:<N>]"
+#       .github/workflows/ai-review.yml        "AI Review [pr:<N>]"
+#     after stripping an "@<ref>" suffix and a leading "<this repo>/" prefix
+#     (case-insensitive) from the path. Any other prefix fails the pair.
+# An empty $db (unresolvable default branch) trusts nothing. Accepts both
+# REST field names (display_title, head_branch) and the camelCase names
+# _pr_named_review_dispatch_runs emits (displayTitle, headBranch).
+_pr_named_review_trust_jq_def()
+{
+	cat <<'JQ_DEF'
+def pr_named_review_path($repo):
+  ((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
+  | if $repo != "" and ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
+    then $p[(($repo | length) + 1):]
+    else $p
+    end;
+def trusted_pr_named($pr; $db; $repo):
+  ((if has("display_title") then .display_title else .displayTitle end) // "") as $t
+  | (if has("head_branch") then .head_branch else .headBranch end) as $hb
+  | pr_named_review_path($repo) as $p
+  | ($pr | test("^[1-9][0-9]*$"))
+    and ($db != "")
+    and ((.event // "") == "workflow_dispatch")
+    and ($hb == null or $hb == "" or $hb == $db)
+    and (($p == ".github/workflows/internal-review.yml" and $t == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
+         or ($p == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $pr + "]")));
+JQ_DEF
+}
+
+# ---------------------------------------------------------------
 # Helper: list the review dispatch runs named for one PR
 # ---------------------------------------------------------------
 # A review run dispatched from the default branch has head_branch (and
@@ -19395,9 +19529,14 @@ _has_active_autofix_run()
 #   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
 #   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
 # A workflow_dispatch run's name is evaluated from the dispatched ref's
-# workflow file, which is always the default branch now (issues #4618,
-# #4701), never from PR text, so an exact match on the name identifies
-# the PR.
+# workflow file. The pipeline always dispatches from the default branch
+# (issues #4618, #4701), but anyone who can push a branch copy of a wrapper
+# can dispatch a same-named run from that branch, so the name alone proves
+# nothing (issue #6629). A run counts only when it passes
+# _pr_named_review_trust_jq_def: workflow_dispatch, head_branch equal to the
+# default branch (from _review_run_default_branch) or null, the exact title
+# paired with its own wrapper path, and that path equal to the wrapper whose
+# listing returned it.
 #
 # Listing (security, issue #4927): only the two wrappers' own
 # workflow_dispatch runs are read, page by page, back to the review-run
@@ -19417,7 +19556,7 @@ _has_active_autofix_run()
 #            that used its whole 240-minute job budget and then failed would
 #            otherwise leave the default window minutes after it ended.
 # Output:    one JSON array on stdout, newest first, of the matching runs:
-#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
+#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt, headBranch, path}]
 # Returns:   0 = the listing is complete: an empty array means no run named
 #            for the PR was created inside the window.
 #            1 = the listing is incomplete. Stdout still carries the matches
@@ -19443,7 +19582,10 @@ _has_active_autofix_run()
 #            short page before total_count was reached (the listing shifted
 #            while it was read), or more runs than 10 pages hold. Each is
 #            logged once on stderr (CLAUDE.md §8):
-#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
+#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<default_branch_unavailable|cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
+#            An unresolvable default branch (issue #6629) is reported before
+#            any listing call; _review_run_default_branch makes at most one
+#            extra `GET repos/<repo>` per poller process.
 #
 # Usage: _pr_named_review_dispatch_runs <pr_number> [lookback_minutes]
 _pr_named_review_dispatch_runs()
@@ -19458,9 +19600,19 @@ _pr_named_review_dispatch_runs()
 	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
 	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
 	local _pnr_total=0 _pnr_read=0 _pnr_wrapper_runs='[]' _pnr_runs='[]' _pnr_matches=""
+	local _pnr_default_branch=""
 	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
 		printf '[]\n'
 		return 0
+	fi
+	# Provenance (issue #6629): without the default branch no PR-named run can
+	# be trusted, and a missing run proves nothing, so the listing is
+	# incomplete and every caller fails closed. No listing call is made.
+	if ! _pnr_default_branch="$(_review_run_default_branch)"; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=default_branch_unavailable wrapper=none page=0 read=0 total=0" >&2
+		echo "::warning::PR_NAMED_REVIEW_RUNS pr=${pr_number}: the default branch could not be resolved; review dispatch runs cannot be verified this poll." >&2
+		printf '[]\n'
+		return 1
 	fi
 	_pnr_now="$(date +%s 2>/dev/null || echo "")"
 	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
@@ -19495,7 +19647,7 @@ _pr_named_review_dispatch_runs()
 			# this function and its command substitutions inherit.
 			_pnr_page_json="$(gh_retry gh api -X GET \
 				"repos/${GITHUB_REPOSITORY}/actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}" \
-				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}]}' \
+				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at, headBranch: .head_branch, path: .path}]}' \
 				2>"${_pnr_err_file:-/dev/null}")" || _pnr_page_rc=$?
 			if [ "${_pnr_page_rc}" -ne 0 ]; then
 				# A wrapper this repo does not have: complete and empty.
@@ -19519,7 +19671,7 @@ _pr_named_review_dispatch_runs()
 			if ! _pnr_total="$(printf '%s' "${_pnr_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
 				|| ! _pnr_page_len="$(printf '%s' "${_pnr_page_json}" | jq -r '.workflow_runs | length' 2>/dev/null)" \
 				|| ! _pnr_wrapper_runs="$(printf '%s\n%s\n' "${_pnr_wrapper_runs}" "${_pnr_page_json}" \
-					| jq -cs '(.[0] + .[1].workflow_runs) | unique_by(.databaseId)' 2>/dev/null)" \
+					| jq -cs --arg w "${_pnr_wrapper}" '(.[0] + (.[1].workflow_runs | map(. + {listedWrapper: $w}))) | unique_by(.databaseId)' 2>/dev/null)" \
 				|| ! _pnr_read="$(printf '%s' "${_pnr_wrapper_runs}" | jq -r 'length' 2>/dev/null)" \
 				|| ! [[ "${_pnr_total}" =~ ^[0-9]+$ && "${_pnr_page_len}" =~ ^[0-9]+$ && "${_pnr_read}" =~ ^[0-9]+$ ]]; then
 				_pnr_wrapper_runs='[]'
@@ -19551,14 +19703,17 @@ _pr_named_review_dispatch_runs()
 		_pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)" \
 			|| _pnr_runs='[]'
 	fi
-	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" '
+	# The trust rule (_pr_named_review_trust_jq_def) plus one more check: the
+	# run's path must name the wrapper whose listing returned it.
+	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" \
+		--arg db "${_pnr_default_branch}" --arg repo "${GITHUB_REPOSITORY:-}" "$(_pr_named_review_trust_jq_def)"'
 		(if type == "array" then . else [] end)
 		| [ .[]? | select(type == "object") ]
 		| unique_by(.databaseId)
 		| [ .[]
-			| select((.event // "workflow_dispatch") == "workflow_dispatch")
-			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
+			| select(trusted_pr_named($pr; $db; $repo))
+			| select(pr_named_review_path($repo) == (".github/workflows/" + ((.listedWrapper // "") | tostring)))
+			| del(.listedWrapper)
 		  ]
 		| sort_by(.createdAt // "")
 		| reverse
