@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u274c Runtime validation harness error Validation stopped before application tests ran. The supplied validation/logs/compose.log shows that Docker created validation-app-1 but failed to start it beca",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-10-10T20:41:06Z",
+      "run_attempt": 1,
+      "run_id": 38083210967,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38083210967",
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "a3437003d9edeb84d08b871a14cb781c9e680f99",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
