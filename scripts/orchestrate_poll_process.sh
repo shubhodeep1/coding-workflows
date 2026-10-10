@@ -647,14 +647,20 @@ _gh_url() {
 tracking_issue_is_smoke_fixture() {
   local title="${1:-}"
   local labels_json="${2:-[]}"
-  # Anchored like the workflows' issue-title detector (`^\[E2E `): only a
-  # title that starts with the marker, directly or after the orchestrator's
-  # `[Orchestrator] ` prefix, is a fixture, so a real project such as
-  # `[Orchestrator] Add [E2E tests] for payments` keeps its alerts. The
-  # `[Orchestrator] E2E ` form matches the parent-title signal plan.yml and
-  # orchestrate_clarify_respond.yml already use for decomposed fixtures.
+  # Anchored like the workflows' issue-title detector (`^\[E2E `). A bare
+  # `[E2E ` prefix only occurs on issues the gate creates itself, because
+  # orchestrate.yml prefixes every decomposed tracking title with
+  # `[Orchestrator] `. After that prefix the title is model-written from the
+  # project description, so only the decompose fixture's own marker
+  # (`E2E Orchestrate Smoke`, bracketed or not, any case) counts: a real
+  # project such as `[Orchestrator] E2E tests for checkout` or
+  # `[Orchestrator] [E2E tests] for payments` keeps its alerts.
+  local title_lc="${title,,}"
   case "${title}" in
-    "[E2E "*|"[Orchestrator] [E2E "*|"[Orchestrator] E2E "*) return 0 ;;
+    "[E2E "*) return 0 ;;
+  esac
+  case "${title_lc}" in
+    "[orchestrator] [e2e orchestrate smoke "*|"[orchestrator] e2e orchestrate smoke "*) return 0 ;;
   esac
   printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "e2e-smoke-test")' >/dev/null 2>&1
 }
