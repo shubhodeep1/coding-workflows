@@ -1417,7 +1417,7 @@ byte-identical.
 | The numbers that matter | Value |
 | --- | --- |
 | Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
-| Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
+| Image | pulled prebuilt from GHCR when one matches its inputs, else built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after); see "Prebuilt sandbox images" |
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | staged Node manifests and filtered `requirements.txt` / `pyproject.toml` dependencies (both when present) installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; installable Python source (`pyproject.toml`, or requirements with `setup.py`) runs separately offline, including Node/Python hybrids; a failed dev dependency install warns even if base dependencies install on retry; never copied back; when the proxy is unavailable, installation is skipped without restoring network access |
@@ -1493,6 +1493,40 @@ merged-PR check; only digits glued to the redirection (`2>&1`, `2>/dev/null`)
 are a file descriptor, as in Bash.
 An unresolved push source also requires confirmation instead of checking the
 session checkout's unrelated HEAD.
+
+### Prebuilt sandbox images
+
+The sandbox images the isolated agents run in are now pulled ready-made from
+GHCR instead of built on every job. `scripts/sandbox_image.sh` sits in front of
+each image build (`codex_isolated_exec.sh`, `clarify_isolated_run.sh`,
+`heal_isolated_implement.sh`, `review_untrusted_sandbox.sh`): it pulls
+`ghcr.io/shubhodeep1/coding-workflows-sandbox:<family>-<input hash>` and runs
+the same `docker build` as before when the pull fails, times out or returns an
+image whose `coding-workflows.sandbox-input` label does not match. A job no
+longer depends on Docker Hub, npm or the Debian mirrors being reachable, which
+on 2026-10-09 pushed Claude roles onto the codex fallback.
+
+The input hash covers the build context's files, the Dockerfile path and the
+build args (`CODEX_VERSION`, `OPENCODE_VERSION`, `CLAUDE_CLI_VERSION`). A repo
+that overrides one of them, or a ref whose Dockerfile differs from the published
+ones, finds no tag and builds locally exactly as before.
+`.github/workflows/publish-sandbox-images.yml` publishes the tags:
+
+| The numbers that matter | Value |
+| --- | --- |
+| Images per ref | 7: clarify (codex, Claude, heal defaults), review (OpenCode, Claude), `codex_isolated_exec.sh` (codex, Claude) |
+| Published from | pushes to `main` and `stable` that touch an image input; weekly forced rebuild Mondays 04:23 UTC (Debian security updates); `workflow_dispatch` |
+| Pull timeout | `SANDBOX_IMAGE_PULL_TIMEOUT_SECS`, default `60` |
+| Registry | `SANDBOX_IMAGE_REGISTRY`, default `ghcr.io/shubhodeep1/coding-workflows-sandbox`; `off` always builds locally |
+| Log line | `SANDBOX_IMAGE family=<f> outcome=pulled\|built reason=<pull_failed\|label_mismatch\|disabled> ref=<ref>` |
+
+What this means for operators: the package must be public so consumer repos
+pull it without credentials. GitHub creates a new package as private; after
+the first publish, set it to public once under the package's settings. Until
+then, and whenever GHCR is down, jobs build locally and log
+`outcome=built reason=pull_failed`. The publish job runs only in
+`shubhodeep1/coding-workflows` and logs in with the job's `GITHUB_TOKEN`
+(`packages: write`); no consumer job holds a registry credential.
 
 ### Workflow file size limit
 
@@ -1584,6 +1618,16 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **Base-branch gate:** the issue is implemented as a new PR off the default
+  branch, so it can only fix a failure the base branch shares. After the
+  open-issue dedup, the script reads the base branch's result for the same
+  check (two reads for a failed CI workflow run, one for a non-Actions check).
+  A `success` there means the failure is PR-specific: the run logs
+  `skip reason=pr_specific_failure base=<ref> base_conclusion=success` and
+  files nothing, leaving the failure to the PR's review/autofix loop. Any
+  other result, a pending or missing base run, or a failed read files the issue
+  as before (`base_gate outcome=file base_conclusion=<c|unknown> reason=…`).
+  `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED=false` turns the gate off.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2156,10 +2200,12 @@ through `clarify → plan → implement → review`.
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | How long a `queued` review run keeps suppressing a duplicate dispatch from `review_autofix_sweep.yml`. Past this age the run is treated as wedged, logged as `AUTOFIX_SWEEP_STALE_QUEUED`, and no longer blocks the sweep. `in_progress` runs are never discounted. Set `0` to restore the previous no-cutoff behaviour. |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `true` | Size-based `lite \| standard \| full` review tiers: `lite` runs 1 reviewer, `standard` 4, `full` the whole `REVIEWER_MODELS` panel. Set to `false` to turn the size tiers off: the full panel then runs unless `REVIEWER_RISK_TIER_ENABLED` is also on, in which case that resolver's selection (which can be smaller) stands. `AUTOFIX_SKIP_*` fast paths remain authoritative, `[force-review]` / `force-review` still force `full`, and so does a full panel the `REVIEWER_RISK_TIER_*` resolver already forced. The `REVIEW_TIER: tier=… reason=… models_source=… protected=…` log line records each decision. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` (one-reviewer) tier. Any file type qualifies, but a diff touching a protected path (the same list as the deterministic skip gate: `agents.md` / `CLAUDE.md` / `unattended_system_instructions.md`, `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`, and build, dependency, config and script files; both sides of a rename count) goes to `standard` instead. `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
-| `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the whole `REVIEWER_MODELS` panel (from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list instead when a repo sets it and every slug in it is on the panel; a slug not on the panel falls back to the whole panel with a warning), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. If the sole active reviewer is `mistralai/mistral-small-2603` and is skipped (`skipped_open` or `skipped_unmapped`) or reports a context overflow, review retries once with `openai/gpt-6-luna` when that model is in the live roster and its circuit breaker has not marked it `skip_open`. If GPT cannot start before the soft deadline after a skipped Mistral or context overflow, the run requests partial finalize; otherwise an unsuccessful single-reviewer run fails rather than passing with zero successful reviewers. This includes risk-tier-only single-reviewer runs when size tiers are disabled. Other failed reviewer errors do not trigger this retry. Multi-reviewer runs retain their skip-only fail-open behavior. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the whole `REVIEWER_MODELS` panel (from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list instead when a repo sets it and every slug in it is on the panel; a slug not on the panel falls back to the whole panel with a warning), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. If the sole active reviewer is any slot other than `openai/gpt-6-luna` and is skipped (`skipped_open`, `skipped_unmapped`, or `skipped_pool` for the Claude account-pool slot) or reports a context overflow, review retries once with `openai/gpt-6-luna` when that model is in the live roster and its circuit breaker has not marked it `skip_open` (this rescue was Mistral-only until the 2026-10 panel refresh). If GPT cannot start before the soft deadline after a skipped sole reviewer or context overflow, the run requests partial finalize; otherwise an unsuccessful single-reviewer run fails rather than passing with zero successful reviewers. This includes risk-tier-only single-reviewer runs when size tiers are disabled. Other failed reviewer errors do not trigger this retry. Multi-reviewer runs retain their skip-only fail-open behavior. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` (four-reviewer) tier, in any folder. Larger diffs run the full panel. |
 | `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | empty | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. Empty (the default) draws four reviewers at random from the whole `REVIEWER_MODELS` panel, seeded by the PR number the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG`, so every panel model can run on any tier (`models_source=random_standard`). A set value pins those reviewers (`models_source=configured_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt. The reviewer watchdog kills an attempt that starts more OpenCode turns, and the slot fails without a retry or failback. Real reviewer passes peaked at 101 turns. |
+| `REVIEWER_POOL_FALLBACK_MODEL` | `claude-haiku-5-5` | Claude account-pool model the `anthropic/claude-sonnet-5.5` review-panel slot retries on, once, when its Sonnet run does not succeed (crash, timeout, refusal, malformed output, or a usage limit on every account). A pool-wide outage skips the slot (`skipped_pool`) instead; the slot never falls back to OpenRouter. Must match `^claude-[a-z0-9-]{1,60}$`. |
+| `AI_ENGINE_PANEL_REVIEWER` | empty | Engine of the Claude review-panel slot (role `PANEL_REVIEWER`, default `claude` in `.github/ai/claude_engine.json`). `codex` (or the PR's `ai:codex` label, or `AI_ENGINE=codex`) skips the slot, because it only runs on the Claude account pool. The "Resolve AI engine" step installs the Claude CLI and fetches the pool credential whenever `REVIEWER_MODELS` has an `anthropic/claude-*` slot and the role resolves to `claude`. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then the reviewer's failback model). Minimum `2`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
@@ -2198,6 +2244,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress counts as unknown, never as an older success), a non-Actions check with that check's newest run on the base branch tip. When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. `false` files every failure. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
@@ -2248,7 +2295,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
-| `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor container wall-time limit. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. |
+| `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor wall-time limit, for the codex container and for the Claude run alike. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. When `IMPLEMENT` resolves to Claude (the default), `scripts/heal_isolated_implement.sh` runs the heal editor and its syntax repairs through `ai_engine.sh` `claude_run` on its own snapshot (in `codex_isolated_exec.sh`'s credential-free write container, never the job's shared workspace sandbox), then applies the same syntax validation and scoped transfer as a codex edit. Claude unavailable (exit 75) runs the isolated codex editor; any other Claude failure fails the run. `HEAL_ISOLATED_EDITOR ... engine=` names the engine that ran. |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
@@ -2496,8 +2543,16 @@ ignored with a warning. Role names: `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`,
 `RB_JUDGE`, `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`,
 `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `ACTIVATION_VERIFY`,
 `LOG_ANALYSIS`, `LOG_AUDIT`, `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
-`SUMMARISER`, `BEHAVIOURAL_SMOKE`. The six reviewer slots have no engine
-switch.
+`SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER`. Five of the six reviewer
+slots run on OpenRouter through OpenCode and have no engine switch. The
+`anthropic/claude-sonnet-5.5` slot is `PANEL_REVIEWER`: it runs
+`claude-sonnet-5-5` on the Claude account pool in a read-only
+`prepare-ephemeral claude` review sandbox, retries once on
+`REVIEWER_POOL_FALLBACK_MODEL` (default `claude-haiku-5-5`) in the pool when
+the Sonnet run does not succeed, and is skipped (status `skipped_pool`, no
+OpenRouter call) when the role resolves to codex or the pool is unavailable.
+Set `AI_ENGINE_PANEL_REVIEWER=codex` (or the PR's `ai:codex` label) to turn
+the slot off.
 
 **How the label spreads.** `ai-orchestrate.yml` takes an optional `engine`
 input (`claude` or `codex`; empty leaves the project unlabelled), and the

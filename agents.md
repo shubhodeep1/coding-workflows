@@ -301,6 +301,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    Files nothing when the base branch passes the same check
+    (`CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED`, default `true`; log
+    `CHECK_TRIAGE skip reason=pr_specific_failure`): a base-branch fix cannot
+    repair a PR-specific failure, which the PR's autofix loop owns.
     The PR-head checkout does not persist credentials; collection uses a
     GitHub token before Codex runs from a trusted support directory in a
     separate, GitHub-token-free step. Missing trusted support fails closed.
@@ -1274,6 +1278,19 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   root removes it by label, and an orphan without its broker has no model
   access. Implement's final cleanup removes its persistent sandbox root;
   a failed cleanup warns. Log prefix: `CODEX_ISOLATION`.
+- **Prebuilt images.** Every image build goes through
+  `scripts/sandbox_image.sh build --family <f> [--build-arg K=V]... [-f DOCKERFILE] CONTEXT`,
+  which pulls `${SANDBOX_IMAGE_REGISTRY}:<family>-<first 32 hex of the input hash>`
+  and falls back to the local `docker build -q` (same args, plus the label
+  `coding-workflows.sandbox-input=<full hash>`). It runs under the caller's
+  `env -i` / `env -u` wrapper, so pass `SANDBOX_IMAGE_REGISTRY` and
+  `SANDBOX_IMAGE_PULL_TIMEOUT_SECS` through explicitly. A caller without the
+  helper next to it builds locally, so support-copy lists that ship a build
+  site must ship `sandbox_image.sh` too (`tests/test_sandbox_image.py` checks
+  them). `codex_isolated_exec.sh image-context [--engine claude] --out DIR`
+  writes the generated context, and `scripts/sandbox_images_publish.sh`
+  mirrors each site's default inputs; change a site's default and the
+  publish script together. Log prefix: `SANDBOX_IMAGE`.
 
 ## Workflow file size limit
 
@@ -1388,8 +1405,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_REPAIR` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_EDITOR` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `mistralai/mistral-small-2603`, `deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode only (no engine switch) |
-| review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | OpenCode only (no engine switch) |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`, `z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode for five slots; the `anthropic/claude-sonnet-5.5` slot runs on the Claude account pool (Sonnet 5.5, one Haiku 5.5 retry, skipped when the pool is unavailable) · `PANEL_REVIEWER` |
+| review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | Same as pass 1 · `PANEL_REVIEWER` for the Claude slot |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
 | security audit (weekly / dispatch, orchestrator security pass) | `openai/gpt-6-sol` on codex | `xhigh` on codex; `high` on Claude | `low` | Claude (Opus 5.5 at `high`; codex `gpt-6-sol` fallback on any Claude failure, including every account at the 90% usage gate) · `SECURITY_AUDIT` |
@@ -1412,7 +1429,8 @@ to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, 
 model variable only when that value starts with `claude-`, else Opus 5.5
 (`claude-opus-5-5`), or Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`,
 `RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; the reasoning
-column is the effort (`none` / `minimal` → `low`). The reviewer rows have no
+column is the effort (`none` / `minimal` → `low`). Apart from the
+`anthropic/claude-sonnet-5.5` slot (`PANEL_REVIEWER`), the reviewer rows have no
 engine switch. When Claude is unavailable (exit 75, `AI_ENGINE_FALLBACK`),
 poller judges retry OpenCode in a fresh isolated sandbox; other roles use
 their codex/OpenCode fallback. The pinned CLI is `@anthropic-ai/claude-code`
@@ -1449,9 +1467,10 @@ callsite (≈20 sites across `scripts/*.sh` and `.github/workflows/*.yml`),
 the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-6-sol` in `scripts/codex_model_catalog.json`. Third-party
-reviewer models (`minimax/minimax-m3`, `mistralai/mistral-small-2603`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
-`qwen/qwen3.7-plus`) carry `support_verbosity = false` in the catalog
+reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.3-flash`,
+`google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`) carry
+`support_verbosity = false` in the catalog (the `anthropic/claude-sonnet-5.5`
+slot runs on the Claude account pool, not codex/OpenCode)
 (the `openai/gpt-6-luna` reviewer slot supports it, with catalog default
 `low`) — codex CLI logs
 `model_verbosity is set but ignored as the model does not support verbosity`
@@ -1477,8 +1496,8 @@ the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 `function`).
 
 The reviewer-only multi-model run (claude-branch-review) uses the same
-reviewer models (`minimax/minimax-m3`, `mistralai/mistral-small-2603`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
+reviewer models (`minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`,
+`z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`,
 `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) plus
 `unattended_system_instructions.md` as system context. Nothing triggers it
 by default any more: PR #6438 removed the `claude/**` push trigger from
@@ -2217,6 +2236,7 @@ and shipped:
 - `OPERATOR_STEP_TICK` (`scripts/operator_step_issue.py tick`, run by `scripts/promote_main_cycle.sh`: `key= outcome=ticked|already_done|no_source_sha|not_ancestor|unknown_commit stable=`)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `CLAUDE_POOL_HEALTH` (`scripts/claude_pool_health_alert.sh`, the "Alert on Claude pool accounts at the usage gate" step of `orchestrate_poll.yml`: `accounts= gated= auth_failed= probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`; `sent` means one Telegram WARNING named every account at or above `gate_utilization` and every rejected token; the step reads the pool action's `probes` output and sends at most once an hour, see README "Near-cap alert")
+- `SANDBOX_IMAGE` (`scripts/sandbox_image.sh`: `family= outcome=pulled|built|published|publish_skipped reason= ref=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. A failed dispatch logs `outcome=hold reason=dispatch_failed` and posts a `failed` marker for the used cycle (past the cap, `reason=dispatch_failed_exhausted` and the marker counts as a used head attempt). If result publication fails, report skips review re-dispatch so it cannot run without the marker. After dispatch the gate confirms the pending-marker comment response with bounded retries and fails closed with `reason=pending_marker_failed` if none is confirmed. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication. On a current-head findings marker before exhaustion, `awaiting_followups` requires an open `ai:security` issue authored by the pipeline account for that branch and a findings marker younger than `SECURITY_PASS_FOLLOWUP_STALE_HOURS`; otherwise the gate holds with `followups_missing`, `followups_unverifiable` or `followups_stalled`.)
@@ -2479,6 +2499,7 @@ LOG_PREFIX.name=NEEDS_HUMAN
 LOG_PREFIX.name=OPERATOR_STEP_TICK
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=CLAUDE_POOL_HEALTH
+LOG_PREFIX.name=SANDBOX_IMAGE
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS
@@ -2772,7 +2793,7 @@ depend on it.
 - When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - The deterministic review skip requires a complete paginated `/pulls/{n}/files` list for both small-diff and doc-only candidates, matched against the existing PR-details `changed_files` count. Missing/malformed/empty/partial responses and GitHub's 3,000-file ceiling route to review. Both names of a rename are checked; nested or case-variant agent instructions and automation paths (`.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`) plus root build/dependency/lint config suppress skip independently of `AGENTS_MD_MATERIALITY_ENABLED`. Benign docs and small code changes still qualify when evidence is complete; the head-bound merge check remains in place.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
-- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. `mistralai/mistral-small-2603` (262K-token window versus 1M for the other default panel models, back on the panel since PR #6438 in the slot `z-ai/glm-5.2` held) has no same-family failback chain. When Mistral is the sole active reviewer, a `skipped_unmapped` or `skipped_open` slot, or a reported context overflow, retries once with `openai/gpt-6-luna` if it is in the live roster and its circuit breaker has not marked it `skip_open`; a budget-skipped GPT retry after either case requests soft-deadline partial finalize, while other unsuccessful single-reviewer runs fail rather than passing with zero successes. This includes a sole reviewer selected by the risk tier when size tiers are disabled. Multi-reviewer runs retain the skip-only fail-open behavior; a Mistral overflow fails its slot while other reviewers can succeed. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `google/gemini-3.8-flash -> google/gemini-3.1-flash-lite`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `openai/gpt-6-luna -> openai/gpt-5.6-luna`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the Gemini, GPT, Qwen, and GLM failback targets keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens, while the DeepSeek (`deepseek/deepseek-v3.2`, 128K) and MiniMax (`minimax/minimax-m2.5`, 200K) targets have smaller windows than the largest reviewer prompts. It also retains retired-roster / operator-override mappings `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every other live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
+- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The `anthropic/claude-sonnet-5.5` slot has no chain entry because it never runs on OpenRouter: it runs on the Claude account pool (`PANEL_REVIEWER`), retries once on `REVIEWER_POOL_FALLBACK_MODEL` (default `claude-haiku-5-5`) in the pool, and ends `skipped_pool` when the pool is unavailable. `mistralai/mistral-small-2603` (262K-token window, on the panel from PR #6438 until the 2026-10 panel refresh gave its slot to `anthropic/claude-sonnet-5.5`) still has no same-family failback chain. When any slot other than `openai/gpt-6-luna` is the sole active reviewer, a `skipped_unmapped`, `skipped_open` or `skipped_pool` slot, or a reported context overflow, retries once with `openai/gpt-6-luna` if it is in the live roster and its circuit breaker has not marked it `skip_open`; a budget-skipped GPT retry after either case requests soft-deadline partial finalize, while other unsuccessful single-reviewer runs fail rather than passing with zero successes. This includes a sole reviewer selected by the risk tier when size tiers are disabled. Multi-reviewer runs retain the skip-only fail-open behavior; an overflowing slot fails while other reviewers can succeed. The live-roster mapping file covers `z-ai/glm-5.3-flash -> z-ai/glm-5.3-flashx` (the 2026-10 refresh gave it the slot `deepseek/deepseek-v4-pro` held), `google/gemini-3.8-flash -> google/gemini-3.1-flash-lite`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `openai/gpt-6-luna -> openai/gpt-5.6-luna`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the Gemini, GPT, Qwen, and GLM failback targets keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens, while the MiniMax (`minimax/minimax-m2.5`, 200K) target has a smaller window than the largest reviewer prompts. It also retains retired-roster / operator-override mappings `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2` (128K), `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every other live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
 - Reviewer loop guards (`scripts/review_run_reviewers.sh` watchdog, review panel only; the judge, consolidator, consensus summariser, and smoke reviewer-role callers are not capped). Every 10 s poll reads the attempt's OpenCode `--format json` event stream. `REVIEWER_MAX_STEPS` (default `120`): once an attempt starts more than that many turns (`step_start` events), the watchdog kills it (`wd_reason=max_steps`, log line `killed by watchdog ... (turn limit N ...); not retried.`) and the slot fails as a non-retryable failure with no cheaper-reasoning retry and no failback; a fast loop may overshoot by the turns that start within one poll. `REVIEWER_TOOL_REPEAT_LIMIT` (default `10`, minimum `2`): once the last N completed tool calls are identical (same tool and same JSON input, so paged `read` calls with different offsets never match), the watchdog kills the attempt (`wd_reason=tool_repeat`) and it follows the normal retryable path (class `tool_repeat`: cheaper reasoning, then failback). Invalid values fall back to the defaults with a `::warning::`. OpenCode's own agent `steps` setting is not used: in 1.18.23 it only injects a "maximum steps reached" instruction and keeps offering tools, so a looping model continues. Background: `x-ai/grok-4.20` reviewer passes looped on one repeated tool call for 2,205 / 1,468 / 234 turns (runs 35949371968, 36483245451, 36522631293) while real passes peaked at 101 turns; it left the default roster on 2026-09-29.
 - The reviewer and editor PR-state watchdogs share `scripts/gh_helpers.sh::gh_review_pr_state` within a job: an `open` result is cached for at most 120 seconds under `RUNNER_TEMP`, while `closed`/`merged` and failed reads are not cached. A reopened PR therefore requires a fresh read before the watchdog stops work; this cache never authorizes a merge.
 - The `GH_PAT_BUDGET` start/end snapshots cover each PAT-using job in review, clarify (including its failure-only `heal-report` job), poller, sweep, workflow-failure heal intake and validation-improvements intake. Both intake and `heal-report` snapshots precede their first PAT checkout; end steps run on failure and report unknown when checkout or quota reads fail or staged support lacks `gh_pat_budget` (the sweep's start step also reports unknown in that case). Deltas from a shared account are estimates and only comparable within one reset window.
@@ -2995,6 +3016,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/plan.yml
 .github/workflows/promote-main-to-stable.yml
 .github/workflows/propagate-consumer-secrets.yml
+.github/workflows/publish-sandbox-images.yml
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml

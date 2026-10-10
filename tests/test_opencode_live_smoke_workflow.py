@@ -157,5 +157,16 @@ def main() -> int:
 	return 0
 
 
+def test_smoke_skips_claude_pool_reviewer_slots() -> None:
+	# anthropic/* panel slots run on the Claude account pool in the review
+	# sandbox, never through OpenRouter, so the OpenRouter smoke skips them.
+	smoke = SMOKE.read_text(encoding="utf-8")
+	assert "anthropic/claude-sonnet-5.5" in _reviewer_roster(smoke)
+	assert '            case "${reviewer_slug}" in\n              anthropic/*)\n' in smoke
+	assert 'served by the Claude account pool, not OpenRouter' in smoke
+	skip = smoke.index("anthropic/*)")
+	assert skip < smoke.index("printf 'reviewer-%s\\treviewer\\t%s\\n'")
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
