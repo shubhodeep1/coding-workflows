@@ -30,8 +30,8 @@ def test_role_and_access_are_allowlisted(tmp_path):
 	assert 'engine="${7:-codex}"' in text
 	assert 'claude_access="${9:-write}"' in text
 	assert '"${claude_role}" = REVIEW_CONSOLIDATOR' in text
-	assert '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the review utility roles' in text
-	assert 'Claude review-panel slot (PANEL_REVIEWER) are read-only sandbox roles;\n# never transfer.' in text
+	assert '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.\n# The Claude review-panel slot (PANEL_REVIEWER) is read-only too.' in text
+	assert '# The review utility roles (SUMMARISER, BEHAVIOURAL_SMOKE; plan item 3d;\n# JUDGE_INTERIM, #6664) are read-only sandbox roles too; never transfer.' in text
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "PANEL_REVIEWER"):
 		proc = subprocess.run(["bash", str(SANDBOX), "run", "prompt", "out", "model", "high", "/dev/null", "codex", role, "write"],
 			env=env, capture_output=True, text=True)
