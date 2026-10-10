@@ -1580,6 +1580,74 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   ships) and deletes a consumer copy only when it is byte-identical to a
   released version (log prefix `RETIRED_FILE_REMOVED`); a locally modified copy
   is kept (`RETIRED_FILE_KEPT_MODIFIED`).
+- Attested release manifest (#6943). The `release` job of `mark-stable.yml`
+  and `test-and-mark-stable.yml` runs `scripts/release_manifest_publish.sh build`
+  after the version tag is pushed: it checks that the tag peels to the release
+  SHA, checks that commit out into a detached worktree and runs that tree's own
+  `scripts/release_manifest.py build`, writing `release-manifest.v1.json`
+  (`RELEASE_MANIFEST_ASSET_NAME`, default set in the helper; schema
+  `ai-memory/schemas/release_manifest.v1.json`). The job attests the file with
+  `actions/attest-build-provenance@v3` (only that job holds `id-token: write`
+  and `attestations: write`), and `upload` adds it to the GitHub Release
+  (`--clobber`; the manifest is deterministic per tag) and checks the asset
+  landed. Any failure prints `::error::RELEASE_MANIFEST outcome=failed
+  reason=<token>` and stops the release before "Notify consumer repos via
+  repository_dispatch". Log prefix `RELEASE_MANIFEST`; tests
+  `tests/test_release_manifest.py` and
+  `tests/test_release_manifest_workflow_contract.py`.
+- Fail-closed verification (#6957). The `Verify attested release manifest`
+  step (`id: verify_release_manifest`) of `update_workflows.yml` acts only when
+  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `false`; off it logs
+  `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` and makes no API
+  call). It resolves the `vX.Y.Z` release whose tag points at the `stable`
+  commit, downloads the asset, runs `gh attestation verify` with a
+  `--cert-identity-regex` limited to this repo's `mark-stable.yml` /
+  `test-and-mark-stable.yml` at `refs/heads/(main|stable)`, hash-checks the
+  verifier modules against the manifest (`verifier_unattested` for releases
+  whose manifest predates them, `verifier_hash_mismatch`), and runs
+  `scripts/verify_release_manifest.py verify` on every file the updater reads
+  (the `verify-pr-tree` subcommand serves the `verify` job below). A rejection
+  logs `UPDATER_MANIFEST_VERIFY outcome=rejected reason=<token>
+  stage=<input|tag|release|download|attestation|header|bootstrap|paths|verify>`
+  and stops the run before any consumer file is written; the summary shows
+  `ERR_RELEASE_MANIFEST_VERIFY_FAILED`. Verifier reasons include
+  `schema_invalid`, `repository_mismatch`, `sha_mismatch`, `unlisted_path`,
+  `missing_file`, `hash_mismatch`, `mode_mismatch`, `size_mismatch`,
+  `symlink_mismatch`, `read_failed` and `internal_error`. The step logic stays
+  inline because in consumer runs the only `scripts/` copy is the release tree
+  under verification. Tests `tests/test_verify_release_manifest.py` and
+  `tests/test_update_workflows_manifest_verify.py`.
+- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) its `Commit and push
+  updates` step (`id: commit_push`) never pushes to the default branch: it
+  commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
+  the merge train ignores it) with a `Updater-Release-SHA:` trailer, pushes
+  with `--force-with-lease`, fails closed on commits it did not write (an
+  existing branch is replaced only when the repository activity API shows
+  every push to it came from the `GH_PAT` account and the newest produced its
+  tip; committer email and trailer alone are forgeable), lints
+  the PR text with `scripts/lint_pr_body_auto_close.py` (now part of the
+  attested release manifest) and opens or refreshes one PR; for a
+  `verified=true` release it records `auto_merge=pending_verify`. PR calls use
+  `GH_PAT`; no job requests a `pull-requests` permission because a reusable
+  job cannot raise the caller's grant. Log prefix `UPDATER_PR_DELIVERY`.
+- The separate `verify` job (#7004; job id `verify`, status context
+  `ai-update-workflows/verify` and log prefix `UPDATER_PR_VERIFY` as shipped in
+  `update_workflows.yml`) runs after a PR was opened
+  or refreshed. It checks the PR head out without credentials and never runs
+  code from it, re-attests the release manifest, hash-checks every release
+  module it runs, checks that the PR adds one commit with the
+  `Updater-Release-SHA:` trailer on top of the default branch, and runs
+  `scripts/verify_release_manifest.py verify-pr-tree`, which accepts a changed
+  path only when it matches the attested release (re-rendered wrapper,
+  manifest hash, attested retired-file hash, or the audit-gate/changelog
+  output the attested scripts reproduce on the PR's parent). It posts the
+  commit status `ai-update-workflows/verify` with the job token and is the
+  only place that enables auto-merge (bound to the verified head, `verified=true`
+  releases only). It has no job-level `permissions:` (a reusable job asking for
+  more than the caller grants fails the whole run at startup); the consumer
+  template grants `contents`, `pull-requests` and `statuses: write`, and
+  `tests/test_update_workflows_template_gate.py` pins that contract. Log prefix
+  `UPDATER_PR_VERIFY`.
 - Stable-release repository dispatch payloads carry both `version` and the peeled
   commit `sha`. Consumers validate the payload but independently resolve current
   `stable`, so delayed events cannot downgrade installed pins.
@@ -2257,6 +2325,10 @@ and shipped:
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
+- `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
+- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
+- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
+- `UPDATER_PR_VERIFY` (`update_workflows.yml` job `verify`, runs only after the PR path opened or refreshed a pull request: `outcome=passed reason=ok pr= head= auto_merge=enabled|failed|skipped_unverified`, `outcome=rejected reason= stage=`)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2501,6 +2573,10 @@ LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
+LOG_PREFIX.name=RELEASE_MANIFEST
+LOG_PREFIX.name=UPDATER_MANIFEST_VERIFY
+LOG_PREFIX.name=UPDATER_PR_DELIVERY
+LOG_PREFIX.name=UPDATER_PR_VERIFY
 
 ---
 

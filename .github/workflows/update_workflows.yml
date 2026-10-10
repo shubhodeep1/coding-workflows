@@ -44,6 +44,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: ${{ inputs.allow_workflow_edits != false }}
+    # Re-exported for the `verify` job (issue #7004). Additive only.
+    outputs:
+      delivery: ${{ steps.commit_push.outputs.delivery }}
+      pr_action: ${{ steps.commit_push.outputs.pr_action }}
+      pr_number: ${{ steps.commit_push.outputs.pr_number }}
+      pr_url: ${{ steps.commit_push.outputs.pr_url }}
+      pushed_sha: ${{ steps.commit_push.outputs.pushed_sha }}
+      branch: ${{ steps.commit_push.outputs.branch }}
+      base: ${{ steps.commit_push.outputs.base }}
+      upstream_sha: ${{ steps.fetch.outputs.upstream_sha }}
+      verified: ${{ steps.verify_release_manifest.outputs.verified }}
+      tag: ${{ steps.verify_release_manifest.outputs.tag }}
     steps:
       - name: Checkout consumer repo
         uses: actions/checkout@v5
@@ -103,6 +115,202 @@ jobs:
 
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
           echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+
+      # Fail-closed release-manifest verification (orchestrator project #6902,
+      # issue #6960). Runs before every step that writes the consumer
+      # checkout; any failure stops the job, so "Commit and push updates"
+      # never runs. Off unless the repo variable
+      # UPDATER_VERIFY_RELEASE_MANIFEST is "true".
+      # Assumption: the authoritative plan
+      # (docs/plans/safeguarded-consumer-updater-plan.md on branch
+      # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be
+      # read from the planning/implementation sandbox, so the variable, asset
+      # name and log prefix are the provisional names from the issue. If the
+      # plan names different identifiers, the plan wins.
+      # The logic stays inline: in consumer runs the only scripts/ copy is
+      # the release checkout being verified, so a helper there would be
+      # unverified code.
+      - name: Verify attested release manifest
+        id: verify_release_manifest
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          UPDATER_VERIFY_RELEASE_MANIFEST: ${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'false' }}
+          RELEASE_MANIFEST_ASSET_NAME: release-manifest.v1.json
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          VERIFY_REASON_FILE="${UPDATER_MANIFEST_VERIFY_REASON_FILE:-/tmp/update_workflows_failure_reason.txt}"
+          ASSET_NAME="${RELEASE_MANIFEST_ASSET_NAME:-release-manifest.v1.json}"
+          RELEASE_REPO="shubhodeep1/coding-workflows"
+          MANIFEST_MAX_BYTES=16777216
+
+          verify_flag="${UPDATER_VERIFY_RELEASE_MANIFEST:-false}"
+          verify_flag="${verify_flag//[[:space:]]/}"
+          verify_flag="${verify_flag,,}"
+          if [ "${verify_flag}" != "true" ]; then
+            if [ "${verify_flag}" != "false" ]; then
+              echo "::warning::UPDATER_VERIFY_RELEASE_MANIFEST is neither true nor false; release-manifest verification stays disabled."
+            fi
+            echo "UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled"
+            echo "verified=skipped" >> "${VERIFY_OUT}"
+            echo "reason=disabled" >> "${VERIFY_OUT}"
+            exit 0
+          fi
+
+          # Fixed, path-free tokens only; never echo URLs or credentials.
+          reject() {
+            local stage="$1"
+            local reason="$2"
+            echo "::error::UPDATER_MANIFEST_VERIFY outcome=rejected reason=${reason} stage=${stage}"
+            echo "verified=false" >> "${VERIFY_OUT}"
+            echo "reason=${reason}" >> "${VERIFY_OUT}"
+            printf '%s\n%s\n' "ERR_RELEASE_MANIFEST_VERIFY_FAILED" "Release manifest verification failed at stage ${stage} (reason ${reason}); no consumer file was changed." > "${VERIFY_REASON_FILE}"
+            exit 1
+          }
+
+          [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || reject input invalid_upstream_sha
+          [ -n "${UPSTREAM_DIR:-}" ] && [ -d "${UPSTREAM_DIR}" ] || reject input upstream_missing
+          UPSTREAM_ROOT="$(cd "${UPSTREAM_DIR}/.." && pwd -P)" || reject input upstream_missing
+          for verify_tool in git gh jq sha256sum python3; do
+            command -v "${verify_tool}" >/dev/null 2>&1 || reject input tool_missing
+          done
+
+          WORK="$(mktemp -d)" || reject input workdir_unavailable
+          trap 'rm -rf "${WORK}"' EXIT
+          MANIFEST="${WORK}/${ASSET_NAME}"
+
+          # Release tag for UPSTREAM_SHA: git protocol on the existing clone
+          # (no REST call). Peeled ^{} lines override annotated-tag objects.
+          if ! tag_refs="$(git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
+            reject tag release_tag_missing
+          fi
+          TAG="$(printf '%s\n' "${tag_refs}" | awk -v want="${UPSTREAM_SHA}" '
+            NF >= 2 {
+              sha = tolower($1); ref = $2
+              sub(/^refs\/tags\//, "", ref)
+              if (ref ~ /\^\{\}$/) { sub(/\^\{\}$/, "", ref); peeled[ref] = sha } else { direct[ref] = sha }
+            }
+            END {
+              for (t in direct) {
+                c = (t in peeled) ? peeled[t] : direct[t]
+                if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && c == want) print t
+              }
+            }' | sort -V | tail -n1)"
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || reject tag release_tag_missing
+
+          # GitHub API (§14): no existing call in this job returns release
+          # data, so this adds exactly one release lookup and one asset
+          # download, only when the flag is on.
+          if ! release_json="$(gh api "repos/${RELEASE_REPO}/releases/tags/${TAG}" 2>/dev/null)"; then
+            reject release release_lookup_failed
+          fi
+          if ! asset_line="$(printf '%s' "${release_json}" | jq -r --arg name "${ASSET_NAME}" '
+            if type == "object" and .draft == false and .prerelease == false then
+              [(.assets // [])[] | select(type == "object" and .name == $name and .state == "uploaded")]
+              | if length == 1 then "\(.[0].id) \(.[0].size)" else "missing" end
+            else "invalid" end' 2>/dev/null)"; then
+            reject release release_lookup_failed
+          fi
+          case "${asset_line}" in
+            invalid|"") reject release release_lookup_failed ;;
+            missing) reject release asset_missing ;;
+          esac
+          ASSET_ID="${asset_line%% *}"
+          ASSET_SIZE="${asset_line##* }"
+          [[ "${ASSET_ID}" =~ ^[0-9]+$ ]] && [[ "${ASSET_SIZE}" =~ ^[0-9]+$ ]] || reject release release_lookup_failed
+          if [ "${ASSET_SIZE}" -le 0 ] || [ "${ASSET_SIZE}" -gt "${MANIFEST_MAX_BYTES}" ]; then
+            reject release asset_missing
+          fi
+
+          if ! gh api -H 'Accept: application/octet-stream' "repos/${RELEASE_REPO}/releases/assets/${ASSET_ID}" > "${MANIFEST}" 2>/dev/null; then
+            reject download asset_download_failed
+          fi
+          downloaded_size="$(wc -c < "${MANIFEST}" | tr -d '[:space:]')"
+          [ "${downloaded_size}" = "${ASSET_SIZE}" ] || reject download asset_download_failed
+
+          # Attestation with the runner's gh, never code from the release
+          # tree. Both release workflows attest on GitHub-hosted runners.
+          if ! gh attestation verify "${MANIFEST}" \
+            --repo shubhodeep1/coding-workflows \
+            --cert-identity-regex '^https://github\.com/shubhodeep1/coding-workflows/\.github/workflows/(mark-stable|test-and-mark-stable)\.yml@refs/heads/(main|stable)$' \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners; then
+            reject attestation attestation_failed
+          fi
+
+          if ! jq -e --arg repo "${RELEASE_REPO}" --arg sha "${UPSTREAM_SHA}" --arg tag "${TAG}" \
+            'type == "object" and .repository == $repo and .release_sha == $sha and .tag == $tag' \
+            "${MANIFEST}" >/dev/null 2>&1; then
+            reject header manifest_header_mismatch
+          fi
+
+          # Bootstrap: hash every Python module the verifier executes before
+          # running any code from the release tree.
+          for bootstrap_rel in scripts/verify_release_manifest.py scripts/release_manifest.py scripts/workflow_wrapper_refs.py; do
+            expected_sha256="$(jq -r --arg p "${bootstrap_rel}" \
+              '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+              "${MANIFEST}" 2>/dev/null)" || expected_sha256=""
+            [[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]] || reject bootstrap verifier_unattested
+            bootstrap_path="${UPSTREAM_ROOT}/${bootstrap_rel}"
+            if [ ! -f "${bootstrap_path}" ] || [ -L "${bootstrap_path}" ]; then
+              reject bootstrap verifier_hash_mismatch
+            fi
+            actual_sha256="$(sha256sum -- "${bootstrap_path}" | awk '{print $1}')"
+            [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
+          done
+
+          # Every path the later steps read, relative to the release root.
+          # Whole directories are enumerated so an injected file is reported
+          # as unlisted_path.
+          PATHS_FILE="${WORK}/paths.txt"
+          (
+            cd "${UPSTREAM_ROOT}"
+            shopt -s nullglob
+            for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
+              printf '%s\n' "${listed}"
+            done
+            printf '%s\n' \
+              workflow-templates/retired_files.txt \
+              workflow-templates/CLAUDE.md \
+              CLAUDE.md \
+              scripts/workflow_wrapper_refs.py \
+              scripts/apply_audit_gate_assets.py \
+              scripts/assemble_changelog.py \
+              scripts/verify_release_manifest.py \
+              scripts/release_manifest.py \
+              scripts/lint_pr_body_auto_close.py
+            for listed_dir in workflow-templates/.claude workflow-templates/audit-gate; do
+              if [ -e "${listed_dir}" ] || [ -L "${listed_dir}" ]; then
+                find "${listed_dir}" ! -type d -print
+              fi
+            done
+          ) > "${PATHS_FILE}" || reject paths paths_enumeration_failed
+
+          set +e
+          verify_line="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${UPSTREAM_ROOT}/scripts/verify_release_manifest.py" verify \
+            --manifest "${MANIFEST}" \
+            --release-root "${UPSTREAM_ROOT}" \
+            --expected-sha "${UPSTREAM_SHA}" \
+            --expected-repository shubhodeep1/coding-workflows \
+            --paths-file "${PATHS_FILE}" 2>/dev/null | head -n1)"
+          verify_rc=$?
+          set -e
+          if [ "${verify_rc}" -ne 0 ]; then
+            verify_reason="$(printf '%s\n' "${verify_line}" | sed -n 's/^UPDATER_MANIFEST_VERIFY outcome=rejected reason=\([a-z_]*\).*/\1/p')"
+            [ -n "${verify_reason}" ] || verify_reason="internal_error"
+            if [ -n "${verify_line}" ]; then
+              echo "::error::${verify_line}"
+            fi
+            reject verify "${verify_reason}"
+          fi
+          echo "${verify_line}"
+          echo "UPDATER_MANIFEST_VERIFY outcome=ok reason=ok tag=${TAG}"
+          echo "verified=true" >> "${VERIFY_OUT}"
+          echo "reason=ok" >> "${VERIFY_OUT}"
+          echo "tag=${TAG}" >> "${VERIFY_OUT}"
 
       - name: Prepare immutable workflow wrappers
         id: render_wrappers
@@ -569,10 +777,48 @@ jobs:
             echo "has_updates=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Pull-request delivery (issue #6989, orchestrator project #6902).
+      # Assumption: the authoritative plan
+      # (docs/plans/safeguarded-consumer-updater-plan.md on branch
+      # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be
+      # read, so UPDATER_PR_DELIVERY_ENABLED (default false), the branch
+      # prefix auto/update-workflows- and the log prefix UPDATER_PR_DELIVERY
+      # are the provisional names from the issue. With the flag off this step
+      # still pushes straight to the default branch. With it on, nothing is
+      # pushed to the default branch: the commit goes to
+      # auto/update-workflows-<release-sha-12> with a lease-checked push and
+      # one pull request is opened or refreshed. This step never enables
+      # auto-merge: for a verified=true release it records
+      # auto_merge=pending_verify, and the separate `verify` job (issue #7004)
+      # enables auto-merge, bound to the pushed head, only after it has
+      # checked the PR tree against the attested release manifest and posted
+      # the ai-update-workflows/verify commit status. PR calls use GH_PAT, so the job requests no
+      # pull-requests permission: a reusable job cannot raise the caller's
+      # contents: write grant, and asking for more fails the run at startup.
       - name: Commit and push updates
+        id: commit_push
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          VERIFIED: ${{ steps.verify_release_manifest.outputs.verified }}
+          RELEASE_TAG: ${{ steps.verify_release_manifest.outputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          UPDATER_PR_DELIVERY_ENABLED: ${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'false' }}
         run: |
           set -euo pipefail
+
+          PR_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          PR_DELIVERY="false"
+          pr_delivery_flag="${UPDATER_PR_DELIVERY_ENABLED:-false}"
+          pr_delivery_flag="${pr_delivery_flag//[[:space:]]/}"
+          pr_delivery_flag="${pr_delivery_flag,,}"
+          if [ "${pr_delivery_flag}" = "true" ]; then
+            PR_DELIVERY="true"
+          elif [ "${pr_delivery_flag}" != "false" ]; then
+            echo "::warning::UPDATER_PR_DELIVERY_ENABLED is neither true nor false; pull-request delivery stays disabled."
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -679,12 +925,300 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "No staged changes detected after update step; skipping commit."
+            echo "delivery=none" >> "${PR_OUT}"
             exit 0
           fi
 
+          # Captured before the commit so the PR path never relies on HEAD~1 in
+          # the shallow checkout.
+          BASE_SHA="$(git rev-parse HEAD)"
+          CHECKED_OUT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
           git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.' "$COMMIT_BODY")"
 
-          git push
+          if [ "${PR_DELIVERY}" != "true" ]; then
+            echo "delivery=direct" >> "${PR_OUT}"
+            git push
+            exit 0
+          fi
+
+          # ── Pull-request delivery (UPDATER_PR_DELIVERY_ENABLED=true) ──────────
+          # Nothing below pushes to the default branch. Every failure exits
+          # non-zero before the next write.
+          BRANCH=""
+          PR_NUMBER=""
+          PR_URL=""
+          PR_ACTION=""
+          AUTO_MERGE="none"
+          STALE_CLOSED=0
+          pr_log() {
+            echo "UPDATER_PR_DELIVERY outcome=$1 reason=$2 branch=${BRANCH:-none} pr=${PR_NUMBER:-none} auto_merge=${AUTO_MERGE:-none}"
+          }
+          pr_fail() {
+            echo "::error::$(pr_log failed "$1")"
+            echo "delivery=pr" >> "${PR_OUT}"
+            echo "pr_action=failed" >> "${PR_OUT}"
+            exit 1
+          }
+
+          [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || pr_fail invalid_upstream_sha
+          [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || pr_fail invalid_repository
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || pr_fail invalid_base_sha
+
+          # GitHub API budget for this path (§14): at most 1 default-branch read
+          # (only when the event carries no repository payload), 1 head+base PR
+          # lookup, 1 compare + 1 user read + 1 branch-activity read (only when the
+          # branch already exists), 1 create or edit, 1 stale-PR list, 1 user read
+          # (only when stale candidates exist and the login is not yet known),
+          # one close per stale PR, 1 auto-merge enable.
+          BASE="${DEFAULT_BRANCH:-}"
+          if [ -z "${BASE}" ]; then
+            BASE="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch 2>/dev/null)" || pr_fail default_branch_lookup_failed
+          fi
+          [[ "${BASE}" =~ ^[A-Za-z0-9._/-]+$ ]] || pr_fail invalid_default_branch
+          [ "${CHECKED_OUT_BRANCH}" = "${BASE}" ] || pr_fail not_default_branch
+
+          BRANCH="auto/update-workflows-${UPSTREAM_SHA:0:12}"
+          [[ "${BRANCH}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]] || pr_fail invalid_branch_name
+
+          # Release trailer: the foreign-commit check below accepts only commits
+          # that carry it. The direct path above keeps its message unchanged.
+          UPDATER_COMMIT_MSG="$(git log -1 --format=%B)"
+          git commit --amend -q -m "${UPDATER_COMMIT_MSG}" -m "Updater-Release-SHA: ${UPSTREAM_SHA}" || pr_fail commit_amend_failed
+          PUSHED_SHA="$(git rev-parse HEAD)"
+
+          TAG_TEXT="${RELEASE_TAG:-}"
+          if ! [[ "${TAG_TEXT}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # Verification off: resolve the vX.Y.Z tag for UPSTREAM_SHA over the
+            # git protocol on the existing release clone (no REST call), the
+            # same way the verify step does. Any failure leaves it unresolved.
+            TAG_TEXT=""
+            if TAG_ROOT="$(cd "${UPSTREAM_DIR:-/nonexistent}/.." 2>/dev/null && pwd -P)" \
+              && TAG_REFS="$(git -C "${TAG_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
+              TAG_TEXT="$(printf '%s\n' "${TAG_REFS}" | awk -v want="${UPSTREAM_SHA}" '
+                NF >= 2 {
+                  sha = tolower($1); ref = $2
+                  sub(/^refs\/tags\//, "", ref)
+                  if (ref ~ /\^\{\}$/) { sub(/\^\{\}$/, "", ref); peeled[ref] = sha } else { direct[ref] = sha }
+                }
+                END {
+                  for (t in direct) {
+                    c = (t in peeled) ? peeled[t] : direct[t]
+                    if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && c == want) print t
+                  }
+                }' | sort -V | tail -n1)" || TAG_TEXT=""
+            fi
+            [[ "${TAG_TEXT}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || TAG_TEXT="unresolved"
+          fi
+          VERIFIED_TEXT="${VERIFIED:-}"
+          case "${VERIFIED_TEXT}" in
+            true|false|skipped) ;;
+            "") VERIFIED_TEXT="skipped" ;;
+            *) VERIFIED_TEXT="unknown" ;;
+          esac
+          if [ "${TAG_TEXT}" = "unresolved" ]; then
+            TITLE_REF="${UPSTREAM_SHA:0:12}"
+          else
+            TITLE_REF="${TAG_TEXT}"
+          fi
+          PR_TITLE="chore: update AI workflow wrappers from coding-workflows@stable (${TITLE_REF})"
+
+          PR_WORK="$(mktemp -d)" || pr_fail workdir_unavailable
+          trap 'rm -rf "${PR_WORK}"' EXIT
+          BODY="${PR_WORK}/body.md"
+          LINT_INPUT="${PR_WORK}/lint_input.md"
+          COMMIT_MSGS="${PR_WORK}/commit_messages.bin"
+          {
+            echo "Automated update from coding-workflows@stable."
+            echo ""
+            echo "- **Release tag:** ${TAG_TEXT}"
+            echo "- **Release SHA:** \`${UPSTREAM_SHA}\`"
+            echo "- **Release manifest verification:** ${VERIFIED_TEXT}"
+            echo ""
+            if [ "${VERIFIED_TEXT}" = "true" ]; then
+              echo "Release manifest verification passed, so auto-merge is enabled for this exact head commit after the \`ai-update-workflows/verify\` check passes."
+            else
+              echo "Release manifest verification did not pass (outcome: ${VERIFIED_TEXT}), so this pull request waits for a human to review and merge it."
+            fi
+            echo ""
+            echo "Changed files:"
+            echo ""
+            changed_count=0
+            while IFS= read -r changed_path; do
+              [ -n "${changed_path}" ] || continue
+              changed_count=$((changed_count + 1))
+              if [ "${changed_count}" -gt 200 ]; then
+                echo "- (more files omitted)"
+                break
+              fi
+              case "${changed_path}" in
+                *'`'*) echo "- (a path with unsupported characters)" ;;
+                *) echo "- \`${changed_path}\`" ;;
+              esac
+            done < <(git diff --name-only "${BASE_SHA}" HEAD)
+            echo ""
+            echo "Opened by ai-update-workflows (UPDATER_PR_DELIVERY_ENABLED=true). The plan that names this variable could not be read when it was built, so the variable, the auto/update-workflows- branch prefix and the UPDATER_PR_DELIVERY log prefix are provisional names."
+            echo ""
+            echo "<!-- ai:update-workflows-pr:v1 release_sha=${UPSTREAM_SHA} -->"
+          } > "${BODY}"
+          {
+            printf '%s\n\n' "${PR_TITLE}"
+            cat "${BODY}"
+          } > "${LINT_INPUT}"
+          git log -1 --format='%B%x00' > "${COMMIT_MSGS}"
+
+          # §21: the composed title, body and commit message must not auto-close
+          # any orchestrator tracking issue. No fail-open: a lookup error blocks.
+          UPSTREAM_ROOT="$(cd "${UPSTREAM_DIR:-/nonexistent}/.." 2>/dev/null && pwd -P)" || pr_fail upstream_missing
+          LINT_SCRIPT="${UPSTREAM_ROOT}/scripts/lint_pr_body_auto_close.py"
+          [ -f "${LINT_SCRIPT}" ] || pr_fail pr_body_lint_missing
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${LINT_SCRIPT}" --pr-body-file "${LINT_INPUT}" --commit-messages-file "${COMMIT_MSGS}" --repo "${GITHUB_REPOSITORY}"; then
+            pr_fail pr_body_lint_failed
+          fi
+
+          # One lookup scoped to head and base. The list API (not search) sees a
+          # pull request created seconds earlier.
+          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest)" || pr_fail pr_lookup_failed
+          OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
+          CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
+          [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
+          if [ -n "${OPEN_PR}" ]; then
+            PR_NUMBER="${OPEN_PR%% *}"
+            PR_URL="${OPEN_PR#* }"
+            [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
+            # #7004: GitHub keeps auto-merge enrollment across pushes, so an
+            # earlier run's enrollment would merge the refreshed head before
+            # the verify job checks it. Withdraw it before pushing; the verify
+            # job re-enables it for the verified head. Reuses the lookup above
+            # (§14); a failed withdrawal fails closed before any push.
+            OPEN_PR_AUTO="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0] | if .autoMergeRequest == null then "" else (.id // "missing") end')" || pr_fail pr_lookup_failed
+            if [ "${OPEN_PR_AUTO}" = "missing" ]; then
+              pr_fail auto_merge_withdraw_failed
+            elif [ -n "${OPEN_PR_AUTO}" ]; then
+              gh api graphql -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' -f "id=${OPEN_PR_AUTO}" >/dev/null || pr_fail auto_merge_withdraw_failed
+              echo "UPDATER_PR_DELIVERY #${PR_NUMBER}: withdrew auto-merge enrolled by an earlier run before refreshing the head."
+            fi
+          elif [ "${CLOSED_UNMERGED}" -gt 0 ]; then
+            # A human closed this release's pull request: respect the rejection.
+            echo "::warning::$(pr_log skipped closed_by_human)"
+            {
+              echo "delivery=pr"
+              echo "branch=${BRANCH}"
+              echo "pr_action=skipped"
+              echo "auto_merge=none"
+            } >> "${PR_OUT}"
+            exit 0
+          fi
+
+          # Lease-checked push. Never overwrites commits the updater did not write.
+          REMOTE_LINE="$(git ls-remote origin "refs/heads/${BRANCH}")" || pr_fail remote_lookup_failed
+          REMOTE_SHA="$(printf '%s\n' "${REMOTE_LINE}" | awk -v ref="refs/heads/${BRANCH}" '$2 == ref {print $1; exit}')"
+          PUSH_REASON="pushed"
+          if [ -z "${REMOTE_SHA}" ]; then
+            # Empty lease value: the push succeeds only if the branch still does not exist.
+            git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
+          else
+            [[ "${REMOTE_SHA}" =~ ^[0-9a-f]{40}$ ]] || pr_fail remote_lookup_failed
+            COMPARE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${REMOTE_SHA}")" || pr_fail compare_failed
+            if ! printf '%s' "${COMPARE_JSON}" | jq -e --arg sha "${UPSTREAM_SHA}" '
+              (.ahead_by | type) == "number"
+              and .ahead_by <= 20
+              and .ahead_by == ((.commits // []) | length)
+              and all((.commits // [])[];
+                (.commit.committer.email // "") == "github-actions[bot]@users.noreply.github.com"
+                and ((.commit.message // "") | split("\n") | any(. == ("Updater-Release-SHA: " + $sha))))
+            ' >/dev/null 2>&1; then
+              pr_fail foreign_commits_on_branch
+            fi
+            # Committer email and trailer are git metadata anyone with push
+            # access can forge, so they only pre-filter. The proof is the
+            # authenticated pusher: every push recorded for this branch (repository
+            # activity API, newest first) must come from the GH_PAT account the
+            # checkout pushes with, and the newest one must have produced
+            # REMOTE_SHA. A full page (possible older history) or any lookup error
+            # fails closed.
+            PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)" || PAT_LOGIN=""
+            [ -n "${PAT_LOGIN}" ] || pr_fail branch_pusher_unverified
+            ACTIVITY_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/activity?ref=refs/heads/${BRANCH}&per_page=100" 2>/dev/null)" || pr_fail branch_pusher_unverified
+            if ! printf '%s' "${ACTIVITY_JSON}" | jq -e --arg login "${PAT_LOGIN}" --arg sha "${REMOTE_SHA}" --arg ref "refs/heads/${BRANCH}" '
+              type == "array"
+              and length > 0
+              and length < 100
+              and .[0].after == $sha
+              and all(.[]; (.actor.login // "") == $login and (.ref // "") == $ref)
+            ' >/dev/null 2>&1; then
+              pr_fail foreign_commits_on_branch
+            fi
+            git fetch --no-tags --depth 1 origin "refs/heads/${BRANCH}" >/dev/null 2>&1 || pr_fail remote_lookup_failed
+            [ "$(git rev-parse FETCH_HEAD)" = "${REMOTE_SHA}" ] || pr_fail lease_mismatch_or_push_rejected
+            if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
+              PUSHED_SHA="${REMOTE_SHA}"
+              PUSH_REASON="branch_up_to_date"
+            else
+              git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
+            fi
+          fi
+
+          if [ -n "${PR_NUMBER}" ]; then
+            gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${BODY}" >/dev/null || pr_fail pr_edit_failed
+            PR_ACTION="refreshed"
+          else
+            PR_URL="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --head "${BRANCH}" --title "${PR_TITLE}" --body-file "${BODY}" | tail -n1)" || pr_fail pr_create_failed
+            PR_NUMBER="${PR_URL##*/}"
+            [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_create_failed
+            PR_ACTION="created"
+          fi
+
+          # Best effort: close earlier updater pull requests for older releases.
+          # Only same-repository PRs on a strict auto/update-workflows-<sha12>
+          # branch authored by the GH_PAT account are touched.
+          if STALE_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --state open --search "head:auto/update-workflows-" --limit 50 --json number,url,headRefName,isCrossRepository,author 2>/dev/null)"; then
+            STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}$")) and .headRefName != $b) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
+            if [ -n "${STALE_CANDIDATES}" ]; then
+              if { [ -n "${PAT_LOGIN:-}" ] || PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)"; } && [ -n "${PAT_LOGIN}" ]; then
+                while read -r stale_number stale_author; do
+                  [[ "${stale_number}" =~ ^[0-9]+$ ]] || continue
+                  [ "${stale_author}" = "${PAT_LOGIN}" ] || continue
+                  if gh pr close "${stale_number}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by ${PR_URL} (release ${TAG_TEXT}, ${UPSTREAM_SHA})." >/dev/null; then
+                    STALE_CLOSED=$((STALE_CLOSED + 1))
+                  else
+                    echo "::warning::UPDATER_PR_DELIVERY could not close stale updater pull request #${stale_number}."
+                  fi
+                done <<< "${STALE_CANDIDATES}"
+              else
+                echo "::warning::UPDATER_PR_DELIVERY could not read the GH_PAT login; stale updater pull requests stay open."
+              fi
+            fi
+          else
+            echo "::warning::UPDATER_PR_DELIVERY could not list stale updater pull requests."
+          fi
+
+          # Merge policy: auto-merge only a verified release, and only from the
+          # `verify` job after its independent PR-tree check passes (#7004).
+          if [ "${VERIFIED_TEXT}" = "true" ]; then
+            AUTO_MERGE="pending_verify"
+            echo "UPDATER_PR_DELIVERY #${PR_NUMBER}: the verify job checks the PR tree and decides auto-merge."
+          else
+            AUTO_MERGE="skipped_unverified"
+            echo "::warning::UPDATER_PR_DELIVERY release manifest verification outcome is ${VERIFIED_TEXT}; #${PR_NUMBER} waits for a human to review and merge it."
+          fi
+
+          {
+            echo "delivery=pr"
+            echo "branch=${BRANCH}"
+            echo "base=${BASE}"
+            echo "pushed_sha=${PUSHED_SHA}"
+            echo "pr_number=${PR_NUMBER}"
+            echo "pr_url=${PR_URL}"
+            echo "pr_action=${PR_ACTION}"
+            echo "auto_merge=${AUTO_MERGE}"
+            echo "stale_closed=${STALE_CLOSED}"
+          } >> "${PR_OUT}"
+          if [ "${PR_ACTION}" = "created" ]; then
+            pr_log opened "${PUSH_REASON}"
+          else
+            pr_log refreshed "${PUSH_REASON}"
+          fi
 
       - name: Send Telegram notification
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
@@ -692,6 +1226,10 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          COMMIT_DELIVERY: ${{ steps.commit_push.outputs.delivery }}
+          COMMIT_PR_URL: ${{ steps.commit_push.outputs.pr_url }}
+          COMMIT_PR_ACTION: ${{ steps.commit_push.outputs.pr_action }}
+          COMMIT_AUTO_MERGE: ${{ steps.commit_push.outputs.auto_merge }}
         run: |
           set -euo pipefail
 
@@ -786,12 +1324,23 @@ jobs:
             MSG="${MSG}
           Changelog fragments assembled: ${CHANGELOG_FRAGMENT_COUNT} fragment(s), layout ${CHANGELOG_LAYOUT}."
           fi
+          # Pull-request delivery reports the PR instead of a pushed commit.
+          # A PR left for a human (auto-merge not enabled) is a WARNING.
+          TG_LEVEL="DEBUG"
+          if [ "${COMMIT_DELIVERY:-}" = "pr" ]; then
+            MSG="${MSG}
+          Delivered as a pull request (${COMMIT_PR_ACTION:-unknown}): ${COMMIT_PR_URL:-none}
+          Auto-merge: ${COMMIT_AUTO_MERGE:-none}"
+            if [ "${COMMIT_AUTO_MERGE:-}" != "enabled" ] && [ "${COMMIT_AUTO_MERGE:-}" != "pending_verify" ]; then
+              TG_LEVEL="WARNING"
+            fi
+          fi
           MSG="${MSG}
           Source: coding-workflows@stable
           Run: ${RUN_URL}"
 
           if declare -F tg_send_msg >/dev/null 2>&1; then
-            tg_send_msg "${MSG}" "DEBUG" >/dev/null
+            tg_send_msg "${MSG}" "${TG_LEVEL}" >/dev/null
           else
             curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
               -d "chat_id=${TG_ADMIN_CHAT_ID}" \
@@ -801,6 +1350,12 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify_release_manifest.outcome }}
+          COMMIT_OUTCOME: ${{ steps.commit_push.outcome }}
+          COMMIT_DELIVERY: ${{ steps.commit_push.outputs.delivery }}
+          COMMIT_PR_URL: ${{ steps.commit_push.outputs.pr_url }}
+          COMMIT_AUTO_MERGE: ${{ steps.commit_push.outputs.auto_merge }}
         run: |
           set -euo pipefail
 
@@ -850,6 +1405,23 @@ jobs:
             exit 1
           fi
 
+          if [ "${VERIFY_OUTCOME:-}" = "failure" ]; then
+            # Same path the verify step writes (it honours the override).
+            VERIFY_REASON_FILE="${UPDATER_MANIFEST_VERIFY_REASON_FILE:-${FAILURE_REASON_FILE}}"
+            VERIFY_FAILURE_DETAIL=""
+            if [ -f "${VERIFY_REASON_FILE}" ]; then
+              VERIFY_FAILURE_DETAIL="$(sed -n '2p' "${VERIFY_REASON_FILE}" 2>/dev/null || true)"
+            fi
+            [ -n "${VERIFY_FAILURE_DETAIL}" ] || VERIFY_FAILURE_DETAIL="Release manifest verification failed before any consumer file was changed."
+            echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \`ERR_RELEASE_MANIFEST_VERIFY_FAILED\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason detail:** ${VERIFY_FAILURE_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${VERIFY_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \`${VERIFY_REASON_FILE}\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 1
+          fi
+
           if [ "${RENDER_OUTCOME}" = "failure" ]; then
             echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason code:** \`ERR_WRAPPER_RENDER_FAILED\`" >> "$GITHUB_STEP_SUMMARY"
@@ -886,6 +1458,12 @@ jobs:
           echo "- **Top-level CLAUDE.md synced:** ${CLAUDE_MD_CHANGED:-false}" >> "$GITHUB_STEP_SUMMARY"
           RETIRED_REMOVED_COUNT="${{ steps.retired_files.outputs.retired_removed }}"
           echo "- **Retired files removed:** ${RETIRED_REMOVED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Delivery:** ${COMMIT_DELIVERY:-none}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${COMMIT_OUTCOME:-}" = "failure" ]; then
+            echo "- **Delivery status:** failed (see the UPDATER_PR_DELIVERY log line)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- **Pull request:** ${COMMIT_PR_URL:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Auto-merge:** ${COMMIT_AUTO_MERGE:-n/a}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${HAS_UPDATES}" = "true" ]; then
@@ -934,3 +1512,466 @@ jobs:
             cat /tmp/claude_md_changed_file.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # Independent pull-request verification (issue #7004, orchestrator project
+  # #6902). Runs only after the PR path opened or refreshed a pull request. It
+  # checks the PR head out as data (no stored credentials, nothing from it is
+  # executed), re-downloads and attests the release manifest, hash-checks every
+  # release module it runs, and compares every file the PR changes with what
+  # the attested release produces (scripts/verify_release_manifest.py
+  # verify-pr-tree). It posts the fixed commit status
+  # `ai-update-workflows/verify` on the PR head, and it is the only place that
+  # enables auto-merge (bound to the verified head, verified=true releases
+  # only). Any error fails closed: failure status, no auto-merge.
+  # Assumption: the authoritative plan
+  # (docs/plans/safeguarded-consumer-updater-plan.md on branch
+  # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be read,
+  # so the job id `verify`, the status context `ai-update-workflows/verify`
+  # and the log prefix UPDATER_PR_VERIFY are the provisional names from the
+  # issue. If the plan names different identifiers, the plan wins.
+  # No job-level `permissions:` block on purpose: a reusable job that asks for
+  # a permission its caller did not grant fails the whole run at startup with
+  # zero jobs, which would also stop this updater from refreshing an older
+  # caller wrapper. The job inherits the caller's grant; the consumer template
+  # grants `statuses: write`, and without it the status post fails and the job
+  # fails closed. The attestation and bootstrap-hash logic stays inline for
+  # the same reason as in "Verify attested release manifest".
+  verify:
+    needs: update-wrappers
+    if: ${{ !cancelled() && needs.update-wrappers.outputs.delivery == 'pr' && (needs.update-wrappers.outputs.pr_action == 'created' || needs.update-wrappers.outputs.pr_action == 'refreshed') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      VERIFY_STATUS_CONTEXT: ai-update-workflows/verify
+      PR_NUMBER: ${{ needs.update-wrappers.outputs.pr_number }}
+      PUSHED_SHA: ${{ needs.update-wrappers.outputs.pushed_sha }}
+      UPSTREAM_SHA: ${{ needs.update-wrappers.outputs.upstream_sha }}
+      VERIFIED: ${{ needs.update-wrappers.outputs.verified }}
+      BASE: ${{ needs.update-wrappers.outputs.base }}
+    steps:
+      - name: Validate verify inputs and mark pending
+        id: verify_inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          reject() {
+            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=$2 stage=$1"
+            exit 1
+          }
+
+          [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || reject input invalid_pr_number
+          [[ "${PUSHED_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || reject input invalid_pushed_sha
+          [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || reject input invalid_upstream_sha
+          [[ "${BASE:-}" =~ ^[A-Za-z0-9._/-]+$ ]] || reject input invalid_base
+          case "${VERIFIED:-}" in
+            true|false|skipped|"") ;;
+            *) reject input invalid_verified ;;
+          esac
+          [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || reject input invalid_repository
+          echo "sha_ok=true" >> "${VERIFY_OUT}"
+
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
+          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+            -f state=pending \
+            -f "context=${VERIFY_STATUS_CONTEXT}" \
+            -f "description=Verifying updater PR tree against the attested release manifest" \
+            -f "target_url=${RUN_URL}" >/dev/null; then
+            reject status status_post_failed
+          fi
+
+      - name: Check out updater pull request head (data only)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.update-wrappers.outputs.pushed_sha }}
+          path: .updater-pr-tree
+          fetch-depth: 2
+          persist-credentials: false
+          token: ${{ github.token }}
+          lfs: false
+
+      - name: Fetch and verify attested release
+        id: verify_release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          RELEASE_MANIFEST_ASSET_NAME: release-manifest.v1.json
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          reject() {
+            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=$2 stage=$1"
+            exit 1
+          }
+
+          ASSET_NAME="${RELEASE_MANIFEST_ASSET_NAME:-release-manifest.v1.json}"
+          RELEASE_REPO="shubhodeep1/coding-workflows"
+          RELEASE_URL="https://github.com/${RELEASE_REPO}.git"
+          MANIFEST_MAX_BYTES=16777216
+          WORK="${RUNNER_TEMP:-/tmp}/updater-verify"
+          RELEASE_ROOT="${WORK}/release"
+          MANIFEST="${WORK}/${ASSET_NAME}"
+
+          [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || reject input invalid_upstream_sha
+          for verify_tool in git gh jq sha256sum python3; do
+            command -v "${verify_tool}" >/dev/null 2>&1 || reject input tool_missing
+          done
+          # Our own scratch directory under RUNNER_TEMP; start from a clean state.
+          rm -rf -- "${WORK}"
+          mkdir -p "${WORK}"
+
+          # GH_PAT reaches git only through this one-shot credential helper,
+          # never through a remote URL or a written git config.
+          CRED_HELPER='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f'
+          rgit() {
+            git -c credential.helper= -c "credential.helper=${CRED_HELPER}" -c core.hooksPath=/dev/null "$@"
+          }
+
+          # Release tag whose peeled commit is the release the PR was built
+          # from. `stable` is not re-read, so a release published after the
+          # update job cannot cause a false rejection.
+          if ! tag_refs="$(rgit ls-remote --tags "${RELEASE_URL}" 'refs/tags/v*' 2>/dev/null)"; then
+            reject tag release_tag_missing
+          fi
+          TAG="$(printf '%s\n' "${tag_refs}" | awk -v want="${UPSTREAM_SHA}" '
+            NF >= 2 {
+              sha = tolower($1); ref = $2
+              sub(/^refs\/tags\//, "", ref)
+              if (ref ~ /\^\{\}$/) { sub(/\^\{\}$/, "", ref); peeled[ref] = sha } else { direct[ref] = sha }
+            }
+            END {
+              for (t in direct) {
+                c = (t in peeled) ? peeled[t] : direct[t]
+                if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && c == want) print t
+              }
+            }' | sort -V | tail -n1)"
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || reject tag release_tag_missing
+
+          rgit clone --quiet --depth 1 --no-checkout --filter=blob:none --sparse "${RELEASE_URL}" "${RELEASE_ROOT}" || reject release release_clone_failed
+          rgit -C "${RELEASE_ROOT}" fetch --quiet --force --no-tags --depth 1 origin "refs/tags/${TAG}" || reject release release_clone_failed
+          fetched_sha="$(git -C "${RELEASE_ROOT}" rev-parse 'FETCH_HEAD^{commit}')" || reject release release_clone_failed
+          [ "${fetched_sha,,}" = "${UPSTREAM_SHA}" ] || reject release release_sha_mismatch
+          rgit -C "${RELEASE_ROOT}" checkout --quiet --detach "${UPSTREAM_SHA}" || reject release release_clone_failed
+          rgit -C "${RELEASE_ROOT}" sparse-checkout set workflow-templates scripts || reject release release_clone_failed
+          [ "$(git -C "${RELEASE_ROOT}" rev-parse HEAD)" = "${UPSTREAM_SHA}" ] || reject release release_sha_mismatch
+
+          # GitHub API (§14): this is a separate job, so nothing from the
+          # update job can be reused; one release lookup and one asset
+          # download, repeated on purpose so the check is independent.
+          if ! release_json="$(gh api "repos/${RELEASE_REPO}/releases/tags/${TAG}" 2>/dev/null)"; then
+            reject release release_lookup_failed
+          fi
+          if ! asset_line="$(printf '%s' "${release_json}" | jq -r --arg name "${ASSET_NAME}" '
+            if type == "object" and .draft == false and .prerelease == false then
+              [(.assets // [])[] | select(type == "object" and .name == $name and .state == "uploaded")]
+              | if length == 1 then "\(.[0].id) \(.[0].size)" else "missing" end
+            else "invalid" end' 2>/dev/null)"; then
+            reject release release_lookup_failed
+          fi
+          case "${asset_line}" in
+            invalid|"") reject release release_lookup_failed ;;
+            missing) reject release asset_missing ;;
+          esac
+          ASSET_ID="${asset_line%% *}"
+          ASSET_SIZE="${asset_line##* }"
+          [[ "${ASSET_ID}" =~ ^[0-9]+$ ]] && [[ "${ASSET_SIZE}" =~ ^[0-9]+$ ]] || reject release release_lookup_failed
+          if [ "${ASSET_SIZE}" -le 0 ] || [ "${ASSET_SIZE}" -gt "${MANIFEST_MAX_BYTES}" ]; then
+            reject release asset_missing
+          fi
+          if ! gh api -H 'Accept: application/octet-stream' "repos/${RELEASE_REPO}/releases/assets/${ASSET_ID}" > "${MANIFEST}" 2>/dev/null; then
+            reject download asset_download_failed
+          fi
+          downloaded_size="$(wc -c < "${MANIFEST}" | tr -d '[:space:]')"
+          [ "${downloaded_size}" = "${ASSET_SIZE}" ] || reject download asset_download_failed
+
+          # Same attestation policy as "Verify attested release manifest";
+          # tests/test_update_workflows_template_gate.py keeps the two in step.
+          if ! gh attestation verify "${MANIFEST}" \
+            --repo shubhodeep1/coding-workflows \
+            --cert-identity-regex '^https://github\.com/shubhodeep1/coding-workflows/\.github/workflows/(mark-stable|test-and-mark-stable)\.yml@refs/heads/(main|stable)$' \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners; then
+            reject attestation attestation_failed
+          fi
+
+          if ! jq -e --arg repo "${RELEASE_REPO}" --arg sha "${UPSTREAM_SHA}" --arg tag "${TAG}" \
+            'type == "object" and .repository == $repo and .release_sha == $sha and .tag == $tag' \
+            "${MANIFEST}" >/dev/null 2>&1; then
+            reject header manifest_header_mismatch
+          fi
+
+          # Bootstrap: hash every release module this job executes before any
+          # of them runs.
+          for bootstrap_rel in scripts/verify_release_manifest.py scripts/release_manifest.py scripts/workflow_wrapper_refs.py scripts/apply_audit_gate_assets.py scripts/assemble_changelog.py; do
+            expected_sha256="$(jq -r --arg p "${bootstrap_rel}" \
+              '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+              "${MANIFEST}" 2>/dev/null)" || expected_sha256=""
+            [[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]] || reject bootstrap verifier_unattested
+            bootstrap_path="${RELEASE_ROOT}/${bootstrap_rel}"
+            if [ ! -f "${bootstrap_path}" ] || [ -L "${bootstrap_path}" ]; then
+              reject bootstrap verifier_hash_mismatch
+            fi
+            actual_sha256="$(sha256sum -- "${bootstrap_path}" | awk '{print $1}')"
+            [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
+          done
+
+          PATHS_FILE="${WORK}/paths.txt"
+          (
+            cd "${RELEASE_ROOT}"
+            shopt -s nullglob
+            for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
+              printf '%s\n' "${listed}"
+            done
+            printf '%s\n' \
+              workflow-templates/retired_files.txt \
+              workflow-templates/CLAUDE.md \
+              CLAUDE.md \
+              scripts/workflow_wrapper_refs.py \
+              scripts/apply_audit_gate_assets.py \
+              scripts/assemble_changelog.py \
+              scripts/verify_release_manifest.py \
+              scripts/release_manifest.py \
+              scripts/lint_pr_body_auto_close.py
+            for listed_dir in workflow-templates/.claude workflow-templates/audit-gate; do
+              if [ -e "${listed_dir}" ] || [ -L "${listed_dir}" ]; then
+                find "${listed_dir}" ! -type d -print
+              fi
+            done
+          ) > "${PATHS_FILE}" || reject paths paths_enumeration_failed
+
+          set +e
+          (cd "${WORK}" && python3 -I -B "${RELEASE_ROOT}/scripts/verify_release_manifest.py" verify \
+            --manifest "${MANIFEST}" \
+            --release-root "${RELEASE_ROOT}" \
+            --expected-sha "${UPSTREAM_SHA}" \
+            --expected-repository shubhodeep1/coding-workflows \
+            --paths-file "${PATHS_FILE}") > "${WORK}/verify_release.out" 2>/dev/null
+          verify_rc=$?
+          set -e
+          verify_line="$(head -n1 "${WORK}/verify_release.out")"
+          if [ "${verify_rc}" -ne 0 ]; then
+            verify_reason="$(printf '%s\n' "${verify_line}" | sed -n 's/^UPDATER_MANIFEST_VERIFY outcome=rejected reason=\([a-z_]*\).*/\1/p')"
+            reject release_tree "${verify_reason:-internal_error}"
+          fi
+          echo "${verify_line}"
+
+          {
+            echo "work=${WORK}"
+            echo "release_root=${RELEASE_ROOT}"
+            echo "manifest=${MANIFEST}"
+            echo "tag=${TAG}"
+          } >> "${VERIFY_OUT}"
+
+      - name: Check updater pull request topology
+        id: verify_topology
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          reject() {
+            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=$2 stage=$1"
+            exit 1
+          }
+
+          PR_TREE="${GITHUB_WORKSPACE}/.updater-pr-tree"
+          pgit() {
+            git -C "${PR_TREE}" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.allow=never "$@"
+          }
+
+          head_sha="$(pgit rev-parse HEAD)" || reject topology head_mismatch
+          [ "${head_sha}" = "${PUSHED_SHA}" ] || reject topology head_mismatch
+          parents_line="$(pgit rev-list --parents -n1 "${PUSHED_SHA}")" || reject topology not_single_parent
+          read -r -a commit_parts <<< "${parents_line}"
+          [ "${#commit_parts[@]}" -eq 2 ] || reject topology not_single_parent
+          PARENT="${commit_parts[1]}"
+          [[ "${PARENT}" =~ ^[0-9a-f]{40}$ ]] || reject topology not_single_parent
+
+          head_message="$(pgit log -1 --format=%B "${PUSHED_SHA}")" || reject topology release_trailer_missing
+          printf '%s\n' "${head_message}" | grep -Fxq "Updater-Release-SHA: ${UPSTREAM_SHA}" || reject topology release_trailer_missing
+
+          # One compare call proves the PR adds exactly one commit on top of
+          # the default branch (§14: no earlier call in this job has it).
+          compare_json="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE}...${PUSHED_SHA}" 2>/dev/null)" || reject topology compare_failed
+          if ! printf '%s' "${compare_json}" | jq -e --arg parent "${PARENT}" '
+            (.ahead_by == 1)
+            and ((.merge_base_commit.sha // "") == $parent)
+            and (.status == "ahead" or .status == "diverged")
+          ' >/dev/null 2>&1; then
+            reject topology unexpected_commits
+          fi
+
+          # The update job assembled the changelog with today's UTC date; the
+          # head commit's UTC date reproduces it, also for a refreshed PR.
+          COMMIT_DATE="$(TZ=UTC pgit log -1 --format=%cd --date=format-local:%Y-%m-%d "${PUSHED_SHA}")" || reject topology commit_date_unreadable
+          [[ "${COMMIT_DATE}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || reject topology commit_date_unreadable
+
+          {
+            echo "parent=${PARENT}"
+            echo "commit_date=${COMMIT_DATE}"
+          } >> "${VERIFY_OUT}"
+
+      - name: Reproduce derived consumer files
+        id: verify_reproduce
+        env:
+          WORK: ${{ steps.verify_release.outputs.work }}
+          RELEASE_ROOT: ${{ steps.verify_release.outputs.release_root }}
+          PARENT: ${{ steps.verify_topology.outputs.parent }}
+          COMMIT_DATE: ${{ steps.verify_topology.outputs.commit_date }}
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          reject() {
+            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=$2 stage=$1"
+            exit 1
+          }
+
+          [ -n "${WORK:-}" ] && [ -d "${WORK}" ] || reject reproduce workdir_missing
+          [ -n "${RELEASE_ROOT:-}" ] && [ -d "${RELEASE_ROOT}" ] || reject reproduce release_missing
+          [[ "${PARENT:-}" =~ ^[0-9a-f]{40}$ ]] || reject reproduce invalid_parent
+          PR_TREE="${GITHUB_WORKSPACE}/.updater-pr-tree"
+          BASE_TREE="${WORK}/base"
+
+          git -C "${PR_TREE}" -c core.hooksPath=/dev/null -c protocol.allow=never worktree add --quiet --detach "${BASE_TREE}" "${PARENT}" || reject reproduce worktree_failed
+
+          # The same attested scripts, with the same arguments the update job
+          # used, run from a neutral directory against the PR's parent tree.
+          cd "${WORK}"
+          GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/apply_audit_gate_assets.py" \
+            --contract-root "${RELEASE_ROOT}/workflow-templates/audit-gate" \
+            --repo-root "${BASE_TREE}" \
+            --result-file "${WORK}/audit_gate_result.json" \
+            --changed-files-file "${WORK}/audit_gate_changed_files.txt" >/dev/null || reject reproduce audit_gate_failed
+          GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/assemble_changelog.py" ensure-assets \
+            --repo-root "${BASE_TREE}" \
+            --changed-paths-file "${WORK}/changelog_asset_files.txt" >/dev/null || reject reproduce changelog_assets_failed
+          GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/assemble_changelog.py" assemble \
+            --repo-root "${BASE_TREE}" \
+            --date "${COMMIT_DATE}" >/dev/null || reject reproduce changelog_assemble_failed
+
+          echo "base_tree=${BASE_TREE}" >> "${VERIFY_OUT}"
+
+      - name: Verify pull request tree against attested manifest
+        id: verify_tree
+        env:
+          WORK: ${{ steps.verify_release.outputs.work }}
+          RELEASE_ROOT: ${{ steps.verify_release.outputs.release_root }}
+          MANIFEST: ${{ steps.verify_release.outputs.manifest }}
+          PARENT: ${{ steps.verify_topology.outputs.parent }}
+          BASE_TREE: ${{ steps.verify_reproduce.outputs.base_tree }}
+        run: |
+          set -euo pipefail
+
+          reject() {
+            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=$2 stage=$1"
+            exit 1
+          }
+
+          PR_TREE="${GITHUB_WORKSPACE}/.updater-pr-tree"
+          cd "${WORK}"
+          set +e
+          python3 -I -B "${RELEASE_ROOT}/scripts/verify_release_manifest.py" verify-pr-tree \
+            --manifest "${MANIFEST}" \
+            --release-root "${RELEASE_ROOT}" \
+            --expected-sha "${UPSTREAM_SHA}" \
+            --expected-repository shubhodeep1/coding-workflows \
+            --git-dir "${PR_TREE}/.git" \
+            --base "${PARENT}" \
+            --head "${PUSHED_SHA}" \
+            --reproduced-root "${BASE_TREE}" > "${WORK}/verify_tree.out" 2>/dev/null
+          tree_rc=$?
+          set -e
+          tree_line="$(head -n1 "${WORK}/verify_tree.out")"
+          if [ -n "${tree_line}" ]; then
+            echo "${tree_line}"
+          fi
+          if [ "${tree_rc}" -ne 0 ]; then
+            tree_reason="$(printf '%s\n' "${tree_line}" | sed -n 's/^UPDATER_MANIFEST_VERIFY outcome=rejected reason=\([a-z_]*\).*/\1/p')"
+            reject verify "${tree_reason:-internal_error}"
+          fi
+
+      - name: Publish verify result and enable auto-merge
+        id: verify_publish
+        env:
+          STATUS_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
+          if ! GH_TOKEN="${STATUS_TOKEN:-}" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+            -f state=success \
+            -f "context=${VERIFY_STATUS_CONTEXT}" \
+            -f "description=Updater PR tree matches the attested release manifest" \
+            -f "target_url=${RUN_URL}" >/dev/null; then
+            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=status_post_failed stage=publish"
+            exit 1
+          fi
+
+          # Merge policy (moved here from "Commit and push updates"): only a
+          # verified=true release, only after the success status, bound to
+          # the verified head.
+          AUTO_MERGE="skipped_unverified"
+          if [ "${VERIFIED:-}" = "true" ]; then
+            if GH_TOKEN="${MERGE_TOKEN:-}" gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --auto --squash --match-head-commit "${PUSHED_SHA}"; then
+              AUTO_MERGE="enabled"
+            else
+              AUTO_MERGE="failed"
+              echo "::warning::UPDATER_PR_VERIFY could not enable auto-merge on #${PR_NUMBER}; a human must merge it."
+            fi
+          else
+            echo "::warning::UPDATER_PR_VERIFY release manifest verification outcome is ${VERIFIED:-skipped}; #${PR_NUMBER} waits for a human to review and merge it."
+          fi
+          echo "auto_merge=${AUTO_MERGE}" >> "${VERIFY_OUT}"
+          echo "UPDATER_PR_VERIFY outcome=passed reason=ok pr=${PR_NUMBER} head=${PUSHED_SHA} auto_merge=${AUTO_MERGE}"
+
+      - name: Mark verify failure
+        if: ${{ always() && steps.verify_inputs.outputs.sha_ok == 'true' && steps.verify_publish.outcome != 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+
+          VERIFY_STATE="failure"
+          if [ "${JOB_STATUS:-}" = "cancelled" ]; then
+            VERIFY_STATE="error"
+          fi
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
+          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+            -f "state=${VERIFY_STATE}" \
+            -f "context=${VERIFY_STATUS_CONTEXT}" \
+            -f "description=Updater PR tree did not pass verification; auto-merge stays off" \
+            -f "target_url=${RUN_URL}" >/dev/null; then
+            echo "::warning::UPDATER_PR_VERIFY could not post the ${VERIFY_STATE} status."
+          fi
+          echo "UPDATER_PR_VERIFY outcome=rejected reason=verify_failed stage=final pr=${PR_NUMBER} head=${PUSHED_SHA} auto_merge=none"
+
+      - name: Verify summary
+        if: always()
+        env:
+          PUBLISH_OUTCOME: ${{ steps.verify_publish.outcome }}
+          AUTO_MERGE: ${{ steps.verify_publish.outputs.auto_merge }}
+        run: |
+          set -euo pipefail
+
+          if [ "${PUBLISH_OUTCOME:-}" = "success" ]; then
+            VERIFY_RESULT="passed"
+          else
+            VERIFY_RESULT="failed (see the UPDATER_PR_VERIFY log line)"
+          fi
+          {
+            echo "### Updater pull request verification"
+            echo ""
+            echo "- **Pull request:** #${PR_NUMBER:-none}"
+            echo "- **Head:** \`${PUSHED_SHA:-none}\`"
+            echo "- **Result:** ${VERIFY_RESULT}"
+            echo "- **Auto-merge:** ${AUTO_MERGE:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -5,10 +5,22 @@
 #   - Runs daily (04:00 UTC) and on repository_dispatch from the upstream
 #     coding-workflows repo when a new stable release is tagged.
 #   - Fetches the latest workflow templates from coding-workflows@stable.
-#   - Compares each template against the local wrapper in .github/workflows/.
-#   - If differences are found, overwrites the local wrapper with the upstream
-#     template and commits directly to the default branch.
+#   - Compares each template against the local wrapper in .github/workflows/
+#     and renders the changed wrappers with the release commit SHA.
+#   - Delivers the changes as a pull request from the branch
+#     auto/update-workflows-<release-sha-12> when the
+#     UPDATER_PR_DELIVERY_ENABLED repository variable is 'true'. A separate
+#     verify job then checks every file the pull request changes against the
+#     attested release manifest and posts the ai-update-workflows/verify
+#     commit status. Auto-merge is enabled only after that check passes, and
+#     only for a release whose manifest verification reported verified=true;
+#     otherwise the pull request waits for a human.
+#   - While UPDATER_PR_DELIVERY_ENABLED is unset (the default), the changes
+#     are still pushed straight to the default branch.
 #   - Sends a Telegram alert listing which wrappers were updated.
+#
+# Permissions: contents (push the update branch), pull-requests (open and
+# refresh the pull request) and statuses (the verify job's commit status).
 #
 # Opting out:
 #   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
@@ -25,6 +37,8 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: write
+  pull-requests: write
+  statuses: write
 jobs:
   update:
     uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
