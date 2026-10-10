@@ -107,6 +107,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
+| `UNBLOCK_JUDGE_REGRANT_ENABLED` | No | `true` | unblock_judge | Re-check a scope-blocked issue's automation-path rejection with the current grant guard before asking the judge, and resume it without a verdict when every rejected path is now granted (once per rejection run). `false` sends every such item to the judge. The re-check reads `ALLOW_WORKFLOW_EDITS` with the same `true` default as `implement.yml`. |
 | `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (both Codex and Claude run in a read-only, network-isolated container; their credentials stay in host-side relays. The Claude path follows `.github/ai/claude_engine.json` and falls back to isolated Codex only when unavailable). |
 | `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
 | `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
@@ -3287,6 +3288,25 @@ and resolver chains, a failed project) now goes to the unblock judge
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
+  An `operator_step` fix-up gates only the new code path behind its
+  placeholder flag; existing paths (releases, tagging, dispatches, merges)
+  keep running while the flag is unset.
+- **Before a verdict.** Two deterministic exits run before the judge is asked.
+  (1) A scope-blocked issue whose newest trusted rejection comes from the
+  automation-path grant guard is re-checked with today's
+  `scripts/files_touched_scope_guard.py` (same issue body, author and
+  `ALLOW_WORKFLOW_EDITS`). When it grants every rejected path, the judge posts
+  a comment ending in `<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->` and
+  the stop's resume command, with no verdict and no operator step; the
+  implementation run checks the grant again before it commits. Each rejection
+  run is re-granted at most once (`UNBLOCK_JUDGE op=regrant ... outcome=regranted`,
+  or `outcome=skip reason=still_denied|already_regranted|not_automation_path|disabled`).
+  (2) A blocked issue that is itself a fix-up the judge filed (first line
+  `<!-- ai:unblock-fixup:v1 item=<n> ...`, authored by the pipeline login)
+  never gets a fix-up of its own: the judge adds one `unblock-fixup-<n>` entry
+  to the `ai:operator-step` issue, comments
+  `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->` and sends one WARNING
+  (`outcome=escalated reason=fixup_blocked`); later runs stop at that marker.
   A malformed pipeline-authored project fix-up request is skipped with
   `UNBLOCK_PROJECT action=fixup comment=<id> outcome=invalid_request` in the
   poll log; a failed request-list parse logs `outcome=request_parse_failed`.
