@@ -1,7 +1,9 @@
 # Fixed build context: no repository files or secrets are sent to docker build.
+# python3-yaml: the heal editor's syntax validator (validate_changed_files_syntax.sh)
+# checks edited YAML in this image; without it every workflow edit failed (#6982).
 FROM node:22.16.0-bookworm-slim
 ARG CODEX_VERSION=v0.114.0
-RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates git \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-yaml ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
     "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION#v}-linux-x64" \
