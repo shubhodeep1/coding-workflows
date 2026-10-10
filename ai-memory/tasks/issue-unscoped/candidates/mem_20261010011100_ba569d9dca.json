@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed due to harness error; failure_summary=Validation harness error: Investigate the rootless daemon's cgroup configuration and runner provisioning in scripts/validation_harness_sandbox.sh:265-319. Ensure its container-start path has a usable cgroup hierarchy, and add a fail-closed startup probe before running generated validation so this condition is reported as a sandbox error rather than an application failure. Verify with a synthetic container start through the isolated harness, then rerun validation.",
+  "fingerprint": "64bdffb5ffab24cb472cff0bca41ba6114e130b262bfa5435dac035aa123ec44",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38010821615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38010821615",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20261010011100_ba569d9dca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38010821615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-10-10T01:11:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
