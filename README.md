@@ -1572,6 +1572,16 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **Base-branch gate:** the issue is implemented as a new PR off the default
+  branch, so it can only fix a failure the base branch shares. After the
+  open-issue dedup, the script reads the base branch's result for the same
+  check (two reads for a failed CI workflow run, one for a non-Actions check).
+  A `success` there means the failure is PR-specific: the run logs
+  `skip reason=pr_specific_failure base=<ref> base_conclusion=success` and
+  files nothing, leaving the failure to the PR's review/autofix loop. Any
+  other result, a pending or missing base run, or a failed read files the issue
+  as before (`base_gate outcome=file base_conclusion=<c|unknown> reason=…`).
+  `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED=false` turns the gate off.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2162,6 +2172,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest completed push run of the same workflow on the PR's base branch, a non-Actions check with that check's newest run on the base branch tip. When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. `false` files every failure. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |

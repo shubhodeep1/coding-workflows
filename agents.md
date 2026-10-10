@@ -300,6 +300,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    Files nothing when the base branch passes the same check
+    (`CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED`, default `true`; log
+    `CHECK_TRIAGE skip reason=pr_specific_failure`): a base-branch fix cannot
+    repair a PR-specific failure, which the PR's autofix loop owns.
     The PR-head checkout does not persist credentials; collection uses a
     GitHub token before Codex runs from a trusted support directory in a
     separate, GitHub-token-free step. Missing trusted support fails closed.
