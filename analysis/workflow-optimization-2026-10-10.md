@@ -206,3 +206,46 @@ No interpolated decoded block falls between 15,000 and 18,000 characters. The la
 | Code modularization | 5 workflows, 5 existing stall-guard scripts, and 1 new resolver-staging script | Large |
 | Expression size reduction | `implement.yml` and approximately 2 extracted scripts | Medium |
 | Medium/Low fixes | Approximately 5 additional workflow/script files; overlaps with rows above | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-10)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` permits implementation without further review. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` identifies a possible saving that must not be auto-implemented because it touches a protected retry, pagination, authorization, or race-sensitive path.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `NEEDS_VERIFICATION`** — `.github/workflows/review_autofix.yml:1875-1888` and `.github/workflows/review_autofix.yml:1891-1900`, in **Dispatch standalone validate for orchestrator short-circuit issues**. **Current → proposed:** 2 → 1 reads when the cached issue nodes and PR text are empty and the GraphQL lookup succeeds with no linked issues; retain both reads on an incomplete GraphQL response. **Endpoints:** GraphQL `repository.pullRequest.closingIssuesReferences` and REST `GET /repos/{repo}/pulls/{pr}`. **Evidence:** The GraphQL call already selects the PR; on the empty-nodes path, a subsequent REST call fetches that PR’s title and body. **Proposed fix:** Add `title` and `body` to the existing pull-request GraphQL selection, retain them alongside the issue nodes, and let the PR-text fallback use them only after a validated complete response. Follow the response-validation pattern of `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`; keep REST as the miss/error fallback. **Safety rationale:** The reads are in one step with the same token and no intervening PR mutation, but different endpoints and the current GraphQL `--jq` projection do not establish equivalent partial-error behavior. **Downstream signal:** Verify title/body parity, top-level GraphQL-error handling, and tests for empty references, partial responses, and GraphQL failure before removing the conditional REST read.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — `RISKY_SKIP`** — `scripts/review_merge_train.sh:792-804,949-956` and `scripts/review_merge_train.sh:863-875,985-991`, in `_mt_find_marker_comment` and `_mt_upsert_comment`. **Current → proposed:** *p* paginated comment-list requests + 1 comment GET → *p* list requests on the queued, existing-marker path, where *p* is the page count. **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments?per_page=100` and `GET /repos/{repo}/issues/comments/{id}`. **Evidence:** The listing filters comments by author and marker but projects only ID and creation time; `_mt_upsert_comment` then fetches the selected ID’s body to decide whether a PATCH is needed. **Proposed fix:** Extend `_mt_find_marker_comment` to return a safely encoded body with the selected ID and timestamp, and pass it to `_mt_upsert_comment`; retain its GET when supplied only an ID or when the snapshot cannot be trusted. **Safety rationale:** The source listing uses `--paginate`, and reusing its earlier body could alter the upsert’s response to a concurrent comment edit. **Downstream signal:** Do not auto-implement; manually review page selection, body encoding, and concurrent-edit behavior, then test that an unchanged body still suppresses the PATCH.
+
+- **REUSE-002 — `RISKY_SKIP`** — `scripts/orchestrate_poll_process.sh:20401-20403` and `scripts/orchestrate_poll_process.sh:20445-20447`, in the project-processing loop. **Current → proposed:** 2 → 1 `default_branch` reads on the merge-conflict path **only when the first read succeeded**; retain the second read otherwise. **Endpoint:** `GET /repos/{repo}`. **Evidence:** `DEFAULT_BRANCH_TRACKING` is resolved before the merge-conflict branch, which unconditionally resolves `FINAL_DEFAULT_BRANCH` from the same repository again. **Proposed fix:** Carry a validated successful `DEFAULT_BRANCH_TRACKING` value into `FINAL_DEFAULT_BRANCH`; preserve a fresh read when the first call failed or supplied its `"main"` fallback. **Safety rationale:** This is inside `orchestrate_poll_process.sh`, and the current fallback discards whether the first API read succeeded—both trigger manual race-sensitive review. **Downstream signal:** Do not auto-implement; manually trace merge-conflict transitions and default-branch changes, and test success, failed-first-read, and fallback paths.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Both reads establish the authenticated account for trust decisions; manually verify identity provenance before reuse.
+- API-002: `RISKY_SKIP` — The memo would affect retried label creation inside the poller; manually review missing-label recovery.
+- API-003: `RISKY_SKIP` — Both proposed changes alter retry/backoff loops, rather than merge fetched data.
+- API-004: `RISKY_SKIP` — These are rate-limit probes inside the poller; a shared snapshot can change the second sweep’s budget decision.
+- BATCH-001: `RISKY_SKIP` — Replay authorization depends on complete paginated comments inside the poller.
+- BATCH-002: `RISKY_SKIP` — Timeline pagination and poller race handling require manual field and completeness review.
+
+### Summary Counts
+
+Counts cover **net-new findings above**, not cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 2 | REUSE-001, REUSE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
