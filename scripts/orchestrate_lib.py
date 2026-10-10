@@ -3805,6 +3805,23 @@ UNROUTED_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 UNROUTED_ROUTED_LABELS = frozenset({"ai:clarification", "ai:planning", "ai:awaiting-approval", "ai:implementing"})
 UNROUTED_BLOCK_LABEL = "ai:blocked"
 _UNROUTED_AUTOMATION_MARKER_RE = re.compile(r"<!--\s*(?:ai:|ai_|orchestrator_)", re.IGNORECASE)
+# Other pipeline markers: helpers post comments under their own names
+# (tg_cleanup / tg_phase from tg_helpers.sh, workflow-failure-heal:occurrence,
+# ...) and versioned NAME_V1 blocks. These are never a human reply, but unlike
+# the markers above they do not show that a reply was handled, so they only
+# disqualify the comment as the human candidate. Missing them let a bare
+# `<!-- tg_cleanup:N -->`, posted a second after the block, pass as a human
+# reply and page the operator.
+_UNROUTED_PIPELINE_MARKER_RE = re.compile(
+	r"<!--\s*(?:ai-|tg_cleanup:|tg_phase:|gh_rl_ts:|status:"
+	r"|workflow-failure-heal:|check-failure-triage:|claude-branch-review:"
+	r"|review-autofix-failure|security-pass-|re-security-pass-dedup|revalidate-dedup"
+	r"|merge-train|validation-failure-fingerprint|force-merge-bypass"
+	r"|[a-z][a-z0-9_]*_v[0-9]+\b)",
+	re.IGNORECASE,
+)
+# A reply has visible text; a body that is only HTML comments is bookkeeping.
+_UNROUTED_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 # Openings of automation comments that predate their markers (or never carry
 # one). Lower-case; compared against the left-stripped, lower-cased body.
 _UNROUTED_AUTOMATION_PREFIXES = (
@@ -3844,6 +3861,15 @@ def _is_unrouted_automation_body(body: Any) -> bool:
 	if _UNROUTED_AUTOMATION_MARKER_RE.search(text):
 		return True
 	return text.lstrip().lower().startswith(_UNROUTED_AUTOMATION_PREFIXES)
+
+
+def _is_unrouted_non_human_body(body: Any) -> bool:
+	if _is_unrouted_automation_body(body):
+		return True
+	text = body if isinstance(body, str) else ""
+	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
+		return True
+	return not _UNROUTED_HTML_COMMENT_RE.sub("", text).strip()
 
 
 def _parse_github_ts(value: Any) -> datetime | None:
@@ -3907,7 +3933,7 @@ def classify_unrouted_blocked_issues(
 			if (
 				comment.get("authorAssociation") in UNROUTED_TRUSTED_ASSOCIATIONS
 				and author.get("__typename") == "User"
-				and not _is_unrouted_automation_body(comment.get("body"))
+				and not _is_unrouted_non_human_body(comment.get("body"))
 			):
 				human = (created, comment)
 		if human is None:

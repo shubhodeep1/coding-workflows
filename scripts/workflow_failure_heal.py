@@ -74,6 +74,12 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 # go to check-failure triage instead.
 MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 
+# Scheduled self-checks in coding-workflows. The intake takes their failed
+# runs on the default branch only. The nightly self-test carries the daily
+# validation harness sandbox check, which catches runner-image drift before
+# project validations fail on it.
+SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
+
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
@@ -149,6 +155,10 @@ RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promot
 # runs on the repository's default branch (checked against the run GitHub
 # returns, not the payload), matching the intake job's `if:` predicate.
 CI_WORKFLOW_FILES = ("ci.yml",)
+# Scheduled self-check workflow files (SCHEDULED_CHECK_WORKFLOW_NAMES) a
+# `workflow_run` report may cite. Accepted only for runs GitHub reports on the
+# default branch, matching the intake job's `if:` predicate.
+SCHEDULED_CHECK_WORKFLOW_FILES = ("nightly-validation-selftest.yml",)
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
@@ -1865,7 +1875,8 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
 	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then a failed editor
-	preflight (the editor never ran), then the editor flags, then the run
+	preflight, a failed reviewer step or a failed sandbox prepare (the editor
+	never ran), then the editor flags, then the run
 	summary's ``finalize_reason``, then ``workflow_failure``.
 	"""
 	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
@@ -1877,6 +1888,9 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	# failing phase rather than the empty editor output it left behind.
 	if flags.get("AUTOFIX_REVIEWERS_FAILED") == "true":
 		return "reviewers_failed"
+	# The review sandbox could not be prepared, so the editor never ran.
+	if flags.get("AUTOFIX_SANDBOX_PREPARE_FAILED") == "true":
+		return "sandbox_prepare_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":
@@ -2068,6 +2082,11 @@ _FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
 	# test reports ``tests/x.py::TestClass::test_y``.
 	re.compile(r"^\s*FAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(?:[A-Za-z_][A-Za-z0-9_]{0,160}::)?(test_[A-Za-z0-9_]{1,160})", re.MULTILINE),
 	re.compile(r"^\s*FAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b", re.MULTILINE),
+	# A test file CI runs as a script (``python3 tests/x.py``) fails with a
+	# traceback whose frame names the file and the test function, or with
+	# unittest's ``FAIL: test_x (module.Class.test_x)`` / ``ERROR:`` header.
+	re.compile(r'^\s*File "(?:[^"\n]{0,400}/)?(tests/(?:[A-Za-z0-9_-]{1,80}/){0,4}test_[A-Za-z0-9_]{1,160}\.py)", line [0-9]+, in (test_[A-Za-z0-9_]{1,160})\s*$', re.MULTILINE),
+	re.compile(r"^\s*(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,160}) \([A-Za-z0-9_.]{1,300}\)\s*$", re.MULTILINE),
 )
 FAILING_TEST_LIMIT = 20
 
@@ -2135,6 +2154,90 @@ def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str
 	return out
 
 
+# Guard tests check a property of other files, so their own name maps to no
+# subject (tests/test_workflow_file_size_limit.py has no
+# scripts/workflow_file_size_limit.*) and a heal for them was confined to
+# tests/**, where the guard cannot be fixed. Each one maps to the files its
+# fix edits instead; every entry must still exist at the scope commit.
+HEAL_SCOPE_GUARD_TEST_SUBJECTS: dict[str, tuple[str, ...]] = {
+	"tests/test_ci_job_split_contract.py": (".github/workflows/ci.yml",),
+	# Pin the inventory-parity step order and the shared shell-block guard step in ci.yml.
+	"tests/test_ci_inventory_parity_order_contract.py": (".github/workflows/ci.yml",),
+	"tests/test_ci_shared_shell_block_guard.py": (".github/workflows/ci.yml",),
+	# Pins the orchestrate-poll sharded step in ci.yml and its ports in both
+	# release gates; ci.yml, mark-stable.yml and test-and-mark-stable.yml run it.
+	"tests/test_ci_poll_test_sharding.py": (".github/workflows/ci.yml", ".github/workflows/mark-stable.yml", ".github/workflows/test-and-mark-stable.yml"),
+}
+# The workflow size guard (CLAUDE.md §27) is fixed by moving inline run:
+# bodies of the oversized workflow into new scripts/<workflow>_step_<slug>.sh
+# files, registered in the bootstrap list and the inventory. Its subjects are
+# the workflow files at or above the guard at the scope commit, those
+# registries, and one glob per oversized workflow for the new step scripts.
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST = "tests/test_workflow_file_size_limit.py"
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES = 480_000
+HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES = ("scripts/stage_workflow_support.sh", "docs/INVENTORY.md")
+# The only glob a scope may carry besides the trailing tests/** and
+# changelog.d/*.md: new step scripts of one named workflow, never scripts/*.
+_HEAL_SCOPE_STEP_GLOB_RE = re.compile(r"scripts/[a-z0-9][a-z0-9_]{0,79}_step_\*\.sh")
+
+
+def heal_scope_step_script_glob(workflow_path: str) -> str:
+	"""``scripts/<stem>_step_*.sh`` for ``.github/workflows/<stem>.yml`` (``-`` becomes ``_``), or ``""``."""
+	match = re.fullmatch(r"\.github/workflows/([A-Za-z0-9_-]{1,80})\.ya?ml", workflow_path or "")
+	if not match:
+		return ""
+	glob = f"scripts/{match.group(1).replace('-', '_').lower()}_step_*.sh"
+	return glob if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(glob) else ""
+
+
+def _heal_oversized_workflows(checkout: str, ref: str | None, guard_bytes: int = HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES) -> list[str]:
+	"""Workflow files at or above ``guard_bytes`` at ``ref`` (or in the checkout when ``ref`` is empty)."""
+	found: list[str] = []
+	if ref:
+		result = subprocess.run(["git", "ls-tree", "-l", "-z", ref, "--", ".github/workflows/"], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			return []
+		for entry in result.stdout.split(b"\0"):
+			meta, _, raw_path = entry.partition(b"\t")
+			fields = meta.split()
+			if len(fields) != 4 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") or not fields[3].isdigit():
+				continue
+			path = raw_path.decode("utf-8", errors="replace")
+			if int(fields[3]) >= guard_bytes and re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml", path):
+				found.append(path)
+		return sorted(found)
+	workflows = Path(checkout) / ".github" / "workflows"
+	for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
+		if path.is_file() and not path.is_symlink() and path.stat().st_size >= guard_bytes:
+			found.append(path.relative_to(checkout).as_posix())
+	return found
+
+
+def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_workflows: Any) -> list[str]:
+	"""Subjects of the failing guard tests: existing paths, plus step-script globs.
+
+	``oversized_workflows`` is called only when the size guard failed and returns
+	the workflow paths at or above the guard at the scope commit.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str):
+			continue
+		candidates: list[str] = list(HEAL_SCOPE_GUARD_TEST_SUBJECTS.get(test_file, ()))
+		if test_file == HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST:
+			oversized = [path for path in oversized_workflows() if isinstance(path, str)]
+			candidates.extend(oversized)
+			if oversized:
+				candidates.extend(HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES)
+			candidates.extend(heal_scope_step_script_glob(path) for path in oversized)
+		for candidate in candidates:
+			if not candidate or candidate in out:
+				continue
+			if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(candidate) or (_safe_heal_path(candidate) and exists(candidate)):
+				out.append(candidate)
+	return out
+
+
 # Explicit scope slots reserved for failing-test subjects ahead of changed_files.
 HEAL_SCOPE_SUBJECT_RESERVE = 8
 
@@ -2152,12 +2255,17 @@ def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable
 	# The crash file and workflow paths keep priority; remaining subjects follow.
 	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
 	for path in ordered:
-		if not isinstance(path, str) or not _safe_heal_path(path) or path in paths:
+		if not isinstance(path, str) or path in paths:
+			continue
+		step_glob = bool(_HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) and path in subjects
+		if not step_glob and not _safe_heal_path(path):
 			continue
 		if len(paths) >= 20:
 			# Counted without an existence lookup, so this is an upper bound.
 			dropped += 1
-		elif exists(path):
+		elif step_glob or exists(path):
+			# A step-script glob names files the fix creates, so it has no
+			# existence check; it comes only from heal_scope_guard_subjects.
 			paths.append(path)
 	if dropped:
 		print(f"WORKFLOW_HEAL warn heal_scope_truncated kept={len(paths)} dropped_candidates={dropped}", file=sys.stderr)
@@ -2191,7 +2299,7 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 	runs = markers[0][1].split(",") if markers else []
 	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
 		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
-		or any(not _safe_heal_path(path) for path in paths[:-2])
+		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
 		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
 		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
 		status = "malformed"
@@ -2323,7 +2431,9 @@ def verify_run_provenance(
 
 	A ``workflow_run`` report may cite a CI run (``CI_WORKFLOW_FILES``) only
 	when GitHub reports it as a ``push`` run on ``default_branch``; an empty or
-	invalid ``default_branch`` rejects every CI run (fail closed).
+	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
+	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
+	GitHub reports it on ``default_branch``, under the same fail-closed rule.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
@@ -2346,7 +2456,7 @@ def verify_run_provenance(
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
 	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
 		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
-		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES)
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -2377,6 +2487,11 @@ def verify_run_provenance(
 			and str(run.get("head_branch") or "") == default_branch
 		):
 			reason = "ci_not_default_branch_push"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in SCHEDULED_CHECK_WORKFLOW_FILES and not (
+			is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "scheduled_check_not_default_branch"
 		if not reason and kind == "phase_failure":
 			linked = any(
 				isinstance(comment, dict) and bool(_comment_author(comment))
@@ -2887,6 +3002,8 @@ def compose_issue_body(
 		if payload.get("source_kind") == "workflow_run":
 			if payload.get("workflow_name") in MAIN_CI_WORKFLOW_NAMES:
 				intro = "A CI run on the default branch failed."
+			elif payload.get("workflow_name") in SCHEDULED_CHECK_WORKFLOW_NAMES:
+				intro = "A scheduled self-check workflow run on the default branch failed."
 			else:
 				intro = "A release / promotion workflow run failed."
 			intro += (
@@ -3500,7 +3617,9 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 				if len(matches) > 1:
 					matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]
 				test_files.extend(path for path in matches if path not in test_files)
-		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=heal_scope_test_subjects(test_files, exists))
+		subjects = heal_scope_test_subjects(test_files, exists)
+		subjects += [path for path in heal_scope_guard_subjects(test_files, exists, lambda: _heal_oversized_workflows(args.checkout, args.ref)) if path not in subjects]
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=subjects)
 		sys.stdout.write(marker + "\n")
 	elif args.operation == "failing-tests":
 		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
