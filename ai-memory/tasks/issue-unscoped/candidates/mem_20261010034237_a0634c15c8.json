@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRetried: registry and network failures,\u201d including \u201c5xx responses.\u201d\n  expected_change_site: `scripts/review_untrusted_sandbox.sh`, `_review_sandbox_build_image` retry matcher\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: At line 50, the `: (429|50[0-9])` alternative only matches status codes 500\u2013509 in Docker\u2019s `unexpected status from ...: <code>` error format. The other status/code alternative requires the code to immediately follow `status` or `code`, so it does not match that format when the message says `status from ...`. A transient 520 or 522 response in that format therefore fails on the first attempt instead of being retried.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cRetried: registry and network failures,\u201d including \u201c5xx responses.\u201d\n  Expected change site: `scripts/review_untrusted_sandbox.sh`, `_review_sandbox_build_image` retry matcher.\n  Evidence of absence: At line 50, the `: (429|50[0-9])` alternative only matches status codes 500\u2013509 in Docker\u2019s `unexpected status from ...: <code>` error format. The other status/code alternative requires the code to immediately follow `status` or `code`, so it does not match that format when the message says `status from ...`. A transient 520 or 522 response in that format therefore fails on the first attempt instead of being retried.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d10256a3aff728791d906e728121b75dbcc537cd54a021e078de6194cc8c100f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7010,
+    "run_id": "38019181580",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38019181580",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010034237_a0634c15c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7010,
+    "run_id": "38019181580"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T03:42:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
