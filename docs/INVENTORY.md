@@ -247,6 +247,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_editor_noop_disposition.sh` — body of the review_autofix.yml "Validate editor no-op disposition" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_stage_codex_logs.sh` — body of the review_autofix.yml "Stage codex logs for upload (failure or empty-editor)" step (sourced by the step; skips with a warning when the script is missing, since the step also runs after support staging failed; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_editor_summary_comment.sh` — body of the review_autofix.yml "Post editor summary comment" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_exhaustion_review_blocked_comment.sh` — body of the review_autofix.yml "Post review-blocked comment on PR (autofix exhaustion)" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_mark_review_blocked_exhaustion.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (autofix exhaustion)" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
