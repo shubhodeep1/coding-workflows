@@ -14677,11 +14677,11 @@ import sys
 MAX_TOKENS = 200
 FILES_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchang", re.IGNORECASE)
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
-TOP_NUMBERED_RE = re.compile(r"^\d+[.)]\s+\S")
 NEXT_LABEL_RE = re.compile(
-    r"^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*"
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]\s*)?(?:\*\*|__)?`?\s*"
     r"(?:Functions|Data structures|API|Decisions|Security considerations|Data flow|"
-    r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit)\b",
+    r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit|"
+    r"Implementation-time|Diagrams)\b",
     re.IGNORECASE,
 )
 LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -14696,9 +14696,9 @@ TOKEN_RE = re.compile(
 def line_tokens(line):
     found = []
     for match in TOKEN_RE.finditer(line):
-        token = match.group(1).rstrip(".!?}]")
-        if token.partition("/")[2]:
-            found.append(token)
+        # A bare directory such as `scripts/` is kept: it names an automation
+        # path no exact grant can cover, so the gate holds (fail closed).
+        found.append(match.group(1).rstrip(".!?}]"))
     return found
 
 
@@ -14720,9 +14720,9 @@ def main(argv):
             continue
         if not in_section:
             continue
-        if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line) or (
-            TOP_NUMBERED_RE.match(line) and not line_tokens(line)
-        ):
+        # A numbered file entry does not end the section; only a heading or
+        # the next known plan label does (fail closed on unknown layouts).
+        if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line):
             in_section = False
             suppress = None
             continue

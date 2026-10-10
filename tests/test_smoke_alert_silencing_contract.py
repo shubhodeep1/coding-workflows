@@ -57,7 +57,9 @@ EXPECTED_STEP_DECLARATIONS = {
 	# (replace-claude-sessions Phase 8b), whose answer poster's loop guard can
 	# alert. The Claude issue handoff step was retired in Phase 2.
 	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
-	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
+	# 5 = four notification steps + "Auto-approve clear plan", whose
+	# automation-path hold (#6838) sends one WARNING.
+	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 5,
 	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
 	"review_autofix.yml": [
 		"${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",

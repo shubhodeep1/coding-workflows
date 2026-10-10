@@ -340,7 +340,9 @@ def test_automation_path_plan_extractor_is_identical_in_plan_and_poller() -> Non
 			"prompts/b.txt", "scripts/a.sh", "workflow-templates/*.yml",
 		],
 		"**Files changed**\nNothing else is modified:\n- `scripts/no.sh`\nDone with `scripts/yes.sh`\n": ["scripts/yes.sh"],
-		"Files likely to change:\n- `tests/a.py`\n- a `scripts/` helper\n": [],
+		"Files likely to change:\n- `tests/a.py`\n- a `scripts/` helper\n": ["scripts/"],
+		"1. Files likely to change\n1. `tests/a.py`\n2. `scripts/b.sh`\n2. Functions\n- `scripts/c.sh`\n": ["scripts/b.sh"],
+		"Files likely to change:\n- `tests/a.py`\n7. `Implementation-time estimate: 30 minutes`\n- `scripts/d.sh`\n": [],
 	}
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp_path = Path(workdir)
