@@ -15,6 +15,50 @@ fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
 
+# `_review_sandbox_build_image <timeout_seconds|0> <docker build args...>`
+# prints the built image id. The base image comes from Docker Hub, whose
+# token and registry endpoints intermittently answer 429/500/504; one such
+# answer used to fail the whole sandbox prepare and, with it, the review
+# editor (PR #6645 runs 37989220029 and 37994304266). A build whose error
+# output names a registry or network failure is retried up to
+# REVIEW_SANDBOX_BUILD_ATTEMPTS times (default 3) after 10 s, then 30 s;
+# any other failure returns at once. Every attempt's error output stays on
+# stderr. Logs REVIEW_SANDBOX_BUILD attempt=<n> outcome=ok|retry|fail.
+_review_sandbox_build_image()
+{
+	local build_timeout="$1" attempts="${REVIEW_SANDBOX_BUILD_ATTEMPTS:-3}" attempt=1 rc err_file built
+	local retry_sleep_1="${REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1:-10}" retry_sleep_2="${REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2:-30}"
+	shift
+	[[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || attempts=3
+	[[ "${retry_sleep_1}" =~ ^[0-9]+$ ]] || retry_sleep_1=10
+	[[ "${retry_sleep_2}" =~ ^[0-9]+$ ]] || retry_sleep_2=30
+	err_file="$(mktemp)"
+	while :; do
+		rc=0
+		if [ "${build_timeout}" -gt 0 ]; then
+			built="$(timeout --signal=TERM --kill-after=10s "${build_timeout}s" env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q "$@" 2>"${err_file}")" || rc=$?
+		else
+			built="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q "$@" 2>"${err_file}")" || rc=$?
+		fi
+		cat "${err_file}" >&2
+		if [ "${rc}" -eq 0 ] && [ -n "${built}" ]; then
+			echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=ok" >&2
+			rm -f -- "${err_file}"
+			printf '%s\n' "${built}"
+			return 0
+		fi
+		if [ "${attempt}" -lt "${attempts}" ] && grep -qiE 'auth\.docker\.io|registry-1\.docker\.io|failed to resolve source metadata|too many requests|(status|code)[: ]+(429|5[0-9][0-9])|: (429|50[0-9]) [A-Za-z]|tls handshake timeout|i/o timeout|connection reset by peer|unexpected EOF' "${err_file}"; then
+			echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=retry rc=${rc}" >&2
+			if [ "${attempt}" -eq 1 ]; then sleep "${retry_sleep_1}"; else sleep "${retry_sleep_2}"; fi
+			attempt=$((attempt + 1))
+			continue
+		fi
+		echo "REVIEW_SANDBOX_BUILD attempt=${attempt} outcome=fail rc=${rc}" >&2
+		rm -f -- "${err_file}"
+		return 1
+	done
+}
+
 # Only the trusted prepare step may select a root; never accept a path from
 # the PR checkout or a model-controlled environment variable.
 if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
@@ -63,10 +107,10 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		source "${support}/ai_engine.sh"
 		claude_cli_version="$(ai_engine_cli_version)"
 		[[ "${claude_cli_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Claude CLI version' >&2; exit 1; }
-		image="$(timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		image="$(_review_sandbox_build_image 900 --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'claude\n' > "${root}/engine"
 	else
-		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		image="$(_review_sandbox_build_image 0 --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 	fi
 	[ -n "${image}" ] || exit 1
 	printf '%s\n' "${image}" > "${root}/image"

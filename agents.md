@@ -420,7 +420,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
-    than `editor_empty_noop`; the identical-failure cap's report lists the
+    than `editor_empty_noop`, and a failed `Install project dependencies`
+    sandbox prepare (`deps_prepare`) is reported the same way as
+    `sandbox_prepare_failed` (`sandbox_prepare_failure_evidence.txt`,
+    `AUTOFIX_SANDBOX_PREPARE_FAILED=true`; the sandbox image build retries
+    Docker Hub and network failures, `REVIEW_SANDBOX_BUILD_ATTEMPTS`); the identical-failure cap's report lists the
     failed runs from the head's `review-autofix-failure:v1` markers
     (`AUTOFIX_FAILURE_MARKER_AUTHOR`) so the intake reads their logs; and a
     support script's self-named error line (`untrusted_process_sandbox: …`)

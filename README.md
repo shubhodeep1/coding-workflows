@@ -1614,7 +1614,7 @@ through `clarify → plan → implement → review`.
   retry; the intake keys these reports on the PR, so one PR holds one open
   heal issue either way. The report carries
   the run's `finalize_reason` (or the flag that fired: `reviewers_failed`,
-  `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
+  `sandbox_prepare_failed`, `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
   `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
   escalations are left to the `ai:resolver-escalated` label path. The
   reporter never fails the review job; stable log lines are prefixed
@@ -1707,6 +1707,26 @@ through `clarify → plan → implement → review`.
   handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
   no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
   summariser exited 226 and the run was reported as an empty editor.
+- **A failed review sandbox prepare names its phase too:** when `Install
+  project dependencies (best-effort)` (step id `deps_prepare`) fails, the
+  editor never runs either. `Post editor summary comment` then names the
+  failure `sandbox_prepare_failed` (ranked after `reviewers_failed` and ahead
+  of the editor flags, in the same places), sets
+  `AUTOFIX_SANDBOX_PREPARE_FAILED=true`, and writes
+  `sandbox_prepare_failure_evidence.txt` (the last `REVIEW_SANDBOX_BUILD
+  outcome=fail` line and the prepare's last error line) from the prepare
+  stderr the step keeps in `sandbox_prepare_stderr.txt`. The no-output
+  comment names the sandbox prepare and its redacted error; the retry
+  handling is unchanged. `scripts/review_untrusted_sandbox.sh` also retries
+  the sandbox image build when Docker Hub or the network fails (429/5xx,
+  `failed to resolve source metadata`, TLS or I/O timeouts, resets): up to
+  `REVIEW_SANDBOX_BUILD_ATTEMPTS` attempts (default `3`), sleeping
+  `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` (default `10`) then
+  `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2` (default `30`) seconds, and logs
+  `REVIEW_SANDBOX_BUILD attempt=<n> outcome=ok|retry|fail`. Other build
+  failures fail at once. On PR #6645 two runs (37989220029, 37994304266) lost
+  their editor to one Docker Hub 500/504 on `node:22.16.0-bookworm-slim` and
+  were reported as `editor_empty_noop`.
 - **The summariser works from its prompt only:** `scripts/summarize_reviewer_consensus.sh`
   inlines every reviewer output and tells the model not to call tools or open
   reviewer files on disk. The prompt used to point at

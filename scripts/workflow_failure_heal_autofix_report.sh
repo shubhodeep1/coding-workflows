@@ -54,6 +54,10 @@
 #                                          (true/false); names the failure reviewers_failed,
 #                                          after editor_preflight_failed (the preflight step
 #                                          runs first) and ahead of the editor flags
+#   AUTOFIX_SANDBOX_PREPARE_FAILED         the review sandbox prepare failed, so the editor
+#                                          never ran (true/false); names the failure
+#                                          sandbox_prepare_failed, after reviewers_failed
+#                                          and ahead of the editor flags
 #   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
 #                                          identical-failure cap passes identical_failure_cap);
 #                                          wins over the flags when it is a valid reason token
@@ -144,6 +148,9 @@ elif [ "${EDITOR_PREFLIGHT_FAILED:-false}" = "true" ]; then
 elif [ "${AUTOFIX_REVIEWERS_FAILED:-false}" = "true" ]; then
 	# The reviewer step failed, so the editor never ran.
 	FAILURE_REASON="reviewers_failed"
+elif [ "${AUTOFIX_SANDBOX_PREPARE_FAILED:-false}" = "true" ]; then
+	# The review sandbox could not be prepared, so the editor never ran.
+	FAILURE_REASON="sandbox_prepare_failed"
 elif [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
 	FAILURE_REASON="editor_empty_noop"
 elif [ "${EDITOR_CHANGES_LOST:-false}" = "true" ]; then
@@ -205,6 +212,14 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/reviewers_failure_evidence.txt" ]; then
 		echo "--- reviewers_failure_evidence.txt ---"
 		head -n 40 "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | cut -c1-400
+	fi
+	# The sandbox prepare's last error and the prepare stderr tail when the
+	# review sandbox could not be prepared ("Post editor summary comment").
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt" ]; then
+		echo "--- sandbox_prepare_failure_evidence.txt ---"
+		head -n 10 "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | cut -c1-400
+		echo "--- sandbox_prepare_stderr.txt (tail) ---"
+		tail -n 40 "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | cut -c1-400
 	fi
 	if [ -s "${SUMMARY_LINE_FILE}" ]; then
 		head -c 6000 "${SUMMARY_LINE_FILE}"
