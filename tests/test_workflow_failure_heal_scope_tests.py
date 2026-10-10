@@ -277,6 +277,14 @@ def test_ci_contract_guards_scope_ci_yml() -> None:
 		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 
 
+def test_ci_poll_sharding_guard_scopes_ci_and_both_release_gates() -> None:
+	wfs = (".github/workflows/ci.yml", ".github/workflows/mark-stable.yml", ".github/workflows/test-and-mark-stable.yml")
+	out = heal.heal_scope_guard_subjects(["tests/test_ci_poll_test_sharding.py"], exists=lambda path: True, oversized_workflows=lambda: [])
+	assert out == list(wfs)
+	# Every subject must exist at the scope commit.
+	assert heal.heal_scope_guard_subjects(["tests/test_ci_poll_test_sharding.py"], exists=lambda path: path == wfs[0], oversized_workflows=lambda: []) == [wfs[0]]
+
+
 def test_oversized_workflows_read_the_checkout_without_a_ref() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		root = Path(tmpdir) / "repo"
