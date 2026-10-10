@@ -1937,8 +1937,13 @@ through `clarify → plan → implement → review`.
   branch when the reported `script_ref` is `stable` or an ancestor of `main`;
   it targets the PR head when the support ref equals that head or cannot be
   resolved. A missing PR-head branch falls back to `stable` (`warn
-  source_pr_branch_missing`). The `created` log line records the choice as
-  `target_branch_source=default|failed_run_branch|support_ref|source_pr_head|base_branch`.
+  source_pr_branch_missing`). A consumer report whose release pin `stable`
+  does not contain (the branch-progress compare above says `behind` or
+  `diverged`, for example this repository's own projects validating on `main`)
+  targets the default branch instead, because `stable` has none of the code
+  that failed (`target_branch_retarget … reason=wrapper_pin_not_on_target`;
+  #7063). An unavailable compare keeps `stable`. The `created` log line records the choice as
+  `target_branch_source=default|failed_run_branch|support_ref|source_pr_head|base_branch|wrapper_pin_not_on_target`.
   Two further tokens cover review/autofix failures **self-inflicted** by a
   branch of this repository. The autofix reporter sends ownership facts with
   its report (`base_branch`, `script_ref`, the PR's `changed_files`, and
