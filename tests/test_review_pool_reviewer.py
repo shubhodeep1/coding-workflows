@@ -218,6 +218,32 @@ def test_pool_outcomes_feed_the_circuit_breaker(tmp_path: Path) -> None:
 	assert _run(tmp_path / "codex", AI_ENGINE_RESOLVED_PANEL_REVIEWER="codex")["health"] == []
 
 
+def test_fallback_success_counts_as_a_slot_failure(tmp_path: Path) -> None:
+	# Like run_reviewer: a Haiku success after a failed Sonnet run must not
+	# reset the slot's consecutive failure count.
+	result = _run(tmp_path, FAKE_SONNET_RC="1", FAKE_HAIKU_OUT=FINDINGS)
+	assert result["status"] == "success"
+	assert result["health"] == [f"{SLOT} retryable_failure pool_exit_1"]
+
+
+def test_budget_and_pr_closed_skips_record_no_health(tmp_path: Path) -> None:
+	(tmp_path / "budget").mkdir()
+	(tmp_path / "closed").mkdir()
+	budget = _run(tmp_path / "budget", FAKE_BUDGET="200", FAKE_SONNET_OUT=FINDINGS)
+	assert budget["status"] == "skipped_budget"
+	assert budget["health"] == []
+	pr_number = f"99{os.getpid()}"
+	sentinel = Path(f"/tmp/pr_closed_sentinel_{pr_number}")
+	sentinel.write_text("closed\n", encoding="utf-8")
+	try:
+		closed = _run(tmp_path / "closed", PR_NUMBER=pr_number, FAKE_SONNET_OUT=FINDINGS)
+	finally:
+		sentinel.unlink()
+	assert closed["status"] == "pr_closed"
+	assert closed["runs"] == []
+	assert closed["health"] == []
+
+
 def test_low_run_budget_skips_before_any_pool_run(tmp_path: Path) -> None:
 	result = _run(tmp_path, FAKE_BUDGET="200", FAKE_SONNET_OUT=FINDINGS)
 	assert result["status"] == "skipped_budget"

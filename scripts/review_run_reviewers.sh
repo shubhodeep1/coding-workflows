@@ -5184,7 +5184,15 @@ run_pool_reviewer() {
     # pool outage, budget, PR closed) are not slot failures and record nothing.
     if command -v reviewer_record_health_outcome >/dev/null 2>&1; then
       case "${pool_final_status}" in
-        success) reviewer_record_health_outcome "${model}" "primary_success" "" "" "${log_file}" || true ;;
+        success)
+          # A fallback-model success still means the slot model failed, as in
+          # run_reviewer; recording primary_success would reset the count.
+          if [ "${pool_success_model:-}" = "${pool_fallback_model}" ] && [ "${pool_fallback_model}" != "${pool_primary_model}" ]; then
+            reviewer_record_health_outcome "${model}" "retryable_failure" "${pool_success_model}" "pool_${pool_last_reason:-fallback_used}" "${log_file}" || true
+          else
+            reviewer_record_health_outcome "${model}" "primary_success" "${pool_success_model:-}" "" "${log_file}" || true
+          fi
+          ;;
         failed) reviewer_record_health_outcome "${model}" "retryable_failure" "" "pool_${pool_last_reason:-unknown}" "${log_file}" || true ;;
       esac
     fi
