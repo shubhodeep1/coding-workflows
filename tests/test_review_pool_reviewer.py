@@ -371,3 +371,22 @@ def test_pool_skip_does_not_count_as_a_hard_failure(tmp_path: Path) -> None:
 	assert result["calls"] == [f"pool {SLOT}"]
 	assert "RESULT=0" in result["stdout"]
 	assert "not counted as success" not in result["stderr"]
+
+
+@pytest.mark.parametrize(("role", "expected", "absent"), [
+	("PANEL_REVIEWER", "no codex fallback", "running codex"),
+	("REVIEW_EDITOR", "running codex", "no codex fallback"),
+])
+def test_fallback_alert_names_the_panel_slot_action(tmp_path: Path, role: str, expected: str, absent: str) -> None:
+	# ai_engine_fallback's Telegram alert must not claim codex runs for the
+	# Claude review-panel slot, which has no codex path.
+	sent = tmp_path / "sent.txt"
+	script = textwrap.dedent(f"""\
+		tg_send_msg() {{ printf '%s\\n' "$1" >> "{sent}"; }}
+		source "{REPO_ROOT / 'scripts' / 'ai_engine.sh'}"
+		ai_engine_fallback {role} all_accounts_failed
+		""")
+	subprocess.run(["bash", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path)}, capture_output=True, text=True, check=True)
+	message = sent.read_text(encoding="utf-8")
+	assert expected in message
+	assert absent not in message
