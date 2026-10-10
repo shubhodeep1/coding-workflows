@@ -50,7 +50,8 @@ VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_
 # systemd attempt. Either way a test container that the daemon refuses to
 # start (or a probe image the daemon refuses to import) fails provision; only
 # a probe the host cannot build, or whose command cannot run inside the
-# container (exit 126/127), passes as container_probe_inconclusive.
+# container (exit 126/127 without a cgroup error), passes as
+# container_probe_inconclusive.
 VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-auto}"
 SANDBOX_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -282,9 +283,15 @@ build_probe_image()
 	done < <(printf '/usr/bin/true\n'; ldd /usr/bin/true 2>/dev/null | grep -oE '(^|[[:space:]])/[^[:space:]]+' | tr -d '[:blank:]')
 	[ "${#files[@]}" -ge 1 ] || return 1
 	set +e
-	tar -C / -chf - -- "${files[@]}" 2>/dev/null | as_sandbox docker import --change 'CMD ["/usr/bin/true"]' - "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>&1
+	local import_err_file
+	import_err_file="$(mktemp 2>/dev/null)" || import_err_file=/dev/null
+	tar -C / -chf - -- "${files[@]}" 2>/dev/null | as_sandbox docker import --change 'CMD ["/usr/bin/true"]' - "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>"${import_err_file}"
 	local -a import_status=("${PIPESTATUS[@]}")
 	set -e
+	# The daemon's refusal text and exit code, for the caller's log line.
+	SANDBOX_PROBE_IMPORT_RC="${import_status[1]}"
+	SANDBOX_PROBE_IMPORT_ERR="$(cat -- "${import_err_file}" 2>/dev/null || true)"
+	[ "${import_err_file}" = /dev/null ] || rm -f -- "${import_err_file}"
 	[ "${import_status[0]}" -eq 0 ] && [ "${import_status[1]}" -eq 0 ] && return 0
 	# tar killed by SIGPIPE (141) means the daemon side closed the stream first.
 	if [ "${import_status[1]}" -ne 0 ] && { [ "${import_status[0]}" -eq 0 ] || [ "${import_status[0]}" -eq 141 ]; }; then
@@ -294,16 +301,18 @@ build_probe_image()
 }
 
 # Start (and remove) one container: 0 when it ran, 1 when the daemon refused
-# to start it (`docker run` exit 125, the cgroup failure) or to import the
-# probe image, 2 when the probe is inconclusive (the host could not assemble
-# the image, or the image's command could not run: 126/127), so a host-side
-# probe problem is never mistaken for a broken daemon.
+# to start it (`docker run` exit 125, or 126/127 with a cgroup error) or to
+# import the probe image, 2 when the probe is inconclusive (the host could not
+# assemble the image, or the image's command could not run: 126/127 without a
+# cgroup error), so a host-side probe problem is never mistaken for a broken
+# daemon.
 rootless_docker_container_probe()
 {
 	local probe_err="" rc=0 build_rc=0
 	build_probe_image || build_rc=$?
 	if [ "${build_rc}" -eq 3 ]; then
-		printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=import detail=docker import refused\n' >&2
+		printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=%s stage=import detail=%s\n' "${SANDBOX_PROBE_IMPORT_RC:-unknown}" \
+			"$(printf '%s' "${SANDBOX_PROBE_IMPORT_ERR:-docker import refused}" | tr -c '[:print:]' ' ' | cut -c1-300)" >&2
 		return 1
 	fi
 	[ "${build_rc}" -eq 0 ] || return 2
@@ -313,6 +322,12 @@ rootless_docker_container_probe()
 	printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=%s detail=%s\n' "${rc}" \
 		"$(printf '%s' "${probe_err}" | tr -c '[:print:]' ' ' | cut -c1-300)" >&2
 	[ "${rc}" -eq 125 ] && return 1
+	# The Docker CLI (runStartContainerErr) maps a container-start error whose
+	# text contains "no such file or directory" to 127 and "permission denied"
+	# to 126, so the cgroup failure (#7063) arrives as 126/127, not 125.
+	case "${probe_err}" in
+		*cgroup*) return 1 ;;
+	esac
 	return 2
 }
 
@@ -324,6 +339,10 @@ rootless_docker_container_probe()
 sandbox_start_verified_dockerd()
 {
 	local user="$1" uid="$2" home="$3" runtime_dir="$4" mode="" probe_rc=0
+	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
+		auto|cgroupfs) ;;
+		*) sandbox_log provision ok cgroup_mode_unrecognized_using_auto ;;
+	esac
 	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
 		cgroupfs) mode=cgroupfs ;;
 		*)

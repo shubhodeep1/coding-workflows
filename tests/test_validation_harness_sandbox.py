@@ -617,13 +617,16 @@ def test_a_reused_daemon_is_tested_too_and_replaced_when_containers_fail(tmp_pat
 	assert calls == ["session ai-validation 1002", "probe reused", "stop", "start cgroupfs", "probe cgroupfs"]
 
 
-def _probe(tmp: Path, run_rc: int) -> subprocess.CompletedProcess:
+CGROUP_ERR = "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory"
+
+
+def _probe(tmp: Path, run_rc: int, message: str = CGROUP_ERR) -> subprocess.CompletedProcess:
 	script = f'''
 source "{HELPER}"
 as_sandbox() {{
 	case "$*" in
 		"docker image inspect"*) return 0 ;;
-		"docker run"*) echo "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory" >&2; return {run_rc} ;;
+		"docker run"*) echo "{message}" >&2; return {run_rc} ;;
 	esac
 }}
 rootless_docker_container_probe
@@ -632,12 +635,20 @@ rootless_docker_container_probe
 		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp)})
 
 
-@pytest.mark.parametrize("run_rc,expected", ((0, 0), (125, 1), (126, 2), (127, 2)))
-def test_only_a_daemon_refusal_counts_as_a_failed_container_start(tmp_path: Path, run_rc: int, expected: int) -> None:
-	result = _probe(tmp_path, run_rc)
+# The Docker CLI (runStartContainerErr) exits 127 for a start error containing
+# "no such file or directory", so the #7063 cgroup error arrives as 127.
+NOT_FOUND_ERR = "docker: Error response from daemon: exec: /usr/bin/true: executable file not found in PATH"
+
+
+@pytest.mark.parametrize("run_rc,message,expected", (
+	(0, CGROUP_ERR, 0), (125, CGROUP_ERR, 1), (127, CGROUP_ERR, 1), (126, CGROUP_ERR, 1),
+	(126, NOT_FOUND_ERR, 2), (127, NOT_FOUND_ERR, 2),
+))
+def test_only_a_daemon_refusal_counts_as_a_failed_container_start(tmp_path: Path, run_rc: int, message: str, expected: int) -> None:
+	result = _probe(tmp_path, run_rc, message)
 	assert result.returncode == expected, result.stderr
 	if run_rc:
-		assert f"probe_exit={run_rc} detail=docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers" in result.stderr
+		assert f"probe_exit={run_rc} detail={message[:60]}" in result.stderr
 
 
 @pytest.mark.skipif(shutil.which("ldd") is None or not Path("/usr/bin/true").exists(), reason="needs ldd and /usr/bin/true")
@@ -745,7 +756,7 @@ source "{HELPER}"
 as_sandbox() {{
 	case "$*" in
 		"docker image inspect"*) return 1 ;;
-		"docker import"*) cat >/dev/null; return 1 ;;
+		"docker import"*) cat >/dev/null; echo "Error response from daemon: import refused by test" >&2; return 1 ;;
 		"docker run"*) echo "docker run must not be reached" >&2; return 0 ;;
 	esac
 }}
@@ -757,7 +768,7 @@ rootless_docker_container_probe
 		assert result.returncode == 2, result.stderr
 		return
 	assert result.returncode == 1, result.stderr
-	assert "probe_exit=import" in result.stderr
+	assert "probe_exit=1 stage=import detail=Error response from daemon: import refused by test" in result.stderr
 	assert "docker run must not be reached" not in result.stderr
 
 
@@ -781,7 +792,7 @@ as_sandbox() {{
 	case "$*" in
 		"docker info"*) [ -n "${{DAEMON}}" ] ;;
 		"docker image inspect"*) return 0 ;;
-		"docker run"*) echo "run ${{DAEMON}}" >> "{calls}"; echo "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory" >&2; return 125 ;;
+		"docker run"*) echo "run ${{DAEMON}}" >> "{calls}"; echo "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory" >&2; return 127 ;;
 	esac
 }}
 sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
@@ -802,3 +813,10 @@ def test_a_non_integer_session_wait_falls_back_to_the_default(tmp_path: Path) ->
 		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "SANDBOX_SESSION_WAIT_SECS": "15s"})
 	assert result.returncode == 0, result.stderr
 	assert result.stdout == "15"
+
+
+def test_an_unrecognized_cgroup_mode_is_logged_and_uses_auto(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 0}, mode="cgoupfs")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=ok reason=cgroup_mode_unrecognized_using_auto" in result.stderr
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]

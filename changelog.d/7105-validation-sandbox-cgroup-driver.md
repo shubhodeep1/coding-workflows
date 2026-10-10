@@ -8,6 +8,6 @@ Every validation on this repository stopped before any check ran: Docker refused
 | Projects blocked on this today | #6902, #6664 |
 | New setting | `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` (`auto` default, or `cgroupfs`) |
 | User-session wait | 15 s |
-| Exit code treated as a daemon refusal | `125` (126/127 are inconclusive) |
+| Exit codes treated as a daemon refusal | `125`, or `126`/`127` with a cgroup error (the CLI exits `127` for this one) |
 
 What this means for operators: re-run validation (`/revalidate`) on projects stuck with `ai:harness-broken` from this error. Under the cgroupfs fallback, container resource limits in a validation compose file are ignored.
