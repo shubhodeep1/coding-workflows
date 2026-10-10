@@ -14,7 +14,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
 8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
-9. **Update Workflows** — Automatically updates existing and creates new workflow wrappers in consumer repos when upstream templates change
+9. **Update Workflows** — Automatically updates existing and creates new workflow wrappers in consumer repos when upstream templates change; with `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) the updates arrive as a pull request that the `verify` job checks against the attested release manifest (`UPDATER_VERIFY_RELEASE_MANIFEST`, default `false`), instead of a direct push to the default branch
 10. **Security Audit (source repo only)** — Weekly/manual default-branch OWASP Top 10 + STRIDE audit that records findings on a stable tracker issue and opens one follow-up issue per new finding
 
 For the issue → PR pipeline state machine and the full command vocabulary, see [`docs/how-it-works.md`](docs/how-it-works.md).

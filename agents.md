@@ -1580,6 +1580,43 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   ships) and deletes a consumer copy only when it is byte-identical to a
   released version (log prefix `RETIRED_FILE_REMOVED`); a locally modified copy
   is kept (`RETIRED_FILE_KEPT_MODIFIED`).
+- Attested release manifest (#6943). The `release` job of `mark-stable.yml`
+  and `test-and-mark-stable.yml` runs `scripts/release_manifest_publish.sh build`
+  after the version tag is pushed: it checks that the tag peels to the release
+  SHA, checks that commit out into a detached worktree and runs that tree's own
+  `scripts/release_manifest.py build`, writing `release-manifest.v1.json`
+  (`RELEASE_MANIFEST_ASSET_NAME`, default set in the helper; schema
+  `ai-memory/schemas/release_manifest.v1.json`). The job attests the file with
+  `actions/attest-build-provenance@v3` (only that job holds `id-token: write`
+  and `attestations: write`), and `upload` adds it to the GitHub Release
+  (`--clobber`; the manifest is deterministic per tag) and checks the asset
+  landed. Any failure prints `::error::RELEASE_MANIFEST outcome=failed
+  reason=<token>` and stops the release before "Notify consumer repos via
+  repository_dispatch". Log prefix `RELEASE_MANIFEST`; tests
+  `tests/test_release_manifest.py` and
+  `tests/test_release_manifest_workflow_contract.py`.
+- Fail-closed verification (#6957). The `Verify attested release manifest`
+  step (`id: verify_release_manifest`) of `update_workflows.yml` acts only when
+  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `false`; off it logs
+  `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` and makes no API
+  call). It resolves the `vX.Y.Z` release whose tag points at the `stable`
+  commit, downloads the asset, runs `gh attestation verify` with a
+  `--cert-identity-regex` limited to this repo's `mark-stable.yml` /
+  `test-and-mark-stable.yml` at `refs/heads/(main|stable)`, hash-checks the
+  verifier modules against the manifest (`verifier_unattested` for releases
+  whose manifest predates them, `verifier_hash_mismatch`), and runs
+  `scripts/verify_release_manifest.py verify` on every file the updater reads
+  (the `verify-pr-tree` subcommand serves the `verify` job below). A rejection
+  logs `UPDATER_MANIFEST_VERIFY outcome=rejected reason=<token>
+  stage=<input|tag|release|download|attestation|header|bootstrap|paths|verify>`
+  and stops the run before any consumer file is written; the summary shows
+  `ERR_RELEASE_MANIFEST_VERIFY_FAILED`. Verifier reasons include
+  `schema_invalid`, `repository_mismatch`, `sha_mismatch`, `unlisted_path`,
+  `missing_file`, `hash_mismatch`, `mode_mismatch`, `size_mismatch`,
+  `symlink_mismatch`, `read_failed` and `internal_error`. The step logic stays
+  inline because in consumer runs the only `scripts/` copy is the release tree
+  under verification. Tests `tests/test_verify_release_manifest.py` and
+  `tests/test_update_workflows_manifest_verify.py`.
 - With `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) its `Commit and push
   updates` step (`id: commit_push`) never pushes to the default branch: it
   commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
@@ -1593,8 +1630,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `verified=true` release it records `auto_merge=pending_verify`. PR calls use
   `GH_PAT`; no job requests a `pull-requests` permission because a reusable
   job cannot raise the caller's grant. Log prefix `UPDATER_PR_DELIVERY`.
-- The separate `verify` job (#7004; job id, status context and log prefix are
-  provisional because the plan could not be read) runs after a PR was opened
+- The separate `verify` job (#7004; job id `verify`, status context
+  `ai-update-workflows/verify` and log prefix `UPDATER_PR_VERIFY` as shipped in
+  `update_workflows.yml`) runs after a PR was opened
   or refreshed. It checks the PR head out without credentials and never runs
   code from it, re-attests the release manifest, hash-checks every release
   module it runs, checks that the PR adds one commit with the
