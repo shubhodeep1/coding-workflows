@@ -1403,15 +1403,23 @@ _autofix_pr_named_review_runs()
 			|| { rm -f "${review_error_file}"; return 1; }
 	done
 	rm -f "${review_error_file}"
-	printf '%s' "${review_all}" | jq -c --arg pr "${pr_number}" --arg branch "${review_default_branch}" '
+	printf '%s' "${review_all}" | jq -c --arg pr "${pr_number}" --arg branch "${review_default_branch}" --arg repo "${GITHUB_REPOSITORY}" '
+		# The wrapper path, with an "@<ref>" suffix and a leading
+		# "<this repo>/" prefix removed (same rule as the poller, issue #6629).
+		def review_path:
+			((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
+			| if ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
+				then $p[(($repo | length) + 1):]
+				else $p
+				end;
 		[.[]
 		 | select(type == "object")
 		 # A null/empty head_branch is accepted (issue #6629, Q2): GitHub can
 		 # report one on a real default-branch dispatch (#4928), while a
 		 # branch-copy spoof always reports its own non-empty branch.
 		 | select(.event == "workflow_dispatch" and (((.head_branch // "") == "") or .head_branch == $branch))
-		 | select((.path == ".github/workflows/internal-review.yml" and .display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
-		     or (.path == ".github/workflows/ai-review.yml" and .display_title == ("AI Review [pr:" + $pr + "]")))
+		 | select((review_path == ".github/workflows/internal-review.yml" and .display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
+		     or (review_path == ".github/workflows/ai-review.yml" and .display_title == ("AI Review [pr:" + $pr + "]")))
 		 | {id, status, conclusion, created_at, path}]
 	' 2>/dev/null
 }

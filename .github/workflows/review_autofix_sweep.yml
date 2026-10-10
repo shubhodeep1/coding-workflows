@@ -276,7 +276,7 @@ jobs:
                   # branch key. Everything else stays keyed by head branch.
                   # Provenance (issue #6629): the run must also come from the
                   # default branch (or report a null head_branch, #4928) and
-                  # from internal-review.yml itself; a branch copy's run keeps
+                  # from internal-review.yml itself; a run from a branch copy keeps
                   # its own head-branch key, which never matches a pr: key.
                   def dispatch_pr:
                     if (.event // "") == "workflow_dispatch"
