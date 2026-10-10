@@ -213,7 +213,7 @@ project-written line blocks (replaces the original D2).
   most common invalidation and adds no project code. Patch-id comparison of a
   multi-thousand-line diff is heavier and fails on any context drift.
 
-### D5 — Waivers persist in project state and match exact-or-fuzzy
+### D5 — Waivers persist in project state and match by exact id
 
 Shipped (`security_pass_waived_findings`,
 `SECURITY_AUDIT_WAIVED_FINDINGS`, `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,

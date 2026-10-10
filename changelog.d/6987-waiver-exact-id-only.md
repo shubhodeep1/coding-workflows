@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **A security-pass waiver no longer hides a different finding next to it.** A waiver now suppresses a re-reported finding only when its `finding_id` matches exactly and the category, severity and exploit scenario the waiver recorded also match. A finding under any other id is new and blocks, even at the waived file and line.
+
+Before, `scripts/security_audit.sh` and `scripts/orchestrate_poll_process.sh` also dropped a finding with a new id when its file, category, severity and exploit scenario matched a waiver within `SECURITY_AUDIT_WAIVER_LINE_WINDOW` (40) lines, so a distinct defect near an accepted one could pass unreported. The auditor prompt now tells the model to reuse an accepted defect's original id. Waiver rows store `exploit_scenario` (at most 600 characters) so the comparison still works after a deferred follow-up drops the row's finding payload.
+
+What this means for operators: `SECURITY_AUDIT_WAIVER_LINE_WINDOW` is still accepted and validated, but it no longer changes anything; both scripts log that. A re-report whose recorded fields changed blocks again and can be accepted again through the exhaustion judge or `/security-pass-waive`.
