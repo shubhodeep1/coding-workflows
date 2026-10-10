@@ -5,7 +5,7 @@ The required-checks wait in `scripts/pr_checks_lib.sh` used to see only check-ru
 
 | The numbers that matter | Value |
 | --- | --- |
-| `AUTO_MERGE_WAIT_WORKFLOWS` | `CI` (default; `none` or empty disables) |
+| `AUTO_MERGE_WAIT_WORKFLOWS` | `CI` (default; `none` or `off` disables; names match case-insensitively) |
 | `CI_BUDGET_WORKFLOW_WARN_BYTES` | `440000` (guard: 480,000) |
 | `CI_BUDGET_JOB_WARN_RATIO` | `0.75` of `timeout-minutes` |
 | Test files that ran in no workflow | 66 of 315, 7 of them stale |

@@ -346,7 +346,8 @@ _pr_checks_completed()
 # `_pr_head_ci_runs_pending <head_sha>` sets PR_CHECKS_RUNS_PENDING to the
 # number of workflow runs on <head_sha> whose workflow name is listed in
 # AUTO_MERGE_WAIT_WORKFLOWS (comma-separated, default "CI"; "none" disables)
-# and whose status is not completed, the caller's own run excluded.
+# (matched case-insensitively, as the "none"/"off" check is) and whose
+# status is not completed, the caller's own run excluded.
 # Why: a workflow run exists (queued) as soon as the push event fires, but
 # its jobs' check-runs appear only when they start. A fast check that
 # already passed (the PR-body lint) made the head look green while CI was
@@ -367,11 +368,11 @@ _pr_head_ci_runs_pending()
 	self_run="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}"
 	runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?head_sha=${head_sha}&per_page=100" 2>/dev/null || echo "")"
 	PR_CHECKS_RUNS_PENDING="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
-		($names | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $wanted
+		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select(.status != "completed")
 			| select((.id | tostring) != $self_run)
-			| select(.name as $n | $wanted | index($n))]
+			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))]
 		| length' 2>/dev/null | tail -n1)"
 	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
 	return 0

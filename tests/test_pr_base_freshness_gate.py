@@ -392,6 +392,12 @@ class RequiredChecksWait(unittest.TestCase):
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=ci_run_pending", out)
 
+	def test_wait_workflow_names_match_case_insensitively(self) -> None:
+		runs = _ci_runs(("CI", "queued", 101))
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "ci"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
 	def test_failed_runs_read_falls_back_to_the_check_runs(self) -> None:
 		rc, out = _wait([GREEN], ci_runs_sequence=["not json"])
 		self.assertEqual(rc, 0, out)
@@ -415,12 +421,14 @@ class RequiredChecksWiring(unittest.TestCase):
 		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
 		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", job)
 
 	def test_codex_agent_auto_merge_step_passes_the_wait_variables(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
 
 	def test_freshness_is_rechecked_after_a_wait_on_every_auto_merge_path(self) -> None:
 		job = WORKFLOW.read_text(encoding="utf-8").split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
@@ -433,6 +441,7 @@ class RequiredChecksWiring(unittest.TestCase):
 		step = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
 
 	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
