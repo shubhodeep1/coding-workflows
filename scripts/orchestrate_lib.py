@@ -3661,6 +3661,23 @@ def cmd_print_integration_ref(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
+	"""Print the integration branch an issue body declares, or nothing.
+
+	Reads the issue body from stdin and applies extract_integration_branch
+	(canonical ``Integration branch:`` line first, ``Target branch:`` alias
+	otherwise). Issue #6631: close_merged_issues_sweep and
+	issue_pr_status.yml use it to decide whether a merged PR's base is the
+	issue's own target branch, so the parser stays in one place.
+	"""
+	del args
+	body = sys.stdin.read()
+	branch = extract_integration_branch(body)
+	if branch:
+		print(branch)
+	return 0
+
+
 def cmd_check_stalls(args: argparse.Namespace) -> int:
 	"""Detect stalled issues and return recommended recovery actions."""
 	path = Path(args.state_file).resolve()
@@ -3774,6 +3791,194 @@ def cmd_concurrency_caps(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Unrouted replies on blocked issues (issue #6630)
+# ---------------------------------------------------------------------------
+# The poller's sweep-only tick flags an open ai:blocked issue whose newest
+# trusted human comment never resumed the pipeline: a /reclarify the intake
+# skipped, or an answer posted without any command. Classification goes by
+# comment content, never by login: automation and the operator can share the
+# GH_PAT account.
+
+UNROUTED_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+UNROUTED_ROUTED_LABELS = frozenset({"ai:clarification", "ai:planning", "ai:awaiting-approval", "ai:implementing"})
+UNROUTED_BLOCK_LABEL = "ai:blocked"
+_UNROUTED_AUTOMATION_MARKER_RE = re.compile(r"<!--\s*(?:ai:|ai_|orchestrator_)", re.IGNORECASE)
+# Other pipeline markers: helpers post comments under their own names
+# (tg_cleanup / tg_phase from tg_helpers.sh, workflow-failure-heal:occurrence,
+# ...) and versioned NAME_V1 blocks. These are never a human reply, but unlike
+# the markers above they do not show that a reply was handled, so they only
+# disqualify the comment as the human candidate. Missing them let a bare
+# `<!-- tg_cleanup:N -->`, posted a second after the block, pass as a human
+# reply and page the operator.
+_UNROUTED_PIPELINE_MARKER_RE = re.compile(
+	r"<!--\s*(?:ai-|tg_cleanup:|tg_phase:|gh_rl_ts:|status:"
+	r"|workflow-failure-heal:|check-failure-triage:|claude-branch-review:"
+	r"|review-autofix-failure|security-pass-|re-security-pass-dedup|revalidate-dedup"
+	r"|merge-train|validation-failure-fingerprint|force-merge-bypass"
+	r"|[a-z][a-z0-9_]*_v[0-9]+\b)",
+	re.IGNORECASE,
+)
+# A reply has visible text; a body that is only HTML comments is bookkeeping.
+_UNROUTED_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+# Openings of automation comments that predate their markers (or never carry
+# one). Lower-case; compared against the left-stripped, lower-cased body.
+_UNROUTED_AUTOMATION_PREFIXES = (
+	"/answer [auto-",
+	"/reclarify [auto-",
+	"/approved [auto-",
+	"clarification blocked:",
+	"planning blocked:",
+	"implementation blocked:",
+	"autonomous resolution not possible",
+	"clarification loop guard escalation",
+	"clarification required",
+	"implementation plan",
+	"the task appears clear.",
+	"ai clarification workflow",
+	"ai planning workflow",
+	"ai implementation workflow",
+)
+
+
+def is_reclarify_command_body(body: Any) -> bool:
+	"""Mirror clarify.yml's jobs.clarify.if: /reclarify on the first line, or on
+	a later line of a comment with no automation marker and no plan trailer.
+	Case-insensitive like GitHub's startsWith/contains."""
+	text = (body if isinstance(body, str) else "").lower()
+	if text.startswith("/reclarify"):
+		return True
+	return (
+		"\n/reclarify" in ("\n" + text)
+		and "<!-- ai:" not in text
+		and "to restart clarification reply:" not in text
+	)
+
+
+def _is_unrouted_automation_body(body: Any) -> bool:
+	text = body if isinstance(body, str) else ""
+	if _UNROUTED_AUTOMATION_MARKER_RE.search(text):
+		return True
+	return text.lstrip().lower().startswith(_UNROUTED_AUTOMATION_PREFIXES)
+
+
+def _is_unrouted_non_human_body(body: Any) -> bool:
+	if _is_unrouted_automation_body(body):
+		return True
+	text = body if isinstance(body, str) else ""
+	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
+		return True
+	return not _UNROUTED_HTML_COMMENT_RE.sub("", text).strip()
+
+
+def _parse_github_ts(value: Any) -> datetime | None:
+	if not isinstance(value, str) or not value:
+		return None
+	try:
+		parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+	except ValueError:
+		return None
+	if parsed.tzinfo is None:
+		parsed = parsed.replace(tzinfo=timezone.utc)
+	return parsed.astimezone(timezone.utc)
+
+
+def _nodes(container: Any) -> list:
+	if isinstance(container, dict):
+		nodes = container.get("nodes")
+		return [node for node in nodes if isinstance(node, dict)] if isinstance(nodes, list) else []
+	if isinstance(container, list):
+		return [node for node in container if isinstance(node, dict)]
+	return []
+
+
+def classify_unrouted_blocked_issues(
+	details: Any,
+	now: datetime,
+	grace_minutes: int = 15,
+	max_age_hours: int = 168,
+) -> list[dict[str, Any]]:
+	"""Return the blocked issues whose newest trusted human comment was never routed.
+
+	`details` maps (or lists) GraphQL issue objects carrying `number`,
+	`labels.nodes[].name`, `comments.nodes[]` (databaseId, body, createdAt,
+	authorAssociation, author{login,__typename}) and `timelineItems.nodes[]`
+	LabeledEvents (createdAt, label{name}). Pure: no I/O.
+	"""
+	if now.tzinfo is None:
+		now = now.replace(tzinfo=timezone.utc)
+	grace_seconds = max(0, int(grace_minutes)) * 60
+	max_age_seconds = max(1, int(max_age_hours)) * 3600
+	issues = list(details.values()) if isinstance(details, dict) else details if isinstance(details, list) else []
+	flagged: list[dict[str, Any]] = []
+	for issue in issues:
+		if not isinstance(issue, dict):
+			continue
+		number = issue.get("number")
+		if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+			continue
+		labels = {node.get("name") for node in _nodes(issue.get("labels"))}
+		if UNROUTED_BLOCK_LABEL not in labels:
+			continue
+		comments = []
+		for comment in _nodes(issue.get("comments")):
+			created = _parse_github_ts(comment.get("createdAt"))
+			if created is not None:
+				comments.append((created, comment))
+		comments.sort(key=lambda item: item[0])
+		human = None
+		for created, comment in comments:
+			author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+			if (
+				comment.get("authorAssociation") in UNROUTED_TRUSTED_ASSOCIATIONS
+				and author.get("__typename") == "User"
+				and not _is_unrouted_non_human_body(comment.get("body"))
+			):
+				human = (created, comment)
+		if human is None:
+			continue
+		human_ts, human_comment = human
+		comment_id = human_comment.get("databaseId")
+		if not isinstance(comment_id, int) or isinstance(comment_id, bool) or comment_id <= 0:
+			continue
+		age_seconds = (now - human_ts).total_seconds()
+		if age_seconds < grace_seconds or age_seconds > max_age_seconds:
+			continue
+		# Any later automation comment (clarify output, a replay, or this
+		# detector's own marker) means the reply was handled or already flagged.
+		if any(created > human_ts and _is_unrouted_automation_body(comment.get("body")) for created, comment in comments):
+			continue
+		label_events = []
+		for event in _nodes(issue.get("timelineItems")):
+			label = event.get("label") if isinstance(event.get("label"), dict) else {}
+			created = _parse_github_ts(event.get("createdAt"))
+			if created is not None:
+				label_events.append((created, label.get("name")))
+		# The reply must answer the current block, not precede it.
+		blocked_at = [created for created, name in label_events if name == UNROUTED_BLOCK_LABEL]
+		if blocked_at and human_ts <= max(blocked_at):
+			continue
+		if any(created > human_ts and name in UNROUTED_ROUTED_LABELS for created, name in label_events):
+			continue
+		flagged.append({
+			"issue": number,
+			"comment_id": comment_id,
+			"reason": "command_unrouted" if is_reclarify_command_body(human_comment.get("body")) else "no_command",
+			"age_minutes": int(age_seconds // 60),
+		})
+	flagged.sort(key=lambda item: item["issue"])
+	return flagged
+
+
+def cmd_unrouted_blocked_comments(args: argparse.Namespace) -> int:
+	details = json.loads(sys.stdin.read() or "{}")
+	now = _parse_github_ts(args.now) if args.now else datetime.now(timezone.utc)
+	if now is None:
+		raise ValueError(f"invalid --now timestamp: {args.now!r}")
+	print(json.dumps(classify_unrouted_blocked_issues(details, now, args.grace_minutes, args.max_age_hours)))
+	return 0
+
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Orchestrator helper utilities")
@@ -3916,6 +4121,18 @@ def build_parser() -> argparse.ArgumentParser:
 	p_completion_lessons.add_argument("--state-file", required=True)
 	p_completion_lessons.add_argument("--tracking-issue", required=True)
 	p_completion_lessons.set_defaults(func=cmd_completion_lessons)
+
+	p_extract_branch = subparsers.add_parser(
+		"extract-integration-branch",
+		help="Print the integration branch declared in an issue body read from stdin",
+	)
+	p_extract_branch.set_defaults(func=cmd_extract_integration_branch)
+
+	p_unrouted = subparsers.add_parser("unrouted-blocked-comments", help="Flag blocked issues whose newest trusted human reply was never routed (JSON on stdin)")
+	p_unrouted.add_argument("--grace-minutes", type=int, default=15)
+	p_unrouted.add_argument("--max-age-hours", type=int, default=168)
+	p_unrouted.add_argument("--now", default="")
+	p_unrouted.set_defaults(func=cmd_unrouted_blocked_comments)
 
 	return parser
 

@@ -149,6 +149,17 @@ case "${method}" in
         n="${path#*/collaborators/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/permission_${n}.json"
         [ -f "${fixture}" ] || exit 1 ;;
       repos/*/issues/comments/*) fixture="${FAKE_GH_DIR}/comment_body.json" ;;
+      repos/*)
+        # The repository itself: the default-branch read (issue #6629).
+        # default_branch_fail fails it; default_branch overrides "main".
+        if [[ "${path}" =~ ^repos/[^/]+/[^/]+$ ]]; then
+          if [ -f "${FAKE_GH_DIR}/default_branch_fail" ]; then exit 1; fi
+          db="main"
+          [ -f "${FAKE_GH_DIR}/default_branch" ] && db="$(cat "${FAKE_GH_DIR}/default_branch")"
+          printf '{"default_branch":"%s"}\n' "${db}" | jq -r "${jqf:-.}"
+          exit 0
+        fi
+        echo "unexpected GET ${path}" >&2; exit 1 ;;
       *) echo "unexpected GET ${path}" >&2; exit 1 ;;
     esac
     if [[ "${path}" == repos/*/issues/*/comments ]] && [[ "${jqf}" == *"merge-train:released"* ]] && [ -f "${FAKE_GH_DIR}/fail_released_comment_lookup" ]; then
@@ -247,6 +258,10 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 		"GITHUB_ENV": str(github_env),
 		"GH_TOKEN": "x",
 		"PYTHONDONTWRITEBYTECODE": "1",
+		# Outside a checkout the conflict probe fetches from
+		# ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git; keep tests offline.
+		"GITHUB_SERVER_URL": f"file://{tmp_path}/no-such-server",
+		"RUNNER_TEMP": str(tmp_path),
 	})
 	run_env.update(env)
 	result = subprocess.run(
@@ -1262,7 +1277,6 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent"},
 	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent",
 	 "path": ".github/workflows/review_autofix.yml"},
-	{"head_branch": "ai/issue-9999", "event": "workflow_dispatch", "display_title": "AI Review"},
 ])
 def test_release_leaves_pr_queued_when_a_review_run_has_no_key(tmp_path: Path, run_fields: dict) -> None:
 	"""PR #5451, review of head fd3ad67 (AD-14): a review run with no non-empty
@@ -1403,11 +1417,54 @@ def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
 		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
 		 "path": ".github/workflows/ci.yml"},
 	], total_count_override={"queued": 3})
-	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
 	assert result.returncode == 0, result.stderr
-	assert "reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	# A shift that persists is re-read twice (the default budget), then the
+	# listing is incomplete as before.
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "attempt=2/2" in result.stderr
+	assert "attempt=3/" not in result.stderr
+	assert "outcome=incomplete reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	assert log_text.count("actions/runs?status=queued") == 3
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+
+
+def test_release_rereads_a_listing_that_shifted_once(tmp_path: Path) -> None:
+	"""One run changing status mid-read no longer costs the release tick (run 38003551535)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = [{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push", "path": ".github/workflows/ci.yml"}]
+	_write_runs(fixtures, runs, total_count_override={"queued": 3})
+	# Calls 1-3 read requested, pending and queued (shifted); the re-read of
+	# queued (call 4) and every later call see a consistent listing.
+	(fixtures / "actions_runs_after_switch.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	(fixtures / "actions_runs_switch_at").write_text("4", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE" not in result.stdout
+	# No review run is in flight, so the queued PR is released this tick.
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+
+
+def test_listing_shift_retry_budget_is_configurable_and_validated(tmp_path: Path) -> None:
+	for value, expected_queued_reads in (("0", 1), ("1", 2), ("abc", 3), ("9", 3)):
+		case_dir = tmp_path / f"case-{value}"
+		case_dir.mkdir()
+		bin_dir, fixtures, log = _install_fake_gh(case_dir)
+		_queued_pr_4077(fixtures)
+		_write_runs(fixtures, [
+			{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
+			 "path": ".github/workflows/ci.yml"},
+		], total_count_override={"queued": 3})
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log,
+			MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES=value, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+		assert result.returncode == 0, result.stderr
+		assert log_text.count("actions/runs?status=queued") == expected_queued_reads, (value, log_text.count("actions/runs?status=queued"))
+		assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 
 
 def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
@@ -1774,6 +1831,104 @@ def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue #6629 (re-issue of #5152): review-run provenance in the release listing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("run_fields", [
+	# (a) the same title on a branch copy of the wrapper.
+	{"head_branch": "attacker/branch", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/ai-review.yml"},
+	# (b) the title on the wrong wrapper path, or under another repository.
+	{"head_branch": "main", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/internal-review.yml"},
+	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
+	 "path": ".github/workflows/review_autofix.yml"},
+	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
+	 "path": "other/repo/.github/workflows/internal-review.yml@refs/heads/main"},
+	# An untitled dispatch on a non-default branch is not a trusted review run (Q3).
+	{"head_branch": "ai/issue-9999", "display_title": "AI Review", "path": ".github/workflows/ai-review.yml"},
+])
+def test_release_drops_spoofed_dispatch_runs(tmp_path: Path, run_fields: dict) -> None:
+	"""A dispatch run that fails the trust rule neither holds its PR nor makes
+	the listing incomplete: counting it would let a spoof hold every release."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [dict({"id": 6000, "status": "in_progress", "event": "workflow_dispatch"}, **run_fields)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_non_dispatch_pr_named_run_keeps_head_branch_keying(tmp_path: Path) -> None:
+	"""(c) A marker-titled run from another event is keyed by its head branch only."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 6001, "status": "in_progress", "event": "pull_request",
+		"head_branch": "ai/issue-9999", "display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_untitled_default_branch_dispatch_is_still_unattributed(tmp_path: Path) -> None:
+	"""review_autofix.yml self-dispatches carry no PR-named title; on the
+	default branch they still make the listing incomplete."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 6002, "status": "in_progress", "event": "workflow_dispatch",
+		"head_branch": "main", "display_title": "Codex PR Self-Healing Semantic Agent",
+		"path": ".github/workflows/review_autofix.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_honours_a_default_branch_other_than_main(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "default_branch").write_text("trunk", encoding="utf-8")
+	_write_runs(fixtures, [{"id": 6003, "status": "pending", "event": "workflow_dispatch",
+		"head_branch": "trunk", "display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_unresolvable_default_branch_leaves_pr_queued(tmp_path: Path) -> None:
+	"""(d) No `main` fallback: the listing is incomplete before any runs call."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "default_branch_fail").write_text("", encoding="utf-8")
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=default_branch_unavailable" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "actions/runs" not in log_text
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_reads_the_default_branch_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4078, "ai/issue-4065", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["a.py"])
+	_write_files(fixtures, 4078, ["b.py"])
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	reads = [line for line in log_text.splitlines() if line.rstrip().endswith("repos/acme/consumer --jq .default_branch")]
+	assert len(reads) == 1, log_text
+
+# ---------------------------------------------------------------------------
 # Issue #6570 (plan P1): real conflicts, bounded head, priority lane.
 # ---------------------------------------------------------------------------
 
@@ -1923,6 +2078,111 @@ def test_gate_conflict_probe_failure_keeps_path_overlap_rule(tmp_path: Path, whe
 	assert "older=4075 overlap=paths conflict=unknown" in result.stdout
 	assert "result=queued blockers=#4075" in result.stdout
 	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def _probe_server(tmp_path: Path) -> str:
+	"""A file:// server root whose acme/consumer.git is the fixture origin."""
+	server = tmp_path / "srv"
+	(server / "acme").mkdir(parents=True)
+	(server / "acme" / "consumer.git").symlink_to(tmp_path / "origin.git")
+	return f"file://{server}"
+
+
+@pytest.mark.parametrize(("own", "expected"), [("clean", "conflict=none"), ("conflict", "conflict=conflict")])
+def test_conflict_probe_outside_a_checkout_uses_a_private_repository(tmp_path: Path, own: str, expected: str) -> None:
+	"""The poller and PR-close callers run `release` with no checkout; the probe must still decide."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas[own]))
+	result, _log_text, _env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", GITHUB_SERVER_URL=_probe_server(tmp_path),
+		GH_TOKEN="probe-token-must-not-leak", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"MERGE_TRAIN_PROBE_REPO outcome=created origin=file://{tmp_path}/srv/acme/consumer.git" in result.stdout
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	# The private repository is removed on exit, and the token is never printed.
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+	assert "probe-token-must-not-leak" not in result.stdout + result.stderr
+	assert not (plain / ".git").exists()
+
+
+def test_conflict_probe_outside_a_checkout_keeps_the_blocker_when_the_fetch_fails(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["clean"]))
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_PROBE_REPO outcome=created" in result.stdout
+	assert "older=4075 overlap=paths conflict=unknown" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+
+
+def test_https_probe_fetch_passes_the_token_through_environment_only() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	fetch = text[text.index("_mt_git_fetch()\n"):text.index("_mt_probe_repo_cleanup()\n")]
+	assert "export GIT_CONFIG_COUNT=1" in fetch
+	assert 'export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"' in fetch
+	assert "[[ \"${server}\" =~ ^https:// ]]" in fetch
+	assert "-c http" not in fetch and "config --" not in fetch
+
+
+def _manifest_conflict_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+	"""Two heads that merge cleanly in app.txt but both rewrite the generated manifest."""
+	seed = tmp_path / "mseed"
+	seed.mkdir()
+	_git(seed, "init", "-q", "-b", "main")
+	(seed / "app.txt").write_text("".join(f"line {i}\n" for i in range(1, 21)), encoding="utf-8")
+	(seed / ".ai").mkdir()
+	(seed / ".ai" / ".workspace_source_manifest.txt").write_text("base\n", encoding="utf-8")
+	_git(seed, "add", "-A")
+	_git(seed, "commit", "-q", "-m", "base")
+	shas: dict[str, str] = {}
+	for branch, line_no in (("older", 1), ("younger", 15)):
+		_git(seed, "checkout", "-q", "-b", branch, "main")
+		lines = (seed / "app.txt").read_text(encoding="utf-8").splitlines()
+		lines[line_no - 1] = f"{branch} edit"
+		(seed / "app.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+		(seed / ".ai" / ".workspace_source_manifest.txt").write_text(f"{branch}\n", encoding="utf-8")
+		_git(seed, "commit", "-q", "-am", branch)
+		shas[branch] = _git(seed, "rev-parse", "HEAD")
+	origin = tmp_path / "morigin.git"
+	_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
+	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+	work = tmp_path / "mwork"
+	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
+	return work, shas
+
+
+@pytest.mark.parametrize(("ignore", "expected", "queued"), [
+	(None, "conflict=ignored", False),
+	("none", "conflict=conflict", True),
+])
+def test_conflict_only_in_ignored_paths_does_not_block(tmp_path: Path, ignore: str | None, expected: str, queued: bool) -> None:
+	"""The generated manifest is ignored by the path rule, so a conflict only there does not block either."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _manifest_conflict_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["younger"]))
+	extra = {} if ignore is None else {"MERGE_TRAIN_IGNORE_PATHS": ignore}
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **extra, **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	if queued:
+		assert "result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	else:
+		assert "skipped_clean=1" in result.stdout
+		assert "result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_MERGE_QUEUED" not in env_out
 
 
 def test_gate_conflict_check_off_queues_on_overlap_without_fetch(tmp_path: Path) -> None:
@@ -2142,7 +2402,7 @@ def test_release_keeps_pr_queued_behind_recently_released_old_blocker(tmp_path: 
 def test_merge_train_conflict_aware_settings_are_wired_in_every_caller() -> None:
 	expected = {
 		"MERGE_TRAIN_CONFLICT_CHECK_ENABLED": "${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}",
-		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}",
+		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}",
 		"MERGE_TRAIN_PRIORITY_LABELS": "${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}",
 	}
 	workflows = REPO_ROOT / ".github" / "workflows"

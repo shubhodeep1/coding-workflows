@@ -689,9 +689,11 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	filtered = heal.filter_log(RAW_STEP_LOG)
 	assert "could not resolve ${branch} head sha" not in filtered
 	assert "set -euo pipefail\n" not in filtered.split("##[group]Run set -euo pipefail", 1)[1]
-	# The header line, the env block, and every line the step printed survive.
+	# The header line, the env variable names, and every line the step printed
+	# survive; env values are redacted (basic-auth-survives-evidence-redaction).
 	assert "##[group]Run set -euo pipefail" in filtered
-	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: [redacted]" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" not in filtered
 	assert "retry run #35940786276: status=pending" in filtered
 	assert "##[error]Retry review run did not complete within 25 minutes" in filtered
 	# Cyan output printed by the step itself (outside a Run header) is kept.
@@ -699,6 +701,193 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	# Text without a Run header (reporter evidence) is unchanged by the drop.
 	evidence = "::error::PR diff unavailable\nstderr tail\n"
 	assert heal._drop_step_script_lines(evidence) == evidence
+
+
+def test_filter_log_redacts_basic_authorization_in_step_output() -> None:
+	log = (
+		"2026-09-24T00:00:01Z > Authorization: Basic dXNlcjpwYXNz\n"
+		"2026-09-24T00:00:02Z > authorization: basic bG93ZXI6Y2FzZQ==\n"
+		"2026-09-24T00:00:03Z ##[error]Process completed with exit code 1.\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "dXNlcjpwYXNz" not in filtered
+	assert "bG93ZXI6Y2FzZQ==" not in filtered
+	assert "Authorization: [redacted]" in filtered
+	assert "authorization: [redacted]" in filtered
+
+
+ENV_STEP_LOG = (
+	"2026-09-24T00:00:00Z before the step\n"
+	"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+	"2026-09-24T00:00:01Z \x1b[36;1m./mint.sh\x1b[0m\n"
+	"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+	"2026-09-24T00:00:01Z env:\n"
+	"2026-09-24T00:00:01Z   GH_TOKEN: ghp_x\n"
+	"2026-09-24T00:00:01Z   FOO: plainvalue\n"
+	"2026-09-24T00:00:01Z   MULTI: first-line\n"
+	"continuation-secret-line\n"
+	"2026-09-24T00:00:01Z   EMPTY:\n"
+	"2026-09-24T00:00:01Z ##[endgroup]\n"
+	"2026-09-24T00:00:02Z step output stays: FOO: visible\n"
+)
+
+
+def test_filter_log_redacts_step_env_values_but_keeps_names() -> None:
+	filtered = heal.filter_log(ENV_STEP_LOG)
+	assert "GH_TOKEN: [redacted]" in filtered
+	assert "FOO: [redacted]" in filtered
+	assert "MULTI: [redacted]" in filtered
+	assert "EMPTY:" in filtered
+	for secret in ("ghp_x", "plainvalue", "first-line", "continuation-secret-line"):
+		assert secret not in filtered
+	assert "shell: /usr/bin/bash -e {0}" in filtered
+	assert "./mint.sh\n" not in filtered.split("##[group]Run ./mint.sh", 1)[1]
+	assert "before the step" in filtered
+	assert "step output stays: FOO: visible" in filtered
+	# The continuation line is replaced whole, not passed through.
+	assert "\n  [redacted]\n" in filtered
+
+
+def test_strip_step_env_values_keeps_other_header_sections() -> None:
+	# The runner prints `with:` / `shell:` before `env:`; those stay readable.
+	log = (
+		"##[group]Run actions/checkout@v4\n"
+		"with:\n"
+		"  ref: main\n"
+		"shell: /usr/bin/bash\n"
+		"env:\n"
+		"  A: secret-a\n"
+		"##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	assert "secret-a" not in stripped
+	assert "  A: [redacted]" in stripped
+	assert "with:\n  ref: main\nshell: /usr/bin/bash\nenv:\n" in stripped
+	# Text without a Run header comes back unchanged, and the pass is idempotent.
+	evidence = "::error::PR diff unavailable\nenv:\n  X: y\n"
+	assert heal._strip_step_env_values(evidence) == evidence
+	assert heal._strip_step_env_values(stripped) == stripped
+	once = heal._strip_step_env_values(ENV_STEP_LOG)
+	assert heal._strip_step_env_values(once) == once
+
+
+def test_strip_step_env_values_header_like_lines_do_not_end_env_block() -> None:
+	# A multi-line value continuation that looks like a header key must not
+	# switch redaction off for the rest of the block.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"with: confidential-one\n"
+		"shell: confidential-two\n"
+		"env: FOO=confidential-three\n"
+		"2026-09-24T00:00:01Z   TOKEN2: confidential-four\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z ##[group]Run ./other.sh\n"
+		"2026-09-24T00:00:02Z env: INLINE=confidential-five\n"
+		"2026-09-24T00:00:02Z   NEXT: confidential-six\n"
+		"2026-09-24T00:00:02Z ##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for n in ("one", "two", "three", "four", "five", "six"):
+		assert f"confidential-{n}" not in stripped
+	assert "2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}" in stripped
+	assert "  TOKEN2: [redacted]" in stripped
+	assert "2026-09-24T00:00:02Z env: [redacted]" in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_strip_step_env_values_marker_shaped_value_lines_do_not_end_env_block() -> None:
+	# Unstamped continuation lines of a multi-line value that look like the
+	# header close or a new Run header must not end redaction early.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"##[endgroup]\n"
+		"leaked-after-close\n"
+		"##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("first", "leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert stripped.count("##[endgroup]") == 1
+	assert heal._strip_step_env_values(stripped) == stripped
+	filtered = heal.filter_log(log)
+	assert "leaked-after-close" not in filtered
+	assert "step output kept" in filtered
+
+
+def test_strip_step_env_values_timestamp_shaped_marker_value_lines_do_not_end_env_block() -> None:
+	# A value line that itself starts with a timestamp and reads like a marker
+	# is followed by an unstamped continuation, so it cannot be a real marker.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.count("##[endgroup]") == 1
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_filter_log_drops_unterminated_step_header() -> None:
+	log = (
+		"2026-09-24T00:00:00Z earlier output kept\n"
+		"2026-09-24T00:00:01Z ##[group]Run ./deploy.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   TOKEN: unterminated-value\n"
+		"2026-09-24T00:00:01Z after header line\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "earlier output kept" in filtered
+	assert "unterminated-value" not in filtered
+	assert "TOKEN" not in filtered
+	assert "after header line" not in filtered
+	assert "##[group]Run ./deploy.sh" not in filtered
+	assert filtered.count(heal._STEP_ENV_UNTERMINATED_MARKER) == 1
+
+
+def test_filter_log_keeps_unterminated_step_header_without_env_block() -> None:
+	# A log cut mid-step whose header never opened an env block carries no env
+	# values, so its diagnostic output must survive (heal intake relies on it).
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run codex\n"
+		"2026-09-24T00:00:02Z ::error::resolve_integration_ref.sh: branch missing\n"
+		"2026-09-24T00:00:03Z Authorization: Basic dXNlcjpwYXNz\n"
+	)
+	filtered = heal.filter_log(log)
+	assert heal._STEP_ENV_UNTERMINATED_MARKER not in filtered
+	assert "##[group]Run codex" in filtered
+	assert "resolve_integration_ref.sh: branch missing" in filtered
+	assert "dXNlcjpwYXNz" not in filtered
+
+
+def test_filter_log_byte_cut_never_leaves_an_unredacted_token_suffix() -> None:
+	token = "ghp_" + "Z" * 60
+	log = "x" * 200 + "\n" + "value " + token + "\n"
+	for max_bytes in range(5, 80):
+		filtered = heal.filter_log(log, max_bytes=max_bytes)
+		assert "ZZZZ" not in filtered
 
 
 def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
@@ -2620,7 +2809,7 @@ def test_render_failure_marker_is_log_safe_and_rejects_bad_input() -> None:
 	assert heal.render_failure_marker("abc", "editor_empty_noop", fp, False) == ""
 	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", "not-a-fingerprint", False) == ""
 	parsed = heal.parse_failure_markers([{"id": 9, "author_login": CAP_AUTHOR, "body": "x\n" + marker}], head_sha=SHA_A, author_login=CAP_AUTHOR)
-	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "comment_id": "9"}]
+	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "support": "", "comment_id": "9"}]
 	assert heal.parse_failure_markers([{"author_login": "someone-else", "body": marker}], head_sha=SHA_A, author_login=CAP_AUTHOR) == []
 	assert heal.parse_failure_markers([{"user": {"login": CAP_AUTHOR}, "body": marker}], head_sha=SHA_B, author_login=CAP_AUTHOR) == []
 
@@ -2688,6 +2877,62 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 	assert heal.count_identical_failures(retryable, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
 
 
+SUPPORT_NEW = "5" * 40
+SUPPORT_OLD = "6" * 40
+
+
+def _support_marker_comment(text: str, *, run: str, support: str = "", author: str = CAP_AUTHOR, reason: str = "editor_empty_noop") -> dict:
+	marker = heal.render_failure_marker(SHA_A, reason, _cap_fp(reason), False, run, support or None)
+	assert marker
+	return {"id": int(run), "author_login": author, "body": f"{text}\n\n{marker}"}
+
+
+def test_failure_markers_are_support_version_aware() -> None:
+	"""Issue #6625: failures recorded by an older review-support version do not
+	count toward (or keep applied) the cap of a review on updated support."""
+	fp = _cap_fp()
+	marker = heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", SUPPORT_NEW.upper())
+	assert marker == f"<!-- review-autofix-failure:v1 head={SHA_A} reason=editor_empty_noop fp={fp} degraded=0 run=7 support={SUPPORT_NEW} -->"
+	# An invalid support SHA is omitted, so the marker is byte-identical to the legacy one.
+	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", "abc") == heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7")
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (1, 2, 3)]
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (4, 5, 6)]
+	legacy = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (7, 8, 9)]
+	count = heal.count_identical_failures
+	assert count(current, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	assert count(older, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW) == {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	assert count(legacy, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# Older markers interleaved with current ones neither count nor end the scan.
+	mixed = [current[0], older[0], legacy[0], current[1], older[1]]
+	assert count(mixed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 2
+	# Without a support SHA the legacy rules count every version.
+	assert count([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 6
+	# An untrusted author carrying the current support SHA is still ignored.
+	forged = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW, author="attacker") for run in (10, 11, 12)]
+	assert count(forged, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# A non-retryable failure of an older version does not trip the new one.
+	old_host_only = [_support_marker_comment(AUTOFIX_FAILED_COMMENT, run="13", support=SUPPORT_OLD, reason="conflict_resolver_sandbox_path_host_only")]
+	assert count(old_host_only, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["non_retryable"] is False
+	# Cap markers: only the same head and support version count as applied.
+	def cap(support: str) -> dict:
+		field = f" support={support}" if support else ""
+		return {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3{field} -->"}
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap("")], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap(SUPPORT_NEW)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is True
+	# A cap marker quoted inline (a "First error" code span) is not a cap marker,
+	# and it does not hide the real marker on its own line later in the body.
+	inline = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_NEW)["body"] + "`"}
+	assert count([*current, inline], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	shadowed = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_OLD)["body"] + "`\n\n" + cap(SUPPORT_NEW)["body"]}
+	assert count([*current, shadowed], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	# parse_failure_markers applies the same filter and reports the version.
+	parsed = heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert [marker["run"] for marker in parsed] == ["1", "2", "3"] and {marker["support"] for marker in parsed} == {SUPPORT_NEW}
+	assert len(heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)) == 6
+
+
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-fp-cli-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -2714,7 +2959,20 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false"]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support="]
+		# Issue #6625: --support-sha ignores markers of other support versions.
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-1] == f"support={SUPPORT_NEW}"
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
+				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert f"marker={heal.render_failure_marker(SHA_A, 'editor_empty_noop', fp, False, '42', SUPPORT_NEW)}" in result.stdout.splitlines()
+		assert f" run=42 support={SUPPORT_NEW} -->" in result.stdout
 		(tmp / "comments.json").write_text("{}", encoding="utf-8")
 		bad = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
@@ -2735,6 +2993,10 @@ def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
 		({"EDITOR_NOOP_REFUSAL": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}, None),
+		({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_SANDBOX_PREPARE_FAILED": "true"}, None),
+		({"EDITOR_PREFLIGHT_FAILED": "true", "AUTOFIX_SANDBOX_PREPARE_FAILED": "true"}, None),
+		({"AUTOFIX_SANDBOX_PREPARE_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, None),
 		({}, RUN_SUMMARY_LINE.replace("editor_empty_noop", "reviewers_unavailable")),
 		({}, None),
 	]
@@ -3311,6 +3573,68 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
 
 
+def test_gate_cap_ignores_markers_from_other_support_versions() -> None:
+	"""Issue #6625: a review on updated support retries a head capped by an older one."""
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (101, 102, 103)]
+	legacy = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (104, 105, 106)]
+	for comments in (older, legacy):
+		with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-old-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+			assert f"count=0 max=3 support={SUPPORT_NEW}" in result.stdout
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (107, 108, 109)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-new-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[*older, *current], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert outputs["fingerprint_cap"] == "true" and outputs["skip_reason"] == "fingerprint_cap", result.stdout
+		assert f"non_retryable=false support={SUPPORT_NEW}" in result.stdout
+
+
+def test_fingerprint_cap_block_marker_records_support_version() -> None:
+	"""The cap marker carries support=, and a cap from an older version does not block a new one."""
+	old_cap = {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_OLD} -->"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[old_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert len(state["comments_posted"]) == 1, result.stdout
+		comment = state["comments_posted"][0]
+		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->" in comment
+		assert heal.count_identical_failures([{"author_login": CAP_AUTHOR, "body": comment}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	quoted_cap = {**old_cap, "body": f"First error: `x support={SUPPORT_NEW} y`\n" + old_cap["body"]}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-quoted-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[quoted_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	# A whole current-support cap marker quoted inline (a failure comment's
+	# "First error" code span) is not a cap marker.
+	inline_marker = f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->"
+	inline_cap = {"author_login": CAP_AUTHOR, "body": f"{AUTOFIX_FAILED_COMMENT}\n\n**First error:** `{inline_marker}`"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-inline-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[inline_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	same_cap = {**old_cap, "body": old_cap["body"].replace(SUPPORT_OLD, SUPPORT_NEW)}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-same-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[same_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" in result.stdout
+		assert "comments_posted" not in state
+
+
+def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
+	"""Issues #6625/#6938: the gate and four failure-marker sites use the verified SHA.
+
+	The gate SHA also reaches fingerprint-cap-block, codex-agent, and the
+	deterministic-skip-merge freshness-helper verification step.
+	"""
+	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
+	assert wf.count("autofix-failure-fingerprint \\\n") == 4
+	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
+	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 3
+	assert 'git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}"' in wf
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
+
+
 # ---------------------------------------------------------------------------
 # P3: self-inflicted classification and routing
 # ---------------------------------------------------------------------------
@@ -3860,6 +4184,16 @@ def test_summariser_empty_stdout_prefix_class_covers_every_accepted_prefix() -> 
 	assert heal.reviewer_failure_evidence([look_alike]) == "reviewers_failed=true\n"
 
 
+def test_sandbox_prepare_failed_names_the_failure_after_the_reviewers() -> None:
+	# A failed review sandbox prepare skips the editor: it names the failure
+	# ahead of the editor flags, after reviewers_failed and the preflight.
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "editor_empty_noop") == "sandbox_prepare_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_REVIEWERS_FAILED": "true"}) == "reviewers_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "EDITOR_PREFLIGHT_FAILED": "true"}) == "editor_preflight_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_FAILURE_REASON": "identical_failure_cap"}) == "identical_failure_cap"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}) == "editor_empty_noop"
+
+
 def test_reviewers_failed_names_the_failure_before_the_editor_flags() -> None:
 	assert heal.derive_autofix_failure_reason({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}) == "reviewers_failed"
 	assert heal.derive_autofix_failure_reason({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}) == "identical_failure_cap"
@@ -3932,6 +4266,8 @@ def test_redact_secrets_patterns() -> None:
 	assert heal.redact_secrets("ghp_abcDEF123 github_pat_11AA_bb") == "ghp_[redacted] github_pat_[redacted]"
 	assert heal.redact_secrets("key sk-or-v1-abc") == "key sk-or-[redacted]"
 	assert heal.redact_secrets("plain text") == "plain text"
+	assert heal.redact_secrets("AUTHORIZATION: BASIC abc") == "AUTHORIZATION: [redacted]"
+	assert heal.redact_secrets("Authorization: Basic dXNlcjpwYXNz") == "Authorization: [redacted]"
 
 
 def test_failure_headline_cli(tmp_path) -> None:
