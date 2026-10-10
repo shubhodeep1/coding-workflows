@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_budget_watch.py:95, lines 156-159, 157-159, around lines 155-158 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `CI_BUDGET_WORKFLOW_WARN_BYTES` accepts values at or above `HARD_WORKFLOW_GUARD_BYTES`, which can disable the early warning until the hard guard is reached.\n  WHY: The configured threshold can be reached only after the 480,000-byte hard guard has already failed; severity was reported as MAJOR by Gemini, Minimax, and Qwen, and NIT by DeepSeek and GPT-6-Luna.\n- scripts/ci_budget_watch.py: lines 160-165 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `CI_BUDGET_JOB_WARN_RATIO=1.0` is accepted, so the warning fires only at or after the job timeout.\n  WHY: The timeout guard may cancel CI at that point, leaving no time for the warning to prevent CI from going red.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/ci_budget_watch.py: lines 156-159 (warn_bytes parsing) | severity=NIT | confidence=4\n  PROBLEM: `warn_bytes` accepts any integer from the environment without an upper-bound check against `HARD_WORKFLOW_GUARD_BYTES` (480,000).\n  WHY: A threshold at or above the hard guard silently prevents an early warning before CI fails.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_budget_watch.py:95 | severity=MAJOR | confidence=4\n  PROBLEM: `CI_BUDGET_WORKFLOW_WARN_BYTES` is not validated to be less than the hard guard limit.\n  WHY: A warning threshold above the 480,000-byte hard guard effectively disables the early-warning check.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ci_budget_watch.py: lines 156-159 (`warn_bytes = int(os.environ.get(\"CI_BUDGET_WORKFLOW_WARN_BYTES\", DEFAULT_WORKFLOW_WARN_BYTES))` with no upper-bound check; only `int()` parse error handling) | severity=MAJOR | confidence=4\n  PROBLEM: The script accepts values at or above `HARD_WORKFLOW_GUARD_BYTES` (480,000) for `CI_BUDGET_WORKFLOW_WARN_BYTES`.\n  WHY: The early warning can fire only after the hard guard has failed, bypassing the intended warning window.\n- scripts/ci_budget_watch.py: lines 160-165 (`ratio = float(os.environ.get(\"CI_BUDGET_JOB_WARN_RATIO\", DEFAULT_JOB_WARN_RATIO))` and `if not 0 < ratio <= 1: ratio = DEFAULT_JOB_WARN_RATIO`) | severity=NIT | confidence=4\n  PROBLEM: `CI_BUDGET_JOB_WARN_RATIO=1.0` is accepted, causing the warning to fire only at or after the timeout.\n  WHY: CI may be cancelled by the timeout guard before there is time to act on the warning.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ci_budget_watch.py: 157-159 | severity=NIT | confidence=4\n  PROBLEM: `CI_BUDGET_WORKFLOW_WARN_BYTES` is accepted without checking that it is below `HARD_WORKFLOW_GUARD_BYTES`.\n  WHY: A repository variable set to 480,000 or higher lets workflows reach the CI guard before the watcher reports them.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ci_budget_watch.py: main(), lines parsing CI_BUDGET_WORKFLOW_WARN_BYTES (around lines 155-158 in the final file) | severity=MAJOR | confidence=4\n  PROBLEM: Any positive integer is accepted for `CI_BUDGET_WORKFLOW_WARN_BYTES`, including values at or above `HARD_WORKFLOW_GUARD_BYTES` (480,000).\n  WHY: When the threshold is at or above 480,000, the watcher does not open an `ai:ci-budget` issue before the hard CI guard is tripped.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "9eefe942ab739fd261975533a60e5af41177304b3134cadf43a71fc58d0485d1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7012,
+    "run_id": "38031991832",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38031991832",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010073212_9457eab00e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7012,
+    "run_id": "38031991832"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T07:32:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
