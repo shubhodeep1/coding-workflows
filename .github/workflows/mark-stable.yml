@@ -535,7 +535,16 @@ jobs:
   validate:
     needs: [source, resolve-version]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 40, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes) for a pending `CI / lint` run. A job timeout
+    # fails closed.
+    timeout-minutes: 40
+    # checks/actions read let the CI gate read check-runs and workflow runs
+    # with github.token; this job writes nothing.
+    permissions:
+      contents: read
+      checks: read
+      actions: read
     steps:
       - name: Validate version format
         run: |
@@ -589,49 +598,29 @@ jobs:
               ;;
           esac
 
+      # Security finding #6548 (Refs #7029): the legacy combined commit
+      # status never contains GitHub Actions check-runs, so this check used
+      # to pass on an empty or pending state. It now reuses the bounded
+      # release CI gate (scripts/release_ci_gate.sh, #6797): the newest
+      # github-actions `lint` check-run from ci.yml on the validated SHA must
+      # be completed with success; missing, failed, cancelled, timed-out or
+      # unreadable results fail closed after the bounded wait.
       - name: Verify CI passed on stable
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          SHA=$(git rev-parse HEAD)
-          echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
-          # Allow the release even if no CI status is reported (repos
-          # with no required checks). Fail only on explicit failure.
-          # Distinguish three failure modes:
-          #   1. API call itself failed (transport / auth / repeated 5xx
-          #      / rate-limit retries exhausted) → hard error. The old
-          #      `|| echo "pending"` coerced this into a synthetic
-          #      "pending" that bypassed the gate.
-          #   2. API returned an empty state (repo has no required
-          #      checks configured) → proceed (preserves the documented
-          #      "Allow the release even if no CI status is reported"
-          #      policy above).
-          #   3. API returned a real state — fail only on explicit
-          #      "failure" / "error".
-          # gh_retry already surfaces the final failure stderr, so rc
-          # alone distinguishes transport/auth failure from an empty CI
-          # state.
-          set +e
-          STATE=$(gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
-            --jq '.state')
-          rc=$?
-          set -e
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::Failed to query CI status for ${SOURCE_BRANCH} after retries (rc=${rc}). Refusing to release without a confirmed CI signal."
+          SHA="$(git rev-parse HEAD)"
+          echo "Checking CI / lint for ${SOURCE_BRANCH} @ ${SHA} ..."
+          if [ ! -f scripts/release_ci_gate.sh ]; then
+            echo "::error::scripts/release_ci_gate.sh is missing on ${SOURCE_BRANCH}@${SHA}. Refusing to release without a confirmed CI signal."
             exit 1
           fi
-          if [ -z "$STATE" ]; then
-            echo "CI state: (empty — no required checks configured?) — proceeding"
-          elif [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
-            echo "::error::CI is failing on ${SOURCE_BRANCH} ($STATE). Fix before releasing."
-            exit 1
-          else
-            echo "CI state: $STATE — OK"
-          fi
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${SHA}"
 
   release:
     needs: [source, resolve-version, validate, validate-scripts]
@@ -695,12 +684,35 @@ jobs:
           set -euo pipefail
           bash scripts/release_ci_gate.sh "${GATE_REPO}" "${RELEASE_TESTED_SHA}"
 
+      # Kill switch for stable tag writes (Refs #6548, #7029). Default on:
+      # any value other than `true` (case-insensitive) skips the changelog
+      # commit, the tag pushes, the GitHub Release and the consumer dispatch.
+      # The CI gate above and the validate job still run.
+      - name: Resolve release tagging switch
+        id: release_tagging
+        env:
+          RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          raw="${RELEASE_TAGGING_ENABLED-true}"
+          value="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          if [ -z "${value}" ] || [ "${value}" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Release tagging enabled."
+            exit 0
+          fi
+          shown="$(printf '%s' "${raw}" | tr -cd 'A-Za-z0-9_.-' | cut -c1-32)"
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::RELEASE_TAGGING_ENABLED=${shown} — skipping tag writes, GitHub Release and consumer dispatch; CI gate and validation still ran."
+          echo "Release tagging disabled (RELEASE_TAGGING_ENABLED=${shown}): no changelog commit, tag push, GitHub Release or consumer dispatch." >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
           DRY_RUN: ${{ inputs.dry_run }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_TAGGING: ${{ steps.release_tagging.outputs.enabled }}
         run: |
           set -euo pipefail
 
@@ -735,6 +747,13 @@ jobs:
 
           if [ "${DRY_RUN}" = "true" ]; then
             echo "Dry run — assembled CHANGELOG.md left uncommitted."
+            exit 0
+          fi
+
+          # Kill switch: anything but an explicit `true` (including a missing
+          # output) leaves the stable branch untouched.
+          if [ "${RELEASE_TAGGING:-}" != "true" ]; then
+            echo "Release tagging disabled — assembled CHANGELOG.md left uncommitted."
             exit 0
           fi
 
@@ -790,7 +809,7 @@ jobs:
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
 
       - name: Tag version and update stable pointer
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
@@ -944,7 +963,7 @@ jobs:
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
       - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
@@ -1006,7 +1025,7 @@ jobs:
           exit "${RELEASE_CREATE_RC}"
 
       - name: Notify consumer repos via repository_dispatch
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
