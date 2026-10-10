@@ -319,7 +319,7 @@ def test_required_names_uses_built_in_default_when_var_unset(tmp_path):
 		'_pr_required_check_names_for_base "main"',
 	)
 	assert result.returncode == 0, result.stderr
-	expected_default = ("CI,Integration PR readiness check,"
+	expected_default = ("CI,lint,Integration PR readiness check,"
 		"Lint plan-archival completeness,"
 		"Lint PR body for auto-close keywords against orchestrator-tracking issues,"
 		"review / gate")

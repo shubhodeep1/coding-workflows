@@ -54,6 +54,10 @@
 #                                          (true/false); names the failure reviewers_failed,
 #                                          after editor_preflight_failed (the preflight step
 #                                          runs first) and ahead of the editor flags
+#   AUTOFIX_SANDBOX_PREPARE_FAILED         the review sandbox prepare failed, so the editor
+#                                          never ran (true/false); names the failure
+#                                          sandbox_prepare_failed, after reviewers_failed
+#                                          and ahead of the editor flags
 #   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
 #                                          identical-failure cap passes identical_failure_cap);
 #                                          wins over the flags when it is a valid reason token
@@ -144,6 +148,9 @@ elif [ "${EDITOR_PREFLIGHT_FAILED:-false}" = "true" ]; then
 elif [ "${AUTOFIX_REVIEWERS_FAILED:-false}" = "true" ]; then
 	# The reviewer step failed, so the editor never ran.
 	FAILURE_REASON="reviewers_failed"
+elif [ "${AUTOFIX_SANDBOX_PREPARE_FAILED:-false}" = "true" ]; then
+	# The review sandbox could not be prepared, so the editor never ran.
+	FAILURE_REASON="sandbox_prepare_failed"
 elif [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
 	FAILURE_REASON="editor_empty_noop"
 elif [ "${EDITOR_CHANGES_LOST:-false}" = "true" ]; then
@@ -184,7 +191,7 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	echo "failure_reason=${FAILURE_REASON}"
 	echo "finalize_reason=${FINALIZE_REASON:-unknown}"
 	echo "consecutive_failed_runs=${STREAK}"
-	echo "flags: AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
+	echo "flags: EDITOR_PREFLIGHT_FAILED=${EDITOR_PREFLIGHT_FAILED:-} AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_SANDBOX_PREPARE_FAILED=${AUTOFIX_SANDBOX_PREPARE_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
 	# The step's first error ("Assemble failure evidence"), as an ::error:: line
 	# so the intake's error signature ranks it first; the tails below often
 	# carry only model output. Written to the evidence file, never to stdout.
@@ -205,6 +212,14 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/reviewers_failure_evidence.txt" ]; then
 		echo "--- reviewers_failure_evidence.txt ---"
 		head -n 40 "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | cut -c1-400
+	fi
+	# The sandbox prepare's last error and the prepare stderr tail when the
+	# review sandbox could not be prepared ("Post editor summary comment").
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt" ]; then
+		echo "--- sandbox_prepare_failure_evidence.txt ---"
+		head -n 10 "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | cut -c1-400
+		echo "--- sandbox_prepare_stderr.txt (tail) ---"
+		tail -n 40 "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | cut -c1-400
 	fi
 	if [ -s "${SUMMARY_LINE_FILE}" ]; then
 		head -c 6000 "${SUMMARY_LINE_FILE}"
@@ -273,8 +288,24 @@ fi
 
 # The report is enveloped under client_payload.report: GitHub rejects a
 # client_payload with more than 10 top-level properties (HTTP 422).
+# Report identity (issue #6559): see workflow_failure_heal_report.sh. Only
+# when the staged helper knows the subcommand (an older copy would fail it);
+# the token file is 0600, never printed, and removed on exit.
+IDENTITY_FILE="${REPORT_DIR}/report_identity.jwt"
 DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
-if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
+trap 'rm -f "${IDENTITY_FILE}" "${DISPATCH_FILE}"' EXIT
+WRAP_ARGS=(--payload-json "${PAYLOAD_FILE}")
+if grep -q 'request-report-identity' "${HEAL_PY}" 2>/dev/null; then
+	IDENTITY_STATUS="$(python3 "${HEAL_PY}" request-report-identity --out "${IDENTITY_FILE}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+	IDENTITY_STATUS="$(printf '%s' "${IDENTITY_STATUS}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+	log "${IDENTITY_STATUS:-identity=absent reason=unknown} pr=${PR}"
+	if [ -s "${IDENTITY_FILE}" ]; then
+		WRAP_ARGS+=(--report-identity-file "${IDENTITY_FILE}")
+	fi
+else
+	log "identity=absent reason=helper_outdated pr=${PR}"
+fi
+if ! python3 "${HEAL_PY}" wrap-dispatch "${WRAP_ARGS[@]}" > "${DISPATCH_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=dispatch_envelope_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
 	exit 0
 fi

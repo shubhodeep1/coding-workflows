@@ -38,6 +38,33 @@ fi
 
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
+# Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
+# Q35: A): a reviewed head whose base moved under files this PR touches is
+# updated from the base instead of auto-merged, so CI and review run on the
+# combined tree first. The library is a required bootstrap script; a missing
+# copy logs once and keeps the pre-gate behaviour.
+# shellcheck source=/dev/null
+if [ -f "${SCRIPT_DIR}/pr_checks_lib.sh" ]; then
+	source "${SCRIPT_DIR}/pr_checks_lib.sh" 2>/dev/null || true
+fi
+if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
+	_pr_base_fresh_for_merge()
+	{
+		echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
+		return 0
+	}
+fi
+if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
+	# Fail closed: without the library nothing verifies CI, and an
+	# unprotected base would let `gh pr merge --auto` land the PR at once.
+	_pr_wait_for_required_checks()
+	{
+		PR_CHECKS_WAIT_OUTCOME="unavailable"
+		echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+		return 1
+	}
+fi
+
 record_auto_merge_ready_labels_allowed()
 {
 	if [ -n "${GITHUB_ENV:-}" ]; then
@@ -206,6 +233,42 @@ fi
 # This step runs only after a clean review tail and a non-holding security
 # pass; post for the verified head before any merge or manual-merge path.
 review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
+
+# Base moved under this PR's files since its checks ran: request the branch
+# update and stop here. The synchronize run re-validates the combined tree
+# and reaches this step again with a current head. Integration PRs are
+# synced by the orchestrator itself and never auto-merged here, so they
+# skip the two reads.
+_orch_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=base_moved_overlap"
+	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	exit 0
+fi
+
+# `gh pr merge --auto` merges immediately when the base has no required
+# status checks (no branch protection), whatever CI says. Wait for the
+# required set on the reviewed head to settle, and enable auto-merge only
+# when it is green; a settled failure leaves the PR for the next review
+# round (the sweep re-dispatches) and withholds the merge labels.
+if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: required check-runs on ${INITIAL_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}. Nothing merges until a later review round sees them green."
+	exit 0
+fi
+
+# The wait above can take minutes; the base may have moved under this PR's
+# files meanwhile (`--match-head-commit` binds only the head), so re-check
+# freshness once more when the wait actually polled.
+if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+	&& ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=base_moved_overlap"
+	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	exit 0
+fi
 
 # Scoped opt-out for forward-merge fallback PRs opened by
 # forward-merge-stable-to-main.yml — these are routed AWAY from the
