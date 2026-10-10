@@ -352,7 +352,14 @@ _pr_checks_completed()
 # its jobs' check-runs appear only when they start. A fast check that
 # already passed (the PR-body lint) made the head look green while CI was
 # still queued, so the required-checks wait could return before CI ran.
-# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING (integer), return 0.
+# It also sets PR_CHECKS_RUNS_UNRUN to the number of listed workflows whose
+# every run on <head_sha> completed as cancelled or startup_failure: such a
+# run (for example cancelled while still queued) leaves no check-runs, so
+# the check-run gate alone would read the head as green although CI never
+# produced a result. The wait refuses with reason=ci_run_cancelled; a
+# later re-run returns the workflow to pending.
+# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
+# (integers), return 0.
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
 # when disabled or the SHA/repository is unusable. Fail-open: a failed or
 # malformed read counts as 0 pending (the check-run gate still applies).
@@ -360,6 +367,7 @@ _pr_head_ci_runs_pending()
 {
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
 	PR_CHECKS_RUNS_PENDING=0
+	PR_CHECKS_RUNS_UNRUN=0
 	names_csv="${AUTO_MERGE_WAIT_WORKFLOWS-CI}"
 	case "$(printf '%s' "${names_csv}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
 		""|none|off) return 0 ;;
@@ -367,14 +375,21 @@ _pr_head_ci_runs_pending()
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
 	self_run="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}"
 	runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?head_sha=${head_sha}&per_page=100" 2>/dev/null || echo "")"
-	PR_CHECKS_RUNS_PENDING="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	local counts
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
-			| select(.status != "completed")
 			| select((.id | tostring) != $self_run)
-			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))]
-		| length' 2>/dev/null | tail -n1)"
+			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+		| ($runs | map(select(.status != "completed")) | length) as $pending
+		| ($runs | group_by(.name // "" | ascii_downcase)
+			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
+			| length) as $unrun
+		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
+	PR_CHECKS_RUNS_PENDING="${counts%% *}"
+	PR_CHECKS_RUNS_UNRUN="${counts##* }"
 	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
+	[[ "${PR_CHECKS_RUNS_UNRUN}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_UNRUN=0
 	return 0
 }
 
@@ -413,6 +428,11 @@ _pr_wait_for_required_checks()
 					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ]; then
 						PR_CHECKS_WAIT_OUTCOME="timeout"
 						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_RUNS_PENDING} reason=ci_run_pending"
+						return 1
+					fi
+					if [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; then
+						PR_CHECKS_WAIT_OUTCOME="failed"
+						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=failed waited_s=${waited} pending=0 reason=ci_run_cancelled"
 						return 1
 					fi
 				fi

@@ -294,9 +294,11 @@ printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 	return int(last.split()[0][3:]), res.stdout
 
 
-def _ci_runs(*entries: tuple[str, str, int]) -> str:
-	"""actions/runs?head_sha= shape: workflow name, status, run id."""
-	return json.dumps({"workflow_runs": [{"name": name, "status": status, "id": run_id} for name, status, run_id in entries]})
+def _ci_runs(*entries: tuple) -> str:
+	"""actions/runs?head_sha= shape: workflow name, status, run id[, conclusion]."""
+	return json.dumps({"workflow_runs": [
+		{"name": e[0], "status": e[1], "id": e[2], "conclusion": e[3] if len(e) > 3 else None} for e in entries
+	]})
 
 
 GREEN = _runs(("CI", "completed", "success"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
@@ -397,6 +399,19 @@ class RequiredChecksWait(unittest.TestCase):
 		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "ci"})
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=ci_run_pending", out)
+
+	def test_ci_run_cancelled_before_its_jobs_refuses(self) -> None:
+		"""A queued CI run cancelled before any job started leaves no check-runs: not green."""
+		runs = _ci_runs(("CI", "completed", 101, "cancelled"))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=failed", out)
+		self.assertIn("reason=ci_run_cancelled", out)
+
+	def test_cancelled_run_superseded_by_a_finished_run_proceeds(self) -> None:
+		runs = _ci_runs(("CI", "completed", 101, "cancelled"), ("CI", "completed", 102, "success"))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
 
 	def test_failed_runs_read_falls_back_to_the_check_runs(self) -> None:
 		rc, out = _wait([GREEN], ci_runs_sequence=["not json"])

@@ -1265,7 +1265,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   The issue enters the normal clarify/plan/implement pipeline, so the split
   or rebalance lands before the hard guard or the timeout breaks CI. Logs
   `CI_BUDGET kind= subject= value= limit=` and
-  `CI_BUDGET_ISSUE kind= subject= action=opened|exists`; never fails.
+  `CI_BUDGET_ISSUE kind= subject= action=opened|exists` (plus
+  `CI_BUDGET_LABEL name= action=created` when it creates the label); never fails.
 - GitHub does not start runs for a workflow file over **512,000 bytes**
   (500 KiB). Measured on 2026-09-24 with padded probe workflows: 512,000
   bytes ran, 512,001 did not. Nothing reports an error. Every push instead
