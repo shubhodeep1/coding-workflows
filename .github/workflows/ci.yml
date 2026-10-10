@@ -1395,6 +1395,11 @@ jobs:
           print("OK: both release jobs gate on CI / lint before tagging")
           PY
 
+      - name: Release validate-job CI gate and tagging switch contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_validate_ci_gate.py
+
       - name: Consumer secrets propagation contract tests
         run: |
           set -euo pipefail
