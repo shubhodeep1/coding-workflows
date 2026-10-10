@@ -1,0 +1,245 @@
+name: PR 6576 orchestrate-poll shard follow-up
+
+# One-time follow-up for issue #7072 (activation gap of PR #7067). The
+# postmortem docs/postmortems/2026-10-10-pr-6576-orchestrate-poll-shard-1.md
+# could not fetch PR #6576's failed orchestrate-poll job log and most of the
+# partition could not run without jq and PyYAML. On the default branch this
+# workflow fetches that log (or reruns the CI partition at #6576's recorded
+# head), reruns the failing tests on current main, posts one marker comment on
+# #7072 and files an issue only for a failure that reproduces on main.
+# The marker comment by the GH_PAT account makes every later run a no-op.
+# Single-use: see docs/scripts-pending-removal.md. ci.yml and its aggregate
+# `lint` gate are deliberately untouched.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/pr6576-shard-followup.yml
+      - scripts/pr6576_shard_followup.py
+      - tests/test_pr6576_shard_followup.py
+
+permissions: {}
+
+concurrency:
+  # Pull-request self-tests get their own group so they never replace a
+  # pending default-branch run.
+  group: ${{ github.event_name == 'pull_request' && format('pr6576-shard-followup-pr-{0}', github.ref) || 'pr6576-shard-followup' }}
+  cancel-in-progress: false
+
+env:
+  FOLLOWUP_ISSUE: "7072"
+  SOURCE_PR: "6576"
+  SOURCE_BRANCH: "ai/issue-6573"
+  MARKER: "<!-- ai:pr6576-shard-followup:v1 -->"
+  DEFECT_MARKER: "<!-- ai:pr6576-shard-followup-defect:v1 -->"
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install pytest pyyaml
+
+      - name: Follow-up contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr6576_shard_followup.py
+
+  locate:
+    needs: self-test
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+    outputs:
+      done: ${{ steps.guard.outputs.done }}
+      source: ${{ steps.locate.outputs.source }}
+      head_sha: ${{ steps.locate.outputs.head_sha }}
+      names_count: ${{ steps.locate.outputs.names_count }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check the one-time marker
+        id: guard
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py guard \
+            --repo "${GITHUB_REPOSITORY}" --issue "${FOLLOWUP_ISSUE}"
+
+      - name: Locate the failed orchestrate-poll jobs and their logs
+        id: locate
+        if: steps.guard.outputs.done == 'false'
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py locate \
+            --repo "${GITHUB_REPOSITORY}" --pr "${SOURCE_PR}" --branch "${SOURCE_BRANCH}" --out evidence
+
+      - name: Upload evidence
+        if: steps.guard.outputs.done == 'false'
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr6576-evidence
+          path: evidence/
+          if-no-files-found: error
+
+  rerun:
+    needs: locate
+    if: needs.locate.outputs.done == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # No secrets: the fallback executes PR #6576's historical head code.
+    permissions:
+      contents: read
+    outputs:
+      reproduced_count: ${{ steps.rerun.outputs.reproduced_count }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download evidence
+        uses: actions/download-artifact@v6
+        with:
+          name: pr6576-evidence
+          path: evidence
+
+      - name: Validate recorded head
+        if: needs.locate.outputs.source == 'fallback'
+        env:
+          HEAD_SHA: ${{ needs.locate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::PR6576_FOLLOWUP outcome=failed reason=head_sha_invalid"
+            exit 1
+          fi
+
+      - name: Checkout the recorded head of PR 6576
+        if: needs.locate.outputs.source == 'fallback'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.locate.outputs.head_sha }}
+          path: old
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: Rerun the failing tests
+        id: rerun
+        env:
+          EVIDENCE_SOURCE: ${{ needs.locate.outputs.source }}
+        run: |
+          set -euo pipefail
+          old_args=()
+          if [ "${EVIDENCE_SOURCE}" = "fallback" ]; then
+            old_args=(--old-dir old)
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py rerun \
+            --evidence evidence/evidence.json --main-dir . "${old_args[@]}" --out results
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr6576-results
+          path: results/
+          if-no-files-found: warn
+
+  report:
+    needs: [locate, rerun]
+    if: always() && needs.locate.outputs.done == 'false' && needs.rerun.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download evidence
+        uses: actions/download-artifact@v6
+        with:
+          name: pr6576-evidence
+          path: evidence
+
+      - name: Download results
+        uses: actions/download-artifact@v6
+        with:
+          name: pr6576-results
+          path: results
+
+      - name: Re-check the one-time marker
+        id: guard
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py guard \
+            --repo "${GITHUB_REPOSITORY}" --issue "${FOLLOWUP_ISSUE}"
+
+      - name: File the reproduced defect
+        id: defect
+        if: steps.guard.outputs.done == 'false' && needs.rerun.outputs.reproduced_count != '0'
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py file-defect \
+            --repo "${GITHUB_REPOSITORY}" --results results/results.json --evidence evidence/evidence.json
+
+      - name: Post the result marker comment
+        if: steps.guard.outputs.done == 'false'
+        env:
+          DEFECT_ISSUE: ${{ steps.defect.outputs.issue }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py report \
+            --repo "${GITHUB_REPOSITORY}" --issue "${FOLLOWUP_ISSUE}" \
+            --results results/results.json --evidence evidence/evidence.json \
+            --defect-issue "${DEFECT_ISSUE}"
