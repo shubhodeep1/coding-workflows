@@ -430,6 +430,11 @@ issues: when the newest trusted human reply is at least `RECLARIFY_UNROUTED_GRAC
 old and nothing resumed the pipeline, the poller posts one advisory comment
 (`<!-- ai:reclarify-unrouted:v1 comment=<id> -->`) and a Telegram WARNING, logged as
 `RECLARIFY_UNROUTED issue= comment= reason=command_unrouted|no_command age_minutes= outcome=flagged`.
+A comment never counts as that human reply when it has no visible text (only HTML
+comments, such as `<!-- tg_cleanup:N -->`) or carries a pipeline marker
+(`ai:`, `ai_`, `ai-`, `orchestrator_`, `tg_cleanup:`, `tg_phase:`,
+`workflow-failure-heal:`, a versioned `NAME_V1` block, and the other markers listed in
+`_UNROUTED_PIPELINE_MARKER_RE` in `scripts/orchestrate_lib.py`).
 
 `workflow-log-analysis.yml` runs a source-repository PAT-budget report daily at
 06:00 UTC. Its existing collector inspects completed high-volume workflow runs
