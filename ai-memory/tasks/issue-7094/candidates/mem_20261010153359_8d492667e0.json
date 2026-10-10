@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What is the current state of PR #6947, given its changelog fragment, test file and heal-scope code are already on the default branch?\nChoices:\nA) Its changes already reached the default branch (merged or landed through another PR). The PR's CI failures are stale, and this issue only needs to confirm that the same jobs pass on the current default branch. (RECOMMENDED)\nB) PR #6947 is still open and its branch is behind main. This issue should only post a sync-with-main request through the PR's owner process (a comment on the PR) and then wait for CI to run again. No code change.\nC) PR #6947 is still open and carries changes beyond what is on main that still fail CI. Those changes must be fixed on the default branch in this issue.\nQ2: Which two CI jobs failed, and in which run? The implementer cannot read GitHub Actions logs.\nChoices:\nA) The clarify-respond worker should take the failing job names, failing assertions and run ID from GitHub's data for PR #6947 and put them in the answer as literal text, so planning can quote them. (RECOMMENDED)\nB) Only the `tests-heal-plan-and-validation` job (where `tests/test_workflow_failure_heal_scope_tests.py` runs) and the aggregate `lint` job failed. `lint` is red only because the other job failed.\nC) The failing jobs are something else. Reply with their names and the failing test IDs.\nQ3: Which test is the \"already-correct default-branch advisory test\" that must not change?\nChoices:\nA) A test in `tests/test_workflow_failure_heal_scope_tests.py`.\nB) A test of the `AGENTS.md` materiality advisory (`scripts/review_agents_md_materiality.sh`), or of the plan-decisions advisory lint.\nC) Leave this to the planner. Nothing on the default branch is edited unless a failure is reproduced from a quoted assertion. (RECOMMENDED)\nQ4: What should this issue deliver if both failures turn out to be specific to PR #6947's stale branch and no defect exists on the default branch?\nChoices:\nA) Close as a verified no-op. Post one comment on this issue and on PR #6947 with the evidence (job names, failing assertions, the default-branch revision where the same tests pass), and change no code. (RECOMMENDED)\nB) Add a regression test on the default branch that pins the behaviour, even though nothing is broken.\nC) Hand off to a person (`ai:needs-human`) to sync and re-run PR #6947, because this pipeline may not push to `claude/*`.",
+  "fingerprint": "1c6b8c6c7119e91fea2814939d59715dcbf40e768973eb1cdec775ac45e3e7d6",
+  "lineage": {
+    "issue_number": 7094,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38063833768",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38063833768",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010153359_8d492667e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7094,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38063833768"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7094 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T15:33:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
