@@ -285,6 +285,11 @@ def test_ci_poll_sharding_guard_scopes_ci_and_both_release_gates() -> None:
 	assert heal.heal_scope_guard_subjects(["tests/test_ci_poll_test_sharding.py"], exists=lambda path: path == wfs[0], oversized_workflows=lambda: []) == [wfs[0]]
 
 
+def test_ci_structure_guards_scope_ci_yml() -> None:
+	for guard in ("tests/test_ci_job_split_contract.py", "tests/test_ci_inventory_parity_order_contract.py", "tests/test_ci_shared_shell_block_guard.py"):
+		assert heal.heal_scope_guard_subjects([guard], exists=lambda path: True, oversized_workflows=lambda: []) == [".github/workflows/ci.yml"], guard
+
+
 def test_oversized_workflows_read_the_checkout_without_a_ref() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		root = Path(tmpdir) / "repo"

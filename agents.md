@@ -962,7 +962,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   exists at the scope commit and passes the usual path rules (never
   `.claude/` or `.github/ai/`). Guard tests check other files, so their own
   name maps to no subject; `HEAL_SCOPE_GUARD_TEST_SUBJECTS` maps them to the
-  files their fix edits (`tests/test_ci_job_split_contract.py` to
+  files their fix edits (`tests/test_ci_job_split_contract.py`,
+  `tests/test_ci_inventory_parity_order_contract.py` and
+  `tests/test_ci_shared_shell_block_guard.py` to
   `.github/workflows/ci.yml`; `tests/test_ci_poll_test_sharding.py` to
   `ci.yml`, `mark-stable.yml` and `test-and-mark-stable.yml`).
   A failing `tests/test_workflow_file_size_limit.py` adds every workflow at

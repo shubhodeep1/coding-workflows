@@ -2157,6 +2157,9 @@ def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str
 # fix edits instead; every entry must still exist at the scope commit.
 HEAL_SCOPE_GUARD_TEST_SUBJECTS: dict[str, tuple[str, ...]] = {
 	"tests/test_ci_job_split_contract.py": (".github/workflows/ci.yml",),
+	# Pin the inventory-parity step order and the shared shell-block guard step in ci.yml.
+	"tests/test_ci_inventory_parity_order_contract.py": (".github/workflows/ci.yml",),
+	"tests/test_ci_shared_shell_block_guard.py": (".github/workflows/ci.yml",),
 	# Pins the orchestrate-poll sharded step in ci.yml and its ports in both
 	# release gates; ci.yml, mark-stable.yml and test-and-mark-stable.yml run it.
 	"tests/test_ci_poll_test_sharding.py": (".github/workflows/ci.yml", ".github/workflows/mark-stable.yml", ".github/workflows/test-and-mark-stable.yml"),
