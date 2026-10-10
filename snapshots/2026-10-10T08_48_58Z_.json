@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-09T05:19:39Z",
+  "tick_at": "2026-10-10T08:48:58Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -35,8 +35,7 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -45,14 +44,14 @@
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
-      "number": 6860,
+      "number": 6902,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 37880663268)",
-      "total_waves": 1,
+      "title": "[Orchestrator] Safeguarded consumer workflow updater: attested release manifest, fail-closed verification, pull-request delivery",
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
