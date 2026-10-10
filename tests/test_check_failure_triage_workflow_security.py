@@ -1455,6 +1455,22 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertTrue(any(call.startswith("api -X GET repos/owner/repo/commits/main/check-runs -f check_name=external / lint") for call in calls))
 
+	def test_check_run_event_with_failing_or_unknown_base_check_still_files(self) -> None:
+		for check_base, expected in (
+			({"ref": "main", "check_conclusion": "failure"}, "base_conclusion=failure pr=17"),
+			({"ref": "main", "check_conclusion": ""}, "base_conclusion=unknown reason=no_completed_base_check"),
+			({"ref": "main"}, "base_conclusion=unknown reason=no_completed_base_check"),
+		):
+			with self.subTest(base=check_base):
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body=PLAIN_SOURCE, base=check_base,
+					extra_env={"CHECK_TRIAGE_CHECK_RUN_ID": "55", "CHECK_TRIAGE_CHECK_NAME": "external / lint"},
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main " + expected, proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+
 	def test_gate_can_be_disabled_and_ignores_unsafe_base_refs(self) -> None:
 		for base, extra, expected in (
 			({"ref": "main", "workflow_id": "9", "conclusion": "success"}, {"CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED": "false"}, "base_gate outcome=disabled pr=17"),
@@ -1486,7 +1502,8 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 	def test_pending_base_check_run_is_not_read_as_an_older_success(self) -> None:
 		# A pending base check run must not let an earlier completed success skip triage.
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
-		jq_filter = ('[.check_runs[]?] as $r | if ($r | length) == 0 or any($r[]; .status != "completed") then "" '
+		jq_filter = ('[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) '
+			'or any($r[]; .status != "completed") then "" '
 			'elif all($r[]; .conclusion == "success") then "success" '
 			'else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end')
 		self.assertIn(jq_filter, source)
@@ -1498,6 +1515,9 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 			({"check_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
 			({"check_runs": []}, ""),
 			({}, ""),
+			# A truncated page (more runs than returned) is unknown, never success.
+			({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "success"}]}, ""),
+			({"total_count": 1, "check_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
 		):
 			with self.subTest(payload=payload):
 				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
