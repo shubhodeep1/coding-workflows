@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh:92, 109-111 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The omission filter does not exclude agents.d/ fragments, so PR-controlled instruction-like content can reach the triage model despite CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true.\n  WHY: The triage caller sets the flag to keep PR-head agent files out of the model's readable snapshot, but fragment filenames do not match the filter's excluded basenames; severity ranges from MAJOR to BLOCKER, and the highest severity is used here.\n- scripts/build_static_context.sh: lines 88-91 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: _static_context_local_agents_file claims symlinks are refused, but _static_context_regular_file uses [ -f \"$1\" ], which follows symlinks to regular files.\n  WHY: The implementation can select and read a symlinked agents.md or AGENTS.md, contradicting the comment and differing from the explicit symlink checks in .github/workflows/orchestrate.yml.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/clarify_isolated_run.sh: lines 92, 109-111 | severity=critical | confidence=[5]\n  PROBLEM: Adding agents.d to the snapshot roots allows PR-controlled fragments through the omission filter when CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true.\n  WHY: Fragment basenames do not match the excluded agent-instruction names, so the triage model can read instruction-like content despite the caller's trust-boundary safeguard.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_isolated_run.sh: 92 | severity=high | confidence=[5]\n  PROBLEM: Inclusion of agents.d/ in the isolated snapshot makes fragments available despite the omission flag.\n  WHY: The triage model is intended to run without agent instructions, but fragments bypass the omission filter and can influence it.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/build_static_context.sh: lines 88-91 of the new file | severity=low | confidence=[5]\n  PROBLEM: The comment says symlinks are refused, but _static_context_regular_file uses [ -f \"$1\" ], which follows symlinks to regular files.\n  WHY: The function can select and read a symlinked agents.md or AGENTS.md, contradicting the comment and the explicit symlink checks in .github/workflows/orchestrate.yml.\n- scripts/clarify_isolated_run.sh and the triage caller at scripts/check_failure_triage.sh: scripts/clarify_isolated_run.sh line 92 (the roots set) and lines 109-111 (the agent_instruction_names set); scripts/check_failure_triage.sh around line 600-604 (caller that passes the omission flag) | severity=high | confidence=[5]\n  PROBLEM: agents.d/*.md fragments bypass the omission filter and are copied into the triage sandbox.\n  WHY: The triage caller deliberately sets the omission flag so the model treats PR-head agent files as diagnostic data, not sandbox instructions, but fragment content remains readable and can influence the diagnosis.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_isolated_run.sh: Lines 92, 109-111 | severity=high | confidence=[5]\n  PROBLEM: Adding agents.d to the snapshot roots makes tracked fragments available even when CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true.\n  WHY: The triage caller sets that option to keep PR-head agent files from acting as sandbox instructions, but fragment filenames are not excluded and their instruction-like content can influence the diagnosis.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "656b9853de4a4dec5480b1c1957fca8f428ecf7d43e582701e513474b0a8b824",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7058,
+    "run_id": "38053506851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38053506851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010131848_c23e9cb255",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7058,
+    "run_id": "38053506851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T13:18:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
