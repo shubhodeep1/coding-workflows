@@ -38,6 +38,31 @@ Usage:
 copy; every listed path must be in the manifest (exact match, no
 normalisation, empty lines ignored).
 
+	verify_release_manifest.py verify-pr-tree --manifest <path> --release-root <dir>
+		--expected-sha <40-hex> [--expected-repository shubhodeep1/coding-workflows]
+		--git-dir <pr-checkout/.git> --base <parent-sha> --head <pushed-sha>
+		--reproduced-root <base-worktree>
+
+verify-pr-tree (issue #7004) checks the updater's pull request instead of the
+release tree. It first verifies every manifest entry exactly like `verify`,
+then reads the PR's change set from git blobs (`diff-tree` / `cat-file`, never
+working-tree files, so PR-controlled .gitattributes cannot hide a mismatch)
+and accepts a changed path only when:
+- it is a derived file (audit-gate or changelog output) and its blob equals
+  what the attested scripts produced in --reproduced-root (a worktree of
+  --base the caller ran them on), or both sides deleted it;
+- it is `.github/workflows/<name>.yml` and equals the attested
+  `workflow-templates/<name>.yml` rendered with workflow_wrapper_refs at the
+  release SHA;
+- it is `.claude/<rel>` or `CLAUDE.md` and its sha256 equals the manifest
+  entry of `workflow-templates/.claude/<rel>` or `CLAUDE.md`;
+- it is deleted, listed in the attested `workflow-templates/retired_files.txt`
+  and its base blob sha256 is one of the listed hashes.
+A wrapper, `.claude/` or `CLAUDE.md` path the PR adds, or whose mode the PR
+changes, must carry the manifest entry's mode (`mode_mismatch`).
+Anything else is `unlisted_path`. Every reproduced path must be in the change
+set (`derived_missing`). Added or modified paths must be regular files.
+
 Output: exactly one line on stdout and nothing on stderr:
 	UPDATER_MANIFEST_VERIFY outcome=ok reason=ok count=<n>
 	UPDATER_MANIFEST_VERIFY outcome=rejected reason=<token> count=<n>[ path=<p>]
@@ -56,6 +81,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -80,6 +106,13 @@ REASONS = frozenset(
 		"size_mismatch",
 		"hash_mismatch",
 		"internal_error",
+		# verify-pr-tree (issue #7004)
+		"content_mismatch",
+		"retired_hash_mismatch",
+		"derived_mismatch",
+		"derived_missing",
+		"too_many_changes",
+		"git_failed",
 	}
 )
 
@@ -93,6 +126,15 @@ SYMLINK_MODE = "120000"
 TOP_LEVEL_KEYS = frozenset({"schema_version", "repository", "release_sha", "tag", "files"})
 ENTRY_KEYS = frozenset({"path", "sha256", "size", "mode"})
 SYMLINK_ENTRY_KEYS = ENTRY_KEYS | {"link_target"}
+# verify-pr-tree limits and patterns.
+MAX_PR_CHANGES = 2000
+MAX_BLOB_BYTES = 32 * 1024 * 1024
+GIT_TIMEOUT_SECONDS = 300
+OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+WRAPPER_PATH_RE = re.compile(r"\.github/workflows/([A-Za-z0-9._-]+\.yml)\Z")
+CLAUDE_DIR_PREFIX = ".claude/"
+CLAUDE_TEMPLATE_PREFIX = "workflow-templates/.claude/"
+RETIRED_FILES_PATH = "workflow-templates/retired_files.txt"
 
 # Builder-side reason -> verifier reason for _safe_rel refusals.
 _SAFE_REL_REASONS = {
@@ -381,6 +423,289 @@ def verify(args: argparse.Namespace, state: dict) -> int:
 	return len(entries)
 
 
+# ── verify-pr-tree (issue #7004) ──────────────────────────────────────────
+
+
+def _git_env() -> dict:
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	env.update(
+		{
+			"GIT_CONFIG_NOSYSTEM": "1",
+			"GIT_CONFIG_GLOBAL": os.devnull,
+			"GIT_TERMINAL_PROMPT": "0",
+			"GIT_OPTIONAL_LOCKS": "0",
+			"LC_ALL": "C",
+		}
+	)
+	return env
+
+
+def _git(args: list[str]) -> bytes:
+	cmd = [
+		"git",
+		"-c",
+		"core.hooksPath=" + os.devnull,
+		"-c",
+		"core.fsmonitor=false",
+		"-c",
+		"core.untrackedCache=false",
+		"-c",
+		"protocol.allow=never",
+		*args,
+	]
+	try:
+		result = subprocess.run(
+			cmd,
+			stdin=subprocess.DEVNULL,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.DEVNULL,
+			env=_git_env(),
+			timeout=GIT_TIMEOUT_SECONDS,
+			check=False,
+		)
+	except (OSError, subprocess.SubprocessError) as exc:
+		raise VerifyError("git_failed") from exc
+	if result.returncode != 0:
+		raise VerifyError("git_failed")
+	return result.stdout
+
+
+def _decode_path(raw: bytes) -> str:
+	return raw.decode("utf-8", "surrogateescape")
+
+
+def _changed_entries(git_dir: str, base: str, head: str) -> list[dict]:
+	out = _git(["--git-dir", git_dir, "diff-tree", "-r", "-z", "--no-renames", "--raw", "--no-commit-id", base, head])
+	parts = out.split(b"\0")
+	if parts and parts[-1] == b"":
+		parts.pop()
+	if len(parts) % 2:
+		raise VerifyError("git_failed")
+	changes = []
+	for index in range(0, len(parts), 2):
+		try:
+			meta = parts[index].decode("ascii")
+		except UnicodeDecodeError as exc:
+			raise VerifyError("git_failed") from exc
+		fields = meta[1:].split(" ") if meta.startswith(":") else []
+		if len(fields) != 5:
+			raise VerifyError("git_failed")
+		old_mode, new_mode, old_oid, new_oid, status = fields
+		changes.append(
+			{
+				"path": _decode_path(parts[index + 1]),
+				"old_mode": old_mode,
+				"new_mode": new_mode,
+				"old_oid": old_oid,
+				"new_oid": new_oid,
+				"status": status[:1],
+			}
+		)
+		if len(changes) > MAX_PR_CHANGES:
+			raise VerifyError("too_many_changes")
+	return changes
+
+
+def _blob_size(git_dir: str, oid: str) -> int:
+	if not OBJECT_ID_RE.fullmatch(oid):
+		raise VerifyError("git_failed")
+	text = _git(["--git-dir", git_dir, "cat-file", "-s", oid]).strip()
+	if not text.isdigit():
+		raise VerifyError("git_failed")
+	return int(text)
+
+
+def _blob_bytes(git_dir: str, oid: str, path: str, mismatch_reason: str) -> bytes:
+	if _blob_size(git_dir, oid) > MAX_BLOB_BYTES:
+		raise VerifyError(mismatch_reason, path)
+	return _git(["--git-dir", git_dir, "cat-file", "blob", oid])
+
+
+def _reproduced_changes(reproduced_root: str) -> dict:
+	"""Map each path the attested scripts changed to its blob id (None = deleted)."""
+	out = _git(["-C", reproduced_root, "status", "--porcelain=v1", "-z", "-uall", "--no-renames", "--ignore-submodules=none"])
+	changed: dict = {}
+	for record in out.split(b"\0"):
+		if not record:
+			continue
+		if len(record) < 4 or record[2:3] != b" ":
+			raise VerifyError("git_failed")
+		path = _decode_path(record[3:])
+		segments = path.split("/")
+		if any(segment in ("", ".", "..") for segment in segments) or path.startswith(".git/"):
+			raise VerifyError("derived_mismatch", path)
+		target = os.path.join(reproduced_root, *path.split("/"))
+		try:
+			st = os.lstat(target)
+		except FileNotFoundError:
+			changed[path] = None
+			continue
+		except OSError as exc:
+			raise VerifyError("read_failed", path) from exc
+		if not stat.S_ISREG(st.st_mode):
+			raise VerifyError("derived_mismatch", path)
+		oid = _git(["-C", reproduced_root, "hash-object", "--path=" + path, "--", target]).strip().decode("ascii", "replace")
+		if not OBJECT_ID_RE.fullmatch(oid):
+			raise VerifyError("git_failed")
+		changed[path] = oid
+	return changed
+
+
+def _read_release_file(root: Path, rel: str) -> bytes:
+	try:
+		target = _rm._safe_rel(root, rel)
+	except _rm.ManifestError as exc:
+		raise VerifyError(_SAFE_REL_REASONS.get(exc.reason, "internal_error"), rel) from exc
+	data = _read_capped(str(target), MAX_BLOB_BYTES, "read_failed")
+	if len(data) > MAX_BLOB_BYTES:
+		raise VerifyError("read_failed", rel)
+	return data
+
+
+def _expected_wrapper_bytes(root: Path, template_rel: str, release_sha: str, path: str) -> bytes:
+	raw = _read_release_file(root, template_rel)
+	try:
+		# Path.read_text() in workflow_wrapper_refs applies universal newlines.
+		text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+		return _wrr.pin_reusable_workflow_refs(text, release_sha).encode("utf-8")
+	except (UnicodeDecodeError, ValueError) as exc:
+		raise VerifyError("content_mismatch", path) from exc
+
+
+def _retired_hashes(root: Path) -> dict:
+	"""Parse retired_files.txt the way the updater's shell loop does."""
+	try:
+		text = _read_release_file(root, RETIRED_FILES_PATH).decode("utf-8")
+	except UnicodeDecodeError as exc:
+		raise VerifyError("read_failed", RETIRED_FILES_PATH) from exc
+	retired: dict = {}
+	for line in text.split("\n"):
+		fields = line.split()
+		if not fields or fields[0].startswith("#"):
+			continue
+		retired_path = fields[0]
+		if retired_path.startswith("/") or ".." in retired_path or retired_path.startswith(".git/"):
+			continue
+		retired.setdefault(retired_path, set()).update(fields[1:])
+	return retired
+
+
+def _manifest_regular_entry(index: dict, rel: str):
+	entry = index.get(rel)
+	if entry is None or entry["mode"] not in FILE_MODES:
+		return None
+	return entry
+
+
+def _check_hash_entry(git_dir: str, change: dict, entry: dict) -> None:
+	path = change["path"]
+	if _blob_size(git_dir, change["new_oid"]) != entry["size"]:
+		raise VerifyError("content_mismatch", path)
+	data = _blob_bytes(git_dir, change["new_oid"], path, "content_mismatch")
+	if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+		raise VerifyError("content_mismatch", path)
+
+
+def _check_mode(change: dict, entry: dict) -> None:
+	"""Reject a PR that sets a mode the attested release does not record.
+
+	An added path, or a modified path whose mode the PR changes, must carry
+	the manifest entry's mode. A modified path that keeps its existing mode
+	is accepted: the updater's `cp` onto an existing file keeps the consumer's
+	mode, so only modes the PR itself introduces are checked.
+	"""
+	if change["status"] == "A" or change["old_mode"] != change["new_mode"]:
+		if change["new_mode"] != entry["mode"]:
+			raise VerifyError("mode_mismatch", change["path"])
+
+
+def _check_change(git_dir: str, root: Path, release_sha: str, index: dict, retired, change: dict) -> None:
+	path = change["path"]
+	status = change["status"]
+	if status == "D":
+		if retired is None:
+			retired = _retired_hashes(root)
+		hashes = retired.get(path)
+		if hashes is None:
+			raise VerifyError("unlisted_path", path)
+		data = _blob_bytes(git_dir, change["old_oid"], path, "retired_hash_mismatch")
+		if hashlib.sha256(data).hexdigest() not in hashes:
+			raise VerifyError("retired_hash_mismatch", path)
+		return
+	wrapper = WRAPPER_PATH_RE.fullmatch(path)
+	if wrapper:
+		template_rel = "workflow-templates/" + wrapper.group(1)
+		template_entry = _manifest_regular_entry(index, template_rel)
+		if template_entry is None:
+			raise VerifyError("unlisted_path", path)
+		_check_mode(change, template_entry)
+		expected = _expected_wrapper_bytes(root, template_rel, release_sha, path)
+		if _blob_size(git_dir, change["new_oid"]) != len(expected):
+			raise VerifyError("content_mismatch", path)
+		if _blob_bytes(git_dir, change["new_oid"], path, "content_mismatch") != expected:
+			raise VerifyError("content_mismatch", path)
+		return
+	if path.startswith(CLAUDE_DIR_PREFIX):
+		entry = _manifest_regular_entry(index, CLAUDE_TEMPLATE_PREFIX + path[len(CLAUDE_DIR_PREFIX):])
+	elif path == "CLAUDE.md":
+		entry = _manifest_regular_entry(index, "CLAUDE.md")
+	else:
+		entry = None
+	if entry is None:
+		raise VerifyError("unlisted_path", path)
+	_check_mode(change, entry)
+	_check_hash_entry(git_dir, change, entry)
+
+
+def verify_pr_tree(args: argparse.Namespace, state: dict) -> int:
+	try:
+		expected_sha = _wrr.validate_release_sha(args.expected_sha)
+	except ValueError as exc:
+		raise VerifyError("invalid_argument") from exc
+	base = args.base
+	head = args.head
+	if not OBJECT_ID_RE.fullmatch(base) or not OBJECT_ID_RE.fullmatch(head):
+		raise VerifyError("invalid_argument")
+	expected_repo = args.expected_repository
+	if expected_repo is None:
+		expected_repo = _rm.RELEASE_MANIFEST_REPOSITORY
+	root = Path(args.release_root)
+	for directory in (args.release_root, args.git_dir, args.reproduced_root):
+		try:
+			dir_st = os.stat(directory)
+		except OSError as exc:
+			raise VerifyError("invalid_argument") from exc
+		if not stat.S_ISDIR(dir_st.st_mode):
+			raise VerifyError("invalid_argument")
+	doc = load_manifest(args.manifest)
+	entries = validate_manifest(doc, expected_sha, expected_repo)
+	for entry in entries:
+		verify_entry(root, entry)
+	index = {entry["path"]: entry for entry in entries}
+	changes = _changed_entries(args.git_dir, base, head)
+	state["count"] = len(changes)
+	derived = _reproduced_changes(args.reproduced_root)
+	retired = None
+	changed_paths = set()
+	for change in changes:
+		path = change["path"]
+		changed_paths.add(path)
+		if change["status"] != "D" and change["new_mode"] not in FILE_MODES:
+			raise VerifyError("mode_mismatch", path)
+		if path in derived:
+			head_oid = None if change["status"] == "D" else change["new_oid"]
+			if head_oid != derived[path]:
+				raise VerifyError("derived_mismatch", path)
+			continue
+		if change["status"] == "D" and retired is None:
+			retired = _retired_hashes(root)
+		_check_change(args.git_dir, root, expected_sha, index, retired, change)
+	for path in sorted(derived):
+		if path not in changed_paths:
+			raise VerifyError("derived_missing", path)
+	return len(changes)
+
+
 def _parser() -> _ArgParser:
 	parser = _ArgParser(description="Verify a release tree against its release manifest.", add_help=False)
 	subparsers = parser.add_subparsers(dest="command", required=True, parser_class=_ArgParser)
@@ -390,6 +715,15 @@ def _parser() -> _ArgParser:
 	cmd.add_argument("--expected-sha", required=True)
 	cmd.add_argument("--expected-repository", default=None)
 	cmd.add_argument("--paths-file", default=None)
+	tree = subparsers.add_parser("verify-pr-tree", add_help=False)
+	tree.add_argument("--manifest", required=True)
+	tree.add_argument("--release-root", required=True)
+	tree.add_argument("--expected-sha", required=True)
+	tree.add_argument("--expected-repository", default=None)
+	tree.add_argument("--git-dir", required=True)
+	tree.add_argument("--base", required=True)
+	tree.add_argument("--head", required=True)
+	tree.add_argument("--reproduced-root", required=True)
 	return parser
 
 
@@ -398,9 +732,12 @@ def main(argv: list[str] | None = None) -> int:
 	try:
 		_load_deps()
 		args = _parser().parse_args(argv)
-		if args.command != "verify":
+		if args.command == "verify":
+			count = verify(args, state)
+		elif args.command == "verify-pr-tree":
+			count = verify_pr_tree(args, state)
+		else:
 			raise VerifyError("invalid_argument")
-		count = verify(args, state)
 	except VerifyError as exc:
 		emit("rejected", exc.reason, state["count"], exc.path)
 		return 2

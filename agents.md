@@ -1584,11 +1584,27 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   every push to it came from the `GH_PAT` account and the newest produced its
   tip; committer email and trailer alone are forgeable), lints
   the PR text with `scripts/lint_pr_body_auto_close.py` (now part of the
-  attested release manifest), opens or refreshes one PR and enables auto-merge
-  bound to the pushed head only for a `verified=true` release. PR calls use
-  `GH_PAT`; the job requests no `pull-requests` permission because a reusable
-  job cannot raise the caller's `contents: write` grant. Log prefix
-  `UPDATER_PR_DELIVERY`.
+  attested release manifest) and opens or refreshes one PR; for a
+  `verified=true` release it records `auto_merge=pending_verify`. PR calls use
+  `GH_PAT`; no job requests a `pull-requests` permission because a reusable
+  job cannot raise the caller's grant. Log prefix `UPDATER_PR_DELIVERY`.
+- The separate `verify` job (#7004; job id, status context and log prefix are
+  provisional because the plan could not be read) runs after a PR was opened
+  or refreshed. It checks the PR head out without credentials and never runs
+  code from it, re-attests the release manifest, hash-checks every release
+  module it runs, checks that the PR adds one commit with the
+  `Updater-Release-SHA:` trailer on top of the default branch, and runs
+  `scripts/verify_release_manifest.py verify-pr-tree`, which accepts a changed
+  path only when it matches the attested release (re-rendered wrapper,
+  manifest hash, attested retired-file hash, or the audit-gate/changelog
+  output the attested scripts reproduce on the PR's parent). It posts the
+  commit status `ai-update-workflows/verify` with the job token and is the
+  only place that enables auto-merge (bound to the verified head, `verified=true`
+  releases only). It has no job-level `permissions:` (a reusable job asking for
+  more than the caller grants fails the whole run at startup); the consumer
+  template grants `contents`, `pull-requests` and `statuses: write`, and
+  `tests/test_update_workflows_template_gate.py` pins that contract. Log prefix
+  `UPDATER_PR_VERIFY`.
 - Stable-release repository dispatch payloads carry both `version` and the peeled
   commit `sha`. Consumers validate the payload but independently resolve current
   `stable`, so delayed events cannot downgrade installed pins.
@@ -2265,6 +2281,7 @@ and shipped:
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
 - `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
 - `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
+- `UPDATER_PR_VERIFY` (`update_workflows.yml` job `verify`, runs only after the PR path opened or refreshed a pull request: `outcome=passed reason=ok pr= head= auto_merge=enabled|failed|skipped_unverified`, `outcome=rejected reason= stage=`)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2511,6 +2528,7 @@ LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
 LOG_PREFIX.name=RELEASE_MANIFEST
 LOG_PREFIX.name=UPDATER_MANIFEST_VERIFY
 LOG_PREFIX.name=UPDATER_PR_DELIVERY
+LOG_PREFIX.name=UPDATER_PR_VERIFY
 
 ---
 
