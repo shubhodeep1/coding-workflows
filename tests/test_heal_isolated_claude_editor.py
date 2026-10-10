@@ -155,8 +155,10 @@ def test_claude_unavailable_runs_the_isolated_codex_editor(tmp_path: Path) -> No
 	assert "HEAL_ISOLATED_EDITOR phase=transfer engine=codex outcome=success" in result["stdout"]
 
 
-@pytest.mark.parametrize("claude_rc", [1, 124])
+@pytest.mark.parametrize("claude_rc", [1, 76, 124])
 def test_claude_failure_fails_without_transfer_or_codex_rerun(tmp_path: Path, claude_rc: int) -> None:
+	# 76 is a fallback refused by the capacity-only AI_ENGINE_FALLBACK_POLICY
+	# (project #6664): fail closed, never run codex for a non-capacity reason.
 	result = _run(tmp_path, claude_rc=claude_rc)
 	assert result["rc"] not in (0, 42), result["stderr"]
 	assert result["host_file"] == "old\n"
