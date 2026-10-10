@@ -13,7 +13,16 @@
  *     last good copy kept when a fetch fails);
  *   - name a job_workflow_ref under shubhodeep1/coding-workflows/.github/workflows/,
  *     i.e. a job of a coding-workflows reusable workflow, never a consumer's
- *     own workflow file.
+ *     own workflow file;
+ *   - name one of the exact workflow files in ALLOWED_WORKFLOW_FILES (the
+ *     reusable workflows that use .github/actions/claude-pool-token), at
+ *     refs/heads/main or at a 40-hex commit SHA that equals the signed
+ *     job_workflow_sha and that GitHub's compare API reports as an ancestor
+ *     of (or identical to) main or stable. Any other ref, including a
+ *     feature branch or refs/heads/stable given as a branch, is refused.
+ *     A verification call that fails, times out or is rate limited is
+ *     refused too (403 workflow_sha_unverifiable); nothing is granted on
+ *     uncertainty (issue #6636).
  *
  * Success: 200 `{"accounts":[{"name","token"}],"probe_model","gate"}`.
  * Refusal: 403 `{"error": <reason code>}`. Broker-side trouble (JWKS or
@@ -29,6 +38,8 @@ export interface Env {
 	CLAUDE_POOL_TOKENS?: string;
 	PROBE_MODEL?: string;
 	GATE?: string;
+	/** Optional read-only token for the GitHub compare calls; unauthenticated reads when unset. Never logged. */
+	BROKER_GITHUB_READ_TOKEN?: string;
 }
 
 export interface Deps {
@@ -50,6 +61,35 @@ export const CLOCK_SKEW_SECONDS = 60;
 export const REGISTRY_TTL_MS = 10 * 60 * 1000;
 export const JWKS_TTL_MS = 60 * 60 * 1000;
 const JWKS_REFRESH_FLOOR_MS = 60 * 1000;
+/**
+ * Exact reusable workflow files that may receive the pool: the
+ * .github/workflows/*.yml files that use .github/actions/claude-pool-token.
+ * tests/test_claude_pool_token.py keeps this list equal to that set.
+ */
+export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
+	"clarify.yml",
+	"claude-engine-smoke.yml",
+	"implement.yml",
+	"orchestrate.yml",
+	"orchestrate_clarify_respond.yml",
+	"orchestrate_poll.yml",
+	"plan.yml",
+	"review_autofix.yml",
+	"security-audit.yml",
+	"unblock_judge.yml",
+]);
+export const TRUSTED_BRANCH_REF = "refs/heads/main";
+/**
+ * A SHA-pinned workflow is trusted when it is reachable from one of these
+ * branches. Assumption: both are protected and never force-pushed; release
+ * tags are cut on stable, so ancestry of stable covers "equals a release tag".
+ */
+export const ANCESTOR_BRANCHES: readonly string[] = Object.freeze(["main", "stable"]);
+export const GITHUB_API = "https://api.github.com/repos/shubhodeep1/coding-workflows";
+export const VERIFY_TIMEOUT_MS = 5000;
+export const VERIFIED_SHA_TTL_MS = 6 * 60 * 60 * 1000;
+export const VERIFIED_SHA_MAX = 256;
+export const SHA_RE = /^[0-9a-f]{40}$/;
 const DEFAULT_PROBE_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_GATE = 0.9;
 const MAX_JWT_LENGTH = 8192;
@@ -157,10 +197,118 @@ export function parsePool(raw: string | undefined): { name: string; token: strin
 	return accounts.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
+/**
+ * Split a job_workflow_ref into its workflow file and ref. Returns null unless
+ * the ref has exactly one `@`, its path is WORKFLOW_PREFIX (case-insensitive)
+ * followed by a single file name segment.
+ */
+export function parseWorkflowRef(value: unknown): { file: string; ref: string } | null
+{
+	if (typeof value !== "string") {
+		return null;
+	}
+	const parts = value.split("@");
+	if (parts.length !== 2) {
+		return null;
+	}
+	const [path, ref] = parts;
+	if (path.length <= WORKFLOW_PREFIX.length || path.slice(0, WORKFLOW_PREFIX.length).toLowerCase() !== WORKFLOW_PREFIX) {
+		return null;
+	}
+	const file = path.slice(WORKFLOW_PREFIX.length);
+	if (file.includes("/") || file.includes("\\")) {
+		return null;
+	}
+	return { file, ref };
+}
+
+type ShaVerdict = "trusted" | "untrusted" | "unavailable";
+
 export function createHandler(deps: Deps)
 {
 	let jwks: { keys: Jwk[]; fetchedAt: number } | null = null;
 	let registry: { repos: Set<string>; fetchedAt: number } | null = null;
+	// Positive-only cache: an ancestor of a protected branch stays one.
+	const verifiedShas = new Map<string, number>();
+
+	async function compareStatus(branch: string, sha: string, env: Env): Promise<"yes" | "no" | "unavailable">
+	{
+		const headers: Record<string, string> = {
+			accept: "application/vnd.github+json",
+			"x-github-api-version": "2022-11-28",
+			"user-agent": "claude-pool-broker",
+		};
+		const readToken = env.BROKER_GITHUB_READ_TOKEN;
+		if (typeof readToken === "string" && readToken.trim() !== "") {
+			headers.authorization = `Bearer ${readToken.trim()}`;
+		}
+		let response: Response;
+		try {
+			response = await deps.fetch(`${GITHUB_API}/compare/${branch}...${sha}?per_page=1`, {
+				headers,
+				signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+			});
+		} catch {
+			return "unavailable";
+		}
+		if (response.status === 404 || response.status === 422) {
+			return "no";
+		}
+		if (response.status !== 200) {
+			return "unavailable";
+		}
+		let body: unknown;
+		try {
+			body = await response.json();
+		} catch {
+			return "unavailable";
+		}
+		const status = body && typeof body === "object" ? (body as { status?: unknown }).status : undefined;
+		if (status === "behind" || status === "identical") {
+			return "yes";
+		}
+		if (status === "ahead" || status === "diverged") {
+			return "no";
+		}
+		return "unavailable";
+	}
+
+	async function verifyTrustedSha(sha: string, env: Env): Promise<ShaVerdict>
+	{
+		const now = deps.now();
+		const cachedAt = verifiedShas.get(sha);
+		if (cachedAt !== undefined) {
+			if (now - cachedAt < VERIFIED_SHA_TTL_MS) {
+				deps.log(`CLAUDE_POOL broker workflow_sha_check sha=${sha.slice(0, 12)} result=trusted source=cache`);
+				return "trusted";
+			}
+			verifiedShas.delete(sha);
+		}
+		let verdict: ShaVerdict = "untrusted";
+		for (const branch of ANCESTOR_BRANCHES) {
+			const result = await compareStatus(branch, sha, env);
+			if (result === "unavailable") {
+				verdict = "unavailable";
+				break;
+			}
+			if (result === "yes") {
+				verdict = "trusted";
+				break;
+			}
+		}
+		if (verdict === "trusted") {
+			verifiedShas.set(sha, now);
+			while (verifiedShas.size > VERIFIED_SHA_MAX) {
+				const oldest = verifiedShas.keys().next().value;
+				if (oldest === undefined) {
+					break;
+				}
+				verifiedShas.delete(oldest);
+			}
+		}
+		deps.log(`CLAUDE_POOL broker workflow_sha_check sha=${sha.slice(0, 12)} result=${verdict} source=api`);
+		return verdict;
+	}
 
 	async function loadJwks(force: boolean): Promise<Jwk[]>
 	{
@@ -288,7 +436,7 @@ export function createHandler(deps: Deps)
 		return claims;
 	}
 
-	async function authorize(claims: Record<string, unknown>): Promise<string>
+	async function authorize(claims: Record<string, unknown>, env: Env): Promise<string>
 	{
 		if (typeof claims.repository_owner !== "string" || claims.repository_owner.toLowerCase() !== OWNER) {
 			throw new Refusal(403, "wrong_owner");
@@ -306,11 +454,28 @@ export function createHandler(deps: Deps)
 				throw new Refusal(403, "repo_not_allowed");
 			}
 		}
-		const workflowRef = claims.job_workflow_ref;
-		if (typeof workflowRef !== "string" || !workflowRef.toLowerCase().startsWith(WORKFLOW_PREFIX)) {
+		const workflow = parseWorkflowRef(claims.job_workflow_ref);
+		if (!workflow) {
 			throw new Refusal(403, "wrong_workflow");
 		}
-		return repository;
+		if (!ALLOWED_WORKFLOW_FILES.includes(workflow.file)) {
+			throw new Refusal(403, "workflow_not_allowed");
+		}
+		if (workflow.ref === TRUSTED_BRANCH_REF) {
+			return repository;
+		}
+		if (SHA_RE.test(workflow.ref)) {
+			const signedSha = claims.job_workflow_sha;
+			if (typeof signedSha !== "string" || signedSha !== workflow.ref) {
+				throw new Refusal(403, "workflow_sha_mismatch");
+			}
+			const verdict = await verifyTrustedSha(workflow.ref, env);
+			if (verdict === "trusted") {
+				return repository;
+			}
+			throw new Refusal(403, verdict === "untrusted" ? "workflow_sha_unverified" : "workflow_sha_unverifiable");
+		}
+		throw new Refusal(403, "workflow_ref_not_allowed");
 	}
 
 	return async function handle(request: Request, env: Env): Promise<Response>
@@ -329,7 +494,7 @@ export function createHandler(deps: Deps)
 			if (!match) {
 				throw new Refusal(403, "missing_token");
 			}
-			repository = await authorize(await verify(match[1]));
+			repository = await authorize(await verify(match[1]), env);
 			const accounts = parsePool(env.CLAUDE_POOL_TOKENS);
 			if (accounts.length === 0) {
 				throw new Refusal(503, "pool_empty");
