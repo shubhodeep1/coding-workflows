@@ -81,6 +81,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
+- `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
@@ -264,6 +265,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
+- `scripts/sandbox_image.sh` — Pull a prebuilt sandbox image from GHCR by input hash, or build it locally when the pull fails (`SANDBOX_IMAGE` log prefix).
+- `scripts/sandbox_images_publish.sh` — Build and push every sandbox image variant the build sites resolve (run by publish-sandbox-images.yml).
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
