@@ -828,6 +828,97 @@ def test_auto_answer_enters_a_phase_the_plan_workflow_accepts(stop: str) -> None
 	assert ops[-1]["label"] == f"ai:{stop}"
 
 
+# --- #7032: CI-failure issue reissue and its owning PR ----------------------
+
+OWNER_SHA = "c" * 40
+
+
+def _owner(state: str, **extra) -> dict:
+	owner = {"number": 6786, "state": state, "head_sha": OWNER_SHA, "head_ref": "ai/issue-6789", "base_ref": "main"}
+	owner.update(extra)
+	return owner
+
+
+def test_ci_owner_candidate_recognises_the_copied_marker_without_a_label() -> None:
+	body = "<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #6801."
+	assert actions.ci_owner_candidate(body, ["ai:blocked"], "o/r") == {"pr": 6786, "reason": "marker"}
+	assert actions.ci_owner_candidate("plain body", ["ai:blocked"], "o/r")["reason"] == "not_ci_failure"
+	labelled = "- **Pull request:** https://github.com/o/r/pull/6786 (`ai/issue-6789`)"
+	assert actions.ci_owner_candidate(labelled, ["ai:check-triage"], "O/R") == {"pr": 6786, "reason": "pull_request_line"}
+	# A marker inside a sentence is not line-anchored and does not count.
+	assert actions.ci_owner_candidate("see <!-- check-failure-triage:pr=5 --> here", [], "o/r")["reason"] == "not_ci_failure"
+
+
+def test_ci_owner_candidate_ignores_a_pull_request_url_into_another_repo() -> None:
+	body = "- **Pull request:** https://github.com/evil/fork/pull/6786 (`main`)"
+	assert actions.ci_owner_candidate(body, ["ai:check-triage-escalated"], "o/r") == {"pr": None, "reason": "foreign_repo"}
+
+
+def test_ci_owner_candidate_refuses_conflicting_pr_numbers_and_the_plan_stays_as_today() -> None:
+	body = "<!-- check-failure-triage:pr=1 -->\n<!-- check-failure-triage:pr=2 -->"
+	assert actions.ci_owner_candidate(body, [], "o/r") == {"pr": None, "reason": "conflicting_pr"}
+	mixed = "<!-- check-failure-triage:pr=1 -->\n- **Pull request:** https://github.com/o/r/pull/2"
+	assert actions.ci_owner_candidate(mixed, [], "o/r")["reason"] == "conflicting_pr"
+	baseline = actions.plan(_verdict("reissue", instructions="spec"), _ctx())
+	assert [op["op"] for op in baseline] == ["create_issue", "close"]
+	assert actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner={"state": "unverified", "number": 6786})) == baseline
+
+
+def test_merged_green_owner_supersedes_the_reissue() -> None:
+	ops = actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=_owner("superseded")))
+	assert [op["op"] for op in ops] == ["comment", "close"]
+	assert not any(op["op"] == "create_issue" for op in ops)
+	assert "#6786" in ops[0]["body"] and OWNER_SHA in ops[0]["body"]
+	assert ops[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": False}
+
+
+def test_open_owner_reissue_carries_the_marker_and_a_standalone_branch_line() -> None:
+	ops = actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=_owner("open")))
+	body = ops[0]["body"]
+	assert ops[0]["op"] == "create_issue"
+	assert body.splitlines()[0] == "<!-- check-failure-triage:pr=6786 -->"
+	assert body.endswith("\n\n- Integration branch: `ai/issue-6789`")
+	assert [m.group(1) for m in actions.INTEGRATION_BRANCH_LINE_RE.finditer(body)] == ["ai/issue-6789"]
+	assert actions.ci_owner_candidate(body, [], "o/r")["pr"] == 6786
+	verified = actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=_owner("verified", head_ref=None)))[0]["body"]
+	assert verified.startswith("<!-- check-failure-triage:pr=6786 -->\n") and "Integration branch" not in verified
+
+
+def test_branch_named_inside_a_sentence_is_not_a_declared_branch() -> None:
+	body = "The fix belongs on main; see Integration branch: foo in the notes."
+	assert list(actions.INTEGRATION_BRANCH_LINE_RE.finditer(body)) == []
+	assert actions.declared_integration_branch(body) is None
+	assert actions.declared_integration_branch("- Integration branch: `orchestrator/project-9`") == "orchestrator/project-9"
+
+
+@pytest.mark.parametrize("owner", [
+	_owner("superseded", head_sha="bad"),
+	_owner("open", head_ref="a..b"),
+	_owner("open", head_ref=None),
+	_owner("merged"),
+	_owner("superseded", number=True),
+	"superseded",
+])
+def test_malformed_ci_owner_keeps_todays_reissue(owner: object) -> None:
+	baseline = actions.plan(_verdict("reissue", instructions="spec"), _ctx())
+	assert actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=owner)) == baseline
+
+
+def test_security_and_tracked_issues_ignore_ci_owner() -> None:
+	labels = ["ai:blocked", "ai:security"]
+	for extra in ({"labels": labels, "security_finding_id": "abc-1"}, {"tracking": 12}):
+		baseline = actions.plan(_verdict("reissue", instructions="spec"), _ctx(**extra))
+		assert actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=_owner("superseded"), **extra)) == baseline
+
+
+def test_ci_owner_cli_reports_the_pr_and_declared_branch(tmp_path: Path) -> None:
+	item = tmp_path / "item.json"
+	item.write_text(json.dumps({"body": "<!-- check-failure-triage:pr=6786 -->\n- Integration branch: `orchestrator/project-9`", "labels": [{"name": "ai:blocked"}]}), encoding="utf-8")
+	result = subprocess.run([sys.executable, str(ACTIONS), "ci-owner", "--item-file", str(item), "--repo", "o/r"], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout) == {"pr": 6786, "reason": "marker", "declared_branch": "orchestrator/project-9"}
+
+
 def test_followup_posts_the_reset_for_the_stop() -> None:
 	ops = actions.reset_ops(_ctx("project", "validation-failed"), "fix-up #9 merged")
 	assert _bodies(ops) == ["/revalidate unblock judge: fix-up #9 merged"]
@@ -949,6 +1040,19 @@ if endpoint.endswith("/comments?per_page=100"):
 			if os.environ.get("FAKE_GH_ITEM_COMMENTS_RECHECK"):
 				done(os.environ["FAKE_GH_ITEM_COMMENTS_RECHECK"])
 	done(json.dumps(state["item_comments"]))
+owner_pr = json.loads(os.environ.get("FAKE_GH_OWNER_PR", "null"))
+if owner_pr is not None and endpoint == "repos/o/r/pulls/" + str(owner_pr.get("number")):
+	if os.environ.get("FAKE_GH_FAIL_OWNER_PR"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(json.dumps(owner_pr))
+if endpoint.startswith("repos/o/r/commits/") and "/check-runs" in endpoint and "--slurp" in args:
+	done(os.environ.get("FAKE_GH_OWNER_CHECKS", ""))
+if endpoint.startswith("repos/o/r/git/ref/heads/"):
+	if not os.environ.get("FAKE_GH_OWNER_REF"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(json.dumps({"ref": "refs/heads/" + endpoint[len("repos/o/r/git/ref/heads/"):]}))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
 	head_repo = os.environ.get("FAKE_GH_PR_HEAD_REPO", "o/r")
@@ -2140,3 +2244,57 @@ def test_verdict_record_cannot_carry_a_command_line(tmp_path: Path) -> None:
 	record = state["comments"][0]["body"]
 	assert not COMMAND_LINE.search(record)
 	assert not COMMAND_LINE.search(state["created"][0]["body"])
+
+
+# --- #7032 end to end: the judge reads the owning PR before a reissue --------
+
+CI_ISSUE = dict(ISSUE, body="<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #6801.")
+
+
+def _owner_pr(**extra) -> dict:
+	pr = {"number": 6786, "state": "closed", "merged": True, "base": {"ref": "main", "repo": {"full_name": "o/r", "default_branch": "main"}},
+		"head": {"sha": "c" * 40, "ref": "ai/issue-6789", "repo": {"full_name": "o/r"}}}
+	pr.update(extra)
+	return pr
+
+
+GREEN_CHECKS = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]}])
+REISSUE = {"verdict": "reissue", "reason": "r", "instructions": "correct spec"}
+
+
+def test_merged_green_owner_closes_the_issue_without_a_reissue(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS)
+	assert f"op=reissue outcome=superseded pr=6786 head={'c' * 40}" in result.stdout, result.stdout + result.stderr
+	assert state["created"] == []
+	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state_reason") == "not_planned" for endpoint, fields in state["patched"])
+	assert any(comment["body"].startswith("Superseded: owning PR #6786") for comment in state["comments"])
+
+
+def test_merged_owner_with_failing_checks_reissues_with_the_marker(tmp_path: Path) -> None:
+	red = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "failure"}]}])
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=red)
+	assert "outcome=superseded" not in result.stdout
+	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
+
+
+def test_unreadable_owner_pr_reissues_as_today(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_FAIL_OWNER_PR="1")
+	assert "op=ci_owner outcome=unverified reason=pr_unverified pr=6786" in result.stdout, result.stdout + result.stderr
+	assert len(state["created"]) == 1
+	assert state["created"][0]["body"].startswith("Re-issued by the unblock judge from #7.")
+
+
+def test_fork_owner_pr_is_not_trusted(tmp_path: Path) -> None:
+	fork = _owner_pr(head={"sha": "c" * 40, "ref": "ai/issue-6789", "repo": {"full_name": "evil/fork"}})
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(fork), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS)
+	assert "outcome=unverified" in result.stdout
+	assert len(state["created"]) == 1 and "check-failure-triage" not in state["created"][0]["body"]
+
+
+def test_open_owner_pr_reissue_records_its_head_branch(tmp_path: Path) -> None:
+	open_pr = _owner_pr(state="open", merged=False)
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(open_pr), FAKE_GH_OWNER_REF="1")
+	assert "op=ci_owner outcome=open pr=6786" in result.stdout, result.stdout + result.stderr
+	body = state["created"][0]["body"]
+	assert body.startswith("<!-- check-failure-triage:pr=6786 -->\n")
+	assert body.endswith("- Integration branch: `ai/issue-6789`")

@@ -22,9 +22,26 @@ the network; the shell only executes.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
        or a resume command, so the finding stays blocked (#6541).
+      An optional `ci_owner` object `{"number", "state", "head_sha",
+      "head_ref", "base_ref"}` carries the facts scripts/unblock_judge.sh read
+      about the pull request that owns a CI-failure issue (#7032). `state` is
+      `superseded` (merged into the default or declared integration branch
+      with its required checks green: the `reissue` verdict closes the issue
+      as not planned instead of re-issuing it), `open` (the re-issue carries
+      the triage PR marker and a standalone `- Integration branch:` line with
+      the verified PR head ref), `verified` (the marker only) or `unverified`.
+      A missing or malformed object keeps today's re-issue unchanged. Only
+      standalone, non-security issues use it.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
+  ci-owner --item-file PATH --repo R
+      Reads the already-fetched item JSON and prints
+      `{"pr": n|null, "reason": s, "declared_branch": s|null}`: the pull
+      request that owns a CI-failure issue (label `ai:check-triage` /
+      `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
+      and the issue's single line-anchored integration branch. Conflicting PR
+      numbers or a URL into another repository give `pr: null`.
 
 Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "comment", "issue": n, "body": s}
@@ -79,6 +96,16 @@ INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch
 TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
 SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 MAX_COMMAND_TEXT = 300
+# CI-failure issues and the PR that owns them (#7032). check_failure_triage.sh
+# writes both the label and the marker; unblock re-issues copy the marker.
+CHECK_TRIAGE_LABELS = ("ai:check-triage", "ai:check-triage-escalated")
+CHECK_TRIAGE_PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([0-9]{1,9}) -->[ \t]*$", re.MULTILINE)
+CHECK_TRIAGE_PR_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?\*\*Pull request:\*\*\s*https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]{1,9})(?![0-9])",
+	re.MULTILINE,
+)
+CI_OWNER_STATES = ("superseded", "open", "verified", "unverified")
+CI_OWNER_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 
 
 class UsageError(Exception):
@@ -105,6 +132,65 @@ def _one_line(text: str) -> str:
 	return " ".join(str(text or "").split())[:MAX_COMMAND_TEXT]
 
 
+def _safe_branch_ref(branch: str) -> bool:
+	return (
+		bool(SECURITY_BRANCH_REF_RE.fullmatch(branch)) and ".." not in branch and "//" not in branch
+		and not branch.endswith(("/", ".", ".lock"))
+	)
+
+
+def ci_owner_candidate(body: str, labels: list[str], repo: str) -> dict:
+	"""The PR that owns a CI-failure issue, from its body only (no network)."""
+	body = body if isinstance(body, str) else ""
+	markers = {int(match.group(1)) for match in CHECK_TRIAGE_PR_MARKER_RE.finditer(body)}
+	if not markers and not any(label in CHECK_TRIAGE_LABELS for label in labels):
+		return {"pr": None, "reason": "not_ci_failure"}
+	numbers = set(markers)
+	foreign = False
+	for match in CHECK_TRIAGE_PR_LINE_RE.finditer(body):
+		if match.group(1).lower() == repo.lower():
+			numbers.add(int(match.group(2)))
+		else:
+			foreign = True
+	numbers.discard(0)
+	if len(numbers) > 1:
+		return {"pr": None, "reason": "conflicting_pr"}
+	if not numbers:
+		return {"pr": None, "reason": "foreign_repo" if foreign else "no_pr"}
+	return {"pr": numbers.pop(), "reason": "marker" if markers else "pull_request_line"}
+
+
+def declared_integration_branch(body: str) -> str | None:
+	"""The single valid line-anchored `Integration branch:` value, or None."""
+	branches = {match.group(1).strip() for match in INTEGRATION_BRANCH_LINE_RE.finditer(body if isinstance(body, str) else "")}
+	if len(branches) != 1:
+		return None
+	branch = branches.pop()
+	return branch if _safe_branch_ref(branch) else None
+
+
+def _ci_owner(raw: object) -> dict | None:
+	"""Validate the shell's owning-PR facts; anything malformed is `unverified`."""
+	if raw is None:
+		return None
+	unverified = {"state": "unverified"}
+	if not isinstance(raw, dict):
+		return unverified
+	number, state = raw.get("number"), raw.get("state")
+	head_sha, head_ref = raw.get("head_sha"), raw.get("head_ref")
+	if isinstance(number, bool) or not isinstance(number, int) or number < 1 or state not in CI_OWNER_STATES or state == "unverified":
+		return unverified
+	if head_sha is not None and (not isinstance(head_sha, str) or not CI_OWNER_SHA_RE.fullmatch(head_sha)):
+		return unverified
+	if head_ref is not None and (not isinstance(head_ref, str) or not _safe_branch_ref(head_ref)):
+		return unverified
+	if state == "superseded" and head_sha is None:
+		return unverified
+	if state == "open" and head_ref is None:
+		return unverified
+	return {"number": number, "state": state, "head_sha": head_sha, "head_ref": head_ref}
+
+
 def _security_reissue_metadata(body: str, labels: list[str], item: int) -> tuple[int | None, str | None, bool]:
 	try:
 		dependency = security_dependency_number({"number": item, "body": body, "labels": labels})
@@ -113,10 +199,7 @@ def _security_reissue_metadata(body: str, labels: list[str], item: int) -> tuple
 	branches = [match.group(1).strip() for match in INTEGRATION_BRANCH_LINE_RE.finditer(body)]
 	if not branches:
 		branches = [(match.group(1) or match.group(2)).strip() for match in TARGET_BRANCH_LINE_RE.finditer(body)]
-	if len(set(branches)) > 1 or any(
-		not SECURITY_BRANCH_REF_RE.fullmatch(branch) or ".." in branch or "//" in branch
-		or branch.endswith(("/", ".", ".lock")) for branch in branches
-	):
+	if len(set(branches)) > 1 or any(not _safe_branch_ref(branch) for branch in branches):
 		return None, None, True
 	return dependency, branches[0] if branches else None, False
 
@@ -184,6 +267,7 @@ def _context(raw: object) -> dict:
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
+		"ci_owner": _ci_owner(raw.get("ci_owner")) if kind == "issue" else None,
 	}
 
 
@@ -385,6 +469,23 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			if ctx.get("security_depends_on") is not None:
 				body += f"\n- Depends on: #{ctx['security_depends_on']}"
 		labels = [SECURITY_LABEL] if security_issue else []
+		owner = ctx.get("ci_owner") if ctx["kind"] == "issue" and not ctx["tracking"] and not security_issue else None
+		if owner and owner["state"] == "superseded":
+			# #7032: the PR that owned this CI failure already merged green, so a
+			# replacement issue would redo finished work.
+			return [
+				{
+					"op": "comment",
+					"issue": item,
+					"body": f"Superseded: owning PR #{owner['number']} merged with its required checks passing at head `{owner['head_sha']}`. No re-issue was created.",
+				},
+				{"op": "close", "issue": item, "reason": "not_planned", "pr": False},
+			]
+		if owner and owner["state"] in ("open", "verified"):
+			body = f"<!-- check-failure-triage:pr={owner['number']} -->\n{body}"
+			if owner["state"] == "open":
+				# Only the verified, open, same-repository PR head ref; never model text.
+				body += f"\n\n- Integration branch: `{owner['head_ref']}`"
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
@@ -467,11 +568,23 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	owner_cmd = sub.add_parser("ci-owner")
+	owner_cmd.add_argument("--item-file", required=True)
+	owner_cmd.add_argument("--repo", required=True)
 	return parser
 
 
 def run(argv: list[str] | None = None) -> dict:
 	args = build_parser().parse_args(argv)
+	if args.command == "ci-owner":
+		item = _read_json(args.item_file, "--item-file")
+		if not isinstance(item, dict):
+			raise UsageError("--item-file must hold a JSON object")
+		labels = [label.get("name") for label in item.get("labels") or [] if isinstance(label, dict) and isinstance(label.get("name"), str)]
+		body = item.get("body") if isinstance(item.get("body"), str) else ""
+		result = ci_owner_candidate(body, labels, args.repo)
+		result["declared_branch"] = declared_integration_branch(body)
+		return result
 	ctx = _context(_read_json(args.context_file, "--context-file"))
 	if args.command == "followup":
 		if args.fixup < 1:

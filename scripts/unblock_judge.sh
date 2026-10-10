@@ -43,9 +43,14 @@
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
-# the planned operations (at most about six writes). A failed project marker
+# the planned operations (at most about six writes). For a standalone `reissue`
+# of a CI-failure issue (#7032, unblock_resolve_ci_owner): one owning-PR read,
+# then either the shared check gate (one protection read plus paginated
+# check-runs) or one `git/ref` read. A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
+#      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
+#      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
 # project_state_recheck_unavailable, project_resumed.
 set -uo pipefail
@@ -452,6 +457,80 @@ unblock_state_lists_issue()
 	jq -e --argjson issue "${bound_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${binding_json}" >/dev/null 2>&1
 }
 
+# Facts about the PR that owns a CI-failure issue, for a standalone reissue
+# (#7032). Merges `ci_owner` into context.json; unblock_actions.py decides.
+# Fails open: an unreadable fact leaves today's reissue (no or `unverified`
+# ci_owner). §14: no earlier call on this path reads the owning PR, its check
+# runs or its head ref (the item read is an issue read).
+unblock_resolve_ci_owner()
+{
+	local owner_json owner_pr owner_reason declared pr_json owner_state="verified" owner_head_sha="" owner_head_ref="" owner_base_ref="" default_branch="" ref_json
+	UNBLOCK_CI_OWNER_STATE=""
+	UNBLOCK_CI_OWNER_PR=""
+	UNBLOCK_CI_OWNER_HEAD=""
+	owner_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" ci-owner --item-file "${RUNTIME_DIR}/item.json" --repo "${REPOSITORY}" 2>/dev/null)" || return 0
+	owner_pr="$(jq -r '.pr // empty' <<< "${owner_json}" 2>/dev/null || true)"
+	if ! [[ "${owner_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		owner_reason="$(jq -r '.reason // "unknown"' <<< "${owner_json}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+		[ "${owner_reason}" = "not_ci_failure" ] || unblock_log "item=${ITEM} op=ci_owner outcome=none reason=${owner_reason:-unknown}"
+		return 0
+	fi
+	declared="$(jq -r '.declared_branch // ""' <<< "${owner_json}" 2>/dev/null || true)"
+	if ! pr_json="$(gh api "repos/${REPOSITORY}/pulls/${owner_pr}" 2>/dev/null)" \
+		|| ! jq -e --argjson n "${owner_pr}" --arg repo "${REPOSITORY}" '
+			type == "object" and .number == $n
+			and (((.head.repo.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))
+			and (((.base.repo.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))
+			and ((.head.sha // "") | test("^[0-9a-f]{40}([0-9a-f]{24})?$"))
+		' <<< "${pr_json}" >/dev/null 2>&1; then
+		owner_state="unverified"
+		unblock_log "item=${ITEM} op=ci_owner outcome=unverified reason=pr_unverified pr=${owner_pr}"
+	else
+		owner_head_sha="$(jq -r '.head.sha' <<< "${pr_json}")"
+		owner_head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
+		owner_base_ref="$(jq -r '.base.ref // ""' <<< "${pr_json}")"
+		default_branch="$(jq -r '.base.repo.default_branch // ""' <<< "${pr_json}")"
+		if jq -e '.merged == true' <<< "${pr_json}" >/dev/null 2>&1; then
+			# Merged into the default branch or the issue's declared integration
+			# branch, with the shared required-checks gate green on its head.
+			if [ -n "${owner_base_ref}" ] && { [ "${owner_base_ref}" = "${default_branch}" ] || [ "${owner_base_ref}" = "${declared}" ]; } \
+				&& [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ] && [ -f "${SUPPORT_DIR}/scripts/pr_checks_lib.sh" ] \
+				&& (
+					# shellcheck source=/dev/null
+					source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || exit 1
+					# shellcheck source=/dev/null
+					source "${SUPPORT_DIR}/scripts/pr_checks_lib.sh" >/dev/null 2>&1 || exit 1
+					declare -F _pr_checks_completed >/dev/null 2>&1 || exit 1
+					export PR_CHECKS_REPOSITORY="${REPOSITORY}"
+					# Three arguments: the shared required-checks filter applies.
+					_pr_checks_completed "${owner_pr}" "${owner_head_sha}" "${owner_base_ref}" >/dev/null 2>&1 || exit 1
+					# A head with no check-runs at all is not evidence of green checks.
+					[ "${PR_CHECKS_LAST_TOTAL:-0}" -gt 0 ] 2>/dev/null
+				); then
+				owner_state="superseded"
+			fi
+		elif [ "$(jq -r '.state // ""' <<< "${pr_json}")" = "open" ] \
+			&& [[ "${owner_head_ref}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] \
+			&& [[ "${owner_head_ref}" != *..* && "${owner_head_ref}" != *//* && "${owner_head_ref}" != */ && "${owner_head_ref}" != *. && "${owner_head_ref}" != *.lock ]]; then
+			if ref_json="$(gh api "repos/${REPOSITORY}/git/ref/heads/${owner_head_ref}" 2>/dev/null)" \
+				&& jq -e --arg ref "refs/heads/${owner_head_ref}" '.ref == $ref' <<< "${ref_json}" >/dev/null 2>&1; then
+				owner_state="open"
+			fi
+		fi
+		[ "${owner_state}" = "open" ] || owner_head_ref=""
+		unblock_log "item=${ITEM} op=ci_owner outcome=${owner_state} pr=${owner_pr}"
+	fi
+	if jq --argjson n "${owner_pr}" --arg state "${owner_state}" --arg sha "${owner_head_sha}" --arg ref "${owner_head_ref}" --arg base "${owner_base_ref}" \
+		'. + {ci_owner: {number: $n, state: $state, head_sha: (if $sha == "" then null else $sha end), head_ref: (if $ref == "" then null else $ref end), base_ref: (if $base == "" then null else $base end)}}' \
+		"${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context_owner.json" 2>/dev/null \
+		&& mv "${RUNTIME_DIR}/context_owner.json" "${RUNTIME_DIR}/context.json"; then
+		UNBLOCK_CI_OWNER_STATE="${owner_state}"
+		UNBLOCK_CI_OWNER_PR="${owner_pr}"
+		UNBLOCK_CI_OWNER_HEAD="${owner_head_sha}"
+	fi
+	return 0
+}
+
 unblock_main()
 {
 	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
@@ -812,6 +891,11 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		return 0
 	fi
 	ops_file="${RUNTIME_DIR}/ops.json"
+	UNBLOCK_CI_OWNER_STATE=""
+	if [ "${verdict_name}" = "reissue" ] && [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
+		&& ! jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
+		unblock_resolve_ci_owner
+	fi
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" plan --verdict-file "${RUNTIME_DIR}/verdict.json" \
 		--context-file "${RUNTIME_DIR}/context.json" > "${ops_file}"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=plan_failed"
@@ -832,6 +916,9 @@ ${marker_line}" >/dev/null 2>&1; then
 	fi
 	if [ "${actuation_failed}" = "true" ]; then
 		return 0
+	fi
+	if [ "${UNBLOCK_CI_OWNER_STATE}" = "superseded" ] && jq -e '[.ops[].op] == ["comment", "close"]' "${ops_file}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=reissue outcome=superseded pr=${UNBLOCK_CI_OWNER_PR} head=${UNBLOCK_CI_OWNER_HEAD}"
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=acted"
 }
