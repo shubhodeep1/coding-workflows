@@ -174,6 +174,17 @@ Copy this block when adding a new entry:
   - The feature is on by default, so removal requires confirming no consumer still wants it: for every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly `false` (the repo has opted out) before removing it.
 - **Owner:** @shubhodeep1
 
+### `.github/workflows/check-failure-triage-historical.yml`
+
+- **Introduced in:** #7093 (2026-10-10)
+- **Type:** single-use
+- **Removal trigger:** the `ai:check-triage` issue for PR #6611's CI run 37922279826 (job 113792812346) is closed. The workflow already skips itself on every push once that issue exists; removing it also lets the historical inputs of `check_failure_triage.yml` stay unused until another historical follow-up needs them.
+- **Removal preflight checks:**
+  - `gh issue list --label ai:check-triage --search 37922279826 --state all -R shubhodeep1/coding-workflows` shows a closed issue whose body links run 37922279826.
+  - `gh run list --workflow check-failure-triage-historical.yml --limit 5 -R shubhodeep1/coding-workflows` shows the latest runs ending in the guard job with `HISTORICAL_TRIAGE skip reason=already_filed` (no `repro` or `triage` job ran).
+  - `rg -n 'check-failure-triage-historical' .github/ docs/INVENTORY.md agents.md` lists only this workflow, its inventory line and the generated TREE block, which are removed together.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)

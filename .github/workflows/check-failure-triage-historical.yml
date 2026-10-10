@@ -1,0 +1,354 @@
+---
+# Single-use follow-up (#7093) for the CI failure of PR #6611 (run
+# 37922279826, job 113792812346). check-failure triage only reacts to newly
+# completed CI runs of open PRs, and #6611 merged before its failure was
+# diagnosed (docs/triage/pr-6611-ci-shard-1.md was inconclusive). This
+# workflow runs on every push to main until one triage issue for that run
+# exists, then skips. Registered in docs/scripts-pending-removal.md.
+#
+# Flow: `guard` dedups and probes the job log with github.token. If the log is
+# gone, `repro` reruns the affected orchestrate-poll CI steps of the failing
+# tree with jq and PyYAML, without secrets. `triage` then calls the reusable
+# check-failure triage in historical mode, which reads the log (or the
+# reproduction artifacts) on the host, redacts it, and diagnoses it in the
+# isolated container. Triage never pushes code; the filed issue goes through
+# the normal clarify -> plan -> implement -> review pipeline.
+name: "Internal: Historical check-failure triage (PR #6611 run 37922279826)"
+
+"on":
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: check-triage-historical-37922279826
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HIST_PR: "6611"
+  HIST_RUN_ID: "37922279826"
+  HIST_JOB_ID: "113792812346"
+  HIST_CHECK_NAME: "CI"
+  # A persistent failure must not rerun the reproduction on every push to
+  # main; workflow_dispatch bypasses the cap.
+  HISTORICAL_TRIAGE_MAX_FAILED_RUNS: "3"
+
+jobs:
+  guard:
+    if: >-
+      github.repository == 'shubhodeep1/coding-workflows' &&
+      !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.guard.outputs.should_run }}
+      log_available: ${{ steps.guard.outputs.log_available }}
+      head_sha: ${{ steps.guard.outputs.head_sha }}
+      merge_commit_sha: ${{ steps.guard.outputs.merge_commit_sha }}
+      details_url: ${{ steps.guard.outputs.details_url }}
+    steps:
+      - name: Dedup, cap and probe the historical run
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+
+          # Same formula as scripts/check_failure_triage.sh in historical mode.
+          REPO="${REPOSITORY}"
+          fp="$(printf '%s' "${REPO}|pr=${HIST_PR}|check=${HIST_CHECK_NAME}|run=${HIST_RUN_ID}|job=${HIST_JOB_ID}" | sha256sum | awk '{print $1}')"
+          marker="<!-- check-failure-triage:fp=${fp} -->"
+
+          # Only trusted authors' issues can suppress filing; open or closed.
+          # The script's open-only listing cannot see closed issues, so this
+          # one paginated read is needed (one page per 100 triage issues).
+          existing="$(gh api --paginate --method GET "repos/${REPO}/issues" \
+            -f state=all -f labels=ai:check-triage -F per_page=100 \
+            --jq '.[] | select(.pull_request | not) | select((.author_association // "") as $a | ($a == "OWNER" or $a == "MEMBER" or $a == "COLLABORATOR") or ((.user.type // "") == "Bot")) | {number, first: ((.body // "") | split("\n")[0] | rtrimstr("\r"))}' \
+            | jq -rs --arg marker "${marker}" '[.[] | select(.first == $marker) | .number] | first // empty')"
+          if [ -n "${existing}" ]; then
+            echo "HISTORICAL_TRIAGE skip reason=already_filed issue=${existing} fp=${fp}"
+            exit 0
+          fi
+
+          if [ "${EVENT_NAME}" != "workflow_dispatch" ]; then
+            failed_runs="$(gh api "repos/${REPO}/actions/workflows/check-failure-triage-historical.yml/runs?status=failure&per_page=1" --jq '.total_count // 0')"
+            if ! [[ "${failed_runs}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Could not read this workflow's failed-run count"
+              exit 1
+            fi
+            if [ "${failed_runs}" -ge "${HISTORICAL_TRIAGE_MAX_FAILED_RUNS}" ]; then
+              echo "::warning::Historical triage skipped: ${failed_runs} failed runs reached the cap (${HISTORICAL_TRIAGE_MAX_FAILED_RUNS}); dispatch it manually after fixing the cause."
+              echo "HISTORICAL_TRIAGE skip reason=failed_run_cap failed_runs=${failed_runs}"
+              exit 0
+            fi
+          fi
+
+          pr_json="$(gh api "repos/${REPO}/pulls/${HIST_PR}")"
+          head_repo="$(jq -r '.head.repo.full_name // ""' <<<"${pr_json}")"
+          if [ "${head_repo}" != "${REPO}" ]; then
+            echo "::error::PR #${HIST_PR} head repository is not this repository"
+            exit 1
+          fi
+          merge_commit_sha="$(jq -r '.merge_commit_sha // ""' <<<"${pr_json}")"
+          [[ "${merge_commit_sha}" =~ ^[0-9a-f]{40}$ ]] || merge_commit_sha=""
+          echo "HISTORICAL_TRIAGE pr=${HIST_PR} merged=$(jq -r '.merged // false' <<<"${pr_json}") merge_commit_sha=${merge_commit_sha:-none}"
+
+          run_json="$(gh api "repos/${REPO}/actions/runs/${HIST_RUN_ID}")"
+          head_sha="$(jq -r '.head_sha // ""' <<<"${run_json}")"
+          details_url="$(jq -r '.html_url // ""' <<<"${run_json}")"
+          if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Run ${HIST_RUN_ID} has no valid head SHA"
+            exit 1
+          fi
+          if [ "${details_url}" != "${GITHUB_SERVER_URL}/${REPO}/actions/runs/${HIST_RUN_ID}" ]; then
+            echo "::error::Run ${HIST_RUN_ID} URL does not belong to this repository"
+            exit 1
+          fi
+
+          # 404/410 means the log expired: run the reproduction. Any other
+          # error fails, so a transient error never starts a reproduction.
+          probe_err="$(mktemp)"
+          if gh api "repos/${REPO}/actions/jobs/${HIST_JOB_ID}/logs" > /dev/null 2> "${probe_err}"; then
+            log_available=true
+          elif grep -qE 'HTTP (404|410)' "${probe_err}"; then
+            log_available=false
+          else
+            echo "::error::Job log probe failed"
+            exit 1
+          fi
+          rm -f "${probe_err}"
+
+          {
+            echo "should_run=true"
+            echo "log_available=${log_available}"
+            echo "head_sha=${head_sha}"
+            echo "merge_commit_sha=${merge_commit_sha}"
+            echo "details_url=${details_url}"
+          } >> "$GITHUB_OUTPUT"
+          echo "HISTORICAL_TRIAGE run run=${HIST_RUN_ID} job=${HIST_JOB_ID} log_available=${log_available} head_sha=${head_sha}"
+
+  repro:
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true' && needs.guard.outputs.log_available != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Runs the failing tree's own test code: read-only contents (checkout of
+    # a private repository needs it), no secrets, credentials never persisted.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0, 1, 2, 3]
+    steps:
+      - name: Checkout failing head
+        id: checkout_head
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.guard.outputs.head_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout merge commit fallback
+        if: steps.checkout_head.outcome == 'failure' && needs.guard.outputs.merge_commit_sha != ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.guard.outputs.merge_commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record tested tree
+        env:
+          HEAD_OUTCOME: ${{ steps.checkout_head.outcome }}
+          EXPECTED_HEAD: ${{ needs.guard.outputs.head_sha }}
+          EXPECTED_MERGE: ${{ needs.guard.outputs.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          if [ "${HEAD_OUTCOME}" = "success" ] && [ "${tested_sha}" = "${EXPECTED_HEAD}" ]; then
+            tree=head
+          elif [ -n "${EXPECTED_MERGE}" ] && [ "${tested_sha}" = "${EXPECTED_MERGE}" ]; then
+            tree=merge_commit
+          else
+            echo "::error::Checked-out tree matches neither the failing head nor the merge commit"
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/repro-out/out" "${RUNNER_TEMP}/repro-plan"
+          printf 'tree=%s sha=%s\n' "${tree}" "${tested_sha}" > "${RUNNER_TEMP}/repro-out/tested.txt"
+          echo "HISTORICAL_TRIAGE tested_tree=${tree} tested_sha=${tested_sha}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install jq and Python CI dependencies
+        run: |
+          set -euo pipefail
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq jq
+          fi
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      # The earlier reproduction skipped 439 of 540 tests for lack of jq and
+      # omitted a PyYAML test; stop here rather than run an incomplete one.
+      - name: Assert jq and PyYAML are available
+        run: |
+          set -euo pipefail
+          jq --version
+          python3 -c 'import yaml'
+
+      - name: Extract orchestrate-poll CI steps from the tested tree
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          set -euo pipefail
+          # Parses the tested tree's ci.yml as data. Only `run:` bodies after the
+          # dependency install are kept, verbatim; an unknown `if:`, a workflow
+          # expression in a body or a missing required step writes
+          # extract_failed, which the host reports as an incomplete run.
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${GROUP}" "${RUNNER_TEMP}/repro-out" "${RUNNER_TEMP}/repro-plan" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          import yaml
+
+          group = int(sys.argv[1])
+          out_dir = pathlib.Path(sys.argv[2])
+          script_dir = pathlib.Path(sys.argv[3])
+          out_dir.mkdir(parents=True, exist_ok=True)
+          script_dir.mkdir(parents=True, exist_ok=True)
+
+
+          def fail(reason):
+              (out_dir / "extract_failed").write_text(reason + "\n", encoding="utf-8")
+              print(f"HISTORICAL_TRIAGE extract_failed reason={reason}")
+              sys.exit(0)
+
+
+          try:
+              doc = yaml.safe_load(pathlib.Path(".github/workflows/ci.yml").read_text(encoding="utf-8"))
+          except (OSError, yaml.YAMLError):
+              fail("ci_yml_unreadable")
+          job = ((doc or {}).get("jobs") or {}).get("orchestrate-poll") if isinstance(doc, dict) else None
+          if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+              fail("job_missing")
+          steps = job["steps"]
+          install_index = next((index for index, step in enumerate(steps) if isinstance(step, dict) and step.get("name") == "Install Python CI dependencies"), None)
+          if install_index is None:
+              fail("install_step_missing")
+          required = {"Derive orchestrate poll test subsets", "Orchestrate poll process unit tests"}
+          single_modules = ("test_orchestrate_poll_noop_suspicious_recovery.py", "test_state_snapshot.py", "test_run_substate_ledger.py")
+          plan, seen = [], set()
+          for number, step in enumerate(steps[install_index + 1:], 1):
+              if not isinstance(step, dict) or "run" not in step:
+                  fail("unexpected_step")
+              name, body = str(step.get("name") or ""), step["run"]
+              # Built from two parts: GitHub would expand the literal here.
+              if not isinstance(body, str) or ("$" + "{{") in body:
+                  fail("expression_in_body")
+              condition = step.get("if")
+              if condition is None:
+                  include = True
+              elif re.fullmatch(r"(?:\$\{\{\s*)?strategy\.job-index\s*==\s*0(?:\s*\}\})?", re.sub(r"\s+", " ", str(condition)).strip()):
+                  include = group == 0
+              else:
+                  fail("unsupported_if")
+              if not include:
+                  continue
+              seen.add(name)
+              if name == "Derive orchestrate poll test subsets":
+                  kind = "derive"
+              elif name == "Orchestrate poll process unit tests":
+                  kind = "unit"
+              elif "fast-fail" in name.lower():
+                  kind = "fastfail"
+              else:
+                  kind = "other"
+              flags = [flag for flag, present in (("sharding", "test_ci_poll_test_sharding.py" in body), ("single", all(module in body for module in single_modules))) if present] or ["none"]
+              (script_dir / f"step-{number}.sh").write_text(body, encoding="utf-8")
+              plan.append(f"{number}\t{kind}\t{','.join(flags)}\t{re.sub(r'[^A-Za-z0-9 ._()-]', '_', name)[:120]}")
+          if required - seen:
+              fail("required_step_missing")
+          (out_dir / "plan.tsv").write_text("\n".join(plan) + "\n", encoding="utf-8")
+          (script_dir / "env.sh").write_text(f"CI_POLL_TEST_SHARDS=4\nCI_POLL_TEST_GROUP_INDEX={group}\nCI_POLL_TEST_GROUP_COUNT=4\nPYTHONDONTWRITEBYTECODE=1\n", encoding="utf-8")
+          print(f"HISTORICAL_TRIAGE extracted steps={len(plan)} group={group}")
+          PY
+
+      - name: Run the extracted CI steps
+        run: |
+          set -uo pipefail
+          out="${RUNNER_TEMP}/repro-out"
+          scripts="${RUNNER_TEMP}/repro-plan"
+          mkdir -p "${out}/out"
+          : > "${out}/steps.tsv"
+          if [ -f "${out}/extract_failed" ] || [ ! -s "${out}/plan.tsv" ]; then
+            echo "HISTORICAL_TRIAGE run skipped reason=extract_failed"
+            exit 0
+          fi
+          # Each body runs as its CI step would (bash -eo pipefail); its exit
+          # code is recorded instead of stopping the job, so every step runs.
+          while IFS=$'\t' read -r step_number step_kind _step_flags _step_name; do
+            [[ "${step_number}" =~ ^[0-9]+$ ]] || continue
+            env -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              bash --noprofile --norc -c 'set -a; . "$1"; set +a; exec timeout 1500 bash --noprofile --norc -eo pipefail "$2"' \
+              _ "${scripts}/env.sh" "${scripts}/step-${step_number}.sh" > "${out}/out/step-${step_number}.log" 2>&1
+            step_rc=$?
+            printf '%s\t%s\t%s\n' "${step_number}" "${step_kind}" "${step_rc}" >> "${out}/steps.tsv"
+            echo "HISTORICAL_TRIAGE step=${step_number} kind=${step_kind} rc=${step_rc}"
+          done < "${out}/plan.tsv"
+          for shard_file in /tmp/poll_shard_*.txt /tmp/poll_shard_*.log /tmp/poll_shard_*.rc; do
+            [ -f "${shard_file}" ] && cp "${shard_file}" "${out}/out/"
+          done
+          exit 0
+
+      - name: Upload reproduction results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: historical-repro-group-${{ matrix.group }}
+          path: ${{ runner.temp }}/repro-out/
+          retention-days: 7
+          if-no-files-found: warn
+
+  triage:
+    needs: [guard, repro]
+    if: >-
+      !cancelled() &&
+      needs.guard.outputs.should_run == 'true' &&
+      (needs.repro.result == 'success' || needs.repro.result == 'skipped')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+    uses: ./.github/workflows/check_failure_triage.yml
+    with:
+      pr_number: "6611"
+      check_run_id: ""
+      check_name: "CI"
+      check_conclusion: failure
+      head_sha: ${{ needs.guard.outputs.head_sha }}
+      details_url: ${{ needs.guard.outputs.details_url }}
+      historical_run_id: "37922279826"
+      historical_job_id: "113792812346"
+      historical_repro_artifact_prefix: ${{ needs.guard.outputs.log_available != 'true' && 'historical-repro-' || '' }}
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

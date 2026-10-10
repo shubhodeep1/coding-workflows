@@ -1195,7 +1195,8 @@ esac
 
 
 def _run_collect_stage(*, parent_body: str, base: dict | None = None, extra_env: dict[str, str] | None = None,
-		calls_path: list[str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
+		calls_path: list[str] | None = None, pr_overrides: dict | None = None, pr_payload_raw: str | None = None,
+		inspect=None) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
 	"""Run scripts/check_failure_triage.sh (stage=collect) for a failing CI check on
 	PR #17, whose head branch is ai/issue-41, against a fake ``gh`` that serves
 	the PR, its source issue #41 with ``parent_body``, and an empty open-triage
@@ -1205,7 +1206,12 @@ def _run_collect_stage(*, parent_body: str, base: dict | None = None, extra_env:
 	``base`` adds a base branch to the PR payload and the base-branch gate's
 	reads: ``{"ref": "main", "workflow_id": "9", "conclusion": "success"}`` for a
 	failed CI workflow run, plus ``"check_conclusion"`` for a check_run event.
-	``calls_path`` receives every gh argument line the script issued."""
+	``calls_path`` receives every gh argument line the script issued.
+	``pr_overrides`` merges keys into the PR payload; ``pr_payload_raw`` replaces
+	it. Historical mode (#7093) reads run 37 / job 113 from ``MOCK_HIST_RUN`` /
+	``MOCK_HIST_JOB`` and the job log from ``MOCK_HIST_LOG_FILE`` (404 when
+	unset); ``MOCK_TRIAGE_ISSUES`` replaces the empty triage-issue list.
+	``inspect(runtime_dir, env)`` runs before the temp dir is removed."""
 	temp_dir = tempfile.TemporaryDirectory(prefix="check-triage-lineage-")
 	temp_path = Path(temp_dir.name)
 	bin_dir = temp_path / "bin"
@@ -1224,7 +1230,8 @@ def _run_collect_stage(*, parent_body: str, base: dict | None = None, extra_env:
 		"body": "",
 		"head": {"ref": "ai/issue-41", "sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
 		**({"base": {"ref": base["ref"]}} if base else {}),
-	})
+		**(pr_overrides or {}),
+	}) if pr_payload_raw is None else pr_payload_raw
 	calls_file = temp_path / "gh_calls.txt"
 	_write_executable(
 		bin_dir / "gh",
@@ -1243,7 +1250,16 @@ case "$*" in
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
-  "api --paginate --method GET repos/owner/repo/issues "*) printf '[]\\n' ;;
+  "api --paginate --method GET repos/owner/repo/issues "*) printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-[]}" ;;
+  "api repos/owner/repo/actions/runs/37")
+    [ -n "${MOCK_HIST_RUN:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    printf '%s\\n' "${MOCK_HIST_RUN}" ;;
+  "api repos/owner/repo/actions/jobs/113")
+    [ -n "${MOCK_HIST_JOB:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    printf '%s\\n' "${MOCK_HIST_JOB}" ;;
+  "api repos/owner/repo/actions/jobs/113/logs")
+    [ -n "${MOCK_HIST_LOG_FILE:-}" ] || { echo 'gh: HTTP 410: Gone (HTTP 410)' >&2; exit 1; }
+    cat "${MOCK_HIST_LOG_FILE}" ;;
   "label create "*) ;;
   *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 2 ;;
 esac
@@ -1304,6 +1320,12 @@ esac
 		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 	if calls_path is not None and calls_file.exists():
 		calls_path.extend(calls_file.read_text(encoding="utf-8").splitlines())
+	if inspect is not None:
+		try:
+			inspect(runtime_dir, env)
+		finally:
+			temp_dir.cleanup()
+		return proc, outputs, metadata
 	temp_dir.cleanup()
 	return proc, outputs, metadata
 
@@ -1554,6 +1576,301 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 		self.assertLess(source.index("skip reason=duplicate_open_issue"), source.index("--- Base-branch gate (#7020)"))
 		self.assertLess(source.index("--- Base-branch gate (#7020)"), source.index("--- Lineage cap / escalation"))
+
+
+HIST_RUN_ID = "37"
+HIST_JOB_ID = "113"
+HIST_HEAD_SHA = "a" * 40
+
+
+def _hist_run(**overrides) -> str:
+	run = {
+		"id": 37,
+		"repository": {"full_name": "owner/repo"},
+		"path": ".github/workflows/ci.yml",
+		"event": "pull_request",
+		"conclusion": "failure",
+		"head_sha": HIST_HEAD_SHA,
+		"head_branch": "ai/issue-41",
+	}
+	run.update(overrides)
+	return json.dumps(run)
+
+
+def _hist_job(**overrides) -> str:
+	job = {"id": 113, "run_id": 37, "conclusion": "failure"}
+	job.update(overrides)
+	return json.dumps(job)
+
+
+def _hist_env(**extra: str) -> dict[str, str]:
+	env = {
+		"CHECK_TRIAGE_HISTORICAL_RUN_ID": HIST_RUN_ID,
+		"CHECK_TRIAGE_HISTORICAL_JOB_ID": HIST_JOB_ID,
+		"MOCK_HIST_RUN": _hist_run(),
+		"MOCK_HIST_JOB": _hist_job(),
+	}
+	env.update(extra)
+	return env
+
+
+CLOSED_MERGED = {"state": "closed", "merged": True, "merge_commit_sha": "b" * 40}
+
+
+def _write_repro_group(root: Path, group: int, *, shard_logs: dict[int, str] | None = None,
+		steps_rc: int = 0, extra_step_log: str = "", single: bool = True) -> Path:
+	"""One downloaded ``historical-repro-group-<g>`` artifact, laid out as the
+	historical workflow's repro job writes it."""
+	group_dir = root / f"historical-repro-group-{group}"
+	(group_dir / "out").mkdir(parents=True)
+	(group_dir / "tested.txt").write_text(f"tree=head sha={HIST_HEAD_SHA}\n", encoding="utf-8")
+	plan = ["1\tderive\tnone\tDerive orchestrate poll test subsets"]
+	if group == 0:
+		plan.append("2\tfastfail\tnone\tOrchestrate poll implementation-failed regression fast-fail")
+	flags = "sharding,single" if single else "sharding"
+	plan.append(f"3\tunit\t{flags}\tOrchestrate poll process unit tests")
+	(group_dir / "plan.tsv").write_text("\n".join(plan) + "\n", encoding="utf-8")
+	steps = [line.split("\t")[0] for line in plan]
+	(group_dir / "steps.tsv").write_text("".join(f"{n}\t-\t{steps_rc}\n" for n in steps), encoding="utf-8")
+	for n in steps:
+		body = "  PASS  test_implementation_failed_fast\n" if n == "2" else extra_step_log
+		(group_dir / "out" / f"step-{n}.log").write_text(body, encoding="utf-8")
+	for shard, log_text in (shard_logs or {0: "  PASS  test_one\n", 1: "  PASS  test_two\n"}).items():
+		(group_dir / "out" / f"poll_shard_{shard}.txt").write_text(f"test_{shard}\n", encoding="utf-8")
+		(group_dir / "out" / f"poll_shard_{shard}.log").write_text(log_text, encoding="utf-8")
+		(group_dir / "out" / f"poll_shard_{shard}.rc").write_text("1\n" if "  FAIL  " in log_text else "0\n", encoding="utf-8")
+	return group_dir
+
+
+class CheckFailureTriageHistoricalModeTests(unittest.TestCase):
+	"""Historical mode (#7093): optional run/job ids let triage diagnose a CI run
+	of a PR that has already closed. Empty ids keep every normal-path rule."""
+
+	def test_normal_mode_closed_pr_still_skips_pr_not_open(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(parent_body="", pr_overrides=CLOSED_MERGED, calls_path=calls)
+		self.assertEqual(proc.returncode, 0, proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_not_open pr=17 state=closed", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertFalse(any("actions/jobs" in call for call in calls))
+
+	def test_normal_mode_keeps_open_dedup_and_fingerprint(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(parent_body="", calls_path=calls)
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		self.assertTrue(any("-f state=open" in call for call in calls if "repos/owner/repo/issues " in call), calls)
+		self.assertEqual(metadata["fingerprint"], hashlib.sha256(b"owner/repo|pr=17|check=CI").hexdigest())
+		self.assertNotIn("historical_run_id", metadata)
+		self.assertNotIn("historical_mode", proc.stdout)
+
+	def test_partial_historical_inputs_fail_closed(self) -> None:
+		proc, outputs, _ = _run_collect_stage(parent_body="", extra_env={"CHECK_TRIAGE_HISTORICAL_RUN_ID": "37"})
+		self.assertEqual(proc.returncode, 1)
+		self.assertIn("error historical_inputs_incomplete", proc.stdout)
+		self.assertNotIn("ready", outputs)
+
+	def _log_file(self, text: str) -> str:
+		handle = tempfile.NamedTemporaryFile("w", suffix=".log", delete=False, encoding="utf-8")
+		handle.write(text)
+		handle.close()
+		self.addCleanup(os.unlink, handle.name)
+		return handle.name
+
+	def test_merged_pr_reads_and_redacts_the_job_log(self) -> None:
+		secret = "ghp_" + "S" * 36
+		lines = [f"2026-10-09T10:00:{i:02d}Z noise line {i}" for i in range(60)]
+		lines += [f"2026-10-09T10:01:00Z token {secret}", "2026-10-09T10:01:01Z   FAIL  test_shard_breaks: boom"]
+		lines += [f"2026-10-09T10:02:{i:02d}Z after {i}" for i in range(10)]
+		log_path = self._log_file("\n".join(lines) + "\n")
+		calls: list[str] = []
+		seen: dict[str, object] = {}
+
+		def inspect(runtime_dir: Path, _env: dict[str, str]) -> None:
+			seen["context"] = (runtime_dir / "pr_check_runs_context.txt").read_text(encoding="utf-8")
+			seen["raw_exists"] = (runtime_dir / "historical_job.log").exists()
+
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", pr_overrides=CLOSED_MERGED, calls_path=calls, inspect=inspect,
+			extra_env=_hist_env(MOCK_HIST_LOG_FILE=log_path, GH_TOKEN=secret),
+		)
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		self.assertIn("historical_mode=true pr=17 state=closed merged=true", proc.stdout)
+		self.assertIn("base_gate outcome=bypassed reason=historical_mode", proc.stdout)
+		self.assertIn("historical_evidence source=log outcome=found", proc.stdout)
+		self.assertTrue(any("-f state=all" in call for call in calls if "repos/owner/repo/issues " in call), calls)
+		self.assertEqual(metadata["fingerprint"], hashlib.sha256(b"owner/repo|pr=17|check=CI|run=37|job=113").hexdigest())
+		self.assertEqual(metadata["evidence_source"], "log")
+		self.assertEqual(metadata["evidence_outcome"], "found")
+		self.assertEqual(metadata["historical_run_id"], "37")
+		context = str(seen["context"])
+		self.assertIn("Historical job log (redacted); first shard failure:", context)
+		self.assertIn("FAIL  test_shard_breaks", context)
+		self.assertIn("[redacted]", context)
+		self.assertNotIn(secret, context)
+		self.assertNotIn("noise line 5\n", context)  # outside the 40-line window
+		self.assertFalse(seen["raw_exists"])
+
+	def test_closed_matching_issue_dedups_historical_run(self) -> None:
+		fp = hashlib.sha256(b"owner/repo|pr=17|check=CI|run=37|job=113").hexdigest()
+		issues = json.dumps([{"number": 9, "body": f"<!-- check-failure-triage:fp={fp} -->\n"}])
+		proc, outputs, _ = _run_collect_stage(
+			parent_body="", pr_overrides=CLOSED_MERGED, extra_env=_hist_env(MOCK_TRIAGE_ISSUES=issues),
+		)
+		self.assertEqual(proc.returncode, 0, proc.stderr)
+		self.assertIn("skip reason=duplicate_open_issue issue=9", proc.stdout)
+		self.assertNotIn("ready", outputs)
+
+	def test_fork_pr_still_skipped(self) -> None:
+		fork = dict(CLOSED_MERGED, head={"ref": "ai/issue-41", "sha": HIST_HEAD_SHA, "repo": {"full_name": "fork/repo"}})
+		proc, outputs, _ = _run_collect_stage(parent_body="", pr_overrides=fork, extra_env=_hist_env())
+		self.assertIn("skip reason=fork_pr", proc.stdout)
+		self.assertNotIn("ready", outputs)
+
+	def test_unreadable_pr_fails_closed(self) -> None:
+		proc, outputs, _ = _run_collect_stage(parent_body="", pr_payload_raw="{}", extra_env=_hist_env())
+		self.assertEqual(proc.returncode, 1)
+		self.assertIn("error historical_pr_unverified", proc.stdout)
+		self.assertNotIn("ready", outputs)
+
+	def test_binding_mismatches_fail_closed(self) -> None:
+		cases = {
+			"path": {"MOCK_HIST_RUN": _hist_run(path=".github/workflows/other.yml")},
+			"head_sha": {"MOCK_HIST_RUN": _hist_run(head_sha="c" * 40)},
+			"job_run_id": {"MOCK_HIST_JOB": _hist_job(run_id=38)},
+			"event": {"MOCK_HIST_RUN": _hist_run(event="push")},
+		}
+		for field, overrides in cases.items():
+			with self.subTest(field=field):
+				proc, outputs, _ = _run_collect_stage(parent_body="", pr_overrides=CLOSED_MERGED, extra_env=_hist_env(**overrides))
+				self.assertEqual(proc.returncode, 1, proc.stdout)
+				self.assertIn(f"error historical_binding_mismatch field={field}", proc.stdout)
+				self.assertNotIn("ready", outputs)
+
+	def test_expired_log_without_reproduction_fails(self) -> None:
+		proc, outputs, _ = _run_collect_stage(parent_body="", pr_overrides=CLOSED_MERGED, extra_env=_hist_env())
+		self.assertEqual(proc.returncode, 1)
+		self.assertIn("error historical_evidence_unavailable", proc.stdout)
+		self.assertNotIn("ready", outputs)
+
+	def _run_repro(self, build) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict, str]:
+		repro = Path(tempfile.mkdtemp(prefix="hist-repro-"))
+		self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(repro)], check=False))
+		build(repro)
+		seen: dict[str, str] = {}
+
+		def inspect(runtime_dir: Path, _env: dict[str, str]) -> None:
+			seen["context"] = (runtime_dir / "pr_check_runs_context.txt").read_text(encoding="utf-8")
+
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", pr_overrides=CLOSED_MERGED, inspect=inspect,
+			extra_env=_hist_env(CHECK_TRIAGE_HISTORICAL_REPRO_DIR=str(repro)),
+		)
+		return proc, outputs, metadata, seen.get("context", "")
+
+	def test_reproduction_all_green_is_complete_non_reproduction(self) -> None:
+		proc, outputs, metadata, context = self._run_repro(lambda root: [_write_repro_group(root, g) for g in range(4)])
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		self.assertEqual(metadata["evidence_source"], "repro")
+		self.assertEqual(metadata["evidence_outcome"], "complete_non_reproduction")
+		self.assertEqual(metadata["tested_tree"], "head")
+		self.assertEqual(metadata["tested_sha"], HIST_HEAD_SHA)
+		self.assertEqual(metadata["dependency_skip_count"], 0)
+		self.assertEqual(metadata["missing"], [])
+		self.assertIn("outcome: complete_non_reproduction", context)
+
+	def test_reproduction_failure_is_reproduced(self) -> None:
+		def build(root: Path) -> None:
+			for g in range(4):
+				logs = {0: "  PASS  test_one\n", 1: "  FAIL  test_breaks: AssertionError\n"} if g == 2 else None
+				_write_repro_group(root, g, shard_logs=logs)
+		proc, outputs, metadata, context = self._run_repro(build)
+		self.assertEqual(metadata["evidence_outcome"], "reproduced", proc.stdout)
+		self.assertIn("FAIL  test_breaks", context)
+
+	def test_reproduction_with_jq_skips_is_incomplete(self) -> None:
+		def build(root: Path) -> None:
+			for g in range(4):
+				logs = {0: "  SKIP  test_one: jq binary not available in test environment\n"} if g == 1 else None
+				_write_repro_group(root, g, shard_logs=logs)
+		_, _, metadata, _ = self._run_repro(build)
+		self.assertEqual(metadata["evidence_outcome"], "incomplete")
+		self.assertEqual(metadata["dependency_skip_count"], 1)
+		self.assertIn("dependency_skips:1", metadata["missing"])
+
+	def test_reproduction_missing_group_is_incomplete(self) -> None:
+		_, _, metadata, _ = self._run_repro(lambda root: [_write_repro_group(root, g) for g in range(3)])
+		self.assertEqual(metadata["evidence_outcome"], "incomplete")
+		self.assertIn("group_missing:3", metadata["missing"])
+
+	def test_reproduction_rejects_symlinks_and_caps_large_files(self) -> None:
+		def build(root: Path) -> None:
+			for g in range(4):
+				_write_repro_group(root, g)
+			(root / "historical-repro-group-1" / "out" / "linked.log").symlink_to("/etc/hostname")
+			(root / "historical-repro-group-2" / "out" / "step-3.log").write_text("x" * (2 * 1024 * 1024 + 10), encoding="utf-8")
+		_, _, metadata, _ = self._run_repro(build)
+		self.assertEqual(metadata["evidence_outcome"], "incomplete")
+		self.assertIn("symlink_rejected:out/linked.log", metadata["missing"])
+		self.assertIn("size_capped:out/step-3.log", metadata["missing"])
+
+	def test_diagnose_body_carries_historical_section_and_passes_validation(self) -> None:
+		log_path = self._log_file("  FAIL  test_shard_breaks: boom\n")
+		seen: dict[str, object] = {}
+
+		def inspect(runtime_dir: Path, env: dict[str, str]) -> None:
+			output_path = Path(env["GITHUB_OUTPUT"])
+			output_path.write_text("", encoding="utf-8")
+			diagnose_env = dict(env, CHECK_TRIAGE_STAGE="diagnose", CHECK_TRIAGE_PREPARE_ONLY="true")
+			for name in ("CHECK_TRIAGE_HISTORICAL_RUN_ID", "CHECK_TRIAGE_HISTORICAL_JOB_ID"):
+				diagnose_env.pop(name, None)
+			diagnose_env.pop("GITHUB_WORKSPACE", None)
+			diagnose = subprocess.run(
+				["bash", "--noprofile", "--norc", str(TRIAGE_SCRIPT_PATH)], cwd=REPO_ROOT, env=diagnose_env,
+				capture_output=True, text=True, encoding="utf-8",
+			)
+			seen["diagnose"] = diagnose
+			seen["output"] = output_path.read_text(encoding="utf-8")
+			body_path = runtime_dir / "issue_body.md"
+			seen["body"] = body_path.read_text(encoding="utf-8") if body_path.exists() else ""
+
+		proc, outputs, _ = _run_collect_stage(
+			parent_body="", pr_overrides=CLOSED_MERGED, inspect=inspect,
+			extra_env=_hist_env(MOCK_HIST_LOG_FILE=log_path),
+		)
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		diagnose = seen["diagnose"]
+		self.assertIn("ready=true", str(seen["output"]), diagnose.stdout + diagnose.stderr)
+		body = str(seen["body"])
+		self.assertIn("## Historical run follow-up", body)
+		self.assertIn("/actions/runs/37/job/113", body)
+		self.assertIn("### Acceptance criteria", body)
+		self.assertIn("`CI / lint`", body)
+		self.assertNotIn("<!--", "\n".join(body.split("\n")[4:]))
+		self.assertIsNone(re.search(r"(?im)^\s*(?:[-*>]\s*)*\**\s*target\s+branch\s*\**\s*:", body))
+
+	def test_reusable_workflow_historical_inputs_and_wiring(self) -> None:
+		workflow = _workflow()
+		inputs = workflow["on"]["workflow_call"]["inputs"]
+		for name in ("historical_run_id", "historical_job_id", "historical_repro_artifact_prefix"):
+			self.assertEqual(inputs[name]["default"], "", name)
+			self.assertFalse(inputs[name]["required"], name)
+		derive = workflow["jobs"]["derive_check_name_key"]
+		validate = _step(derive, step_id="hash_check_name")
+		self.assertIn("Invalid historical run/job id", validate["run"])
+		self.assertIn("^[a-z0-9-]{1,64}$", validate["run"])
+		triage = workflow["jobs"]["triage"]
+		self.assertEqual(triage["needs"], "derive_check_name_key")
+		self.assertIn("needs.derive_check_name_key.outputs.same_repo == 'true'", triage["if"])
+		download = _step(triage, name="Download historical reproduction results")
+		self.assertEqual(download["if"], "${{ inputs.historical_repro_artifact_prefix != '' }}")
+		collect = _step(triage, step_id="collect_triage")
+		self.assertEqual(collect["env"]["CHECK_TRIAGE_HISTORICAL_RUN_ID"], "${{ inputs.historical_run_id }}")
+		self.assertNotIn("CHECK_TRIAGE_HISTORICAL_RUN_ID", _step(triage, step_id="diagnose_triage")["env"])
+		checkout = _step(triage, step_id="checkout_pr_head")
+		self.assertEqual(checkout["continue-on-error"], "${{ inputs.historical_run_id != '' }}")
+		staging = _step(triage, name="Stage workflow support files")["run"]
+		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py; do", staging)
+		self.assertIn('"${trusted_dir}/scripts/workflow_failure_heal.py"', staging)
 
 
 if __name__ == "__main__":
