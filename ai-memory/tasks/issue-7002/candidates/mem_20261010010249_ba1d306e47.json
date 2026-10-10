@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: update `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `git rev-parse HEAD` = `af7d2fb8118e43be0c565fa3d7c9677e0f1a7a79`, branch `main`. The issue has no integration-branch metadata, so there is nothing to check for a branch mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one existing file and its exact final content, and says no other file may change. No helper, pattern or new code is needed. The change is to overwrite the file in place, so the scope stays at exactly what was asked.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (already exists; its content is replaced). No other file.\n\n2. Functions or modules to implement\n- None. This is a plain data-file edit.\n\n3. Data structures affected\n- None.\n\n4. API/interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace the whole file\n- Chosen: Overwrite `tests/e2e_smoke_canary.txt` with exactly these three lines, each ending in a single LF newline:\n  ```\n  status: ok\n  run_id: alt-38010697715\n  updated-by: ai-pipeline\n  ```\n- Alternatives considered: Editing only the lines that differ; adding a changelog fragment.\n- Why: The issue requires the content to match \"exactly\", so writing the whole file is the most reliable way to get there. The constraints allow only this one file to change, so a changelog fragment is left out.\n\n## Security considerations\n- Trust boundaries: none touched. This is a static test fixture.\n- Authorization: there are no new endpoints or surfaces.\n- External input: the content is fixed text from the issue and contains no secrets.\n- Abuse cases: none. The automation-path guard does not apply because `tests/` is not a protected automation path.\n\n5. Risks and edge cases\n- Trailing whitespace, CRLF line endings or extra blank lines would break the \"exactly\" requirement. Use LF line endings and a single newline at the end of the file.\n- If the file has unrelated content now, it is discarded on purpose.\n- If a test reads this canary, it has to accept the new content. No such test is expected, since the release smoke gate writes this file.\n\n6. Testing considerations\n- Check the result byte for byte with `printf 'status: ok\\nrun_id: alt-38010697715\\nupdated-by: ai-pipeline\\n' | diff - tests/e2e_smoke_canary.txt`.\n- Run `git diff --stat` and confirm it shows only that one file.\n\n7. Pre-execution self-check\n- The edit is fully specified, limited to the one allowed file, and needs no external input.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "37752cdb4b5a2cc4a351809ed9e8b9e5f22427a176e74c15174394d85c9cf198",
+  "lineage": {
+    "issue_number": 7002,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38011089983",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38011089983",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7002"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261010010249_ba1d306e47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7002,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38011089983"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7002",
+  "timestamps": {
+    "created_at": "2026-10-10T01:02:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
