@@ -250,14 +250,22 @@ def _runs(*entries: tuple[str, str, str]) -> str:
 	]}])
 
 
-def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None) -> tuple[int, str]:
-	"""Each check-runs read returns the next fixture; the last one repeats."""
+def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None,
+		ci_runs_sequence: list[str] | None = None) -> tuple[int, str]:
+	"""Each check-runs read returns the next fixture; the last one repeats.
+
+	ci_runs_sequence does the same for the actions/runs?head_sha= read.
+	"""
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_seq_{os.getpid()}.json"
 	seq_file.write_text(json.dumps(runs_sequence), encoding="utf-8")
 	counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_n_{os.getpid()}"
 	counter.write_text("0", encoding="utf-8")
+	ci_seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_ci_seq_{os.getpid()}.json"
+	ci_seq_file.write_text(json.dumps(ci_runs_sequence or [json.dumps({"workflow_runs": []})]), encoding="utf-8")
+	ci_counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_ci_n_{os.getpid()}"
+	ci_counter.write_text("0", encoding="utf-8")
 	preamble = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -267,6 +275,9 @@ _safe_gh_jq() {{
     *"/check-runs"*)
       n="$(cat "{counter}")"; printf '%s' "$((n + 1))" > "{counter}"
       jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{seq_file}" ;;
+    *"/actions/runs?head_sha="*)
+      n="$(cat "{ci_counter}")"; printf '%s' "$((n + 1))" > "{ci_counter}"
+      jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{ci_seq_file}" ;;
     *) printf '%s' '{{}}' ;;
   esac
 }}
@@ -281,6 +292,11 @@ printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 	assert res.returncode == 0, res.stderr
 	last = [line for line in res.stdout.splitlines() if line.startswith("rc=")][-1]
 	return int(last.split()[0][3:]), res.stdout
+
+
+def _ci_runs(*entries: tuple[str, str, int]) -> str:
+	"""actions/runs?head_sha= shape: workflow name, status, run id."""
+	return json.dumps({"workflow_runs": [{"name": name, "status": status, "id": run_id} for name, status, run_id in entries]})
 
 
 GREEN = _runs(("CI", "completed", "success"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
@@ -346,6 +362,39 @@ class RequiredChecksWait(unittest.TestCase):
 		rc, out = _wait([EMPTY])
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=ok waited_s=2", out)
+
+	def test_queued_ci_run_keeps_waiting_until_it_completes(self) -> None:
+		"""A fast check already passed but CI's run is still queued: do not read the head as green."""
+		queued = _ci_runs(("CI", "queued", 101))
+		done = _ci_runs(("CI", "completed", 101))
+		rc, out = _wait([GREEN], ci_runs_sequence=[queued, queued, done])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("1 CI workflow run(s) on", out)
+		self.assertIn("outcome=ok", out)
+
+	def test_ci_run_that_never_completes_times_out(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[_ci_runs(("CI", "in_progress", 101))])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_unlisted_workflows_and_the_own_run_do_not_wait(self) -> None:
+		runs = _ci_runs(("Security audit", "in_progress", 101), ("CI", "in_progress", 4242))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+		self.assertNotIn("CI workflow run(s)", out)
+
+	def test_wait_workflows_can_be_disabled_or_renamed(self) -> None:
+		runs = _ci_runs(("Build", "queued", 101))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "none"})
+		self.assertEqual(rc, 0, out)
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "Build, CI"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_failed_runs_read_falls_back_to_the_check_runs(self) -> None:
+		rc, out = _wait([GREEN], ci_runs_sequence=["not json"])
+		self.assertEqual(rc, 0, out)
 
 	def test_allow_all_sentinel_proceeds(self) -> None:
 		rc, out = _wait([RED], env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
