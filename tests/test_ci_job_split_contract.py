@@ -6,8 +6,9 @@ took 40-45 minutes. It now runs as parallel jobs, and the job id `lint`
 names the aggregate job, which needs every other job. These tests pin what
 keeps that split honest:
 
-  1. `lint` needs every other CI job, so a new job cannot fall outside the
-     aggregate status;
+  1. `lint` needs every other CI job except the named advisory jobs in
+     `ADVISORY_JOB_IDS`, so a new job cannot fall outside the aggregate
+     status unless it is listed there on purpose;
   2. `lint` runs even when a needed job fails (`if: always()`) and fails
      unless every needed job succeeded. Without `always()` it would be
      skipped, and GitHub counts a skipped required check as passing;
@@ -37,12 +38,16 @@ AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 # Steps every job repeats to set itself up; everything else runs exactly once.
 PER_JOB_SETUP_STEPS = ("Checkout repository", "Setup Python", "Install Python CI dependencies")
 MAX_JOB_TIMEOUT_MINUTES = 20
-# Advisory jobs that run after the worker jobs, only on pushes to main, and
-# are deliberately outside the `lint` aggregate: they are skipped on pull
-# requests, and a skipped needed job would fail the aggregate. They must
-# never fail CI. `budget-watch` reads this run's job durations, so it has to
+# Jobs deliberately outside the aggregate: they run only on pushes to main,
+# wait for the worker jobs so they can read their durations, and must never
+# gate merges. Their own predicate and `lint.needs` exclusion are pinned in
+# `tests/test_ci_budget_watch.py`. Adding a job here is a reviewed decision.
+# They are skipped on pull requests, and a skipped needed job would fail the
+# aggregate. `budget-watch` reads this run's job durations, so it has to
 # wait for the worker jobs (#7012).
-POST_AGGREGATE_ADVISORY_JOBS = {"budget-watch"}
+ADVISORY_JOB_IDS = frozenset({"budget-watch"})
+# Alias kept for the advisory-job wiring test below.
+POST_AGGREGATE_ADVISORY_JOBS = ADVISORY_JOB_IDS
 ADVISORY_JOB_IF = "always() && github.event_name == 'push' && github.ref == 'refs/heads/main'"
 
 
@@ -52,6 +57,10 @@ def _ci_jobs() -> dict:
 	if not isinstance(jobs, dict):
 		raise AssertionError(f"jobs mapping missing in {CI_WORKFLOW}")
 	return jobs
+
+
+def _worker_job_ids(jobs: dict) -> list[str]:
+	return [job_id for job_id in jobs if job_id != AGGREGATE_JOB_ID and job_id not in ADVISORY_JOB_IDS]
 
 
 def _aggregate_step() -> dict:
@@ -84,11 +93,18 @@ class AggregateJobWiringTest(unittest.TestCase):
 		self.assertIn(AGGREGATE_JOB_ID, jobs)
 		needs = jobs[AGGREGATE_JOB_ID]["needs"]
 		self.assertIsInstance(needs, list)
-		self.assertEqual(
-			sorted(needs),
-			sorted(job_id for job_id in jobs if job_id != AGGREGATE_JOB_ID and job_id not in POST_AGGREGATE_ADVISORY_JOBS),
-		)
+		self.assertEqual(sorted(needs), sorted(_worker_job_ids(jobs)))
 		self.assertEqual(len(needs), len(set(needs)))
+
+	def test_advisory_jobs_never_gate_the_aggregate(self) -> None:
+		"""A job treated as advisory here must not also gate the aggregate."""
+		jobs = _ci_jobs()
+		needs = jobs[AGGREGATE_JOB_ID]["needs"]
+		for job_id in sorted(ADVISORY_JOB_IDS):
+			if job_id not in jobs:
+				continue
+			with self.subTest(job=job_id):
+				self.assertNotIn(job_id, needs)
 
 	def test_lint_runs_even_when_a_needed_job_fails(self) -> None:
 		self.assertEqual(_ci_jobs()[AGGREGATE_JOB_ID]["if"], "always()")
@@ -98,11 +114,10 @@ class AggregateJobWiringTest(unittest.TestCase):
 
 	def test_no_other_job_waits_on_another(self) -> None:
 		"""The split only helps if the worker jobs start together."""
-		for job_id, job in _ci_jobs().items():
-			if job_id == AGGREGATE_JOB_ID or job_id in POST_AGGREGATE_ADVISORY_JOBS:
-				continue
+		jobs = _ci_jobs()
+		for job_id in _worker_job_ids(jobs):
 			with self.subTest(job=job_id):
-				self.assertNotIn("needs", job)
+				self.assertNotIn("needs", jobs[job_id])
 
 	def test_advisory_jobs_stay_outside_the_aggregate_and_main_only(self) -> None:
 		jobs = _ci_jobs()
@@ -160,11 +175,10 @@ class JobLayoutTest(unittest.TestCase):
 				seen[step_name] = job_id
 
 	def test_every_worker_job_sets_itself_up_first(self) -> None:
-		for job_id, job in _ci_jobs().items():
-			if job_id == AGGREGATE_JOB_ID or job_id in POST_AGGREGATE_ADVISORY_JOBS:
-				continue
+		jobs = _ci_jobs()
+		for job_id in _worker_job_ids(jobs):
 			with self.subTest(job=job_id):
-				step_names = [step.get("name") for step in job["steps"]]
+				step_names = [step.get("name") for step in jobs[job_id]["steps"]]
 				self.assertEqual(step_names[0], "Checkout repository")
 				for setup_step in PER_JOB_SETUP_STEPS:
 					self.assertIn(setup_step, step_names)
