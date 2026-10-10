@@ -4622,14 +4622,16 @@ close_merged_issues_sweep() {
   # Issue #6631: a merge only counts when it lands on the repository's
   # default branch or on the issue's own declared integration branch
   # (_pr_json_base_is_target_merge). §14 audit: DEFAULT_BRANCH is assigned
-  # later in the tick (after this sweep runs), and CWS_DEFAULT_BRANCH /
-  # FINAL_DEFAULT_BRANCH are per-tracking-issue values that are unset on
-  # sweep-only ticks, so reuse them when present and otherwise make one
-  # repos/<repo> read per sweep, only on ticks that have candidates. An
+  # later in the tick (after this sweep runs), and CWS_DEFAULT_BRANCH is a
+  # per-tracking-issue value that is unset on sweep-only ticks, so reuse it
+  # when present and otherwise make one repos/<repo> read per sweep, only on
+  # ticks that have candidates. FINAL_DEFAULT_BRANCH is deliberately not
+  # reused: its lookups fall back to a literal "main" on API failure, which
+  # would let a main-based merge count in a repo whose default differs. An
   # unresolvable default branch closes nothing this cycle (fail closed: the
   # close is the destructive step); the next tick retries.
   local _sweep_default_branch=""
-  _sweep_default_branch="${CWS_DEFAULT_BRANCH:-${FINAL_DEFAULT_BRANCH:-}}"
+  _sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"
   if [ -z "${_sweep_default_branch}" ]; then
     _sweep_default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
   fi

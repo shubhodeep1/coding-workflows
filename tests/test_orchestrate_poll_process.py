@@ -16223,7 +16223,10 @@ def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	start = script.index("close_merged_issues_sweep() {")
 	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
-	assert 'CWS_DEFAULT_BRANCH:-${FINAL_DEFAULT_BRANCH:-}' in body
+	assert '_sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"' in body
+	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
+	# so the sweep must not reuse it.
+	assert "${FINAL_DEFAULT_BRANCH" not in body
 	assert "--jq '.default_branch'" in body
 	assert "|| echo main" not in body
 	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
