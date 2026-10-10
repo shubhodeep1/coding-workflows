@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u274c Runtime validation harness error Validation stopped before any repository checks ran. The startup result and validation/logs/compose.log show Docker rejecting container start because /sys/fs/cg",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-10-10T08:31:17Z",
+      "run_attempt": 1,
+      "run_id": 38036176256,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38036176256",
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "3a8f943c340bd65dbb45ea81dc3c4cfd4ee03ac3",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
