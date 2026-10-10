@@ -437,7 +437,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     marker, and a heal issue whose own run fails with its own fingerprint is
     escalated (`reason=heal_issue_failed_itself`). Implement skips guard
     blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job
-    output `heal_report`. Before fingerprinting or mutation, the intake verifies
+    output `heal_report`. The resolver's host-only conflict stop
+    (`conflict_resolver_sandbox_path_host_only`) needs a manual merge, not a
+    heal: its per-run report, an `identical_failure_cap` report repeating it
+    (`repeated_failure_reason`, from the gate's `FINGERPRINT_CAP_REASON` or the
+    trusted head markers) and an `ai:needs-human` label on an item whose newest
+    autofix marker by the `GH_PAT` account names it (on a PR, for its current
+    head) are skipped by the
+    reporters and the intake (`skip reason=host_only_conflict_manual_merge`);
+    the resolver's manual-merge error and the cap are unchanged. Before fingerprinting or mutation, the intake verifies
     phase reports against the GitHub-read run, failed phase job and a linking
     comment from a GitHub-reported trusted source-issue author (OWNER, MEMBER,
     COLLABORATOR or `github-actions[bot]`); self-repo reports also require the
