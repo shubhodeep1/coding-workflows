@@ -106,7 +106,8 @@ def copy(path):
             or (path not in root_files and parts[0] not in roots and parts[:2] not in ((".github", "workflows"), (".github", "actions")))
             or (path not in root_files and pathlib.PurePosixPath(path).suffix.lower() not in suffixes and parts[-1] != "Dockerfile")):
         return
-    if omit_agent_instructions and parts[-1].lower() in agent_instruction_names:
+    # agents.d/ fragments (CLAUDE.md §30) are agents.md content waiting to be folded.
+    if omit_agent_instructions and (parts[-1].lower() in agent_instruction_names or parts[0] == "agents.d"):
         omitted += 1
         return
     node = root
