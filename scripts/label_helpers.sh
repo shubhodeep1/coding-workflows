@@ -188,17 +188,26 @@ ensure_label_exists() {
 	return 1
 }
 
+# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
+#
+# Always returns 0. Callers that need to know whether the label landed read
+# SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME afterwards (issue #7099):
+# `applied` (PUT or POST fallback succeeded), `failed` (final POST failed) or
+# `skipped` (missing arguments / repo).
 set_issue_phase_label_resilient() {
+	SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=""
 	local issue_number="${1:-}"
 	local target_label="${2:-}"
 	local repo="${3:-${GITHUB_REPOSITORY:-}}"
 
 	if [ -z "${issue_number}" ] || [ -z "${target_label}" ]; then
 		echo "::warning::set_issue_phase_label_resilient: issue_number and target_label are required; skipping." >&2
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="skipped"
 		return 0
 	fi
 	if [ -z "${repo}" ]; then
 		echo "::warning::set_issue_phase_label_resilient: repo required for issue #${issue_number}; skipping." >&2
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="skipped"
 		return 0
 	fi
 
@@ -208,8 +217,11 @@ set_issue_phase_label_resilient() {
 	if ! _cur="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::set_issue_phase_label_resilient: GET labels failed for #${issue_number} — falling back to POST add." >&2
-		if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+		else
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
 			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 		fi
 		return 0
@@ -220,8 +232,11 @@ set_issue_phase_label_resilient() {
 	if ! _new="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
 		'(. - $p) + [$t] | unique' 2>/dev/null)"; then
 		echo "::warning::set_issue_phase_label_resilient: failed to compute new labels for #${issue_number} — falling back to POST add." >&2
-		if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+		else
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
 			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 		fi
 		return 0
@@ -230,12 +245,16 @@ set_issue_phase_label_resilient() {
 	if printf '{"labels":%s}' "${_new}" | \
 		gh_retry gh api -X PUT "repos/${repo}/issues/${issue_number}/labels" \
 			--input - >/dev/null 2>&1; then
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
 		return 0
 	fi
 
 	echo "::warning::set_issue_phase_label_resilient: PUT labels failed for #${issue_number} — falling back to POST add." >&2
-	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+	if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 		-f "labels[]=${target_label}" >/dev/null 2>&1; then
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+	else
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
 		echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 	fi
 	return 0
