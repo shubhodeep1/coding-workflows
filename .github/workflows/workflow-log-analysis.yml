@@ -1269,7 +1269,7 @@ jobs:
           purge_guard_ok="true"
           if ! purge_in_flight_docs="$(APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash scripts/apply_analysis_on_main.sh)"; then
             purge_guard_ok="false"
-            echo "::warning::Could not list the analysis docs open apply-analysis projects use; skipping the age-based purge this run."
+            echo "::warning::Could not list the analysis docs open apply-analysis projects use (or an orchestrator run is still creating a project); skipping the age-based purge this run."
           fi
           if [ "${purge_guard_ok}" = "true" ] && cutoff_date="$(date -u -d "${retention_raw} days ago" +%Y-%m-%d 2>/dev/null)" && [ -n "${cutoff_date}" ]; then
             shopt -s nullglob

@@ -31,6 +31,8 @@ state.setdefault("calls", []).append(args)
 def save():
     state_path.write_text(json.dumps(state))
 def respond(payload):
+    if "--slurp" in args:
+        payload = [payload]
     save()
     sys.stdout.write(json.dumps(payload))
     sys.exit(0)
@@ -540,3 +542,31 @@ def test_log_analysis_purge_keeps_docs_open_projects_use_and_fails_closed() -> N
 	loop = step.split('for old_report in analysis/workflow-optimization-*.md; do', 1)[1]
 	assert loop.index('grep -qxF -- "${old_report}"') < loop.index('git rm -- "${old_report}"')
 	assert 'WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=${old_report} reason=in_flight_project' in loop
+
+
+def test_in_flight_docs_fails_while_an_orchestrator_run_is_active() -> None:
+	# A just-dispatched project has no tracking issue or marker until its
+	# orchestrator run creates them, so the purge must not run meanwhile.
+	state = {"open_tracking": [], "orchestrate_runs": [{"id": 5, "status": "queued", "conclusion": None}]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert proc.stdout == ""
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_run_in_flight" in proc.stderr
+
+
+def test_in_flight_docs_fails_when_the_orchestrator_runs_read_fails() -> None:
+	state = {"open_tracking": [], "orchestrate_runs_fail": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert "reason=orchestrate_runs_unreadable" in proc.stderr
+
+
+def test_open_tracking_issue_list_reads_every_page() -> None:
+	state = {"open_tracking": [_tracking(7021)], "comments_by_issue": {"7021": []}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 0, proc.stderr
+	list_calls = [call for call in final["calls"] if any("/issues?state=open" in a for a in call)]
+	assert list_calls and all("--paginate" in call and "--slurp" in call for call in list_calls)

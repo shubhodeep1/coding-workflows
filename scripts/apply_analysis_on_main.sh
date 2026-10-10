@@ -65,7 +65,10 @@
 # In-flight-docs mode (APPLY_ANALYSIS_IN_FLIGHT_DOCS=true) prints, one per
 # line, every doc a trusted marker comment on an OPEN tracking issue names,
 # so the log analysis purge can keep the docs live projects still read: 1 issue
-# list plus 1 comments read per open tracking issue. Exit 2 when any read fails.
+# list call per page, 1 comments read per open tracking issue, and 1
+# orchestrator runs read. Exit 2 when any read fails, or while an orchestrator
+# run is queued or running (a just-dispatched project's tracking issue and
+# marker comment do not exist until that run creates them).
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)  owner/repo
@@ -174,7 +177,9 @@ is_truthy()
 
 # open_tracking_issue_numbers [extra-label]
 # JSON array of open ai:orchestrator-tracking issue numbers, optionally
-# narrowed to issues that also carry <extra-label>. One API call.
+# narrowed to issues that also carry <extra-label>. One API call per page of
+# 100; every page is read so the purge's in-flight list cannot drop a project
+# past the first 100 open tracking issues.
 open_tracking_issue_numbers()
 {
 	local labels="ai:orchestrator-tracking"
@@ -183,8 +188,8 @@ open_tracking_issue_numbers()
 	fi
 	local encoded_labels
 	encoded_labels="$(printf '%s' "${labels}" | sed 's/:/%3A/g; s/,/%2C/g')"
-	gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=${encoded_labels}&per_page=100" \
-		| jq -c '[.[] | select(has("pull_request") | not) | .number] | sort'
+	gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=${encoded_labels}&per_page=100" \
+		| jq -c '[.[][] | select(has("pull_request") | not) | .number] | sort'
 }
 
 # trusted_marker_comment_present <issue-number> <marker-line>
@@ -350,6 +355,21 @@ if is_truthy "${APPLY_ANALYSIS_IN_FLIGHT_DOCS}"; then
 	set -e
 	if [ "${in_flight_rc}" -ne 0 ]; then
 		echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable" >&2
+		exit 2
+	fi
+	# A dispatched project gets its tracking issue and marker comment from the
+	# orchestrator run, after dispatch, so its doc is not listed above yet.
+	# While such a run is queued or running, report unavailable so the purge
+	# skips this run instead of deleting that doc.
+	set +e
+	orchestrate_run_in_flight
+	in_flight_run_rc=$?
+	set -e
+	if [ "${in_flight_run_rc}" -eq 0 ]; then
+		echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_run_in_flight" >&2
+		exit 2
+	elif [ "${in_flight_run_rc}" -ne 1 ]; then
+		echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_runs_unreadable" >&2
 		exit 2
 	fi
 	printf '%s\n' "${in_flight_output}" | sed '/^$/d'
