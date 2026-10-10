@@ -207,6 +207,19 @@ def test_both_models_failing_marks_the_slot_failed(tmp_path: Path) -> None:
 	assert "failed on the Claude account pool after 2 attempt(s)" in result["output"]
 
 
+@pytest.mark.parametrize("reason", ["all_accounts_failed", "all_usage_limit"])
+def test_every_account_exhausted_on_both_models_skips_the_slot(tmp_path: Path, reason: str) -> None:
+	# all_accounts_failed also covers every account rejecting its token. Haiku
+	# is still tried (usage limits can be per model), but when it finds the
+	# pool exhausted too the slot is skipped_pool, so the sole-reviewer rescue
+	# can run, and the circuit breaker records nothing.
+	result = _run(tmp_path, FAKE_SONNET_RC="75", FAKE_SONNET_REASON=reason, FAKE_HAIKU_RC="75", FAKE_HAIKU_REASON=reason)
+	assert result["status"] == "skipped_pool"
+	assert result["runs"] == ["claude-sonnet-5-5", "claude-haiku-5-5"]
+	assert f"AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason={reason} action=skip" in result["log"]
+	assert result["health"] == []
+
+
 def test_pool_outcomes_feed_the_circuit_breaker(tmp_path: Path) -> None:
 	for name in ("ok", "failed", "pool", "codex"):
 		(tmp_path / name).mkdir()

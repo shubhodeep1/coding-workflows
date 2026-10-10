@@ -5325,6 +5325,15 @@ run_pool_reviewer() {
       pool_finish skipped_budget "Reviewer slot ${model} skipped because the run budget is nearly exhausted."
       ;;
     *)
+      # The last model also found every account exhausted. The sandbox reports
+      # all_accounts_failed for usage limits and rejected tokens alike, so once
+      # no model is left the pool is out for this slot: skip it (which lets the
+      # sole-reviewer rescue run) rather than record a slot failure.
+      if [ -z "${pool_skip_reason}" ]; then
+        case "${pool_last_reason}" in
+          all_accounts_failed|all_usage_limit) pool_skip_reason="${pool_last_reason}" ;;
+        esac
+      fi
       if [ -n "${pool_skip_reason}" ]; then
         pool_log "AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason=${pool_skip_reason} action=skip"
         pool_finish skipped_pool "Reviewer slot ${model} skipped: the Claude account pool is unavailable (${pool_skip_reason})."
