@@ -217,6 +217,7 @@ if [ "$1:$2" = "workflow:run" ]; then echo "$*" >> "$DISPATCH_LOG"; exit 0; fi
 if [ "$1:$2" = "api:user" ]; then echo trusted; exit 0; fi
 if [ "$1:$2" = "api:graphql" ]; then cat "$GRAPHQL"; exit 0; fi
 case "$*" in
+  "api repos/o/r --jq .default_branch") echo main ;;
   *"/pulls"*) cat "$PRS" ;;
   *"/runs"*) echo '{"workflow_runs":[]}' ;;
   *) exit 1 ;;

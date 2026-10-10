@@ -1875,7 +1875,8 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
 	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then a failed editor
-	preflight (the editor never ran), then the editor flags, then the run
+	preflight, a failed reviewer step or a failed sandbox prepare (the editor
+	never ran), then the editor flags, then the run
 	summary's ``finalize_reason``, then ``workflow_failure``.
 	"""
 	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
@@ -1887,6 +1888,9 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	# failing phase rather than the empty editor output it left behind.
 	if flags.get("AUTOFIX_REVIEWERS_FAILED") == "true":
 		return "reviewers_failed"
+	# The review sandbox could not be prepared, so the editor never ran.
+	if flags.get("AUTOFIX_SANDBOX_PREPARE_FAILED") == "true":
+		return "sandbox_prepare_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":
