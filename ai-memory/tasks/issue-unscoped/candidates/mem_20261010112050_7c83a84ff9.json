@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:407-409 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The code accepts slash-containing base refs but inserts them unescaped into a URL path segment.\n  WHY: A valid base branch such as `release/1.x` is sent as multiple path segments; the API read fails, the error is suppressed, and the gate files an issue as though the base result were unknown, even when the check passed there.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:407-409 | severity=MAJOR | confidence=4\n  PROBLEM: The code accepts slash-containing base refs but inserts them unescaped into a URL path segment.\n  WHY: A valid base branch such as `release/1.x` is sent as multiple path segments. The API read fails, the error is suppressed, and the gate files an issue as though the base result were unknown, even when the check passed there.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0fea78d2704785a934f61257c8ccaf5f7a1b1ac10359fd7fe26e7191ff1edec7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7037,
+    "run_id": "38045949312",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38045949312",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010112050_7c83a84ff9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7037,
+    "run_id": "38045949312"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T11:20:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
