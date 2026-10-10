@@ -416,6 +416,16 @@ def test_poller_does_not_treat_real_projects_as_smoke() -> None:
 	assert not _is_smoke("[Orchestrator] anything", "not json")
 
 
+def test_gate_labels_the_decompose_fixture_tracking_issue() -> None:
+	"""The decompose fixture's tracking title is model-written and may drop the
+	smoke marker, so the gate must also bind the e2e-smoke-test label."""
+	gate = (WORKFLOWS / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	start = gate.index('--field "project_description=${PROJECT_DESC}"')
+	assert '--field "tracking_labels=e2e-smoke-test"' in gate[start:start + 200]
+	assert "tracking_labels: ${{ inputs.tracking_labels }}" in (WORKFLOWS / "internal-orchestrate.yml").read_text(encoding="utf-8")
+	assert _is_smoke("[Orchestrator] Update two smoke canary files in parallel", '[{"name":"ai:orchestrator-tracking"},{"name":"e2e-smoke-test"}]')
+
+
 def _tg_notify_run(tracking_num: str, smoke_nums: str, level: str = "CRITICAL") -> subprocess.CompletedProcess:
 	script = "\n".join([
 		"set -euo pipefail",
