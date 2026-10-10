@@ -267,8 +267,6 @@ _HEAL_COMMIT_REF_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
-_FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
-_FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
@@ -2480,8 +2478,9 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	A trusted marker with a different ``fp``, a failure comment without a
 	marker, or an editor summary ends the scan; the summary a post-editor
 	failure of the same run posted first does not (same pairing rule as
-	``count_autofix_failure_streak``). Markers for another head or from another
-	author are skipped. ``cap_applied`` reports whether a trusted
+	``count_autofix_failure_streak``). Markers for another head are skipped;
+	comments from another author are skipped entirely, so their text (a failure
+	or summary prefix without a marker) never ends the scan either. ``cap_applied`` reports whether a trusted
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
@@ -2513,16 +2512,21 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	seen_runs: set[str] = set()
 	skip_paired_summary = False
 	for comment in reversed(ordered):
-		body = sanitize_text(comment.get("body"))
-		match = _canonical_failure_marker(body)
-		if match is None and _comment_author(comment) != author and _FAILURE_MARKER_RE.search(body) is not None:
-			# Untrusted comment quoting a marker: skipped as before. A trusted
-			# comment whose only marker is not the trailing line is treated as
-			# unmarked below, never parsed for its forged fields.
+		if _comment_author(comment) != author:
+			# Security-pass finding support-version-failure-marker-shadowing:
+			# any comment not written by the pipeline identity is skipped
+			# without ending the scan, including one that merely carries
+			# failure / editor-summary text and no marker. Otherwise a PR
+			# commenter could reset the identical-failure count and defeat the
+			# cap. Every failure and summary comment is posted as that identity.
 			continue
+		body = sanitize_text(comment.get("body"))
+		# A trusted comment whose only marker is not the trailing line is
+		# treated as unmarked below, never parsed for its forged fields.
+		match = _canonical_failure_marker(body)
 		if match is not None:
 			fields = _marker_fields(match)
-			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 				continue
 			if support and fields.get("support", "").lower() != support:
 				continue

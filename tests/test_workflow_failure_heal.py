@@ -2970,6 +2970,12 @@ def test_failure_marker_must_be_the_trailing_standalone_line() -> None:
 	# Untrusted comments quoting a marker are still skipped without ending the scan.
 	attacker = {"id": 6, "author_login": "attacker", "body": AUTOFIX_NOOP_COMMENT + " `" + forged + "` trailing"}
 	assert count([*genuine, attacker], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	# Untrusted comments carrying failure or editor-summary text without a
+	# marker cannot end the scan (and so cannot reset the cap) either.
+	for text in (AUTOFIX_FAILED_COMMENT, AUTOFIX_SUMMARY_COMMENT):
+		untrusted = {"id": 7, "author_login": "attacker", "body": text}
+		assert count([*genuine, untrusted], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+		assert count([*genuine, {**untrusted, "author_login": CAP_AUTHOR}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
 
 
 def test_verify_run_provenance_ignores_a_forged_inline_run_marker() -> None:
