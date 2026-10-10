@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: REFRAME\nQ3: C\nQ4: A\n\nRATIONALE:\nQ1: GITHUB FACTS show PR shubhodeep1/coding-workflows#6947 was merged into `main` at 2026-10-09T22:08:47Z, and source issue #6950 is closed (not_planned). The PR's files are in the checkout: `changelog.d/6947-heal-scope-failing-test-subjects.md` exists, and `tests/test_workflow_failure_heal_scope_tests.py` is wired into `.github/workflows/ci.yml` line 730. A merged PR has no branch left to sync or fix, so its red CI runs are stale. Option B is ruled out because the PR is not open. Option C is ruled out because the PR has nothing that isn't already on main.\nQ2: I don't have the PR's job names, failing assertions or run ID: GITHUB FACTS contain only merge state, and I can't read Actions logs. Choosing A would mean promising data I can't supply, which breaks the data-provision guard. B would mean stating job names as fact without evidence. So I'm replacing \"both failed jobs on PR #6947 pass\" with a check that is at least as strict and can be done on the current default branch (see plan).\nQ3: Nothing on the default branch is shown to be broken. The safest reading is that no existing test changes unless an assertion fails when the tests are run against current `main`.\nQ4: The PR is merged. If the same test modules pass on current `main`, there is nothing to fix. Adding a test for behaviour that already works (B) widens scope. A human hand-off (C) isn't needed, because no `claude/*` push or sync is required once the branch has merged.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: reframe\n  inputs:\n    - `.github/workflows/ci.yml` job `tests-heal-plan-and-validation` (line 707), step \"Workflow failure heal contract and driver tests\" (line 730): `python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py`\n    - `.github/workflows/ci.yml` aggregate job `lint`. It fails whenever any job it needs fails, so a red `lint` on the PR most likely followed from a red worker job.\n    - `changelog.d/6947-heal-scope-failing-test-subjects.md` and the heal-scope code in `scripts/workflow_failure_heal.py` (subcommand `heal-scope`) that PR #6947 added.\n  steps:\n    - Run the pytest command from ci.yml line 730 on the current default-branch checkout with `PYTHONDONTWRITEBYTECODE=1`, and record pass/fail per test ID.\n    - Also run the CI test-wiring guard (`tests/test_ci_wires_every_test_file.py`) and `tests/test_ci_job_split_contract.py`, because PR #6947 added a test file that has to stay wired into CI.\n    - If every test passes, make no code change and post the verified no-op evidence described in Q4.\n    - If a test fails on current `main`, quote the failing test ID and the assertion message word for word in the plan. Fix only that confirmed default-branch defect, using the documented behaviour (agents.md \"Heal scope from failing tests\", the changelog fragment, PR #6947) to decide which side is wrong. Do not rewrite the test just to match the code.\n    - Do not push to `claude/elegant-mendel-5pli2i-heal-scope-test-subjects` or to any `claude/*` branch.\n  replaces_acceptance_criterion: \"Do not treat CI as passing until both failed jobs [on PR #6947] pass.\"\n  equivalence_argument: The PR has merged, so its head can't be re-run or re-synced, and its code now lives only on `main`. Running the same CI test modules against current `main` exercises exactly the merged code plus everything that landed after it. That makes it at least as strict as re-running the stale PR jobs.\n  reversibility: If someone later produces the original job names and assertions and they point at a module outside this set, a new issue can run that module. No code changes under this decision, so nothing has to be reverted.\n\nSETUP REQUIRED: none\n\nNotes:\n- Assumption: the \"two failing jobs\" were `tests-heal-plan-and-validation` (where the PR's new test file runs) plus the aggregate `lint`. I couldn't confirm this from logs, so the reframed check covers the heal test modules and the CI wiring guards instead of relying on the job names.\n- Missing context: the PR's CI run ID and the full failure logs weren't available to me.",
+  "fingerprint": "799cc1b034ee6f1eaab5d1c190d05ac9439dc68e4139cf3fcdc6e04f299ace3f",
+  "lineage": {
+    "issue_number": 7094,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38064070954",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38064070954",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7094"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010154204_bd7041ceb6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7094,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38064070954"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7094",
+  "timestamps": {
+    "created_at": "2026-10-10T15:42:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
