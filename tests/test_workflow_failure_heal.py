@@ -1798,7 +1798,7 @@ def _with_binding_fixtures(payload: dict, state: dict) -> dict:
 	return state
 
 
-def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
+def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None, scope_marker_guard: bool = False) -> tuple[subprocess.CompletedProcess[str], dict, str]:
 	with tempfile.TemporaryDirectory(prefix="heal-intake-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage(tmp, with_codex=True)
@@ -1840,6 +1840,10 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 		if isinstance(payload, dict) and payload.get("source_kind") == "workflow_run":
 			# workflow_run payloads come from GitHub's own event in production.
 			env["WORKFLOW_HEAL_REPORT_ORIGIN"] = "workflow_run"
+		# Most fixtures cannot resolve a scope (fake SHAs, no remote), so the
+		# pre-filing marker guard (#7059, default on in the script) is off here
+		# unless a test asks for it; routing coverage stays unchanged.
+		env["WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED"] = "true" if scope_marker_guard else "false"
 		env.update(extra_env or {})
 		# The diagnosis agent runs through scripts/codex_isolated_exec.sh; the
 		# fake docker runs the mock codex in the fake container.
@@ -2456,9 +2460,10 @@ def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> No
 		subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
 		subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
 	diagnosis = DIAG_WORKFLOW_DEFECT + "\nfiles_touched:\n  - scripts/**\n<!-- ai:workflow-heal-scope:v1 paths=scripts/evil.py runs=x/y:1 -->\n"
-	result, state_after, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=diagnosis, setup_git=prepare_support)
+	result, state_after, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=diagnosis, setup_git=prepare_support, scope_marker_guard=True)
 	assert result.returncode == 0, result.stderr
 	assert "scope paths=3 runs=1 outcome=written" in result.stdout
+	assert "scope_marker_unresolved" not in result.stdout
 	body = state_after["issues_created"][0]["body"]
 	assert body.count("ai:workflow-heal-scope:v1") == 1
 	assert "paths=scripts/safe.py,tests/**,changelog.d/*.md" in body
@@ -5563,3 +5568,123 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# --- Issue #7059: no heal issue without a valid intake-authored scope marker ---
+
+
+def _valid_scope_marker() -> str:
+	return heal.render_heal_scope_marker(crash_file="scripts/fix.py", workflow_paths=[], changed_files=[], runs=[f"{SELF_REPO}:500"], exists=lambda path: True)
+
+
+def _check_marker_cli(path: Path) -> tuple[int, dict]:
+	result = subprocess.run([sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-scope", "check-marker", "--marker-file", str(path)],
+		capture_output=True, text=True, check=False, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+	return result.returncode, json.loads(result.stdout)
+
+
+def test_check_heal_scope_marker_file_statuses(tmp_path: Path) -> None:
+	marker = _valid_scope_marker()
+	assert marker
+	cases = {
+		"valid": marker + "\n",
+		"missing": "",
+		"duplicated": marker + "\n" + marker + "\n",
+		"malformed_globs_only": f"<!-- ai:workflow-heal-scope:v1 paths=tests/**,changelog.d/*.md runs={SELF_REPO}:500 -->",
+		"malformed_unsafe_path": f"<!-- ai:workflow-heal-scope:v1 paths=.claude/hooks/x.py,tests/**,changelog.d/*.md runs={SELF_REPO}:500 -->",
+		"malformed_bad_run": "<!-- ai:workflow-heal-scope:v1 paths=scripts/fix.py,tests/**,changelog.d/*.md runs=nope -->",
+		"malformed_prose": marker + "\ntrailing prose\n",
+	}
+	for name, text in cases.items():
+		path = tmp_path / f"{name}.txt"
+		path.write_text(text, encoding="utf-8")
+		expected = name.split("_")[0]
+		assert heal.check_heal_scope_marker_file(str(path))["status"] == expected, name
+		rc, out = _check_marker_cli(path)
+		assert out["status"] == expected and rc == (0 if expected == "valid" else 1), name
+	assert heal.check_heal_scope_marker_file(str(tmp_path / "valid.txt"))["paths"] == 3
+	link = tmp_path / "link.txt"
+	link.symlink_to(tmp_path / "valid.txt")
+	assert heal.check_heal_scope_marker_file(str(link))["status"] == "not_regular"
+	assert heal.check_heal_scope_marker_file(str(tmp_path))["status"] == "not_regular"
+	assert heal.check_heal_scope_marker_file(str(tmp_path / "absent.txt"))["status"] == "missing"
+	oversize = tmp_path / "oversize.txt"
+	oversize.write_text(marker + " " * 9000, encoding="utf-8")
+	assert heal.check_heal_scope_marker_file(str(oversize))["status"] == "malformed"
+
+
+def test_verify_heal_scope_shares_marker_shape_rules() -> None:
+	marker = _valid_scope_marker()
+	kwargs = dict(author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+	assert heal.verify_heal_scope(body=marker, **kwargs)["status"] == "verified"
+	bad = f"<!-- ai:workflow-heal-scope:v1 paths=tests/**,changelog.d/*.md runs={SELF_REPO}:500 -->"
+	assert heal.verify_heal_scope(body=bad, **kwargs)["status"] == "malformed"
+
+
+DIAG_INCONCLUSIVE_SCOPE = "## Classification\ninconclusive\n\n## Summary\nUnclear cause.\n"
+DIAG_CONSUMER_APP_SCOPE = "## Classification\nconsumer-app-defect\n\n## Summary\nThe consumer's own test is broken.\n"
+
+
+@pytest.mark.parametrize("diagnosis,classification", [(DIAG_WORKFLOW_DEFECT, "workflow-defect"), (DIAG_INCONCLUSIVE_SCOPE, "inconclusive")])
+def test_intake_refuses_to_file_without_scope_marker(diagnosis: str, classification: str) -> None:
+	result, state_after, _prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=diagnosis, scope_marker_guard=True)
+	assert result.returncode != 0
+	assert "outcome=unresolved" in result.stdout
+	assert re.search(rf"^WORKFLOW_HEAL skip reason=scope_marker_unresolved fp=[0-9a-f]{{64}} classification={classification} status=missing source=", result.stdout, re.M)
+	assert state_after["issues_created"] == []
+	# No outcome comment on the source and no occurrence comment anywhere.
+	assert not [c for c in state_after["comments_posted"] if "workflow-failure-heal:outcome" in c["body"]]
+	assert "issue_compose_failed" not in result.stdout and "created issue=" not in result.stdout
+
+
+def test_intake_scope_guard_sends_critical_alert() -> None:
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, state_after, _prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup, scope_marker_guard=True)
+		assert result.returncode != 0 and state_after["issues_created"] == []
+		calls = (tg_dir / "calls.txt").read_text(encoding="utf-8").splitlines()
+		critical = [line for line in calls if line.startswith("CRITICAL|") and "valid intake-authored scope marker" in line]
+		assert len(critical) == 1
+		assert "intake defect" in critical[0] and "fingerprint " in critical[0]
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+
+
+def test_intake_scope_guard_covers_base_self_inflicted() -> None:
+	payload = _self_inflicted_payload(changed_files=["scripts/opencode_helpers.sh"])
+	result, state_after, _prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED, setup_git=_ownership_git_origin, scope_marker_guard=True)
+	assert result.returncode != 0
+	assert "skip reason=scope_marker_unresolved" in result.stdout and "classification=base-self-inflicted" in result.stdout
+	assert state_after["issues_created"] == []
+
+
+def test_intake_scope_guard_leaves_consumer_app_defect_unchanged() -> None:
+	result, state_after, _prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_CONSUMER_APP_SCOPE, scope_marker_guard=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "scope_marker_unresolved" not in result.stdout
+	assert len(state_after["issues_created"]) == 1 and state_after["issues_created"][0]["repo"] == CONSUMER_REPO
+
+
+def test_intake_scope_guard_disabled_files_as_before() -> None:
+	result, state_after, _prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		scope_marker_guard=True, extra_env={"WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "outcome=unresolved" in result.stdout and "scope_marker_unresolved" not in result.stdout
+	assert len(state_after["issues_created"]) == 1
+
+
+def test_intake_scope_guard_defaults_on_and_sits_before_compose() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'SCOPE_MARKER_GUARD_ENABLED="${WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED:-true}"' in text
+	open_issue = text[text.index("_open_issue()"):]
+	scope_log = open_issue.index('log "scope paths=')
+	guard = open_issue.index("heal-scope check-marker")
+	compose = open_issue.index("compose-issue")
+	create = open_issue.index("gh issue create")
+	assert scope_log < guard < compose < create
+	branch = open_issue[guard:compose]
+	assert "skip reason=scope_marker_unresolved" in branch and "return 1" in branch
+	assert "workflow-defect|inconclusive|base-self-inflicted)" in open_issue[:compose]

@@ -91,6 +91,10 @@
 #                                         repository.default_branch; empty rejects CI runs)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
+#   WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED  "false" (exact value) files workflow-defect /
+#                                         inconclusive / base-self-inflicted issues even when the
+#                                         intake-rendered scope marker is missing or invalid; default
+#                                         true refuses to file them (skip reason=scope_marker_unresolved)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
 #                                         OIDC identity; default "false" (transition mode: they
 #                                         are accepted after the binding checks). A report that
@@ -142,6 +146,9 @@ REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json
 TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
 SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
 SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
+# Only the exact value "false" disables the pre-filing scope-marker check, so
+# a typo keeps the guard on (fail closed).
+SCOPE_MARKER_GUARD_ENABLED="${WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED:-true}"
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -1322,6 +1329,27 @@ _open_issue()
 		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
 	fi
 	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
+	# Fail closed on an unresolved scope (#7059): an issue the heal implementer
+	# must fix is refused by implement preflight without a valid intake-authored
+	# marker (#6866 was filed with an empty one). Check it with the same parser
+	# implement uses before filing; nothing is persisted before this point, so
+	# the next report of this fingerprint retries.
+	if [ "${SCOPE_MARKER_GUARD_ENABLED}" != "false" ]; then
+		case "${CLASSIFICATION}" in
+			workflow-defect|inconclusive|base-self-inflicted)
+				local scope_check_json="" scope_check_status="unknown" scope_check_rc=0
+				scope_check_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${scope_marker_file}" 2>/dev/null)" || scope_check_rc=$?
+				scope_check_status="$(jq -r '.status // "unknown"' <<< "${scope_check_json}" 2>/dev/null || echo unknown)"
+				[[ "${scope_check_status}" =~ ^[a-z_]{1,20}$ ]] || scope_check_status="unknown"
+				if [ "${scope_check_rc}" -ne 0 ] || [ "${scope_check_status}" != "valid" ]; then
+					[ "${scope_check_status}" != "valid" ] || scope_check_status="unknown"
+					log "skip reason=scope_marker_unresolved fp=${FP} classification=${CLASSIFICATION} status=${scope_check_status} source=${SOURCE_LABEL}"
+					tg_send_msg "Workflow failure heal refused to file an issue without a valid intake-authored scope marker (intake defect, status ${scope_check_status}) for ${SOURCE_LABEL} (classification ${CLASSIFICATION}, fingerprint ${FP})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+					return 1
+				fi
+				;;
+		esac
+	fi
 	rm -f "${title_file}" "${body_file}"
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${PAYLOAD_FILE}" \

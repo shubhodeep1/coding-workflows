@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -2177,6 +2178,61 @@ def strip_heal_scope_markers(text: str) -> str:
 	return re.sub(r"(?im)^.*ai(?::|&#0*58;|&colon;|&amp;:)workflow-heal-scope.*\n?", "", text)
 
 
+def _heal_scope_marker_shape_ok(paths: list[str], runs: list[str]) -> bool:
+	"""Shape rules shared by verify_heal_scope and check_heal_scope_marker_file:
+	3-22 unique paths ending in the fixed test/changelog globs, every other path
+	safe, and 1-3 unique `owner/repo:N` run refs."""
+	return not (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
+		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
+		or any(not _safe_heal_path(path) for path in paths[:-2])
+		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
+		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs))
+
+
+HEAL_SCOPE_MARKER_FILE_MAX_BYTES = 8192
+
+
+def check_heal_scope_marker_file(path: str) -> dict[str, Any]:
+	"""Check the intake-rendered scope marker file before an issue is filed.
+
+	Same parser as verify_heal_scope (HEAL_SCOPE_RE plus the shared shape
+	rules), minus the authorship/edit checks, which only apply once the issue
+	exists. Statuses: valid, missing, not_regular, duplicated, malformed.
+	"""
+	try:
+		info = os.lstat(path)
+	except FileNotFoundError:
+		return {"status": "missing", "paths": 0}
+	except OSError:
+		return {"status": "not_regular", "paths": 0}
+	if not stat.S_ISREG(info.st_mode):
+		return {"status": "not_regular", "paths": 0}
+	try:
+		fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+	except OSError:
+		return {"status": "not_regular", "paths": 0}
+	try:
+		raw = os.read(fd, HEAL_SCOPE_MARKER_FILE_MAX_BYTES + 1)
+	finally:
+		os.close(fd)
+	if len(raw) > HEAL_SCOPE_MARKER_FILE_MAX_BYTES:
+		return {"status": "malformed", "paths": 0}
+	text = raw.decode("utf-8", errors="replace").strip()
+	count = len(re.findall(r"ai:workflow-heal-scope", text, re.IGNORECASE))
+	if count == 0:
+		return {"status": "missing", "paths": 0}
+	if count != 1:
+		return {"status": "duplicated", "paths": 0}
+	match = HEAL_SCOPE_RE.fullmatch(text)
+	if not match:
+		return {"status": "malformed", "paths": 0}
+	paths = match.group(1).split(",")
+	runs = match.group(2).split(",")
+	if not _heal_scope_marker_shape_ok(paths, runs):
+		return {"status": "malformed", "paths": 0}
+	return {"status": "valid", "paths": len(paths)}
+
+
 def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | None, labels: Iterable[str], pipeline_login: str) -> dict[str, Any]:
 	markers = HEAL_SCOPE_RE.findall(body)
 	count = len(re.findall(r"ai:workflow-heal-scope", body, re.IGNORECASE))
@@ -2193,11 +2249,7 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 		status = "edited"
 	paths = markers[0][0].split(",") if markers else []
 	runs = markers[0][1].split(",") if markers else []
-	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
-		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
-		or any(not _safe_heal_path(path) for path in paths[:-2])
-		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
-		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
+	if status == "verified" and not _heal_scope_marker_shape_ok(paths, runs):
 		status = "malformed"
 	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
 
@@ -3518,6 +3570,10 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
 						merged[key].append(item)
 		_write_json(merged)
+	elif args.operation == "check-marker":
+		result = check_heal_scope_marker_file(args.marker_file)
+		_write_json(result)
+		return 0 if result["status"] == "valid" else 1
 	elif args.operation == "verify":
 		data = _load_json_file(args.input_json)
 		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
@@ -3952,8 +4008,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_route)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests"))
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests", "check-marker"))
 	p.add_argument("--log-files", nargs="*")
+	p.add_argument("--marker-file", default="")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
 	p.add_argument("--checkout", default=".")
