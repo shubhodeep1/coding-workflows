@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every `autofix-failure-fingerprint` call block in `review_autofix.yml` (4 sites) must pass `--support-sha \"${REVIEW_SUPPORT_SHA:-}\"`.\n  expected_change_site: .github/workflows/review_autofix.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff for `.github/workflows/review_autofix.yml` contains only 3 hunks for `autofix-failure-fingerprint` calls, while the regression test `test_review_autofix_passes_support_sha_to_every_marker_site` asserts there are 4 call sites that must be updated. One call site remains unpinned, breaking the structural requirement for the support SHA.\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR adds the `budget-watch` job to CI and implements the logic to open budget issues, but there are no diff hunks in `.github/workflows/ci.yml` that move or rebalance existing slow CI job steps (e.g., from `tests-promote-stall-and-review` or `tests-release-and-log-analysis`) into other jobs as requested in the task intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Every `autofix-failure-fingerprint` call block in `review_autofix.yml` (4 sites) must pass `--support-sha \"${REVIEW_SUPPORT_SHA:-}\"`.\n  Expected change site: .github/workflows/review_autofix.yml\n  Evidence of absence: The PR diff for `.github/workflows/review_autofix.yml` contains only 3 hunks for `autofix-failure-fingerprint` calls, while the regression test `test_review_autofix_passes_support_sha_to_every_marker_site` asserts there are 4 call sites that must be updated. One call site remains unpinned, breaking the structural requirement for the support SHA.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR adds the `budget-watch` job to CI and implements the logic to open budget issues, but there are no diff hunks in `.github/workflows/ci.yml` that move or rebalance existing slow CI job steps (e.g., from `tests-promote-stall-and-review` or `tests-release-and-log-analysis`) into other jobs as requested in the task intent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "55911af8a74eb14112f5c3f895da2f3b4e8d9b056f71b8d6b6b7d82f5e9a5a7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7012,
+    "run_id": "38023568964",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38023568964",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010045439_bb5f63d2ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7012,
+    "run_id": "38023568964"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T04:54:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
