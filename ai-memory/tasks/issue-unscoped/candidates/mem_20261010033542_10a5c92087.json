@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:773 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The marker scan checks the entire comment body instead of requiring a failure marker on the final standalone line.\n  WHY: A comment containing a failure marker anywhere in its body can incorrectly increment the failure streak.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fix the remaining comment-handling issues: accept failure markers only on the final standalone line\"\n  expected_change_site: scripts/workflow_failure_heal.py count_autofix_failure_streak body-match check\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The implementation still scans for markers anywhere in the comment body using `any(marker in body ...)` at line 773 rather than anchoring the scan to the trailing line; author filtering addresses the untrusted-comment half, but the textual-marker match remains unanchored and a trusted commenter can still cause a false failure count.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:773 | severity=high | confidence=4\n  PROBLEM: The marker scan still checks the entire comment body instead of being anchored to the final standalone line.\n  WHY: An untrusted comment containing a failure marker string anywhere in its body will incorrectly increment the failure streak.\n- Requirement: \"Fix the remaining comment-handling issues: accept failure markers only on the final standalone line\"\n  Expected change site: scripts/workflow_failure_heal.py count_autofix_failure_streak body-match check\n  Evidence of absence: The implementation still scans for markers anywhere in the comment body using any(marker in body ...) at line 773, rather than anchoring the scan to the trailing line as the requirement specified and as the sibling function count_identical_failures already does.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Fix the remaining comment-handling issues: accept failure markers only on the final standalone line, and prevent untrusted comments from changing failure counts or retry limits.\" (PR description)\n  Expected change site: scripts/workflow_failure_heal.py:773, count_autofix_failure_streak textual-marker match (`if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS)`)\n  Evidence of absence: The PR adds author filtering to count_autofix_failure_streak (lines 764, 770-771) and passes it from the reporter, which closes the untrusted-comment half. The other half \u2014 anchoring the textual-marker match \u2014 is not implemented. Line 773 still uses substring matching anywhere in the body, while the sibling linked-comments check at line 2423 already anchors the same textual markers with `body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS)`. The structured `<!-- review-autofix-failure:v1 ... -->` marker is anchored in count_identical_failures via _FAILURE_MARKER_TRAILING_RE, but count_autofix_failure_streak still has no anchor for the textual markers it scans. The author filter mitigates the untrusted-author attack, but a trusted commenter (a stale pipeline comment that happens to contain the phrase in its body) would still falsely count as a failure.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "f99c5f5424b50c526d9f8ced0c44219b628322ce9f29df0e091b6e874ec00a6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7023,
+    "run_id": "38019394377",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38019394377",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010033542_10a5c92087",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7023,
+    "run_id": "38019394377"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T03:35:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
