@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the parity fix land on?\nChoices:\nA) PR #6674's head branch `ai/issue-6668`. Treat it as this issue's integration branch, so the fix PR targets `ai/issue-6668` and lands in PR #6674 before that PR merges. (RECOMMENDED)\nB) The default branch, as a separate follow-up after PR #6674 merges.\n**Note:** B leaves PR #6674's CI red until then, and if PR #6674 merges with the mismatch, `main` CI and the stable release gate's parity test fail.\nC) Do not use this issue. Close it and let PR #6674's own review/autofix editor fix the live copy (that editor admits `.claude/hooks/gh_api_write_guard.py` for Claude engine fixes).\nQ2: Which copy is authoritative when making the two hooks identical?\nChoices:\nA) The template `workflow-templates/.claude/hooks/gh_api_write_guard.py` on the PR head. Copy it byte-for-byte, including its executable mode, over `.claude/hooks/gh_api_write_guard.py`. This keeps PR #6668's new bare-help behaviour and its restrictions. (RECOMMENDED)\nB) The live `.claude/hooks/gh_api_write_guard.py` on the PR head. Revert the template to match it, which drops PR #6668's change.\nC) Merge the two by hand, keeping any difference that exists only in the live copy, and apply the same result to both files.\nQ3: Should the implementation scope be locked to the two hook copies, so implement's automation-path guard has an exact `files_touched` grant?\nChoices:\nA) Yes. `files_touched` is `.claude/hooks/gh_api_write_guard.py` and `workflow-templates/.claude/hooks/gh_api_write_guard.py`, plus a `changelog.d/<n>-<slug>.md` fragment. (RECOMMENDED)\nB) Yes, and also allow `tests/test_gh_api_write_guard.py` and `tests/test_claude_template_live_parity.py` in case the tests need adjusting. Exempting the hook from the parity check is still not allowed.\nC) No `files_touched` lock; use the open grant for pipeline-authored issues.",
+  "fingerprint": "a8af1d6db11fbe33d2328dad52cb69f07dd492e7e195a708c945f7c09818a334",
+  "lineage": {
+    "issue_number": 7020,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38017829925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38017829925",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010024621_005c0c7854",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7020,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38017829925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7020 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T02:46:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
