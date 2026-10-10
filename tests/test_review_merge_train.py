@@ -1417,11 +1417,54 @@ def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
 		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
 		 "path": ".github/workflows/ci.yml"},
 	], total_count_override={"queued": 3})
-	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
 	assert result.returncode == 0, result.stderr
-	assert "reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	# A shift that persists is re-read twice (the default budget), then the
+	# listing is incomplete as before.
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "attempt=2/2" in result.stderr
+	assert "attempt=3/" not in result.stderr
+	assert "outcome=incomplete reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	assert log_text.count("actions/runs?status=queued") == 3
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+
+
+def test_release_rereads_a_listing_that_shifted_once(tmp_path: Path) -> None:
+	"""One run changing status mid-read no longer costs the release tick (run 38003551535)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = [{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push", "path": ".github/workflows/ci.yml"}]
+	_write_runs(fixtures, runs, total_count_override={"queued": 3})
+	# Calls 1-3 read requested, pending and queued (shifted); the re-read of
+	# queued (call 4) and every later call see a consistent listing.
+	(fixtures / "actions_runs_after_switch.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	(fixtures / "actions_runs_switch_at").write_text("4", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE" not in result.stdout
+	# No review run is in flight, so the queued PR is released this tick.
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+
+
+def test_listing_shift_retry_budget_is_configurable_and_validated(tmp_path: Path) -> None:
+	for value, expected_queued_reads in (("0", 1), ("1", 2), ("abc", 3), ("9", 3)):
+		case_dir = tmp_path / f"case-{value}"
+		case_dir.mkdir()
+		bin_dir, fixtures, log = _install_fake_gh(case_dir)
+		_queued_pr_4077(fixtures)
+		_write_runs(fixtures, [
+			{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
+			 "path": ".github/workflows/ci.yml"},
+		], total_count_override={"queued": 3})
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log,
+			MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES=value, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+		assert result.returncode == 0, result.stderr
+		assert log_text.count("actions/runs?status=queued") == expected_queued_reads, (value, log_text.count("actions/runs?status=queued"))
+		assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 
 
 def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
