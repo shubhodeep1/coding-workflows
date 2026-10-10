@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Release-manifest changes in this repository span the verifier, publishing or updater workflows, and workflow-contract tests.",
   "timestamps": {
     "created_at": "2026-10-10T01:07:01Z",
