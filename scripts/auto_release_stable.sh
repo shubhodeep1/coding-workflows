@@ -197,9 +197,11 @@ if [ "${failed_attempts_on_tip}" -gt 0 ]; then
 fi
 
 echo "Dispatching ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH} (tip ${branch_tip}, tag at ${tag_commit:-none})."
+# Fully qualified: `stable` is also a tag, and the release gate accepts
+# only refs/heads/stable.
 gh_retry gh workflow run "${AUTO_RELEASE_STABLE_WORKFLOW_FILE}" \
 	--repo "${GITHUB_REPOSITORY}" \
-	--ref "${AUTO_RELEASE_STABLE_BRANCH}"
+	--ref "refs/heads/${AUTO_RELEASE_STABLE_BRANCH}"
 echo "AUTO_RELEASE_DISPATCHED sha=${branch_tip}"
 emit_output dispatched true
 emit_output sha "${branch_tip}"

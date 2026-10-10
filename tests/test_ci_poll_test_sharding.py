@@ -271,6 +271,20 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertIn("shards=1", self.run)
 		self.assertIn("is not a positive integer", self.run)
 
+	def test_failure_summary_prints_after_the_loop_and_before_exit(self) -> None:
+		"""Failing test names must reach the log tail, outside every ::group:: (#6889)."""
+		judge = self.run.index("shard_failures=0")
+		loop_end = self.run.index("\ndone\n", judge)
+		summary_print = self.run.index('echo "::error::${shard_failure_summary}"')
+		tally = self.run.index("orchestrate-poll shard(s) failed.")
+		exit_line = self.run.index("exit 1", tally)
+		self.assertLess(loop_end, summary_print)
+		self.assertLess(summary_print, tally)
+		self.assertLess(summary_print, exit_line)
+		self.assertIn("shard_failure_summaries=()", self.run)
+		self.assertIn("grep -E '^  FAIL  [A-Za-z0-9_]+:'", self.run)
+		self.assertNotIn(" rg ", self.run)
+
 	def test_the_three_single_file_modules_still_run(self) -> None:
 		group_zero_gate = self.run.index('if [ "${poll_group}" -eq 0 ]; then')
 		for module in (
@@ -446,6 +460,76 @@ class ShardJudgeTest(unittest.TestCase):
 				)
 				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+	def test_all_shards_green_prints_no_failure_summary(self) -> None:
+		result = run_shard_judge(
+			poll_step()["run"],
+			{n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)},
+		)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed tests:", result.stdout)
+
+	def test_failure_summary_names_the_failing_test_in_the_tail(self) -> None:
+		"""Summary lines are ci.yml-only; the release gates keep the old loop (#6889 D2)."""
+		shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+		shard_files[1] = {
+			"txt": "test_a\ntest_b\n",
+			"log": "  PASS  test_a\n  FAIL  test_b: boom\n2 passed, 1 failed, 3 total\n",
+			"rc": "1\n",
+		}
+		result = run_shard_judge(poll_step()["run"], shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		summary = "::error::orchestrate-poll shard 1 exit 1 failed tests: test_b\n"
+		self.assertIn(summary, result.stdout)
+		self.assertLess(result.stdout.rindex("::endgroup::"), result.stdout.index(summary))
+		self.assertLess(
+			result.stdout.index(summary),
+			result.stdout.index("1 orchestrate-poll shard(s) failed."),
+		)
+
+	def test_failure_summary_without_fail_lines_reports_process_failure(self) -> None:
+		shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+		shard_files[0] = {"txt": "test_0\n", "log": "Traceback: boom\n", "rc": "2\n"}
+		result = run_shard_judge(poll_step()["run"], shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn(
+			"::error::orchestrate-poll shard 0 exit 2 failed tests: no FAIL lines (process failure)",
+			result.stdout,
+		)
+
+	def test_failure_summary_for_a_shard_without_log(self) -> None:
+		shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+		shard_files[3] = {"txt": "test_3\n"}
+		result = run_shard_judge(poll_step()["run"], shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn(
+			"::error::orchestrate-poll shard 3 exit none failed tests: no log (tests did not run)",
+			result.stdout,
+		)
+
+	def test_failure_summary_caps_names_at_twenty(self) -> None:
+		fail_lines = "".join(f"  FAIL  test_case_{i:02d}: boom\n" for i in range(25))
+		shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+		shard_files[2] = {"txt": "test_2\n", "log": fail_lines, "rc": "1\n"}
+		result = run_shard_judge(poll_step()["run"], shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		expected_names = ", ".join(f"test_case_{i:02d}" for i in range(20))
+		self.assertIn(
+			f"::error::orchestrate-poll shard 2 exit 1 failed tests: {expected_names} (+5 more)\n",
+			result.stdout,
+		)
+
+	def test_failure_summary_never_echoes_failure_text(self) -> None:
+		shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+		shard_files[1] = {
+			"txt": "test_1\n",
+			"log": "  FAIL  test_x: ::warning::forged ::add-mask::x\n  FAIL  bad-name!: oops\n",
+			"rc": "1\n",
+		}
+		result = run_shard_judge(poll_step()["run"], shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		summary_lines = [line for line in result.stdout.splitlines() if "failed tests:" in line]
+		self.assertEqual(summary_lines, ["::error::orchestrate-poll shard 1 exit 1 failed tests: test_x"])
+
 	def test_shard_with_tests_but_no_log_fails(self) -> None:
 		for workflow_name, step_run in self.step_runs().items():
 			with self.subTest(workflow=workflow_name):
@@ -472,6 +556,119 @@ class ShardJudgeTest(unittest.TestCase):
 				result = run_shard_judge(step_run, shard_files)
 				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 				self.assertIn("orchestrate-poll shard 1 failed (exit 1)", result.stdout)
+
+
+SUMMARY_HEADING = "orchestrate-poll failed-shard summary"
+COUNT_LINE = "orchestrate-poll shard(s) failed."
+
+
+def green_shards(count: int = 4) -> dict[int, dict[str, str]]:
+	return {
+		n: {"txt": f"test_{n}\n", "log": "33 passed, 0 failed, 33 total\n", "rc": "0\n"}
+		for n in range(count)
+	}
+
+
+class ShardFailureSummaryTest(unittest.TestCase):
+	"""A failed shard's failing tests must reach the end of the step log (#6946).
+
+	Each shard log is printed in a collapsed group, so before this summary a
+	log tail (and the check-failure triage that reads one) showed only the
+	last shard's passing summary. ci.yml only: the release-gate copies are
+	intentionally unchanged.
+	"""
+
+	def run_ci(self, shard_files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+		return run_shard_judge(poll_step()["run"], shard_files)
+
+	def test_failing_shard_is_summarised_after_the_last_group(self) -> None:
+		shard_files = green_shards()
+		shard_files[1] = {
+			"txt": "test_alpha\ntest_beta\n",
+			"log": (
+				"  PASS  test_alpha\n"
+				"  FAIL  test_beta: boom\n"
+				"Traceback (most recent call last): sentinel-traceback\n"
+				"33 passed, 1 failed, 34 total\n"
+			),
+			"rc": "1\n",
+		}
+		result = self.run_ci(shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		out = result.stdout
+		last_group_end = out.rindex("::endgroup::")
+		summary_fail_line = out.index("    |   FAIL  test_beta: boom")
+		count_line = out.index(f"1 {COUNT_LINE}")
+		self.assertLess(last_group_end, out.index(SUMMARY_HEADING))
+		self.assertLess(last_group_end, summary_fail_line)
+		self.assertLess(summary_fail_line, count_line)
+		self.assertIn("::error::orchestrate-poll shard 1 failing tests: test_beta\n", out)
+		self.assertGreater(out.rindex("sentinel-traceback"), last_group_end)
+
+	def test_shard_without_log_is_counted_and_summarised(self) -> None:
+		shard_files = green_shards()
+		shard_files[2] = {"txt": "test_2\n"}
+		result = self.run_ci(shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		out = result.stdout
+		self.assertIn(f"1 {COUNT_LINE}", out)
+		self.assertGreater(
+			out.index("shard 2: no log; its tests did not run"), out.rindex("::endgroup::")
+		)
+
+	def test_shard_without_rc_is_counted_and_its_tail_summarised(self) -> None:
+		shard_files = green_shards()
+		shard_files[3] = {"txt": "test_3\n", "log": "runner killed sentinel-kill\n"}
+		result = self.run_ci(shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		out = result.stdout
+		self.assertIn("orchestrate-poll shard 3 failed (exit 1)", out)
+		self.assertIn(f"1 {COUNT_LINE}", out)
+		self.assertGreater(
+			out.index("    | runner killed sentinel-kill"), out.rindex("::endgroup::")
+		)
+
+	def test_all_green_prints_no_summary(self) -> None:
+		result = self.run_ci(green_shards())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn(SUMMARY_HEADING, result.stdout)
+
+	def test_log_text_cannot_forge_workflow_commands_in_the_summary(self) -> None:
+		shard_files = green_shards()
+		shard_files[0] = {
+			"txt": "test_0\n",
+			"log": "::error::forged\n::endgroup::\n  FAIL  bad%0Aname: x\n",
+			"rc": "1\n",
+		}
+		result = self.run_ci(shard_files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		out = result.stdout
+		summary = out[out.index(SUMMARY_HEADING):]
+		for line in summary.splitlines():
+			if line.startswith("::"):
+				self.assertTrue(
+					line.startswith("::error::orchestrate-poll shard ")
+					or line == f"::error::1 {COUNT_LINE}",
+					f"unexpected workflow command in summary: {line!r}",
+				)
+		self.assertIn("    | ::error::forged", summary)
+		self.assertIn("    | ::endgroup::", summary)
+		for line in out.splitlines():
+			if line.startswith("::error::"):
+				self.assertNotIn("bad%0Aname", line)
+
+	def test_summary_precedes_the_count_line_and_both_branches_record_the_shard(self) -> None:
+		step_run = poll_step()["run"]
+		self.assertLess(step_run.index(SUMMARY_HEADING), step_run.index(COUNT_LINE))
+		self.assertEqual(step_run.count(COUNT_LINE), 1)
+		self.assertEqual(step_run.count('failed_shard_ids+=("${shard}")'), 2)
+		no_log_branch = step_run.index("produced no log; its tests did not run")
+		rc_branch = step_run.index('failed (exit ${shard_rc})')
+		first_append = step_run.index('failed_shard_ids+=("${shard}")')
+		second_append = step_run.index('failed_shard_ids+=("${shard}")', first_append + 1)
+		self.assertLess(no_log_branch, first_append)
+		self.assertLess(first_append, rc_branch)
+		self.assertLess(rc_branch, second_append)
 
 
 if __name__ == "__main__":

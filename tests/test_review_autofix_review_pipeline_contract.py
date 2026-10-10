@@ -27,6 +27,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1280,7 +1281,7 @@ def _run_review_tier_harness(
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,qwen/qwen3.7-plus,openai/gpt-6-luna",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -2844,7 +2845,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert "Create Codex config" not in workflow
 	assert ".codex/config.toml" not in workflow
 	opencode_install = _step_block("Install OpenCode CLI")
-	assert "install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde" in opencode_install
+	assert "install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f" in opencode_install
 	assert "opencode_version: ${{ env.OPENCODE_VERSION }}" in opencode_install
 	assert "continue-on-error" not in opencode_install
 
@@ -2903,7 +2904,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR)' in sandbox
 	assert 'opencode_source_mount+=\',readonly\'' in sandbox
 	assert 'opencode_agent=reviewer' in sandbox
-	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in _agents_text_with_fragments()
 	assert 'opencode_helpers_loaded=false' in consolidate
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
@@ -4351,7 +4352,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["review_tier_file"] == "standard"
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
-		"deepseek/deepseek-v4-pro",
+		"z-ai/glm-5.3-flash",
 		"qwen/qwen3.7-plus",
 		"openai/gpt-6-luna",
 	]
@@ -4551,10 +4552,10 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	# A repo that sets the variables keeps exactly those reviewers.
 	pinned_result = _run_review_tier_harness(
 		diff_text=standard_diff,
-		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "mistralai/mistral-small-2603"},
+		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "z-ai/glm-5.3-flash"},
 	)
 	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
-	assert pinned_result["active_models"] == ["mistralai/mistral-small-2603"]
+	assert pinned_result["active_models"] == ["z-ai/glm-5.3-flash"]
 
 
 def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel() -> None:
@@ -4591,7 +4592,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	assert default_standard_picks == set(reviewer_models)
 
 	# A repo that pins the standard list: lite draws from that list only.
-	pinned_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
 	assert set(pinned_standard) < set(reviewer_models)
 	excluded = set(reviewer_models) - set(pinned_standard)
 	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
@@ -4644,10 +4645,10 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	# A pinned lite slug still wins over the standard pool.
 	pinned_lite = _run_review_tier_harness(
 		diff_text=lite_diff,
-		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "mistralai/mistral-small-2603", "PR_NUMBER": "9"},
+		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "anthropic/claude-sonnet-5.5", "PR_NUMBER": "9"},
 	)
 	assert pinned_lite["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_lite"
-	assert pinned_lite["active_models"] == ["mistralai/mistral-small-2603"]
+	assert pinned_lite["active_models"] == ["anthropic/claude-sonnet-5.5"]
 
 
 def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(review_tier: str = "lite") -> None:
@@ -5098,16 +5099,21 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 			)
 
 	assert sorted(mapped) == [
-		"deepseek/deepseek-v4-pro",
 		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
+		"z-ai/glm-5.3-flash",
 	]
-	# The catalog ships no other Mistral slug, so mistral-small has no chain:
-	# a prompt over its 262K window is one failed, non-blocking slot (PR #6438).
-	assert sorted(unmapped) == ["mistralai/mistral-small-2603"]
+	# The Claude review-panel slot never runs on OpenRouter: it retries on
+	# REVIEWER_POOL_FALLBACK_MODEL in the Claude account pool itself, so it has
+	# no chain entry and the catalog ships no other anthropic/ slug.
+	assert sorted(unmapped) == ["anthropic/claude-sonnet-5.5"]
+	assert "anthropic/claude-sonnet-5.5" not in chains
+	assert chains["z-ai/glm-5.3-flash"] == ["z-ai/glm-5.3-flashx"]
+	# Retired from the panel in the 2026-10 refresh; kept for operator overrides.
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert "mistralai/mistral-small-2603" not in chains
 	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
@@ -5793,7 +5799,7 @@ def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	stage_helper = _stage_helper_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
+	assert "review_apply_fixes.sh review_untrusted_sandbox.sh sandbox_image.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
@@ -6913,8 +6919,25 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 		bin_dir = tmp / "bin"
 		bin_dir.mkdir()
 		fake_gh = bin_dir / "gh"
-		fake_gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n', encoding="utf-8")
+		# Every call is recorded; the required-checks wait reads one green check-run.
+		fake_gh.write_text(
+			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
+			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;; esac\n',
+			encoding="utf-8",
+		)
 		fake_gh.chmod(0o755)
+		# The verified merge-gate helper checkout the step sources
+		# (.codex-freshness-src pinned to REVIEW_SUPPORT_SHA); without it the
+		# required-checks wait fails closed and no auto-merge is enabled.
+		helper = tmp / ".codex-freshness-src"
+		(helper / "scripts").mkdir(parents=True)
+		for name in ("pr_checks_lib.sh", "gh_helpers.sh"):
+			(helper / "scripts" / name).write_text((REPO_ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+		git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+		subprocess.run(["git", "init", "-q", str(helper)], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(helper), "add", "-A"], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(helper), "commit", "-q", "-m", "helper"], check=True, env=git_env)
+		support_sha = subprocess.run(["git", "-C", str(helper), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 		for index, (head_ref, pattern, expected_summary, expected_reason) in enumerate((
 			("orchestrator/project-7", "^orchestrator/project-", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
 			("orchestrator/project-7", "(", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
@@ -6938,10 +6961,14 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 				"ENABLE_AUTO_MERGE": "true",
 				"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
 				"DET_SKIP_REASON": "doc_only",
+				"FRESHNESS_HELPER_CHECKOUT_OUTCOME": "success",
+				"REVIEW_SUPPORT_SHA": support_sha,
+				"AUTO_MERGE_CHECKS_POLL_SECONDS": "1",
+				"AUTO_MERGE_CHECKS_WAIT_MINUTES": "1",
 			})
-			result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True, check=False)
+			result = subprocess.run(["bash", "-c", step["run"]], env=env, cwd=tmp, capture_output=True, text=True, check=False)
 			assert result.returncode == 0, result.stderr
-			assert expected_summary in summary_path.read_text(encoding="utf-8")
+			assert expected_summary in summary_path.read_text(encoding="utf-8"), result.stdout + result.stderr
 			calls = calls_path.read_text(encoding="utf-8").splitlines() if calls_path.exists() else []
 			if expected_reason:
 				assert not calls, calls
@@ -7584,8 +7611,19 @@ def _run_auto_merge_helper_with_fake_gh(
 			        sys.stdout.write("")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
-			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "body": ""}}))
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "base": {{"ref": "main"}}, "body": ""}}))
 			        sys.exit(0)
+			    # Merge-base freshness gate: the base did not move.
+			    if "/compare/" in path:
+			        sys.stdout.write(json.dumps({{"ahead_by": 0, "files": []}}))
+			        sys.exit(0)
+			    # Required-checks wait: the reviewed head's checks are green.
+			    if "/check-runs" in path:
+			        sys.stdout.write(json.dumps([{{"check_runs": [{{"name": "CI", "status": "completed", "conclusion": "success"}}]}}]))
+			        sys.exit(0)
+			    if path.endswith("/protection"):
+			        sys.stderr.write("Branch not protected\\n")
+			        sys.exit(1)
 			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
 			    sys.exit(1)
 			if args[:2] == ["pr", "merge"]:
@@ -7801,6 +7839,7 @@ def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None
 	evidence = _step_block("Assemble failure evidence")
 	files = (
 		'--evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',
@@ -8239,6 +8278,8 @@ def main() -> int:
 	test_review_isolation_transfers_into_active_work_tree()
 	test_review_relay_accepts_only_configured_chat_model()
 	test_review_relay_main_preserves_invoked_mode()
+	test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost()
+	test_review_sandbox_cleanup_reports_path_free_reason()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -9239,6 +9280,106 @@ def test_review_isolation_reports_result_conflicts_host() -> None:
 		assert (host / "b.py").read_bytes() == b"host"
 
 
+
+_SMOKE_CANARY_BAIT = (
+	"status: BROKEN_BY_E2E_BAIT_123\n"
+	"run_id: WRONG_VALUE_SHOULD_BE_123\n"
+	"updated-by: e2e-bait-injector\n"
+	"# E2E_EDITOR_BAIT_123: canary corrupted; restore to linked issue spec (smoke gate)\n"
+)
+_SMOKE_CANARY_SPEC = "status: ok\nrun_id: 123\nupdated-by: ai-pipeline\n"
+
+
+def _seed_fixture(root: Path):
+	"""Snapshot a host with a baited smoke canary; return (host, source, run)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	host = root / "host"
+	source = root / "isolated" / "source"
+	source.mkdir(parents=True)
+	(host / "tests").mkdir(parents=True)
+	(host / "tests/e2e_smoke_canary.txt").write_text(_SMOKE_CANARY_BAIT)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "tests"], cwd=host, env=_git_clean_env(), check=True)
+	manifest = root / "isolated" / "baseline.json"
+	payload = root / "payload.txt"
+	payload.write_text(_SMOKE_CANARY_SPEC)
+
+	def run(action: str, *extra: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest), *extra],
+			env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+			capture_output=True, text=True, check=False,
+		)
+
+	assert run("snapshot").returncode == 0
+	return host, source, payload, run
+
+
+def test_review_isolation_seed_publishes_smoke_canary_through_transfer() -> None:
+	"""Regression for release gate run 37669315093 (review run 37674139451)."""
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		canary = "tests/e2e_smoke_canary.txt"
+		seeded = run("seed", canary, str(payload))
+		assert seeded.returncode == 0, seeded.stderr
+		# Seeding never touches the host before the validated transfer.
+		assert (host / canary).read_text() == _SMOKE_CANARY_BAIT
+		assert (source / canary).read_text() == _SMOKE_CANARY_SPEC
+		transferred = run("transfer")
+		assert transferred.returncode == 0, transferred.stderr
+		assert (host / canary).read_text() == _SMOKE_CANARY_SPEC
+		spec_path = REPO_ROOT / "tests/e2e_smoke_canary_spec.txt"
+		if spec_path.exists():
+			for key in ("status: ok", "run_id:", "updated-by: ai-pipeline"):
+				assert key in spec_path.read_text(encoding="utf-8")
+	# The old order (host write after the snapshot) is still refused.
+	with tempfile.TemporaryDirectory() as td:
+		host, source, _payload, run = _seed_fixture(Path(td))
+		(host / "tests/e2e_smoke_canary.txt").write_text(_SMOKE_CANARY_SPEC)
+		refused = run("transfer")
+		assert refused.returncode != 0
+		assert "reason=host_baseline_changed" in refused.stderr
+
+
+def test_review_isolation_seed_rejects_host_drift_symlinks_and_unknown_paths() -> None:
+	canary = "tests/e2e_smoke_canary.txt"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		(host / canary).write_text("host drifted\n")
+		drift = run("seed", canary, str(payload))
+		assert drift.returncode != 0
+		assert "reason=host_baseline_changed" in drift.stderr
+		assert (source / canary).read_text() == _SMOKE_CANARY_BAIT
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host, source, payload, run = _seed_fixture(root)
+		outside = root / "outside.txt"
+		outside.write_text("outside\n")
+		(source / canary).unlink()
+		(source / canary).symlink_to(outside)
+		linked = run("seed", canary, str(payload))
+		assert linked.returncode != 0
+		assert "reason=symlink_in_path" in linked.stderr
+		assert outside.read_text() == "outside\n"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		for name in ("tests/other.txt", "../escape.txt", ".github/x.txt", ".env.txt"):
+			rejected = run("seed", name, str(payload))
+			assert rejected.returncode != 0, name
+			assert "reason=unsafe_result_path" in rejected.stderr, name
+		assert not (source / "tests/other.txt").exists()
+		assert run("seed", canary).returncode == 2
+
+
+def test_review_isolation_seed_wiring() -> None:
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; esac' in helper
+	seed_call = 'review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"'
+	assert seed_call in helper
+	# The seed branch only runs on a validated, prepared root.
+	assert helper.index("echo '::error::Review sandbox not prepared'") < helper.index(seed_call)
+	assert helper.index(seed_call) < helper.index('[ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2')
+
 def test_review_relay_accepts_only_configured_chat_model() -> None:
 	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
 	assert spec and spec.loader
@@ -9304,6 +9445,157 @@ def test_review_relay_main_preserves_invoked_mode() -> None:
 				broker_module.main()
 			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
 			assert server.mode == mode
+
+
+def _review_step_runs_after_status(condition: object, job_failed: bool) -> bool:
+	"""Model GitHub's step status functions for an ``if:`` expression.
+
+	``always()`` and ``!cancelled()`` run regardless of an earlier failure,
+	``failure()`` runs only after one, and anything else (explicit
+	``success()`` or no status function) runs only while nothing has failed.
+	"""
+	text = str(condition or "")
+	if "always()" in text or "!cancelled()" in text:
+		return True
+	if "failure()" in text:
+		return job_failed
+	return not job_failed
+
+
+def test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost() -> None:
+	"""Reproduces #6484 / run 37666355049: cleanup exited 1 before ``Commit
+	changes``, the implicit ``success()`` skipped the commit and the
+	``!cancelled()`` detector reported the editor's work as editor_changes_lost.
+	"""
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	cleanup_name = "Clean up isolated review workspace"
+	by_name = {step.get("name"): step for step in steps}
+	cleanup = by_name[cleanup_name]
+	assert "always()" in str(cleanup.get("if")), "cleanup must still run after editor failures"
+	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in cleanup["run"]
+	assert '>(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)' in cleanup["run"]
+	job_failed = False
+	evaluated: dict[str, bool] = {}
+	for step in steps:
+		name = step.get("name")
+		runs = _review_step_runs_after_status(step.get("if"), job_failed)
+		evaluated[name] = runs
+		if name == cleanup_name:
+			assert runs
+			job_failed = True  # cleanup exits 1
+	names = [step.get("name") for step in steps]
+	assert names.index("Commit changes") < names.index(cleanup_name), "Commit changes must run before sandbox cleanup"
+	assert names.index("Remove slop-scan runtime artifact") < names.index("Commit changes")
+	assert evaluated["Commit changes"] is True, "a cleanup failure must not skip the commit"
+	assert evaluated["Push all pending commits"] is False, "a cleanup failure must still block the push"
+	detector = str(by_name["Detect editor-claimed-but-uncommitted changes"].get("if"))
+	# With did_commit=true (the commit ran) and the strict ledger flag unset,
+	# the detector is gated off, so editor_changes_lost is not reported.
+	assert "(steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true')" in detector
+
+
+def _run_review_sandbox_cleanup(runner_temp: Path, root: Path, stub_bin: Path) -> subprocess.CompletedProcess[str]:
+	env = {key: value for key, value in os.environ.items() if key not in {"REVIEW_SANDBOX_ROOT", "WORKSPACE_PATH"}}
+	env.update({
+		"PATH": f"{stub_bin}:{os.environ['PATH']}",
+		"RUNNER_TEMP": str(runner_temp),
+		"REVIEW_SANDBOX_ROOT": str(root),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	})
+	return subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh"), "cleanup"],
+		env=env, capture_output=True, text=True, check=False, timeout=60,
+	)
+
+
+def _make_prepared_review_root(root: Path) -> None:
+	root.mkdir(parents=True)
+	(root / "image").write_text("sha256:" + "0" * 64 + "\n")
+	(root / "baseline.json").write_text("{}\n")
+
+
+def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
+	assert 'LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP' in _agents_text_with_fragments()
+	with tempfile.TemporaryDirectory(prefix="review-cleanup-") as td:
+		runner_temp = Path(td).resolve()
+		stub_bin = runner_temp / "bin"
+		stub_bin.mkdir()
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+		docker_stub.chmod(0o755)
+		locked = runner_temp / "review-isolated-locked"
+		try:
+			# Read-only nested directory (dependency cache shape): repaired once.
+			_make_prepared_review_root(locked)
+			nested = locked / "source" / "cache"
+			nested.mkdir(parents=True)
+			(nested / "pkg.txt").write_text("x\n")
+			nested.chmod(0o555)
+			result = _run_review_sandbox_cleanup(runner_temp, locked, stub_bin)
+			assert result.returncode == 0, result.stderr
+			assert not locked.exists()
+			if os.geteuid() != 0:
+				assert "REVIEW_SANDBOX_CLEANUP reason=remove_permission_repaired" in result.stderr
+			assert "::error::" not in result.stderr
+			assert not list(runner_temp.glob("review-cleanup-err-*"))
+		finally:
+			if locked.exists():
+				for dirpath, _dirs, _files in os.walk(locked):
+					os.chmod(dirpath, 0o755)
+
+		# A clean root is removed silently, as before.
+		plain = runner_temp / "review-isolated-plain"
+		_make_prepared_review_root(plain)
+		result = _run_review_sandbox_cleanup(runner_temp, plain, stub_bin)
+		assert result.returncode == 0 and result.stderr == "" and not plain.exists(), result.stderr
+
+		missing_baseline = runner_temp / "review-isolated-nobaseline"
+		_make_prepared_review_root(missing_baseline)
+		(missing_baseline / "baseline.json").unlink()
+		result = _run_review_sandbox_cleanup(runner_temp, missing_baseline, stub_bin)
+		assert result.returncode == 1
+		assert "Review sandbox not prepared" in result.stderr
+		assert "::error::REVIEW_SANDBOX_CLEANUP reason=baseline_missing" in result.stderr
+		assert str(missing_baseline) not in result.stderr
+
+		missing_image = runner_temp / "review-isolated-noimage"
+		_make_prepared_review_root(missing_image)
+		(missing_image / "image").unlink()
+		result = _run_review_sandbox_cleanup(runner_temp, missing_image, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=image_marker_missing" in result.stderr
+
+		nested_root = runner_temp / "review-isolated-outer" / "review-isolated-inner"
+		_make_prepared_review_root(nested_root)
+		result = _run_review_sandbox_cleanup(runner_temp, nested_root, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=root_outside_runner_temp" in result.stderr
+		assert str(nested_root) not in result.stderr
+
+		elsewhere = runner_temp / "other" / "review-isolated-x"
+		_make_prepared_review_root(elsewhere)
+		result = _run_review_sandbox_cleanup(runner_temp, elsewhere, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=root_pattern_mismatch" in result.stderr
+
+		# rm keeps failing: classify its stderr, never echo its paths.
+		rm_bin = runner_temp / "rmbin"
+		rm_bin.mkdir()
+		rm_stub = rm_bin / "rm"
+		rm_stub.write_text("#!/usr/bin/env bash\necho \"rm: cannot remove '/secret/path': Permission denied\" >&2\nexit 1\n")
+		rm_stub.chmod(0o755)
+		(rm_bin / "docker").write_text(docker_stub.read_text())
+		(rm_bin / "docker").chmod(0o755)
+		stuck = runner_temp / "review-isolated-stuck"
+		_make_prepared_review_root(stuck)
+		result = _run_review_sandbox_cleanup(runner_temp, stuck, rm_bin)
+		assert result.returncode == 1
+		assert "::error::REVIEW_SANDBOX_CLEANUP reason=remove_failed cause=permission_denied" in result.stderr
+		assert "/secret/path" not in result.stderr
+		assert str(stuck) not in result.stderr
+
+	# The run path keeps its original single-line output.
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'if [ "${action}" = cleanup ]; then\n\t\techo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2' in helper
 
 
 if __name__ == "__main__":

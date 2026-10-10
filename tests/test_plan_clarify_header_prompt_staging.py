@@ -102,7 +102,7 @@ def test_clarify_sandbox_support_has_main_snapshot_fallback() -> None:
 
 def test_clarify_respond_isolates_every_model_call() -> None:
 	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
-	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do" in respond
+	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do" in respond
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in respond
 	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in respond
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in respond
@@ -139,8 +139,10 @@ def test_isolated_runner_checks_role_support_and_timeout_before_docker() -> None
 		prompt.write_text("prompt", encoding="utf-8")
 		base_env = dict(os.environ, MODEL_EDITOR="openai/gpt-6-sol", MODEL_REASONING_EFFORT="high")
 		for engine, role, extra_env, error in (
-			("codex", "PLAN", {}, "Invalid clarify engine role"),
-			("claude", "PLAN", {}, "Invalid clarify engine role"),
+			# PLAN is accepted since the heal planner runs here (#6463); an
+			# unsupported role is still refused before any Docker work.
+			("codex", "IMPLEMENT", {}, "Invalid clarify engine role"),
+			("claude", "IMPLEMENT", {}, "Invalid clarify engine role"),
 			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": "relative"}, "Invalid clarify isolation support directory"),
 			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": str(tmp_path / "missing")}, "Invalid clarify isolation support directory"),
 			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "0"}, "Invalid clarify isolation timeout"),
@@ -155,8 +157,8 @@ def test_isolated_runner_checks_role_support_and_timeout_before_docker() -> None
 def test_isolated_runner_support_override_and_optional_in_container_timeout() -> None:
 	runner = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
 	assert 'support="scripts"' in runner  # Existing clarify call sites keep their relative support paths.
-	assert '[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]]' in runner
-	assert '[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]]' in runner
+	assert '[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]]' in runner
+	assert '[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]]' in runner
 	assert '"${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"' in runner
 	assert 'install -D -m 0644 "${support}/write_codex_config.sh"' in runner
 	assert 'install -D -m 0644 "${support}/codex_model_catalog.json"' in runner

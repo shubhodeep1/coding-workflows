@@ -10,6 +10,10 @@ import subprocess
 import tempfile
 
 import yaml
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -18,7 +22,6 @@ PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 ORCH_CLARIFY_RESPOND_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
 ORCH_PARSE_ANSWER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh"
-WORKSPACE_SOURCE_MANIFEST = REPO_ROOT / ".ai" / ".workspace_source_manifest.txt"
 CI_WF = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGENTS_MD = REPO_ROOT / "agents.md"
 
@@ -207,7 +210,7 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 	assert 'ISSUE_PAYLOAD_FILE="${EARLY_CACHE_DIR}/issue_payload.json"' in metadata_block
 	assert 'TRACKING_PAYLOAD_FILE="${EARLY_CACHE_DIR}/tracking_issue_payload.json"' in metadata_block
 	assert 'printf \'%s\' "${ISSUE_PAYLOAD}" > "${ISSUE_PAYLOAD_FILE}"' in metadata_block
-	assert 'if TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
+	assert 'if TRACKING_PAYLOAD="$(gh_api_retry --optional "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
 	assert 'printf \'%s\' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"' in metadata_block
 	assert 'TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null || echo "")"' not in metadata_block
 
@@ -216,11 +219,15 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 	assert "ISSUE_META=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${ISSUE_NUMBER}\")\"" in fetch_block
 	assert 'if [ -n "${TRACKING_PAYLOAD_FILE:-}" ] && [ -s "${TRACKING_PAYLOAD_FILE}" ] && jq -e --arg tracking_num "${TRACKING_NUM}"' in fetch_block
 	assert "TRACKING_BODY=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${TRACKING_NUM}\" --jq '.body // \"\"')\"" in fetch_block
-	assert "scripts/orchestrate_parse_and_post_answer.sh" in _read(WORKSPACE_SOURCE_MANIFEST)
+	assert ORCH_PARSE_ANSWER_SCRIPT.is_file()
+	assert subprocess.run(
+		["git", "ls-files", "--error-unmatch", "--", "scripts/orchestrate_parse_and_post_answer.sh"],
+		cwd=REPO_ROOT, capture_output=True, check=False,
+	).returncode == 0
 
 
 def test_agents_and_ci_register_phase_gate_contract() -> None:
-	agents_text = _read(AGENTS_MD)
+	agents_text = _agents_text_with_fragments()
 	assert "- `AI_PHASE_GATE_V1`" in agents_text
 
 	ci_text = _read(CI_WF)
