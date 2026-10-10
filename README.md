@@ -1933,10 +1933,13 @@ through `clarify → plan → implement → review`.
   targets the branch it failed on. A failed review/autofix run on a pull
   request **in coding-workflows itself** targets the verified support-script
   branch when the reported `script_ref` is `stable` or an ancestor of `main`;
-  it targets the PR head when the support ref equals that head or cannot be
-  resolved. A missing PR-head branch falls back to `stable` (`warn
+  it targets the PR head only when the reported `script_ref` equals the PR head
+  SHA (the run staged that head's own scripts). Otherwise the review ran the
+  shared workflow support, so the issue carries no Target branch and its fix
+  ships on the default branch (`target_branch_source=shared_workflow`, issue
+  #6680). A missing PR-head branch falls back to `stable` (`warn
   source_pr_branch_missing`). The `created` log line records the choice as
-  `target_branch_source=default|failed_run_branch|support_ref|source_pr_head|base_branch`.
+  `target_branch_source=default|failed_run_branch|support_ref|source_pr_head|shared_workflow|base_branch`.
   Two further tokens cover review/autofix failures **self-inflicted** by a
   branch of this repository. The autofix reporter sends ownership facts with
   its report (`base_branch`, `script_ref`, the PR's `changed_files`, and
@@ -2317,7 +2320,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint (or, for review/autofix reports, one pull request and the heal issue it fixes) before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
-| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch`. Failed release runs use their failed branch; same-repo review failures use the verified support-script branch when resolvable, otherwise the PR head (falling back to stable if missing). |
+| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch`. Failed release runs use their failed branch; same-repo review failures use the verified support-script branch when resolvable, the PR head only when `script_ref` equals the PR head SHA (falling back to stable if missing), and otherwise no Target branch, so the fix ships on the default branch. |
 | `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), except phase reports, which the provenance gate binds. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
