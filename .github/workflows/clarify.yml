@@ -235,7 +235,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -428,6 +428,8 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
@@ -502,8 +504,32 @@ jobs:
               exit 1
             fi
           fi
+          # An ai:check-triage issue whose linked PR merged and whose failure
+          # is verified fixed on the default branch is closed with evidence
+          # instead of asking for /answer (issue #7095). Unverified or
+          # unreadable evidence keeps the normal path (the helper posts the
+          # failing job's traceback); a write failure after verification
+          # fails the run so no /answer follows. Non-triage issues: no API call.
+          CHECK_TRIAGE_RESOLVED="false"
+          if [ "${SKIP_CODEX}" != "true" ] && jq -e '[(.labels // [])[]?.name] | index("ai:check-triage") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            triage_rc=0
+            TRIAGE_VERDICT="$(python3 scripts/check_triage_resolution.py gate --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" --default-branch "${DEFAULT_BRANCH:-main}")" || triage_rc=$?
+            triage_status="$(printf '%s' "${TRIAGE_VERDICT}" | jq -r '.status // ""' 2>/dev/null || true)"
+            if [ "${triage_rc}" -eq 3 ]; then
+              echo "::error::Verified check-triage issue #${ISSUE_NUMBER} as resolved but could not record or close it"
+              exit 1
+            elif [ "${triage_rc}" -eq 0 ] && { [ "${triage_status}" = "resolved" ] || [ "${triage_status}" = "already_resolved" ]; }; then
+              SKIP_CODEX="true"
+              CHECK_TRIAGE_RESOLVED="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=check_triage_resolved reason=verified outcome=skip issue=${ISSUE_NUMBER}"
+            elif [ "${triage_rc}" -ne 0 ]; then
+              echo "::warning::Check-triage resolution gate failed (rc=${triage_rc}); continuing with clarification"
+            fi
+          fi
+          echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"
+
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else
@@ -1528,7 +1554,9 @@ jobs:
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
-          if [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
+          if [ "${{ steps.clarify_route.outputs.check_triage_resolved }}" = "true" ]; then
+            OUTCOME="check_triage_resolved"
+          elif [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
             OUTCOME="auto_answered_by_orchestrator"
           elif [ "${{ steps.parse_codex.outputs.blocked }}" = "true" ]; then
             OUTCOME="blocked"
