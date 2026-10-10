@@ -1205,8 +1205,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > stays for the next run with an `AGENTS_ASSEMBLE_V1: skipped=<file>
 > reason=<r>` warning. CI's `agents.d fragment check and tests` step runs
 > `assemble_agents.py check`, which fails on any such fragment. Readers see
-> pending fragments: `scripts/build_static_context.sh` renders them into the
-> model's agents context (falling back to the plain file), the AGENTS.md
+> pending fragments: `scripts/build_static_context.sh` and the orchestrate,
+> clarify-respond, poller-judge and validate static-context assemblers render
+> them into the model's agents context (falling back to the plain file), the AGENTS.md
 > materiality check and the review gate count an `agents.d/*.md` change as
 > an `agents.md` change, a `files_touched` or `ai:scope:` scope that covers
 > `agents.md` covers its top-level fragments, the review editor keeps the

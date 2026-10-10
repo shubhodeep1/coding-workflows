@@ -736,13 +736,20 @@ jobs:
             if [ -L agents.md ]; then
               echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
             fi
+            clarify_respond_agents_file=""
             if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
-              echo "=== AGENTS.MD ==="
-              cat AGENTS.md
-              echo
+              clarify_respond_agents_file="AGENTS.md"
             elif [ -f agents.md ] && [ ! -L agents.md ]; then
+              clarify_respond_agents_file="agents.md"
+            fi
+            if [ -n "${clarify_respond_agents_file}" ]; then
               echo "=== AGENTS.MD ==="
-              cat agents.md
+              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+              if [ -d agents.d ] && [ ! -L agents.d ] && clarify_respond_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${clarify_respond_agents_file}" 2>/dev/null)"; then
+                printf '%s\n' "${clarify_respond_agents_render}"
+              else
+                cat "${clarify_respond_agents_file}"
+              fi
               echo
             fi
             cat "${clarify_respond_readme_context}"

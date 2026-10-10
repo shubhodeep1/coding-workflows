@@ -577,7 +577,12 @@ jobs:
             echo
             if [ -f agents.md ] && [ ! -L agents.md ]; then
               echo "=== AGENTS.MD ==="
-              cat agents.md
+              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+              if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file agents.md 2>/dev/null)"; then
+                printf '%s\n' "${orchestrate_agents_render}"
+              else
+                cat agents.md
+              fi
               echo
             elif [ -L agents.md ]; then
               echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
