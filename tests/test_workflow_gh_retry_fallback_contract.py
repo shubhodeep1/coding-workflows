@@ -387,5 +387,126 @@ def main() -> int:
 	return 0
 
 
+
+# ---------------------------------------------------------------------------
+# gh_api_retry migration contract (issue #5873, re-issued as #6634).
+# ---------------------------------------------------------------------------
+
+GH_API_RETRY_BOOTSTRAP_WORKFLOWS = (
+	"review_autofix.yml",
+	"validate.yml",
+	"implement.yml",
+	"orchestrate_clarify_respond.yml",
+	"security-audit.yml",
+)
+GH_API_RETRY_SHIM = (
+	'source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true\n',
+	'type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] '
+	'|| [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }\n',
+)
+GH_API_RETRY_MIGRATED_STEPS = {
+	"review_autofix.yml": ("Resolve trusted review support commit", "Evaluate review gate"),
+	"validate.yml": ("Authorize explicit validation target",),
+	"implement.yml": ("Precheck approval phase label", "Safety check for existing PR"),
+	"orchestrate_clarify_respond.yml": ("Check orchestrator metadata",),
+	"security-audit.yml": ("Resolve trusted audit support commit", "Resolve audit target"),
+	"review_autofix_sweep.yml": ("Enumerate open PRs and dispatch internal-review.yml",),
+}
+
+
+def _gh_api_retry_step(text: str, name: str) -> str:
+	marker = f"      - name: {name}\n"
+	assert text.count(marker) == 1, name
+	start = text.index(marker)
+	end = text.find("\n      - name: ", start + len(marker))
+	return text[start:] if end < 0 else text[start:end]
+
+
+def _gh_api_retry_workflow(name: str) -> str:
+	return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+
+def test_gh_api_retry_bootstrap_step_is_identical_and_precedes_migrated_steps() -> None:
+	bodies = set()
+	for name in GH_API_RETRY_BOOTSTRAP_WORKFLOWS:
+		text = _gh_api_retry_workflow(name)
+		step = _gh_api_retry_step(text, "Bootstrap GitHub API retry helper")
+		bodies.add(step)
+		boot_at = text.index("      - name: Bootstrap GitHub API retry helper\n")
+		for migrated in GH_API_RETRY_MIGRATED_STEPS[name]:
+			assert boot_at < text.index(f"      - name: {migrated}\n"), (name, migrated)
+		assert "continue-on-error: true" in step
+		# Trusted refs only: main here, stable in consumers; never a PR head.
+		assert 'ghr_ref=stable' in step and 'ghr_ref=main' in step
+		assert "https://github.com/shubhodeep1/coding-workflows" in step
+		assert "show HEAD:scripts/emit_event.sh" in step
+		assert "grep -q '^gh_api_retry()'" in step
+		assert "x-access-token:%s" in step and "@github.com" not in step
+	assert len(bodies) == 1
+
+
+def test_gh_api_retry_bootstrap_script_parses() -> None:
+	step = _gh_api_retry_step(_gh_api_retry_workflow("validate.yml"), "Bootstrap GitHub API retry helper")
+	body = step.split("        run: |\n", 1)[1]
+	script = textwrap.dedent(body)
+	subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+
+def test_gh_api_retry_migrated_steps_carry_the_shim() -> None:
+	for name, steps in GH_API_RETRY_MIGRATED_STEPS.items():
+		text = _gh_api_retry_workflow(name)
+		for step_name in steps:
+			step = _gh_api_retry_step(text, step_name)
+			flat = "\n".join(line.strip() for line in step.splitlines()) + "\n"
+			if name == "review_autofix_sweep.yml":
+				assert "source scripts/gh_helpers.sh" in step
+				assert GH_API_RETRY_SHIM[1].strip() in flat
+			else:
+				for line in GH_API_RETRY_SHIM:
+					assert line.strip() in flat, (name, step_name)
+			assert "gh_api_retry " in step, (name, step_name)
+
+
+def test_gate_pr_read_fails_loudly_instead_of_skipping() -> None:
+	step = _gh_api_retry_step(_gh_api_retry_workflow("review_autofix.yml"), "Evaluate review gate")
+	assert 'if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' not in step
+	assert '_pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' in step
+	assert "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}" in step
+
+
+def test_validate_authorize_and_resolvers_distinguish_api_failures() -> None:
+	validate = _gh_api_retry_workflow("validate.yml")
+	authorize = _gh_api_retry_step(validate, "Authorize explicit validation target")
+	assert '"repos/${GITHUB_REPOSITORY}/pulls")" || exit 1' not in authorize
+	assert "VALIDATE_AUTHORIZE_TARGET outcome=api_unavailable" in authorize
+	for name in ("validate.yml", "implement.yml"):
+		resolve = _gh_api_retry_step(_gh_api_retry_workflow(name), "Resolve integration ref")
+		assert "INTEGRATION_REF_RESOLVE outcome=rate_limited" in resolve
+		assert 'if [ "${resolver_rc}" -eq 75 ]; then' in resolve
+	safety = _gh_api_retry_step(_gh_api_retry_workflow("implement.yml"), "Safety check for existing PR")
+	assert "            ' || true)\"" not in safety
+	assert "@base64)\"' || true)\"" not in safety
+	assert safety.count("IMPLEMENT_PR_SAFETY_CHECK outcome=api_unavailable") == 2
+
+
+def test_sweep_snapshot_failure_is_not_no_active_runs() -> None:
+	step = _gh_api_retry_step(_gh_api_retry_workflow("review_autofix_sweep.yml"), "Enumerate open PRs and dispatch internal-review.yml")
+	assert 'gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/' not in step
+	assert 'gh_api_retry --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs"' in step
+	assert "active_snapshot_incomplete=true" in step
+	assert "reason=active_snapshot_incomplete" in step
+	assert "snapshot_incomplete=${active_snapshot_incomplete}" in step
+
+
+def test_idempotent_marker_never_rides_on_creates() -> None:
+	offenders = []
+	for path in list((REPO_ROOT / "scripts").glob("*.sh")) + list((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+		for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+			if "GH_RETRY_IDEMPOTENT=true" not in line:
+				continue
+			if any(token in line for token in ("gh issue create", "gh pr create", "gh issue comment", "gh pr comment", "/comments", "gh release create")):
+				offenders.append(f"{path.name}:{number}")
+	assert offenders == []
+
 if __name__ == "__main__":
 	raise SystemExit(main())
