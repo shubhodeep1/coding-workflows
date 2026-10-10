@@ -181,7 +181,7 @@ def _release(tmp_path: Path, tag: bool = True) -> tuple[Path, str]:
 	(src / "scripts").mkdir()
 	for name in EXECUTED_MODULES:
 		shutil.copy2(REPO_ROOT / "scripts" / name, src / "scripts" / name)
-	for name in ("apply_audit_gate_assets.py", "assemble_changelog.py"):
+	for name in ("apply_audit_gate_assets.py", "assemble_changelog.py", "lint_pr_body_auto_close.py"):
 		_write(src, f"scripts/{name}", f"# {name}\n", 0o755)
 	_git(src, "init", "-q")
 	_git(src, "add", "-A")

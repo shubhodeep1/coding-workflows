@@ -1574,6 +1574,20 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   ships) and deletes a consumer copy only when it is byte-identical to a
   released version (log prefix `RETIRED_FILE_REMOVED`); a locally modified copy
   is kept (`RETIRED_FILE_KEPT_MODIFIED`).
+- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) its `Commit and push
+  updates` step (`id: commit_push`) never pushes to the default branch: it
+  commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
+  the merge train ignores it) with a `Updater-Release-SHA:` trailer, pushes
+  with `--force-with-lease`, fails closed on commits it did not write (an
+  existing branch is replaced only when the repository activity API shows
+  every push to it came from the `GH_PAT` account and the newest produced its
+  tip; committer email and trailer alone are forgeable), lints
+  the PR text with `scripts/lint_pr_body_auto_close.py` (now part of the
+  attested release manifest), opens or refreshes one PR and enables auto-merge
+  bound to the pushed head only for a `verified=true` release. PR calls use
+  `GH_PAT`; the job requests no `pull-requests` permission because a reusable
+  job cannot raise the caller's `contents: write` grant. Log prefix
+  `UPDATER_PR_DELIVERY`.
 - Stable-release repository dispatch payloads carry both `version` and the peeled
   commit `sha`. Consumers validate the payload but independently resolve current
   `stable`, so delayed events cannot downgrade installed pins.
@@ -2249,6 +2263,7 @@ and shipped:
 - `VALIDATION_HARNESS_SANDBOX`
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
 - `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
+- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2494,6 +2509,7 @@ LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
 LOG_PREFIX.name=RELEASE_MANIFEST
 LOG_PREFIX.name=UPDATER_MANIFEST_VERIFY
+LOG_PREFIX.name=UPDATER_PR_DELIVERY
 
 ---
 

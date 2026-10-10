@@ -23,6 +23,8 @@ Surface (one rule per updater step, see SURFACE_RULES):
 - "Verify attested release manifest": scripts/verify_release_manifest.py and
   scripts/release_manifest.py (the step hash-checks both, plus
   scripts/workflow_wrapper_refs.py, before running the verifier).
+- "Commit and push updates" (pull-request path, #6989):
+  scripts/lint_pr_body_auto_close.py checks the composed PR body.
 - Not attested: scripts/tg_helpers.sh. The "Send Telegram notification" step
   fetches it through the contents API at ref=stable, not from the release
   checkout, so it is outside the release-to-consumer copy surface.
@@ -85,6 +87,9 @@ SURFACE_RULES = (
 	# release checkout, so their bytes must be attested too.
 	("file", "scripts/verify_release_manifest.py", True),
 	("file", "scripts/release_manifest.py", True),
+	# "Commit and push updates" runs the auto-close lint from the release
+	# checkout on its pull-request path (#6989).
+	("file", "scripts/lint_pr_body_auto_close.py", True),
 )
 
 # Directories (and the root file) the output must never be written into, so a
