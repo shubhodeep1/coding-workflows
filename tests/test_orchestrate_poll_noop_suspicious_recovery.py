@@ -75,8 +75,8 @@ exit 1
 		"body": "<!-- ai:reclarify-requeue:v1 source=11 -->",
 		"user": {"type": "Bot", "login": "github-actions[bot]"}}
 	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
-		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "GH_TOKEN": "test", "CALLS": str(calls),
-		"COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "RECLARIFY_UNROUTED_DETECT_ENABLED": "false",
+		"GH_TOKEN": "test", "CALLS": str(calls), "COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
 	def run(rows: list[dict], budget: int = 700) -> str:
 		comments.write_text(json.dumps([rows]))
 		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env={**env, "BUDGET": str(budget)},
@@ -108,6 +108,103 @@ exit 1
 	assert not run([{**source, "author_association": "NONE"}, marker])
 	assert not run([source, {**marker, "user": {"type": "User", "login": "attacker"}}])
 
+
+def test_replay_accepts_trailing_reclarify_source_only_without_marker(tmp_path: Path) -> None:
+	"""Issue #6630: the replay sweep uses the intake's any-line rule."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text('''#!/usr/bin/env bash
+if [ "$1:$2" = "api:rate_limit" ]; then echo 700; exit 0; fi
+if [ "$1:$2" = "api:user" ]; then echo owner; exit 0; fi
+if [ "$1:$2" = "issue:list" ]; then echo '[{"number":7}]'; exit 0; fi
+if [ "$1:$2" = "api:--paginate" ]; then cat "${COMMENTS}"; exit 0; fi
+if [ "$1:$2" = "api:repos/o/r/issues/7" ]; then
+  echo '{"number":7,"state":"open","labels":[{"name":"ai:reclarify-requeue"}]}'; exit 0
+fi
+if [ "$1:$2" = "api:-X" ]; then echo "$*" >> "${CALLS}"; exit 0; fi
+exit 1
+''')
+	gh.chmod(0o755)
+	comments = tmp_path / "comments.json"
+	calls = tmp_path / "calls"
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "RECLARIFY_UNROUTED_DETECT_ENABLED": "false",
+		"GH_TOKEN": "test", "CALLS": str(calls), "COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
+	marker = {"id": 12, "created_at": "2026-10-03T01:01:00Z",
+		"body": "<!-- ai:reclarify-requeue:v1 source=11 -->",
+		"user": {"type": "Bot", "login": "github-actions[bot]"}}
+	def run(body: str) -> str:
+		if calls.exists():
+			calls.unlink()
+		source = {"id": 11, "created_at": "2026-10-03T01:00:00Z", "body": body,
+			"user": {"type": "User", "login": "owner"}, "author_association": "OWNER"}
+		comments.write_text(json.dumps([[source, marker]]))
+		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		return calls.read_text() if calls.exists() else ""
+	assert "POST repos/o/r/issues/7/comments" in run("Answer first.\n\n/reclarify")
+	assert "POST" not in run("Answer\n/reclarify\n<!-- ai:clarification-questions -->")
+	assert "POST" not in run("please /reclarify later")
+
+
+def test_idle_poller_flags_unrouted_blocked_reply_once(tmp_path: Path) -> None:
+	"""Issue #6630: a blocked issue whose human reply never routed gets one advisory."""
+	from datetime import datetime, timedelta, timezone
+
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text('''#!/usr/bin/env bash
+if [ "$1:$2" = "api:rate_limit" ]; then echo 700; exit 0; fi
+if [ "$1:$2" = "api:user" ]; then exit 1; fi
+if [ "$1:$2" = "issue:list" ]; then echo '[{"number":9,"labels":[{"name":"ai:blocked"}]}]'; exit 0; fi
+if [ "$1:$2" = "api:graphql" ]; then
+  echo graphql >> "${CALLS}"
+  [ -n "${GRAPHQL_FAIL:-}" ] && exit 1
+  cat "${GRAPHQL}"; exit 0
+fi
+if [ "$1:$2" = "api:-X" ]; then echo "$*" >> "${CALLS}"; exit 0; fi
+exit 1
+''')
+	gh.chmod(0o755)
+	graphql = tmp_path / "graphql.json"
+	calls = tmp_path / "calls"
+	now = datetime.now(timezone.utc)
+	def ts(minutes: int) -> str:
+		return (now - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	def comment(cid: int, body: str, minutes: int) -> dict:
+		return {"databaseId": cid, "body": body, "createdAt": ts(minutes),
+			"authorAssociation": "OWNER", "author": {"login": "owner", "__typename": "User"}}
+	def write(comments: list) -> None:
+		graphql.write_text(json.dumps({"data": {"repository": {"i9": {
+			"number": 9, "labels": {"nodes": [{"name": "ai:blocked"}]},
+			"comments": {"nodes": comments},
+			"timelineItems": {"nodes": [{"createdAt": ts(120), "label": {"name": "ai:blocked"}}]}}}}}))
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "GH_TOKEN": "test", "GH_RETRY_MAX_ATTEMPTS": "1",
+		"CALLS": str(calls), "GRAPHQL": str(graphql), "PYTHONDONTWRITEBYTECODE": "1",
+		"TG_BOT_SECRET": "", "TG_ADMIN_CHAT_ID": ""}
+	def run(**extra: str) -> tuple[str, str]:
+		if calls.exists():
+			calls.unlink()
+		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env={**env, **extra},
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		return result.stdout, calls.read_text() if calls.exists() else ""
+	answer = comment(21, "Answer to the blocker.\n\n/reclarify", 30)
+	write([comment(20, "Clarification blocked: human input required.", 119), answer])
+	out, made = run()
+	assert "RECLARIFY_UNROUTED issue=9 comment=21 reason=command_unrouted" in out and "outcome=flagged" in out
+	assert made.count("POST repos/o/r/issues/9/comments") == 1
+	assert "<!-- ai:reclarify-unrouted:v1 comment=21 -->" in made
+	write([answer, comment(22, "advisory\n\n<!-- ai:reclarify-unrouted:v1 comment=21 -->", 5)])
+	out, made = run()
+	assert "POST" not in made and "outcome=flagged" not in out
+	out, made = run(GRAPHQL_FAIL="1")
+	assert "RECLARIFY_UNROUTED outcome=skip reason=graphql_unavailable" in out and "POST" not in made
+	out, made = run(RECLARIFY_UNROUTED_DETECT_ENABLED="false")
+	assert "graphql" not in made and "RECLARIFY_UNROUTED" not in out
 
 def test_standalone_snapshot_batches_clean_prs_and_skips_draft_claude_reads() -> None:
 	text = POLLER.read_text()
@@ -539,11 +636,24 @@ def _cap_skip_block() -> str:
 	return sweep[start:end]
 
 
-def _run_cap_skip(comments: list, commits: list, login: str | None) -> tuple[str, int]:
+def _support_resolver_block() -> str:
+	"""Return the verbatim `_noop_cap_review_support_sha` definition and its state."""
+	sweep = _sweep_block()
+	start = sweep.find('NOOP_CAP_REVIEW_SUPPORT_SHA=""')
+	assert start != -1, "Sweep must declare the review-support SHA cache"
+	end = sweep.find("\n}\n", sweep.find("_noop_cap_review_support_sha() {", start))
+	assert end != -1
+	return sweep[start:end + 3]
+
+
+def _run_cap_skip(comments: list, commits: list, login: str | None, *, repo: str = "o/consumer",
+		engine_sha: str = "", ai_review: str | None = None) -> tuple[str, int]:
 	"""Run the verbatim skip snippet inside a one-iteration loop.
 
 	`gh_retry` / `_safe_gh_jq` are stubbed; `login=None` makes the
-	identity lookup fail. Returns (stdout, GET /user call count)."""
+	identity lookup fail. `repo` / `engine_sha` / `ai_review` (the
+	consumer's `.github/workflows/ai-review.yml` text) drive the
+	review-support SHA resolution. Returns (stdout, GET /user call count)."""
 	import json
 	import shlex
 	import subprocess
@@ -554,6 +664,10 @@ def _run_cap_skip(comments: list, commits: list, login: str | None) -> tuple[str
 	# comment bodies before the verbatim snippet sees them.
 	with tempfile.TemporaryDirectory() as tmp:
 		calls = Path(tmp) / "calls"
+		if ai_review is not None:
+			wf_dir = Path(tmp) / ".github" / "workflows"
+			wf_dir.mkdir(parents=True)
+			(wf_dir / "ai-review.yml").write_text(ai_review)
 		script = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -567,6 +681,9 @@ NOOP_MAX_RETRIES=3
 NOOP_RECOVERY_CAP_SKIPPED=0
 NOOP_CAP_TRUSTED_LOGIN=""
 NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+GITHUB_REPOSITORY={json.dumps(repo)}
+ORCHESTRATOR_ENGINE_SHA={json.dumps(engine_sha)}
+{_support_resolver_block()}
 N_COMMENTS_JSON={shlex.quote(json.dumps(comments))}
 N_COMMITS_JSON={shlex.quote(json.dumps(commits))}
 for _pr in a b; do
@@ -575,16 +692,107 @@ for _pr in a b; do
 done
 echo "SKIPPED=${{NOOP_RECOVERY_CAP_SKIPPED}}"
 """
-		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, cwd=tmp)
 		call_count = len(calls.read_text().splitlines()) if calls.exists() else 0
 		return result.stdout, call_count
 
 
-def _cap_comment(login: str, head: str = CAP_HEAD) -> dict:
+def _cap_comment(login: str, head: str = CAP_HEAD, support: str = "") -> dict:
+	support_field = f" support={support}" if support else ""
 	return {
 		"user": {"login": login},
-		"body": f"**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head={head} fp={'a' * 64} reason=editor_empty_noop count=3 -->",
+		"body": f"**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head={head} fp={'a' * 64} reason=editor_empty_noop count=3{support_field} -->",
 	}
+
+
+SUPPORT_NEW = "5" * 40
+SUPPORT_OLD = "6" * 40
+
+
+def test_cap_skip_matching_support_in_source_repo_skips():
+	"""Issue #6625: in this repository the review support SHA is the
+	poller's engine SHA; a cap marker carrying it still skips."""
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_NEW)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert "DISPATCH" not in out, out
+	assert f"support={SUPPORT_NEW}" in out
+	assert "SKIPPED=2" in out
+
+
+def test_cap_skip_other_support_version_redispatches():
+	"""A cap marker written by an older review support version does not
+	stop the gate any more, so the sweep re-dispatches and logs why."""
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_OLD)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert f"NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT pr=4332 head={CAP_HEAD} support={SUPPORT_NEW}" in out
+
+
+def test_cap_skip_support_text_outside_marker_does_not_count():
+	"""The support SHA must be a field of the cap marker: an older cap comment
+	that quotes ` support=<current> ` elsewhere (e.g. its first error) is stale."""
+	stale = _cap_comment("shubhodeep1", support=SUPPORT_OLD)
+	stale["body"] = f"First error: `x support={SUPPORT_NEW} y`\n" + stale["body"]
+	out, _ = _run_cap_skip([stale], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
+
+
+def test_cap_skip_inline_quoted_marker_does_not_count():
+	"""A whole current-support cap marker quoted inline (a failure comment's
+	"First error" code span) is not a cap marker on its own line, so the PR
+	is dispatched as if no cap marker existed (no cap log, no identity lookup)."""
+	quoted = _cap_comment("shubhodeep1", support=SUPPORT_NEW)
+	quoted["body"] = "**AI review/autofix failed**\n\n**First error:** `" + quoted["body"].split("\n", 1)[1] + "`"
+	out, calls = _run_cap_skip([quoted], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP" not in out, out
+	assert calls == 0
+
+
+def test_cap_skip_inline_quoted_marker_does_not_count_when_support_unresolved():
+	"""With the support SHA unresolved the any-version fallback applies, but an
+	inline-quoted cap marker is still not a cap marker (the gate ignores it)."""
+	quoted = _cap_comment("shubhodeep1")
+	quoted["body"] = "**AI review/autofix failed**\n\n**First error:** `" + quoted["body"].split("\n", 1)[1] + "`"
+	out, calls = _run_cap_skip([quoted], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP" not in out
+	assert calls == 0
+
+
+def test_cap_skip_legacy_marker_redispatches_when_support_resolved():
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
+
+
+def test_cap_skip_consumer_support_from_ai_review_pin():
+	"""Consumer pollers run `stable`, but reviews run the SHA pinned in the
+	local ai-review.yml wrapper; that pin is the support version."""
+	wrapper = f"    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{SUPPORT_NEW} # stable\n"
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_NEW)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		engine_sha=SUPPORT_OLD, ai_review=wrapper)
+	assert "DISPATCH" not in out, out
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_OLD)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		engine_sha=SUPPORT_OLD, ai_review=wrapper)
+	assert out.count("DISPATCH") == 2, out
+
+
+def test_cap_skip_unresolved_support_keeps_legacy_skip():
+	"""An unrendered `@stable` wrapper (or none) leaves the support SHA
+	unresolved: any trusted cap marker for the head still skips."""
+	wrapper = "    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable\n"
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_OLD)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		ai_review=wrapper)
+	assert "DISPATCH" not in out, out
+	assert "support=unresolved" in out
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha="abc1234")
+	assert "DISPATCH" not in out, out
 
 
 def test_cap_skip_suppresses_redispatch_when_cap_applied_on_head():
@@ -659,7 +867,7 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			if func is test_idle_poller_replays_only_trusted_failed_reclarify_once:
+			if func.__code__.co_argcount == 1:
 				with tempfile.TemporaryDirectory() as test_dir:
 					func(Path(test_dir))
 			else:
