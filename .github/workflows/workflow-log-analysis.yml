@@ -1230,6 +1230,7 @@ jobs:
         if: steps.analyze.outputs.analysis_status == 'completed'
         env:
           REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
 
@@ -1258,10 +1259,26 @@ jobs:
           # for that reason.
           purged_count=0
           cutoff_date=""
-          if cutoff_date="$(date -u -d "${retention_raw} days ago" +%Y-%m-%d 2>/dev/null)" && [ -n "${cutoff_date}" ]; then
+          # Never purge a doc an open apply-analysis project still reads: its
+          # plan and implement stages read the doc from the default branch,
+          # and the project's own final PR deletes it. Issue #7022 blocked when
+          # a doc was purged from main before its project could read it. When
+          # the open projects cannot be read, skip the purge (fail closed; a
+          # report kept one more day costs nothing).
+          purge_in_flight_docs=""
+          purge_guard_ok="true"
+          if ! purge_in_flight_docs="$(APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash scripts/apply_analysis_on_main.sh)"; then
+            purge_guard_ok="false"
+            echo "::warning::Could not list the analysis docs open apply-analysis projects use; skipping the age-based purge this run."
+          fi
+          if [ "${purge_guard_ok}" = "true" ] && cutoff_date="$(date -u -d "${retention_raw} days ago" +%Y-%m-%d 2>/dev/null)" && [ -n "${cutoff_date}" ]; then
             shopt -s nullglob
             for old_report in analysis/workflow-optimization-*.md; do
               [ "${old_report}" = "${REPORT_FILE}" ] && continue
+              if printf '%s\n' "${purge_in_flight_docs}" | grep -qxF -- "${old_report}"; then
+                echo "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=${old_report} reason=in_flight_project"
+                continue
+              fi
               filename="$(basename "${old_report}")"
               # Match workflow-optimization-YYYY-MM-DD(-N).md and capture only
               # the date stamp; greedy parameter expansion (e.g. ${s%%-[0-9]*})
@@ -1276,7 +1293,7 @@ jobs:
               fi
             done
             shopt -u nullglob
-          else
+          elif [ "${purge_guard_ok}" = "true" ]; then
             echo "::warning::Unable to compute report purge cutoff date for retention window (${retention_raw} days); skipping age-based purge to avoid accidental deletions."
           fi
           if [ "${purged_count}" -gt 0 ]; then
