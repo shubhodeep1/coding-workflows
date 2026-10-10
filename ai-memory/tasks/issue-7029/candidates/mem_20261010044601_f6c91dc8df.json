@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7029,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7029\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7036\",\"pr_number\":7036,\"branch\":\"ai/issue-7029\",\"run_id\":\"38023663111\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38023663111\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\"README.md\",\"changelog.d/7029-release-validate-ci-gate.md\",\"tests/test_release_validate_ci_gate.py\",\"tests/test_workflow_gh_retry_fallback_contract.py\"]}",
+  "fingerprint": "efcc0de9d80a5634fd6e9cc194e7854c91da2dcab16c797e5057349d0edad82c",
+  "lineage": {
+    "issue_number": 7029,
+    "parent_ids": [],
+    "pr_number": 7036,
+    "run_id": "38023663111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38023663111",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7036"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261010044601_f6c91dc8df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7029,
+    "level": "run",
+    "pr_number": 7036,
+    "run_id": "38023663111"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7029: https://github.com/shubhodeep1/coding-workflows/pull/7036",
+  "timestamps": {
+    "created_at": "2026-10-10T04:46:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
