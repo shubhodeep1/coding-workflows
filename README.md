@@ -430,6 +430,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   clarify:
     if: >-
@@ -448,6 +449,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   plan:
     if: >-
@@ -484,6 +486,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  id-token: write
 jobs:
   implement:
     if: >-
@@ -1312,6 +1315,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 jobs:
   clarify:
