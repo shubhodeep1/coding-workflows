@@ -299,7 +299,8 @@ security_audit_append_prompt_context() {
 			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
 			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
 			echo "Rules for accepted findings:" || return 1
-			echo "- Never re-report the same accepted exploit under any finding_id. Report a different exploit even when its file, category and line are near an accepted finding; an acceptance covers only its documented scenario." || return 1
+			echo "- Do not report an accepted finding again. If you do report the same defect, reuse its original finding_id; a finding under any other finding_id is treated as a new, blocking finding." || return 1
+			echo "- Report a different exploit even when its file, category and line are near an accepted finding; an acceptance covers only its documented scenario." || return 1
 			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
 		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
@@ -372,11 +373,14 @@ fi
 # the orchestrator's security-pass exhaustion judge accepted as known risks
 # for the audited project (findings-json mode only).  They are appended to the
 # prompt as accepted findings the model must not report again, and the
-# post-filter drops any re-report deterministically: an exact `finding_id`
-# match, or the same file, category, severity and exploit scenario within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
-# ids drift between runs and fix commits move lines).  Counted as
-# `suppressed_waived`.  Malformed input fails closed like prior findings.
+# post-filter drops a re-report deterministically only when its non-empty
+# `finding_id` exactly matches the waiver's and every category, severity and
+# exploit scenario the waiver recorded also matches.  There is no proximity
+# match: a finding under a different `finding_id` is a new finding, even at
+# the waived file and line, so an accepted defect must keep its original id.
+# Counted as `suppressed_waived`.  Malformed input fails closed like prior
+# findings.  SECURITY_AUDIT_WAIVER_LINE_WINDOW is still accepted and validated
+# for compatibility, but it no longer controls suppression.
 SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
@@ -1205,6 +1209,20 @@ def text_field(finding: dict, key: str) -> str:
 	return sanitized_prompt_value
 
 
+def raw_lower(value: object) -> str:
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.lower().split())
+
+
+def raw_scenario(value: object) -> str:
+	# Both sides are cut to 600 characters (the poller's cap on reported and
+	# waived rows) before whitespace is collapsed; case is kept.
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value[:600].split())
+
+
 normalized: list[dict] = []
 prompt_lines: list[str] = []
 for index, finding in enumerate(waived_findings):
@@ -1213,6 +1231,8 @@ for index, finding in enumerate(waived_findings):
 	finding_id = text_field(finding, "finding_id")
 	if not finding_id:
 		raise SystemExit(f"waived finding #{index} is missing its finding_id")
+	raw_finding_id_value = finding.get("finding_id")
+	raw_finding_id = raw_finding_id_value.strip() if isinstance(raw_finding_id_value, str) else ""
 	relative_file = ""
 	file_value = finding.get("file")
 	if isinstance(file_value, str) and file_value.strip():
@@ -1230,14 +1250,24 @@ for index, finding in enumerate(waived_findings):
 		line_number = line_value
 	category = text_field(finding, "owasp_or_stride_category")
 	waived_finding = finding.get("finding")
+	# Match fields are normalized from the raw values, not the prompt-sanitized
+	# ones (stripping backticks or fence markers would distort the comparison).
+	# They are never rendered into the prompt.
+	match_exploit_scenario = raw_scenario(finding.get("exploit_scenario"))
+	if not match_exploit_scenario and isinstance(waived_finding, dict):
+		match_exploit_scenario = raw_scenario(waived_finding.get("exploit_scenario"))
 	normalized.append(
 		{
 			"finding_id": finding_id,
+			"match_finding_id": raw_finding_id,
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
 			"severity": text_field(finding, "severity"),
 			"exploit_scenario": text_field(finding, "exploit_scenario") or (text_field(waived_finding, "exploit_scenario") if isinstance(waived_finding, dict) else ""),
+			"match_category": raw_lower(finding.get("owasp_or_stride_category")),
+			"match_severity": raw_lower(finding.get("severity")),
+			"match_exploit_scenario": match_exploit_scenario,
 		}
 	)
 	location = relative_file or "(location not recorded)"
@@ -1266,7 +1296,8 @@ PY
 		exit 1
 	fi
 	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
-	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (match: exact finding_id plus recorded category/severity/exploit scenario)"
+	echo "security-audit: SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW} is accepted for compatibility but no longer controls waiver suppression"
 fi
 
 # Full scans export every eligible oversized tracked file; listed prior-finding
@@ -1537,7 +1568,9 @@ summary_path = Path(sys.argv[6])
 audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
 waived_findings_path = Path(sys.argv[9])
-waiver_line_window = int(sys.argv[10])
+# Still passed (and validated by the caller) to keep the argument order
+# stable; it no longer controls waiver suppression.
+_unused_waiver_line_window = int(sys.argv[10])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1736,36 +1769,35 @@ if not isinstance(waived_findings_input, list):
 def matching_waiver(finding: dict[str, object]) -> str | None:
 	"""Return the waived finding_id this finding re-reports, if any.
 
-	Exact id first; otherwise the same file and category within the line
-	window of the waived line, because the auditor mints a new id on every
-	run and a fix commit shifts the cited line.
+	A waiver suppresses a finding only when its non-empty finding_id exactly
+	matches and every category, severity and exploit scenario the waiver
+	recorded also matches.  There is no proximity match: a finding under a
+	different finding_id is a new finding, even at the waived location.
 	"""
-	finding_id = str(finding.get("finding_id") or "")
-	finding_file = str(finding.get("file") or "")
+	finding_id = finding.get("finding_id")
+	if not isinstance(finding_id, str) or not finding_id:
+		return None
 	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
-	finding_line = int(finding.get("line") or 0)
+	finding_severity = " ".join(str(finding.get("severity") or "").lower().split())
+	finding_scenario = " ".join(str(finding.get("exploit_scenario") or "")[:600].split())
 	for waiver in waived_findings_input:
 		if not isinstance(waiver, dict):
 			continue
-		waived_id = str(waiver.get("finding_id") or "")
-		waived_file = str(waiver.get("file") or "")
-		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
-		waived_severity = str(waiver.get("severity") or "").strip().lower()
-		waived_scenario = " ".join(str(waiver.get("exploit_scenario") or "").lower().split())
-		finding_scenario = " ".join(str(finding.get("exploit_scenario") or "").lower().split())
-		if (waived_id and waived_id == finding_id
-			and (not waived_category or waived_category == finding_category)
-			and (not waived_severity or waived_severity == str(finding.get("severity") or "").strip().lower())
-			and (not waived_scenario or waived_scenario == finding_scenario)):
-			return waived_id
-		waived_line = waiver.get("line")
-		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
+		waived_id = waiver.get("match_finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip():
+			waived_id = waiver.get("finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip() or waived_id.strip() != finding_id:
 			continue
-		if (waived_file == finding_file and waived_category == finding_category
-			and waived_severity == str(finding.get("severity") or "").strip().lower()
-			and waived_scenario and waived_scenario == finding_scenario
-			and abs(waived_line - finding_line) <= waiver_line_window):
-			return waived_id or "(unnamed waiver)"
+		waived_category = str(waiver.get("match_category") or "")
+		waived_severity = str(waiver.get("match_severity") or "")
+		waived_scenario = str(waiver.get("match_exploit_scenario") or "")
+		if waived_category and waived_category != finding_category:
+			continue
+		if waived_severity and waived_severity != finding_severity:
+			continue
+		if waived_scenario and waived_scenario != finding_scenario:
+			continue
+		return finding_id
 	return None
 
 

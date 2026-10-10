@@ -51,7 +51,7 @@ findings.
 | Exhaustion comment carries the findings table (`render_security_pass_findings_table`) | shipped | PR #4018; `scripts/orchestrate_poll_process.sh` `security_pass_terminal_failure` (≈4721) |
 | Delta re-audit: files changed since the last audited commit plus files of prior findings; prior findings re-emitted by id | shipped | `SECURITY_AUDIT_DIFF_SINCE`, `SECURITY_AUDIT_PRIOR_FINDINGS`, state `security_pass_last_audited_sha` and `security_pass_reported_findings` (the shipped name for the plan's `security_pass_prior_findings`); log `SECURITY_PASS_SCOPE ... mode=full\|delta`; fragment `changelog.d/3928-security-pass-delta-reaudit.md` |
 | Previous fix cycle's own hunks audited as fresh attack surface | shipped (not in the original plan) | PR #4089; `SECURITY_AUDIT_FIX_CYCLE_DIFFS`, state `security_pass_fix_touched_files` |
-| Waivers travel to the engine and match by id or by file+category within a window | shipped | `SECURITY_AUDIT_WAIVED_FINDINGS`, `SECURITY_AUDIT_WAIVER_LINE_WINDOW` (default 40), `security_pass_apply_waivers_to_findings` (≈5403) |
+| Waivers travel to the engine and match only by exact `finding_id` plus the recorded category, severity and exploit scenario (proximity matching removed, #6987) | shipped | `SECURITY_AUDIT_WAIVED_FINDINGS`, `SECURITY_AUDIT_WAIVER_LINE_WINDOW` (default 40; still validated, no longer controls suppression), `security_pass_apply_waivers_to_findings` |
 | `/security-pass-waive` command | shipped | `docs/how-it-works.md` command table; `security_pass_waived_findings`, `<!-- security-pass-waive-dedup:<id> -->` |
 | Advisory `ai:security` follow-up creation with weekly-audit marker and state dedupe | shipped, but only for findings the exhaustion judge or a waive accepted | `create_security_pass_advisory_followup` (singular), `security_pass_followup_issues` |
 | Exhaustion judge instead of terminal failure | shipped (not in the original plan) | PR #4074; `prompts/mode-judge-security-pass-exhaustion.txt`, `MAX_SECURITY_PASS_JUDGE_ROUNDS` |
@@ -215,9 +215,14 @@ project-written line blocks (replaces the original D2).
 
 ### D5 — Waivers persist in project state and match exact-or-fuzzy
 
-Shipped as designed (`security_pass_waived_findings`,
+Shipped (`security_pass_waived_findings`,
 `SECURITY_AUDIT_WAIVED_FINDINGS`, `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
-`/security-pass-waive`). No remaining work. Advisory rows filed under D3 are
+`/security-pass-waive`). The fuzzy half was later removed (#6987): a waiver
+now suppresses only a finding with the same non-empty `finding_id` whose
+category, severity and exploit scenario match every value the waiver
+recorded. A proximity match let a distinct defect next to a waived line go
+unreported. `SECURITY_AUDIT_WAIVER_LINE_WINDOW` is still accepted and
+validated but no longer controls suppression. No remaining work. Advisory rows filed under D3 are
 appended to the same waiver list with `source: "preexisting"` so the existing
 suppression covers them.
 
@@ -609,11 +614,12 @@ below the number of genuinely project-owned findings.
   its own, so nothing changes. **New poller + old engine.** Additive keys
   absent → today's behaviour. Covered by tests in both phases.
 - **Advisory rows as waivers suppress a later project regression at the same
-  location.** Suppression matches exact id, or same file and category within
-  `SECURITY_AUDIT_WAIVER_LINE_WINDOW` (40 lines). A project edit that
-  introduces a *new* defect class in the same window is still reported (the
-  category differs); the same class at the same place is by construction the
-  advisory already filed. ACCEPTED, same as for judge waivers today.
+  location.** Suppression matches only an exact, non-empty `finding_id` whose
+  recorded category, severity and exploit scenario also match (#6987 removed
+  the `SECURITY_AUDIT_WAIVER_LINE_WINDOW` proximity match). A new defect at
+  the same place is reported under a new id and blocks; the same defect
+  re-reported under its original id is by construction the advisory already
+  filed. ACCEPTED, same as for judge waivers today.
 
 ## Rollout
 
