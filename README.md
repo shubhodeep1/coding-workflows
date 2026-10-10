@@ -1188,6 +1188,32 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reflowed). If upstream's `@stable` ref predates the script, both steps log
 > and no-op.
 
+> **agents.md fragment contract (`CLAUDE.md` §30):** PRs document behaviour in
+> `agents.d/<issue-or-pr>-<slug>.md` instead of editing `agents.md` (consumers:
+> `AGENTS.md`). Each block starts with
+> `<!-- agents: section="<exact ## heading>" -->`; its text is appended to the
+> end of that section, a table row or list item continues its table or list,
+> and in `## Stable log prefixes (contractual)` the `` - `PREFIX` `` bullets
+> and `LOG_PREFIX.name=` lines land at the end of their registries. A heading
+> that does not exist needs ` new` in the marker. `scripts/assemble_agents.py`
+> folds the fragments in filename order and deletes them: upstream in the
+> release job's `Assemble changelog fragments` step (same commit as the
+> changelog fold; the tag step's `RELEASE_UNTESTED_HEAD` guard accepts that
+> commit touching only `CHANGELOG.md`, `changelog.d/`, `agents.md` and
+> `agents.d/`), and in consumers in the sync's `Assemble agents.md fragments`
+> step, which runs upstream's copy from the `@stable` support checkout and
+> reports `agents_assembled`. Both fail open: a fragment that cannot fold
+> stays for the next run with an `AGENTS_ASSEMBLE_V1: skipped=<file>
+> reason=<r>` warning. CI's `agents.d fragment check and tests` step runs
+> `assemble_agents.py check`, which fails on any such fragment. Readers see
+> pending fragments: `scripts/build_static_context.sh` and the orchestrate,
+> clarify-respond, poller-judge and validate static-context assemblers render
+> them into the model's agents context (falling back to the plain file), the AGENTS.md
+> materiality check and the review gate count an `agents.d/*.md` change as
+> an `agents.md` change, a `files_touched` or `ai:scope:` scope that covers
+> `agents.md` covers its top-level fragments, the review editor keeps the
+> fragments it creates, and tests read the file through `tests/agents_doc.py`.
+
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
 > their `settings.json` wiring, each documented in the root `CLAUDE.md` that

@@ -43,9 +43,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1316,7 +1320,7 @@ def test_close_and_reissue_redo_ignores_new_output_paths() -> None:
 
 
 def test_reissue_new_outputs_log_prefix_is_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	assert "- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`" in agents_text
 	assert "LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS" in agents_text
 
