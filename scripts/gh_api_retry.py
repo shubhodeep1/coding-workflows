@@ -36,6 +36,7 @@ CLI: ``python3 scripts/gh_api_retry.py [--idempotent] [--optional] -- <gh api ar
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
@@ -113,12 +114,47 @@ def endpoint_bucket(args: Sequence[str]) -> str:
 	return "core"
 
 
+def graphql_doc_is_mutation(text: str) -> bool:
+	"""First operation keyword, after whitespace and # comments, is "mutation"."""
+	stripped = " ".join(line.split("#", 1)[0] for line in text.splitlines()).lstrip()
+	return stripped.lower().startswith("mutation")
+
+
+def _read_doc(path: str) -> str | None:
+	if path == "-":
+		return None
+	try:
+		with open(path, "rb") as handle:
+			return handle.read(65536).decode("utf-8", "replace")
+	except OSError:
+		return None
+
+
+def _input_query(path: str) -> str | None:
+	text = _read_doc(path)
+	if text is None:
+		return None
+	try:
+		payload = json.loads(text)
+	except ValueError:
+		return None
+	if not isinstance(payload, dict):
+		return None
+	query = payload.get("query") or ""
+	return query if isinstance(query, str) else None
+
+
 def is_unsafe_post(args: Sequence[str]) -> bool:
-	"""True for a non-idempotent POST create (mirrors _gh_api_args_unsafe_post)."""
+	"""True for a non-idempotent POST create (mirrors _gh_api_args_unsafe_post).
+
+	A graphql document that cannot be read (missing file, stdin, invalid
+	--input JSON) counts as a mutation, so it is not retried.
+	"""
 	method = ""
 	fields = False
 	mutation = False
 	pending = ""
+	input_path: str | None = None
 	for arg in args:
 		value = None
 		if pending == "method":
@@ -132,6 +168,7 @@ def is_unsafe_post(args: Sequence[str]) -> bool:
 		elif pending in ("input", "skip"):
 			if pending == "input":
 				fields = True
+				input_path = arg
 			pending = ""
 			continue
 		if value is None:
@@ -158,12 +195,17 @@ def is_unsafe_post(args: Sequence[str]) -> bool:
 				continue
 			elif arg.startswith("--input="):
 				fields = True
+				input_path = arg[len("--input="):]
 				continue
 			else:
 				if arg in _FLAGS_WITH_VALUE:
 					pending = "skip"
 				continue
-		if value.startswith("query=") and value[len("query="):].lstrip().lower().startswith("mutation"):
+		if value.startswith("query=@"):
+			doc = _read_doc(value[len("query=@"):])
+			if doc is None or graphql_doc_is_mutation(doc):
+				mutation = True
+		elif value.startswith("query=") and value[len("query="):].lstrip().lower().startswith("mutation"):
 			mutation = True
 	method = method.upper()
 	if method and method != "POST":
@@ -171,6 +213,10 @@ def is_unsafe_post(args: Sequence[str]) -> bool:
 	if not method and not fields:
 		return False
 	if endpoint(args).lstrip("/") == "graphql":
+		if input_path is not None:
+			query = _input_query(input_path)
+			if query is None or graphql_doc_is_mutation(query):
+				mutation = True
 		return mutation
 	return True
 

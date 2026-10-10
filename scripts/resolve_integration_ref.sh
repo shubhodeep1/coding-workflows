@@ -73,7 +73,12 @@ get_issue_body() {
 	if [ "${rc}" -eq 75 ]; then
 		_resolver_rate_limited "issue-${issue_num}"
 	fi
-	[ "${rc}" -eq 0 ] || return "${rc}"
+	if [ "${rc}" -ne 0 ]; then
+		# Exit 2 = API failure (transient retries exhausted or a permanent
+		# error), like branch_exists; exit 1 stays "declared branch missing".
+		echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable what=issue-${issue_num} rc=${rc}" >&2
+		exit 2
+	fi
 	printf '%s\n' "${body}"
 }
 

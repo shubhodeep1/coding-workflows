@@ -701,11 +701,20 @@ jobs:
             type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
             # Classified retry (issue #6634): a 404 keeps the pr_state_unknown
             # skip below; an exhausted transient error or a rate limit fails the
-            # gate loudly instead of silently skipping the review.
+            # gate loudly instead of silently skipping the review. A permanent
+            # error other than 404 (exit 2, e.g. a non-limit 403) fails too; the
+            # helper's GH_API_RETRY stderr line carries the status.
             _pr_gate_rc=0
+            _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
             _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}')" || _pr_gate_rc=$?
-            if [ "${_pr_gate_rc}" -eq 75 ] || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; }; then
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
+            cat "${_pr_gate_err}" >&2 2>/dev/null || true
+            _pr_gate_not_found=false
+            if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
+            rm -f "${_pr_gate_err}"
+            if [ "${_pr_gate_rc}" -eq 75 ] \
+              || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; } \
+              || { [ "${_pr_gate_rc}" -eq 2 ] && declare -F _gh_api_classify >/dev/null && [ "${_pr_gate_not_found}" != "true" ]; }; then
               echo "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}"
               exit 1
             fi

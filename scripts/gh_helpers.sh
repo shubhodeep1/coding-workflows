@@ -267,7 +267,12 @@ _gh_rate_limit_wait()
 	if [ -n "${_resp}" ]; then
 		_reset_ts=$(printf '%s\n' "${_resp}" | tr -d '\r' | awk 'f { print } /^$/ { f = 1 }' \
 			| jq -r --arg b "${_bucket}" '.resources[$b].reset // empty' 2>/dev/null | head -1) || _reset_ts=""
-		[[ "${_reset_ts}" =~ ^[0-9]+$ ]] || _reset_ts=""
+		if [[ "${_reset_ts}" =~ ^[0-9]+$ ]]; then
+			# Exact reset of the limited bucket for gh_rate_limit_breaker_active.
+			_gh_rate_limit_trip_breaker "${_bucket}" "${_reset_ts}"
+		else
+			_reset_ts=""
+		fi
 		if [ -z "${_reset_ts}" ]; then
 			_reset_ts=$(printf '%s\n' "${_resp}" \
 				| grep -i '^x-ratelimit-reset:' | head -1 \
@@ -655,18 +660,19 @@ _gh_cmd_bucket()
 # True (0) when the call is a non-idempotent POST create:
 #   * explicit -X POST / -XPOST / --method POST / --method=POST (any case);
 #   * no method and any -f/-F/--field/--raw-field/--input (gh infers POST).
-# An explicit GET/PUT/PATCH/DELETE is safe. Assumption: the graphql endpoint
-# is treated as a read (retryable) unless a query= value starts with
-# "mutation"; query=@file cannot be inspected and is treated as a read.
+# An explicit GET/PUT/PATCH/DELETE is safe. The graphql endpoint is a read
+# (retryable) unless its document starts with "mutation": an inline query=,
+# a query=@file, or the .query of an --input JSON file. A document that cannot
+# be read (missing file, stdin "-", invalid JSON) counts as a mutation.
 _gh_api_args_unsafe_post()
 {
-	local _a _next="" _method="" _fields=0 _mutation=0 _val _ep
+	local _a _next="" _method="" _fields=0 _mutation=0 _val _ep _input="" _has_input=0 _qf _q
 	for _a in "$@"; do
 		_val=""
 		case "${_next}" in
 			method) _method="${_a}"; _next=""; continue ;;
 			field) _fields=1; _val="${_a}"; _next="" ;;
-			input) _fields=1; _next=""; continue ;;
+			input) _fields=1; _has_input=1; _input="${_a}"; _next=""; continue ;;
 			skip) _next=""; continue ;;
 		esac
 		if [ -z "${_val}" ]; then
@@ -679,7 +685,7 @@ _gh_api_args_unsafe_post()
 				--raw-field=*) _fields=1; _val="${_a#--raw-field=}" ;;
 				-f?*|-F?*) _fields=1; _val="${_a#-?}" ;;
 				--input) _next=input; continue ;;
-				--input=*) _fields=1; continue ;;
+				--input=*) _fields=1; _has_input=1; _input="${_a#--input=}"; continue ;;
 				*)
 					if _gh_api_flag_takes_value "${_a}"; then _next=skip; fi
 					continue
@@ -687,6 +693,13 @@ _gh_api_args_unsafe_post()
 			esac
 		fi
 		case "${_val}" in
+			query=@*)
+				_qf="${_val#query=@}"
+				if [ "${_qf}" = "-" ] || [ ! -r "${_qf}" ] \
+					|| _gh_graphql_doc_is_mutation "$(head -c 65536 "${_qf}" 2>/dev/null)"; then
+					_mutation=1
+				fi
+				;;
 			query=*)
 				_val="${_val#query=}"
 				_val="${_val#"${_val%%[![:space:]]*}"}"
@@ -706,10 +719,33 @@ _gh_api_args_unsafe_post()
 	_ep="$(_gh_api_endpoint "$@")"
 	_ep="${_ep#/}"
 	if [ "${_ep}" = "graphql" ]; then
+		if [ "${_has_input}" = "1" ]; then
+			if [ "${_input}" = "-" ] || [ ! -r "${_input}" ] \
+				|| ! _q="$(jq -r 'if type == "object" then (.query // "") else error("not an object") end' "${_input}" 2>/dev/null)" \
+				|| _gh_graphql_doc_is_mutation "${_q}"; then
+				_mutation=1
+			fi
+		fi
 		[ "${_mutation}" = "1" ]
 		return $?
 	fi
 	return 0
+}
+
+# _gh_graphql_doc_is_mutation <document> — true when the first operation
+# keyword, after leading whitespace and # comments, is "mutation". Pure bash:
+# no pipeline, so callers running under pipefail cannot see a SIGPIPE status.
+_gh_graphql_doc_is_mutation()
+{
+	local _line _out=""
+	while IFS= read -r _line || [ -n "${_line}" ]; do
+		_out+="${_line%%#*} "
+	done <<< "$1"
+	_out="${_out#"${_out%%[![:space:]]*}"}"
+	case "${_out}" in
+		[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]*) return 0 ;;
+	esac
+	return 1
 }
 
 # _gh_cmd_is_unsafe_post <full command…> — gh_retry-style command check.
@@ -1023,7 +1059,7 @@ gh_retry()
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
+			_gh_rate_limit_trip_breaker "$(_gh_cmd_bucket "$@")" "$(( $(date +%s) + 60 ))"
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				_gh_rate_limit_wait_for "${stderr_content}" "$@"
 			fi
@@ -1109,7 +1145,7 @@ gh_retry_to_file()
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
+			_gh_rate_limit_trip_breaker "$(_gh_cmd_bucket "$@")" "$(( $(date +%s) + 60 ))"
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				_gh_rate_limit_wait_for "${stderr_content}" "$@"
 			fi
@@ -1221,7 +1257,7 @@ gh_api_json_to_file()
 			if _is_gh_rate_limit "${stderr_content}"; then
 				echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 				_gh_ratelimit_tg_alert
-				_gh_rate_limit_trip_breaker
+				_gh_rate_limit_trip_breaker "$(_gh_cmd_bucket "$@")" "$(( $(date +%s) + 60 ))"
 				if [ "${attempt}" -lt "${max_attempts}" ]; then
 					_gh_rate_limit_wait_for "${stderr_content}" "$@"
 				fi
@@ -1295,9 +1331,9 @@ curl_gh_api()
 		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
 			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
 			local _reset_ts
 			_reset_ts=$(_parse_reset_header "${header_file}")
+			_gh_rate_limit_trip_breaker "$(_gh_api_header "${header_file}" 'x-ratelimit-resource')" "${_reset_ts}"
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				_sleep_until_reset "${_reset_ts}"
 			fi

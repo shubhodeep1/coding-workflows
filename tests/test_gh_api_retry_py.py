@@ -66,12 +66,31 @@ def test_bash_classify_parity(case: dict, tmp_path: Path) -> None:
 		(["repos/o/r/issues/1"], False),
 		(["graphql", "-f", "query={ viewer { login } }"], False),
 		(["graphql", "-f", "query=  mutation { x }"], True),
-		(["graphql", "-F", "query=@q.graphql"], False),
+		(["graphql", "-F", "query=@does-not-exist.graphql"], True),
+		(["graphql", "--input", "-"], True),
 		(["repos/o/r/pulls", "--jq", ".[] | select(.x == \"-f\")"], False),
 	],
 )
 def test_is_unsafe_post(args: list[str], unsafe: bool) -> None:
 	assert gar.is_unsafe_post(args) is unsafe
+
+
+def test_is_unsafe_post_reads_graphql_documents_from_files(tmp_path: Path) -> None:
+	read_doc = tmp_path / "read.graphql"
+	read_doc.write_text("# a comment\nquery { viewer { login } }\n", encoding="utf-8")
+	mut_doc = tmp_path / "mut.graphql"
+	mut_doc.write_text("# mutation in a comment only\n  mutation { x }\n", encoding="utf-8")
+	read_input = tmp_path / "read.json"
+	read_input.write_text(json.dumps({"query": "query { a }"}), encoding="utf-8")
+	mut_input = tmp_path / "mut.json"
+	mut_input.write_text(json.dumps({"query": "mutation { a }"}), encoding="utf-8")
+	bad_input = tmp_path / "bad.json"
+	bad_input.write_text("not json", encoding="utf-8")
+	assert gar.is_unsafe_post(["graphql", "-F", f"query=@{read_doc}"]) is False
+	assert gar.is_unsafe_post(["graphql", "-F", f"query=@{mut_doc}"]) is True
+	assert gar.is_unsafe_post(["graphql", "--input", str(read_input)]) is False
+	assert gar.is_unsafe_post(["graphql", f"--input={mut_input}"]) is True
+	assert gar.is_unsafe_post(["graphql", "--input", str(bad_input)]) is True
 
 
 def test_bucket() -> None:

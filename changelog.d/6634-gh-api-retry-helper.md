@@ -5,13 +5,13 @@ On 2026-10-01 the `GH_PAT` budget ran out and about 18 review gates and two vali
 
 | Call site | Before | Now |
 | --- | --- | --- |
-| Review gate PR read | a failed read skipped the review as `pr_state_unknown` | `AUTOFIX_GATE_PR_READ_FAILED`, the run fails and the sweep retries it; a 404 still skips |
+| Review gate PR read | a failed read skipped the review as `pr_state_unknown` | `AUTOFIX_GATE_PR_READ_FAILED`, the run fails and the sweep retries it; only a 404 still skips |
 | `validate.yml` authorize step | a transient error read as "not authorized" | `VALIDATE_AUTHORIZE_TARGET outcome=api_unavailable` |
-| Integration-ref resolve (validate, implement) | a rate limit fell back to the default branch | `INTEGRATION_REF_RESOLVE outcome=rate_limited`, the step fails |
+| Integration-ref resolve (validate, implement) | a rate limit or API error fell back to the default branch | `INTEGRATION_REF_RESOLVE outcome=rate_limited` or `outcome=api_unavailable`, the step fails; a declared branch that does not exist still falls back |
 | `implement.yml` existing-PR check | a failed listing read as "no PR" | `IMPLEMENT_PR_SAFETY_CHECK outcome=api_unavailable` |
-| Review sweep active-run snapshot | a failed listing read as "no active runs" | `AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE`, no dispatches that tick |
+| Review sweep active-run snapshot | a failed listing read as "no active runs" | `AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE` (any failure but a 404), no dispatches that tick |
 
-The existing helpers changed too. `gh_retry`, `gh_retry_to_file` and `gh_api_json_to_file` make one attempt for a POST create (comments, issues, PRs, dispatches) unless the caller marks it `--idempotent` or `GH_RETRY_IDEMPOTENT=true`; label and assignee adds carry that marker. `gh_retry_to_file` no longer leaves a failed response in its output file. No helper sleeps after its last attempt, and a GraphQL or search limit waits for its own reset. No GitHub API calls were added; the early steps get the helper with a git clone of `main` (here) or `stable` (consumers).
+The existing helpers changed too. `gh_retry`, `gh_retry_to_file` and `gh_api_json_to_file` make one attempt for a POST create (comments, issues, PRs, dispatches) unless the caller marks it `--idempotent` or `GH_RETRY_IDEMPOTENT=true`; label and assignee adds carry that marker. A GraphQL mutation counts as a create whether it is inline, in a `query=@file` or in an `--input` file; a document that cannot be read counts as one too. A rate limit seen by these helpers now records its bucket, so an `--optional` call skips while it lasts. `gh_retry_to_file` no longer leaves a failed response in its output file. No helper sleeps after its last attempt, and a GraphQL or search limit waits for its own reset. No GitHub API calls were added; the early steps get the helper with a git clone of `main` (here) or `stable` (consumers).
 
 ### For contributors
 

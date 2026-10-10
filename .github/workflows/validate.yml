@@ -210,6 +210,12 @@ jobs:
               echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc}"
               exit 1
             fi
+            # Exit 2 is an API failure (retries exhausted or a permanent error);
+            # only exit 1 (declared branch missing) keeps the fallback below.
+            if [ "${resolver_rc}" -eq 2 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc}"
+              exit 1
+            fi
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi

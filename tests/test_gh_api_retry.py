@@ -52,7 +52,10 @@ exit "$(cat "${FAKE_GH_PLAN}/${step}.rc")"
 """
 
 OK_BODY = '{"number": 6634, "title": "real"}'
-NOW = int(time.time())
+def _now() -> int:
+	# Read the clock per test: a module-level value goes stale when earlier
+	# test modules run for minutes, and short reset windows end in the past.
+	return int(time.time())
 
 
 def _headers(status: str, extra: dict[str, str] | None = None) -> str:
@@ -152,7 +155,7 @@ def test_retry_to_file_keeps_only_successful_body_and_truncates_on_failure(tmp_p
 
 
 def test_primary_limit_waits_for_matching_bucket(tmp_path: Path) -> None:
-	reset = NOW + 30
+	reset = _now() + 30
 	result, _ = _run(tmp_path, [_primary(reset, "graphql"), _ok()], "gh_api_retry graphql -f query='{ viewer { login } }' >/dev/null; echo rc=$?")
 	assert "rc=0" in result.stdout, result.stderr
 	sleeps = _sleeps(tmp_path)
@@ -162,8 +165,8 @@ def test_primary_limit_waits_for_matching_bucket(tmp_path: Path) -> None:
 
 
 def test_rate_limit_wait_reads_bucket_reset_from_rate_limit_body(tmp_path: Path) -> None:
-	reset = NOW + 40
-	json_body = f'{{"resources":{{"core":{{"reset":{NOW + 400}}},"graphql":{{"reset":{reset}}}}}}}'
+	reset = _now() + 40
+	json_body = f'{{"resources":{{"core":{{"reset":{_now() + 400}}},"graphql":{{"reset":{reset}}}}}}}'
 	result, _ = _run(tmp_path, [], "_gh_rate_limit_wait graphql", {"FAKE_RL_JSON": json_body})
 	if "jq" not in subprocess.run(["bash", "-c", "command -v jq || true"], capture_output=True, text=True).stdout:
 		pytest.skip("jq not available")
@@ -225,6 +228,38 @@ def test_idempotent_or_safe_calls_are_retried(tmp_path: Path, command: str, env:
 	assert len(_calls(plan)) == 2, command
 
 
+def test_graphql_documents_in_files_are_classified(tmp_path: Path) -> None:
+	"""A mutation in --input JSON is not retried; a query file read is."""
+	(tmp_path / "mut.json").write_text('{"query": "mutation { addLabel }"}', encoding="utf-8")
+	result, plan = _run(tmp_path, [_bad_gateway(), _ok()], "gh_api_retry graphql --input mut.json >/dev/null; echo rc=$?")
+	assert "rc=1" in result.stdout and len(_calls(plan)) == 1
+	(tmp_path / "plan" / "count").unlink()
+	(tmp_path / "plan" / "calls.log").unlink()
+	(tmp_path / "read.graphql").write_text("# comment\nquery { viewer { login } }\n", encoding="utf-8")
+	result, plan = _run(tmp_path, [_bad_gateway(), _ok()], "gh_api_retry graphql -F query=@read.graphql >/dev/null; echo rc=$?")
+	assert "rc=0" in result.stdout and len(_calls(plan)) == 2
+	assert _gh_bash(tmp_path, "_gh_api_args_unsafe_post graphql -F query=@missing.graphql; echo rc=$?") == "rc=0"
+
+
+def _gh_bash(tmp_path: Path, command: str) -> str:
+	script = f"set -uo pipefail; source '{GH_HELPERS}'; cd '{tmp_path}'; {command}"
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True).stdout.strip()
+
+
+def test_legacy_rate_limit_feeds_optional_breaker(tmp_path: Path) -> None:
+	"""A limit seen by gh_retry records a bucket line that --optional honours."""
+	limited = ("", "gh: API rate limit exceeded for user ID 1. (HTTP 403)\n", 1)
+	result, plan = _run(
+		tmp_path,
+		[limited, _ok()],
+		"gh_retry gh api repos/o/r >/dev/null 2>&1; gh_api_retry --optional repos/o/r >/dev/null; echo rc=$?",
+		{"GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+	assert "rc=75" in result.stdout, result.stderr
+	assert len(_calls(plan)) == 1
+	assert any(line.startswith("core ") for line in (tmp_path / "breaker").read_text().splitlines())
+
+
 def test_no_sleep_after_last_attempt(tmp_path: Path) -> None:
 	env = {"GH_RETRY_MAX_ATTEMPTS": "3"}
 	result, plan = _run(tmp_path, [_bad_gateway()], "gh_api_retry repos/o/r >/dev/null; echo rc=$?", env)
@@ -254,7 +289,7 @@ def test_curl_no_sleep_after_last_attempt(tmp_path: Path) -> None:
 
 
 def test_reset_beyond_cap_gives_up_with_75_and_no_sleep(tmp_path: Path) -> None:
-	result, _ = _run(tmp_path, [_primary(NOW + 3600)], "gh_api_retry repos/o/r >/dev/null; echo rc=$?")
+	result, _ = _run(tmp_path, [_primary(_now() + 3600)], "gh_api_retry repos/o/r >/dev/null; echo rc=$?")
 	assert "rc=75" in result.stdout
 	assert _sleeps(tmp_path) == []
 	assert "outcome=gave_up kind=primary" in result.stderr
@@ -263,7 +298,7 @@ def test_reset_beyond_cap_gives_up_with_75_and_no_sleep(tmp_path: Path) -> None:
 
 
 def test_optional_call_skips_while_breaker_active(tmp_path: Path) -> None:
-	(tmp_path / "breaker").write_text(f"core {NOW + 600}\ngarbage line\n", encoding="utf-8")
+	(tmp_path / "breaker").write_text(f"core {_now() + 600}\ngarbage line\n", encoding="utf-8")
 	result, plan = _run(tmp_path, [_ok()], "gh_api_retry --optional repos/o/r >/dev/null; echo rc=$?; gh_api_retry --optional graphql -f 'query={ a }' >/dev/null; echo rc2=$?")
 	assert "rc=75" in result.stdout
 	assert "rc2=0" in result.stdout
@@ -271,9 +306,10 @@ def test_optional_call_skips_while_breaker_active(tmp_path: Path) -> None:
 
 
 def test_low_budget_records_breaker_line(tmp_path: Path) -> None:
-	result, _ = _run(tmp_path, [_ok(extra={"x-ratelimit-remaining": "5", "x-ratelimit-reset": str(NOW + 100)})], "gh_api_retry repos/o/r >/dev/null; echo rc=$?")
+	reset = _now() + 100
+	result, _ = _run(tmp_path, [_ok(extra={"x-ratelimit-remaining": "5", "x-ratelimit-reset": str(reset)})], "gh_api_retry repos/o/r >/dev/null; echo rc=$?")
 	assert "rc=0" in result.stdout
-	assert f"core {NOW + 100} low" in (tmp_path / "breaker").read_text()
+	assert f"core {reset} low" in (tmp_path / "breaker").read_text()
 
 
 @pytest.mark.parametrize("plan_entry", [_not_found(), (_headers("422 Unprocessable Entity") + "{}", "gh: Validation Failed (HTTP 422)\n", 1), (_headers("403 Forbidden", {"x-ratelimit-remaining": "4000"}) + "{}", "gh: Resource not accessible by integration (HTTP 403)\n", 1)])
@@ -291,7 +327,7 @@ def test_last_status_is_visible_outside_subshell(tmp_path: Path) -> None:
 
 def test_paginate_runs_without_include_and_probes_bucket_reset(tmp_path: Path) -> None:
 	limited = ("", "gh: API rate limit exceeded for user ID 1. (HTTP 403)\n", 1)
-	result, plan = _run(tmp_path, [limited, ("[1]", "", 0)], "gh_api_retry --paginate search/issues -f q=x --method GET; echo; echo rc=$?", {"FAKE_RL_RESET": str(NOW + 20)})
+	result, plan = _run(tmp_path, [limited, ("[1]", "", 0)], "gh_api_retry --paginate search/issues -f q=x --method GET; echo; echo rc=$?", {"FAKE_RL_RESET": str(_now() + 20)})
 	assert "rc=0" in result.stdout
 	assert "[1]" in result.stdout
 	assert all(" -i " not in f" {c} " for c in _calls(plan))
@@ -308,7 +344,7 @@ def test_resolver_exits_75_when_rate_limited(tmp_path: Path) -> None:
 	fake.chmod(0o755)
 	plan_dir = tmp_path / "plan"
 	plan_dir.mkdir()
-	out, err, rc = _primary(NOW + 7200)
+	out, err, rc = _primary(_now() + 7200)
 	(plan_dir / "1.stdout").write_text(out)
 	(plan_dir / "1.stderr").write_text(err)
 	(plan_dir / "1.rc").write_text(str(rc))
