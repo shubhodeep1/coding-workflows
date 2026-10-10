@@ -445,8 +445,13 @@ def test_poller_builds_the_smoke_set_once_and_guards_direct_project_alerts() -> 
 	build = text.index('SMOKE_FIXTURE_TRACKING_NUMS=""')
 	assert build < text.index('for ((tidx=0; tidx<COUNT; tidx++)); do')
 	assert 'SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"' in text
-	assert text.count('if ! _smoke_fixture_alert_silenced "') == 3
-	for message in ('tg_send_msg "${_final_merge_alert_msg}" "CRITICAL"', 'MSG="✅ Project #${TRACKING_NUM} completed successfully."'):
+	assert text.count('if ! _smoke_fixture_alert_silenced "') == 5
+	for message in (
+		'tg_send_msg "${_final_merge_alert_msg}" "CRITICAL"',
+		'MSG="✅ Project #${TRACKING_NUM} completed successfully."',
+		'MSG="Project #${TRACKING_NUM} completed after validation pass',
+		'MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."',
+	):
 		site = text.index(message)
 		assert "_smoke_fixture_alert_silenced" in text[site - 200:site + 400], message
 

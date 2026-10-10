@@ -6,7 +6,7 @@ Before this change, a conflict between main and a project's final PR that appear
 | The numbers that matter | Value |
 | --- | --- |
 | Extra API calls per security-pass tick | 1 PR read, only while a final PR exists |
-| Alert paths silenced for smoke fixtures | `tg_notify` plus 3 direct sends |
+| Alert paths silenced for smoke fixtures | `tg_notify` plus 5 direct sends |
 
 What this means for operators: mid-pass conflicts on final PRs resolve without a manual merge, and smoke-test runs stop producing false CRITICAL alerts.
 

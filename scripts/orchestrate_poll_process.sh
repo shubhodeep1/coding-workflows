@@ -13424,7 +13424,9 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
-  tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  if ! _smoke_fixture_alert_silenced "DEBUG"; then
+    tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  fi
 }
 
 extract_fix_issues_from_comment() {
@@ -25478,7 +25480,9 @@ PRs to revert: ${REVERT_COUNT}"
         if [ -n "${GITHUB_RUN_ID:-}" ]; then
           MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
         fi
-        tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        if ! _smoke_fixture_alert_silenced "DEBUG"; then
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        fi
         continue
       fi
 
