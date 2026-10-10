@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:51 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The header comment says a non-integer `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` falls back to 24, but the code falls back to 6.\n  WHY: The runtime behavior is correct, but the stale comment misleads operators about the actual fallback.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The README `MERGE_TRAIN_GATE` log-format reference should list `conflict=ignored` among the possible conflict values.\n  expected_change_site: README.md around line 2766 (the `gate` subcommand table row)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: README.md:2766 still lists `conflict=none|conflict|unknown|unchecked`; `scripts/review_merge_train.sh` emits `conflict=ignored`.\n- requirement: The `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` header documentation should state that a non-integer value falls back to 6.\n  expected_change_site: scripts/review_merge_train.sh, line 51\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The header comment at line 51 says the fallback is 24, while the code at line 177 assigns `MT_HEAD_MAX_AGE_HOURS=6` and the warning at line 176 says `using 6`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh:51 | severity=low | confidence=5\n  PROBLEM: Header comment reads \"a non-integer warns and falls back to 24\" but the code at lines 174-178 falls back to 6.\n  WHY: No runtime failure; the stale comment misleads operators about the age-cap behavior.\n- TASK_GAP\n  Requirement: PR DESCRIPTION says \"Docs: the README `MERGE_TRAIN_CONFLICT_CHECK_ENABLED` and `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` rows and the agents.md merge-train paragraph are updated.\" The README `gate` subcommand table row at line 2766 documents the per-blocker log line `conflict=none|conflict|unknown|unchecked` but does not include `conflict=ignored`, the new value introduced by this PR at `scripts/review_merge_train.sh:748-757`.\n  Expected change site: README.md around line 2766 (the `gate` subcommand table cell).\n  Evidence of absence: README.md:2766 reads `conflict=none|conflict|unknown|unchecked`. The script now additionally produces `conflict=ignored` (line 755), logged at line 447, and the changelog fragment, agents.md paragraph, and the README `MERGE_TRAIN_CONFLICT_CHECK_ENABLED` var-row all document it. The gate table cell is the only documentation surface that still lists the pre-PR value set.\n  ISSUE_CONFIDENCE: 5\n- The reviewer also reported that the README `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` row and agents.md merge-train paragraph were already updated, so that portion of the PR description's claim is satisfied.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:433 | severity=low | confidence=5\n  PROBLEM: The header comment on line 51 still references 24 as the fallback for a non-integer `MERGE_TRAIN_HEAD_MAX_AGE_HOURS`.\n  WHY: Not a runtime failure, but documentation drift.\n- TASK_GAP\n  Requirement: PR DESCRIPTION says \"the README `MERGE_TRAIN_CONFLICT_CHECK_ENABLED` and `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` rows and the agents.md merge-train paragraph are updated\".\n  Expected change site: README.md around line 2766 (the `gate` subcommand table row).\n  Evidence of absence: The README table at line 2766 for `MERGE_TRAIN_GATE` still lists the conflict field as `conflict=none|conflict|unknown|unchecked`. It should now include `ignored`.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` header documentation should state that a non-integer value falls back to 6.\n  Expected change site: `scripts/review_merge_train.sh` line 51, header comment \"Env (both):\" block.\n  Evidence of absence: The continuation still reads `a non-integer warns and falls back to 24`, while the actual fallback at line 177 is `MT_HEAD_MAX_AGE_HOURS=6` and the runtime warning at line 176 says `using 6`.\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: The README gate audit-log row should document the new `conflict=ignored` value.\n  Expected change site: README.md line 2766, the `gate` subcommand row of the merge-train audit log table.\n  Evidence of absence: The row lists `conflict=none|conflict|unknown|unchecked`, while the code emits `conflict=ignored`.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_merge_train.sh:51 | severity=low | confidence=5\n  PROBLEM: Header comment says \"a non-integer warns and falls back to 24\" but the code at line 177 falls back to 6.\n  WHY: An operator reading the script header will expect a 24-hour fallback, but the script falls back to 6 hours.\n- TASK_GAP\n  Requirement: The README gate log-format reference should list `conflict=ignored` among the possible conflict values.\n  Expected change site: README.md around line 2766 (the `gate` subcommand table row).\n  Evidence of absence: README.md:2766 still reads `conflict=none|conflict|unknown|unchecked`, though the conflict field also produces `conflict=ignored`.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1c3f32c8cb312c46f69b22d2e5b1a38721906d867ae664339588bb0ae48b0d3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6998,
+    "run_id": "38009237984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38009237984",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010004945_6c07fa9d9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6998,
+    "run_id": "38009237984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T00:49:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
