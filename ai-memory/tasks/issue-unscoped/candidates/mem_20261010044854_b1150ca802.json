@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1170 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The retry re-enters the inner loop without resetting `__mt_runs_page`, so a deep-page shift can make the pagination counter reach the `max_pages=10` truncation guard up to one slot early.\n  WHY: This requires a deep-page shift and enough remaining pages to hit the guard; if it occurs, the listing is reported as truncated and the release pass aborts for that tick. The severity is low because the next tick retries.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh:1170 | severity=NIT | confidence=3\n  PROBLEM: The retry via `continue` re-enters the inner `while :` loop at line 1124 without resetting `__mt_runs_page`. The query at line 1125 hardcodes `page=1`, so the re-read always hits page 1 correctly and runs are accumulated through `unique_by(.id)`, but `__mt_runs_page` retains its pre-retry value. After the re-read succeeds it is incremented at line 1192 from the stale value. On a deep-page shift where a short page fires the retry at page N, the counter then advances from N through the remaining pages, reaching the `max_pages=10` truncation guard at line 1181 up to one slot early. In the incident scenario (first-page shift with `created_bound` empty) the counter is 1 before and after the retry, so the truncation guard is not affected.\n  WHY: A status with 9+ pages of runs and a deep-page shift could trip the truncation guard at page 10 instead of page 11, losing at most 100 runs from the union. The accumulated set is still correct, the listing is reported as truncated, and the release pass aborts for that tick \u2014 same fail-closed behaviour as before this PR. The next tick retries. This is the scenario described by the cross-pollination finding and is an extremely unlikely confluence (deep-page shift + re-read returns some unique runs so truncation doesn't fire at 1175 + enough remaining pages to hit max_pages at 1181).\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ee9c29fe8eaaae1464804f52a8a31f886882f3a68624d5365f05d2ca6237be1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7033,
+    "run_id": "38022977848",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38022977848",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010044854_b1150ca802",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7033,
+    "run_id": "38022977848"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T04:48:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
