@@ -603,6 +603,38 @@ _resolver_fail_closed_for_conflict_paths()
     echo "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: ${conflict_host_only_paths}" >&2
     _resolver_fail_closed sandbox_path_host_only
   fi
+  # Name the kind of unsafe path (#7059) without echoing any PR-controlled
+  # name: only tokens from the closed category set and 1|2|3+ depth buckets
+  # are printed (anything else reads as "other" / is dropped), and host-only
+  # lines are only counted. This line becomes the failure comment's First error.
+  local conflict_unsafe_summary=""
+  if [ -s "${conflict_path_report}" ] && [ -f "${conflict_path_report}" ] && [ ! -L "${conflict_path_report}" ]; then
+    conflict_unsafe_summary="$(awk -F'\t' '
+      NR > 500 { exit }
+      index($0, "unsafe") == 1 {
+        unsafe_count++
+        unsafe_category = ($1 == "unsafe") ? $2 : ""
+        if (unsafe_category !~ /^(symlink|symlink_in_path|special_file|unsafe_name|unreadable|other)$/) unsafe_category = "other"
+        seen_category[unsafe_category] = 1
+        if ($1 == "unsafe" && $3 ~ /^(1|2|3\+)$/) seen_depth[$3] = 1
+        next
+      }
+      index($0, "host_only\t") == 1 { host_only_count++ }
+      END {
+        if (unsafe_count == 0) exit
+        split("other special_file symlink symlink_in_path unreadable unsafe_name", category_order, " ")
+        categories = ""
+        for (i = 1; i <= 6; i++) if (category_order[i] in seen_category) categories = categories (categories == "" ? "" : ",") category_order[i]
+        split("1 2 3+", depth_order, " ")
+        depths = ""
+        for (i = 1; i <= 3; i++) if (depth_order[i] in seen_depth) depths = depths (depths == "" ? "" : ",") depth_order[i]
+        if (depths == "") depths = "none"
+        printf "unsafe=%d host_only=%d categories=%s depths=%s", unsafe_count, host_only_count + 0, categories, depths
+      }' "${conflict_path_report}" 2>/dev/null)" || conflict_unsafe_summary=""
+  fi
+  if [ -n "${conflict_unsafe_summary}" ]; then
+    echo "::error::Conflict resolver: conflicted path(s) cannot enter the sandbox: ${conflict_unsafe_summary}" >&2
+  fi
   _resolver_fail_closed sandbox_path_unsupported
 }
 

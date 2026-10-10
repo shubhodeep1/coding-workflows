@@ -452,3 +452,127 @@ def test_no_host_model_launch_or_private_host_index_in_launch():
 	assert "GIT_INDEX_FILE=" not in _launch()
 	assert "GIT_INDEX_FILE=" not in _helper()
 	assert 'codex CONFLICT_RESOLVER write)' in _helper()
+
+
+# Issue #7059: a nameless sandbox_path_unsupported failure now names the kind of
+# path it rejected, as a fixed category token and a depth bucket, before the
+# generic fail-closed line, so it becomes the failure comment's First error.
+UNSAFE_SUMMARY_PREFIX = "::error::Conflict resolver: conflicted path(s) cannot enter the sandbox: "
+
+
+def _first_error(stderr):
+	return next(line for line in stderr.splitlines() if line.startswith("::error::"))
+
+
+def _make_symlinked_file(tmp_path):
+	(tmp_path / "scripts").mkdir(exist_ok=True)
+	os.symlink("/etc/passwd", tmp_path / "scripts/link.py")
+	return "scripts/link.py", "symlink", "2"
+
+
+def _make_symlinked_parent(tmp_path):
+	(tmp_path / "real").mkdir()
+	(tmp_path / "real/x.py").write_text("x = 1\n")
+	(tmp_path / "scripts").mkdir(exist_ok=True)
+	os.symlink(tmp_path / "real", tmp_path / "scripts/sub")
+	return "scripts/sub/x.py", "symlink_in_path", "3+"
+
+
+def _make_fifo(tmp_path):
+	(tmp_path / "assets").mkdir(exist_ok=True)
+	os.mkfifo(tmp_path / "assets/pipe.svg")
+	return "assets/pipe.svg", "special_file", "2"
+
+
+def _make_odd_name(tmp_path):
+	return "assets/odd $name.svg", "unsafe_name", "2"
+
+
+@pytest.mark.parametrize("make", [_make_symlinked_file, _make_symlinked_parent, _make_fifo, _make_odd_name])
+@pytest.mark.parametrize("integration", ["false", "true"])
+def test_unsafe_path_category_is_named_without_the_path(tmp_path, make, integration):
+	_sandbox, calls = _stub(tmp_path)
+	name, category, depth = make(tmp_path)
+	result, env_text = _run_path_guard(tmp_path, [name], integration=integration)
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	summary = f"{UNSAFE_SUMMARY_PREFIX}unsafe=1 host_only=0 categories={category} depths={depth}"
+	assert summary + "\n" in result.stderr
+	assert _first_error(result.stderr) == summary
+	assert "reason=sandbox_path_unsupported" in result.stderr
+	for part in name.split("/"):
+		if part not in ("scripts", "assets"):
+			assert part not in result.stderr
+	for line in result.stderr.splitlines():
+		if line.startswith("REVIEW_RESOLVER_PATH_REJECTED"):
+			assert REJECTED_LINE.fullmatch(line) and line.endswith("path=redacted")
+	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_unsupported"
+	expected_env = "" if integration == "true" else "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_unsupported\n"
+	assert env_text == expected_env
+	assert not calls.exists()
+
+
+@pytest.mark.parametrize("make,reason", [(_make_symlinked_file, "symlink"), (_make_symlinked_parent, "symlink_in_path")])
+def test_symlink_rejection_logs_its_specific_reason(tmp_path, make, reason):
+	name, _category, _depth = make(tmp_path)
+	result, _env_text = _run_path_guard(tmp_path, [name])
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path=redacted\n" in result.stderr
+	assert "reason=unsafe_file" not in result.stderr
+
+
+def test_mixed_host_only_and_unsafe_names_categories_only(tmp_path):
+	_sandbox, calls = _stub(tmp_path)
+	name, _category, _depth = _make_symlinked_file(tmp_path)
+	result, env_text = _run_path_guard(tmp_path, [name, "assets/x.svg"])
+	assert result.returncode == 1
+	assert _first_error(result.stderr) == f"{UNSAFE_SUMMARY_PREFIX}unsafe=1 host_only=1 categories=symlink depths=2"
+	assert "assets/x.svg" not in result.stderr and "link.py" not in result.stderr
+	assert "host-only conflicted path(s) need a manual merge" not in result.stderr
+	assert env_text == "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_unsupported\n"
+	assert not calls.exists()
+
+
+def test_all_host_only_report_has_no_category_line(tmp_path):
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").write_text("x = 1\n")
+	result, _env_text = _run_path_guard(tmp_path, [".claude/hooks/pr_merge_status_guard.py", "assets/x.svg"])
+	assert "cannot enter the sandbox" not in result.stderr
+	assert _first_error(result.stderr) == "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py, assets/x.svg"
+
+
+def _run_report_only(tmp_path, report_text):
+	report = tmp_path / "report.txt"
+	report.write_text(report_text, encoding="utf-8")
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ :; }}
+{_failure_helper()}
+{_path_failure_helper()}
+_resolver_fail_closed_for_conflict_paths {str(report)!r}
+'''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+	return result
+
+
+def test_forged_and_legacy_report_lines_read_as_other(tmp_path):
+	result = _run_report_only(tmp_path, "unsafe\tevil$(x)\t9\nunsafe\nunsafe\t::error::spoof\t1\n")
+	assert result.returncode == 1
+	assert _first_error(result.stderr) == f"{UNSAFE_SUMMARY_PREFIX}unsafe=3 host_only=0 categories=other depths=1"
+	assert "evil" not in result.stderr and "spoof" not in result.stderr
+	assert "reason=sandbox_path_unsupported" in result.stderr
+
+
+def test_empty_report_keeps_the_generic_failure(tmp_path):
+	result = _run_report_only(tmp_path, "")
+	assert result.returncode == 1
+	assert "cannot enter the sandbox" not in result.stderr
+	assert "reason=sandbox_path_unsupported" in result.stderr
+
+
+def test_unsafe_category_is_the_failure_headline(tmp_path):
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("workflow_failure_heal", SCRIPT.parent / "workflow_failure_heal.py")
+	heal = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(heal)
+	name, _category, _depth = _make_symlinked_file(tmp_path)
+	result, _env_text = _run_path_guard(tmp_path, [name])
+	assert heal.failure_headline([result.stderr]) == "Conflict resolver: conflicted path(s) cannot enter the sandbox: unsafe=1 host_only=0 categories=symlink depths=2"
