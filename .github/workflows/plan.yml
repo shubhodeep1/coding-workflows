@@ -127,6 +127,7 @@ jobs:
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
             echo "::notice::No issue number available for integration ref resolution; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -169,12 +170,14 @@ jobs:
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [ ! -f "${resolver_script}" ]; then
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -188,10 +191,16 @@ jobs:
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
             if [ -n "${integration_branch}" ]; then
               echo "integration_branch_meta=${integration_branch}" >> "$GITHUB_OUTPUT"
+              # resolver_status (#7064) feeds the check-triage branch guard:
+              # resolved / none / failed / unavailable.
+              echo "resolver_status=resolved" >> "$GITHUB_OUTPUT"
+            else
+              echo "resolver_status=none" >> "$GITHUB_OUTPUT"
             fi
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout repository
@@ -1092,6 +1101,70 @@ jobs:
               output_path.write_text("", encoding="utf-8")
           PY
 
+      # Check-triage target-branch guard (#7064, default off): when
+      # CHECK_TRIAGE_BRANCH_GUARD_ENABLED is on, an ai:check-triage issue whose
+      # body declares no verified "Target branch:" / "Integration branch:" line
+      # is blocked instead of being planned on the default branch. The guard
+      # reads only the resolver's status token and the GitHub-reported labels;
+      # it never infers a branch from issue prose. The synthetic BLOCKED line
+      # reuses the existing parse -> blocked-handler path.
+      - name: Check-triage target-branch guard
+        id: check_triage_branch_guard
+        if: env.SKIP_PLAN != 'true'
+        env:
+          CHECK_TRIAGE_BRANCH_GUARD_ENABLED: ${{ vars.CHECK_TRIAGE_BRANCH_GUARD_ENABLED || 'false' }}
+          CHECK_TRIAGE_RESOLVER_STATUS: ${{ steps.refctx.outputs.resolver_status }}
+        run: |
+          set -euo pipefail
+          guard_enabled=false
+          case "$(printf '%s' "${CHECK_TRIAGE_BRANCH_GUARD_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+            true|1|yes|on) guard_enabled=true ;;
+          esac
+          # Closed vocabulary; anything else counts as "could not verify".
+          resolver_status="${CHECK_TRIAGE_RESOLVER_STATUS:-}"
+          case "${resolver_status}" in
+            resolved|none|failed|unavailable) ;;
+            *) resolver_status="unknown" ;;
+          esac
+          issue_ref="${ISSUE_NUMBER:-}"
+          [[ "${issue_ref}" =~ ^[0-9]+$ ]] || issue_ref="unknown"
+          guard_log() {
+            echo "CHECK_TRIAGE_BRANCH_GUARD issue=${issue_ref} enabled=${guard_enabled} check_triage=$1 resolver_status=${resolver_status} outcome=$2 reason=$3"
+          }
+          guard_block() {
+            if [ "${resolver_status}" = "none" ]; then
+              printf '%s\n' 'BLOCKED: ai:check-triage issue has no explicit target-branch metadata; add a standalone "Target branch: <branch>" or "Integration branch: <branch>" line to the issue body, then reply /answer' > "${CODEX_OUTPUT_FILE}"
+            else
+              printf '%s\n' "BLOCKED: ai:check-triage issue target branch could not be verified (resolver_status=${resolver_status}); correct the issue's branch metadata, then reply /answer" > "${CODEX_OUTPUT_FILE}"
+            fi
+            echo "CHECK_TRIAGE_BRANCH_GUARD_BLOCKED=true" >> "$GITHUB_ENV"
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            guard_log "$1" blocked "$2"
+          }
+
+          if [ "${guard_enabled}" != "true" ]; then
+            guard_log unknown skip disabled
+            exit 0
+          fi
+
+          if ! labels_json="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null)" || [ -z "${labels_json}" ]; then
+            guard_block unknown labels_unavailable
+            exit 0
+          fi
+          if ! jq -e 'any(.[]; . == "ai:check-triage")' >/dev/null 2>&1 <<<"${labels_json}"; then
+            guard_log false pass not_check_triage
+            exit 0
+          fi
+          if [ "${resolver_status}" = "resolved" ]; then
+            guard_log true pass metadata_present
+            exit 0
+          fi
+          if [ "${resolver_status}" = "none" ]; then
+            guard_block true no_target_branch_metadata
+          else
+            guard_block true target_branch_unverified
+          fi
+
       - name: Capture pre-Codex plan write-guard snapshot
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -1160,7 +1233,7 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Run Codex planning
-        if: env.SKIP_PLAN != 'true'
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

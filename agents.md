@@ -326,6 +326,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
     Fix PRs linked to triage issues run the single-issue security pass at their
     current head; the triage label and fingerprint do not exempt them.
+    With `CHECK_TRIAGE_BRANCH_GUARD_ENABLED` on (default `false`, #7064),
+    `plan.yml`'s `Check-triage target-branch guard` blocks planning of an
+    `ai:check-triage` issue unless the integration resolver verified an explicit
+    `Target branch:` / `Integration branch:` line (`steps.refctx.outputs.resolver_status`
+    is `resolved`); it never infers a branch from prose and reuses the existing
+    `BLOCKED:` handler. Log prefix `CHECK_TRIAGE_BRANCH_GUARD`.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
     `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
     `scripts/workflow_failure_heal_report.sh`,
