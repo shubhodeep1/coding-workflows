@@ -36,8 +36,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 LABEL = "ai:ci-budget"
 DEFAULT_WORKFLOW_WARN_BYTES = 440_000
 HARD_WORKFLOW_GUARD_BYTES = 480_000
@@ -59,6 +57,10 @@ def workflow_size_findings(workflows_dir: Path, warn_bytes: int) -> list[dict[st
 
 def job_timeouts(ci_workflow: Path) -> dict[str, int]:
 	"""Job id and display name -> timeout-minutes, for jobs that set one."""
+	# Imported here so a missing PyYAML only skips the job-duration check
+	# (main() catches the ImportError); the workflow-size check needs no YAML.
+	import yaml
+
 	data = yaml.safe_load(ci_workflow.read_text(encoding="utf-8")) or {}
 	out: dict[str, int] = {}
 	for job_id, job in (data.get("jobs") or {}).items():
@@ -207,6 +209,9 @@ def main(argv: list[str] | None = None) -> int:
 				token=os.environ.get("CI_BUDGET_ISSUE_TOKEN", ""),
 			)
 			print(f"CI_BUDGET_ISSUE kind={f['kind']} subject={f['subject']} action=opened number={created.get('number')}")
+			# Matrix jobs share a base-name subject, so later findings with the
+			# same marker in this run must see the issue just opened.
+			existing += "\n" + marker(f["kind"], f["subject"])
 		except Exception as exc:  # noqa: BLE001
 			print(f"::warning::ci_budget_watch: could not open the {f['kind']} issue for {f['subject']} ({exc}).")
 	return 0

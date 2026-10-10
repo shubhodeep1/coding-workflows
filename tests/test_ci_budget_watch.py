@@ -117,6 +117,16 @@ def test_opens_one_issue_per_new_finding_and_skips_existing(tmp_path: Path) -> N
 	assert "action=opened number=77" in result.stdout
 
 
+def test_matrix_jobs_sharing_a_subject_open_one_issue(tmp_path: Path) -> None:
+	root = _tree(tmp_path, {}, CI)
+	env = _fake_gh(tmp_path, [], [_job("orchestrate-poll (0)", 16 * 60), _job("orchestrate-poll (1)", 17 * 60)])
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	assert len([c for c in calls if c["args"][1].endswith("/issues")]) == 1
+	assert "subject=orchestrate-poll action=exists" in result.stdout
+
+
 def test_api_failures_never_fail_the_job(tmp_path: Path) -> None:
 	root = _tree(tmp_path, {"big.yml": 450_000}, CI)
 	bin_dir = tmp_path / "bin"
