@@ -86,8 +86,24 @@
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
 #   WORKFLOW_HEAL_SOURCE_CHECKOUT         "false" to skip the release-SHA worktree (tests)
+#   WORKFLOW_HEAL_DEFAULT_BRANCH          default branch a CI `workflow_run` report must
+#                                         come from (default: the intake event's
+#                                         repository.default_branch; empty rejects CI runs)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
+#   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
+#                                         OIDC identity; default "false" (transition mode: they
+#                                         are accepted after the binding checks). A report that
+#                                         carries an identity is always verified (issue #6559).
+#   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600)
+#   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch
+#                                         (default GITHUB_EVENT_NAME, else repository_dispatch)
+#   WORKFLOW_HEAL_REPORT_IDENTITY_FILE    0600 file holding the report's OIDC token
+#                                         (default ${RUNTIME_DIR}/report_identity.jwt)
+#   WORKFLOW_HEAL_REPORT_IDENTITY_STATE   present | absent | malformed (default absent),
+#                                         set by the workflow's materialize step
+#   WORKFLOW_HEAL_OIDC_JWKS_FILE          test hook: read the JWKS from this file instead of
+#                                         fetching it (default empty)
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -146,6 +162,28 @@ MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
+REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
+REQUIRE_REPORT_AUTH="${WORKFLOW_HEAL_REQUIRE_REPORT_AUTH:-false}"
+case "${REQUIRE_REPORT_AUTH,,}" in
+	true|false) REQUIRE_REPORT_AUTH="${REQUIRE_REPORT_AUTH,,}" ;;
+	*)
+		log "warn invalid_require_report_auth value=$(printf '%s' "${REQUIRE_REPORT_AUTH}" | tr -cd 'A-Za-z0-9_.-' | head -c 40); using false"
+		REQUIRE_REPORT_AUTH="false"
+		;;
+esac
+REPORT_ORIGIN="${WORKFLOW_HEAL_REPORT_ORIGIN:-${GITHUB_EVENT_NAME:-repository_dispatch}}"
+case "${REPORT_ORIGIN}" in
+	repository_dispatch|workflow_run|workflow_dispatch) ;;
+	# Unknown origins take the strictest path.
+	*) REPORT_ORIGIN="repository_dispatch" ;;
+esac
+REPORT_IDENTITY_FILE="${WORKFLOW_HEAL_REPORT_IDENTITY_FILE:-${RUNTIME_DIR}/report_identity.jwt}"
+REPORT_IDENTITY_STATE="${WORKFLOW_HEAL_REPORT_IDENTITY_STATE:-absent}"
+case "${REPORT_IDENTITY_STATE}" in
+	present|absent|malformed) ;;
+	*) REPORT_IDENTITY_STATE="malformed" ;;
+esac
+OIDC_JWKS_FILE_OVERRIDE="${WORKFLOW_HEAL_OIDC_JWKS_FILE:-}"
 
 # --- Gates -----------------------------------------------------------------
 
@@ -191,6 +229,76 @@ PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
 PAYLOAD_SCRIPT_REF="$(_pf '.script_ref // ""')"
 PAYLOAD_CRASH_FILE="$(_pf '.crash_file // ""')"
 
+# --- Report authentication (issue #6559) -------------------------------------
+#
+# repository_dispatch: a report carrying an OIDC identity is always verified
+# (RS256 against GitHub's JWKS; issuer, audience, iat freshness, repository ==
+# source_repo, this repo's reusable reporter workflow, reporter run). Without
+# one it is accepted only after the binding checks below, or skipped when
+# WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=true. workflow_run payloads are built here
+# from GitHub's own event (`event`); manual workflow_dispatch re-runs always
+# take the binding checks (`manual`). Every rejection fails closed: WARNING,
+# exit 0, no issue or comment written. The token is never logged.
+
+_report_auth_reject()
+{
+	local reject_reason="${1:-verification_failed}"
+	rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
+	log "report_auth=rejected reason=${reject_reason} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
+	tg_send_msg "Workflow failure heal intake rejected a report claiming to come from ${SOURCE_REPO} (reason ${reject_reason}); nothing was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	exit 0
+}
+
+REPORT_AUTH=""
+case "${REPORT_ORIGIN}" in
+	workflow_run)
+		REPORT_AUTH="event"
+		;;
+	workflow_dispatch)
+		REPORT_AUTH="manual"
+		;;
+	*)
+		case "${REPORT_IDENTITY_STATE}" in
+			malformed)
+				_report_auth_reject "identity_malformed"
+				;;
+			present)
+				if [ ! -s "${REPORT_IDENTITY_FILE}" ]; then
+					_report_auth_reject "identity_missing"
+				fi
+				JWKS_FILE="${RUNTIME_DIR}/github_oidc_jwks.json"
+				if [ -n "${OIDC_JWKS_FILE_OVERRIDE}" ]; then
+					cp "${OIDC_JWKS_FILE_OVERRIDE}" "${JWKS_FILE}" 2>/dev/null || : > "${JWKS_FILE}"
+				elif ! curl -sS --fail --max-time 30 --retry 2 --max-filesize 65536 \
+					"https://token.actions.githubusercontent.com/.well-known/jwks" -o "${JWKS_FILE}" 2>/dev/null; then
+					: > "${JWKS_FILE}"
+				fi
+				if ! jq -e '.keys | type == "array"' "${JWKS_FILE}" >/dev/null 2>&1; then
+					_report_auth_reject "jwks_unavailable"
+				fi
+				VERIFY_FILE="${RUNTIME_DIR}/report_identity_verify.json"
+				if ! python3 "${HEAL_PY}" verify-report-identity --token-file "${REPORT_IDENTITY_FILE}" --jwks-json "${JWKS_FILE}" \
+					--payload-json "${PAYLOAD_FILE}" --self-repo "${SELF_REPO}" --max-age "${REPORT_MAX_AGE}" > "${VERIFY_FILE}" 2>/dev/null; then
+					_report_auth_reject "$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+				fi
+				REPORT_AUTH="verified"
+				;;
+			*)
+				# phase_failure reports come from the heal-report job of the
+				# clarify / plan / implement workflows, which runs with
+				# `permissions: {}` and so carries no identity; the provenance
+				# gate below binds them to a run of that workflow in source_repo
+				# linked from the issue by a trusted author.
+				if [ "${REQUIRE_REPORT_AUTH}" = "true" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
+					_report_auth_reject "unauthenticated_report"
+				fi
+				REPORT_AUTH="absent"
+				;;
+		esac
+		;;
+esac
+rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
+
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
@@ -201,6 +309,106 @@ if [ -n "${SKIP_REASON}" ]; then
 fi
 
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
+
+# --- Claim binding (issue #6559) -----------------------------------------------
+#
+# The claimed issue / PR must exist in source_repo (and carry the claimed
+# label); every claimed run must belong to source_repo and have failed (the
+# reporter's own verified run may still be in progress). CLAUDE.md §14 audit:
+# the intake read no issue or pull request object before this, and the jobs
+# reads below are the same per-run reads the log collection used to make, done
+# once here and reused there.
+LOG_DIR="${RUNTIME_DIR}/logs"
+JOBS_DIR="${RUNTIME_DIR}/jobs"
+mkdir -p "${LOG_DIR}" "${JOBS_DIR}"
+if [ "${REPORT_AUTH}" != "event" ]; then
+	BIND_ISSUE_FILE="${RUNTIME_DIR}/bind_issue.json"
+	BIND_PULL_FILE="${RUNTIME_DIR}/bind_pull.json"
+	BIND_ARGS=(--payload-json "${PAYLOAD_FILE}" --jobs-dir "${JOBS_DIR}")
+	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+		if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && gh_api_json_to_file "${BIND_ISSUE_FILE}" gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}" 2>/dev/null; then
+			BIND_ARGS+=(--issue-json "${BIND_ISSUE_FILE}")
+			if ! jq -e --arg l "${LABEL}" '[.labels[]? | if type == "object" then .name else . end] | index($l) != null' "${BIND_ISSUE_FILE}" >/dev/null 2>&1; then
+				# The label may have been removed since the report; its
+				# labeled event still proves the escalation happened.
+				BIND_EVENTS_FILE="${RUNTIME_DIR}/bind_events.json"
+				if gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/events" -F per_page=100 \
+					--jq '.[] | select(.event == "labeled") | .label.name // ""' > "${BIND_EVENTS_FILE}" 2>/dev/null; then
+					if grep -qxF -- "${LABEL}" "${BIND_EVENTS_FILE}"; then
+						BIND_ARGS+=(--labeled-event-found)
+					fi
+				else
+					_report_auth_reject "label_unverifiable"
+				fi
+			fi
+		else
+			_report_auth_reject "issue_not_found"
+		fi
+	elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && gh_api_json_to_file "${BIND_PULL_FILE}" gh api "repos/${SOURCE_REPO}/pulls/${ISSUE_NUMBER}" 2>/dev/null; then
+			BIND_ARGS+=(--pull-json "${BIND_PULL_FILE}")
+			BIND_PR_HEAD="$(jq -r '.head.sha // ""' "${BIND_PULL_FILE}" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+			if [ -n "${HEAD_SHA}" ] && [[ "${BIND_PR_HEAD}" =~ ^[0-9a-f]{40}$ ]] && [ "${HEAD_SHA}" != "${BIND_PR_HEAD}" ]; then
+				# The PR head moved after the failure: the reported head must
+				# still be an ancestor of it.
+				BIND_COMPARE_FILE="${RUNTIME_DIR}/bind_compare.json"
+				if gh_api_json_to_file "${BIND_COMPARE_FILE}" gh api --method GET "repos/${SOURCE_REPO}/compare/${HEAD_SHA}...${BIND_PR_HEAD}" 2>/dev/null \
+					&& jq -e '.status == "ahead" or .status == "identical"' "${BIND_COMPARE_FILE}" >/dev/null 2>&1; then
+					BIND_ARGS+=(--head-ancestor)
+				fi
+			fi
+		else
+			_report_auth_reject "pull_request_not_found"
+		fi
+	fi
+	BIND_RUN_COUNT=0
+	# Only label-escalation reports bind their runs here; phase, autofix and
+	# workflow_run reports have their runs bound by the provenance gate below,
+	# which keeps the current run first and reads no earlier run it rejects.
+	BIND_RUNS_HERE=false
+	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+		BIND_RUNS_HERE=true
+	fi
+	while [ "${BIND_RUNS_HERE}" = "true" ] && IFS= read -r bind_run_id; do
+		[[ "${bind_run_id}" =~ ^[0-9]+$ ]] || continue
+		BIND_RUN_COUNT=$((BIND_RUN_COUNT + 1))
+		[ "${BIND_RUN_COUNT}" -le "${MAX_RUNS}" ] || break
+		BIND_JOBS_FILE="${JOBS_DIR}/${bind_run_id}.json"
+		if ! gh_api_json_to_file "${BIND_JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${bind_run_id}/jobs" -F per_page=100 2>/dev/null \
+			|| ! jq -e '.jobs | type == "array"' "${BIND_JOBS_FILE}" >/dev/null 2>&1; then
+			rm -f "${BIND_JOBS_FILE}"
+		fi
+	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
+	if [ "${REPORT_AUTH}" = "verified" ]; then
+		# Only a verified report's own run (bound to its token) may still be
+		# in progress.
+		BIND_REPORTER_RUN_ID="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+		if [[ "${BIND_REPORTER_RUN_ID}" =~ ^[0-9]+$ ]]; then
+			BIND_ARGS+=(--reporter-run-id "${BIND_REPORTER_RUN_ID}")
+		fi
+		# A verified reporter built the comments excerpt from GitHub; an
+		# unauthenticated one may have made it up, so binding clears it.
+		BIND_ARGS+=(--trusted-excerpts)
+	fi
+	BIND_RESULT_FILE="${RUNTIME_DIR}/bind_result.json"
+	if ! python3 "${HEAL_PY}" bind-report "${BIND_ARGS[@]}" > "${BIND_RESULT_FILE}" 2>/dev/null; then
+		_report_auth_reject "$(jq -r '.reason // "binding_failed"' "${BIND_RESULT_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo binding_failed)"
+	fi
+	# The fetched issue / PR replaces the report's title, URL and body excerpt.
+	if ! jq --slurpfile bind "${BIND_RESULT_FILE}" '.run_refs = $bind[0].run_refs | . + ($bind[0].overrides // {})' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
+		_report_auth_reject "binding_failed"
+	fi
+	ISSUE_TITLE="$(_pf '.issue_title // ""')"
+	ISSUE_URL="$(_pf '.issue_url // ""')"
+	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
+	if [ "${REPORT_AUTH}" = "absent" ]; then
+		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	fi
+else
+	log "report_auth=event reason=workflow_run_event source=${SOURCE_REPO} kind=${SOURCE_KIND}"
+fi
+
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
 
 # --- Provenance (before any log read) --------------------------------------
@@ -218,6 +426,19 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	# repository, workflow path, conclusion or PR association, and no issue/PR
 	# comments were read here before. At most one /user read, three run GETs,
 	# and one paginated comment read; failures reject rather than bypass this gate.
+	# The default branch a CI run must come from is read from the intake's own
+	# event file (always this repository), so it costs no GitHub call; empty
+	# rejects CI runs (fail closed) and leaves release runs unaffected.
+	PROVENANCE_DEFAULT_BRANCH="${WORKFLOW_HEAL_DEFAULT_BRANCH:-}"
+	if [ -z "${PROVENANCE_DEFAULT_BRANCH}" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+		PROVENANCE_DEFAULT_BRANCH="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+	fi
+	PROVENANCE_DEFAULT_BRANCH="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -z "${PROVENANCE_DEFAULT_BRANCH}" ]; then
+		# Lets operators tell "default branch unknown" apart from "run not on the
+		# default branch"; both still reject CI runs as ci_not_default_branch_push.
+		log "provenance_default_branch_unavailable source=${SOURCE_REPO} kind=${SOURCE_KIND} effect=ci_runs_rejected"
+	fi
 	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
 		if [ "${SOURCE_KIND}" != "phase_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
 			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
@@ -239,7 +460,8 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 		fi
 	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
 	if ! python3 "${HEAL_PY}" verify-run-provenance --payload-json "${PAYLOAD_FILE}" --runs-json "${PROVENANCE_RUNS}" \
-		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" > "${PROVENANCE_RESULT}" 2>/dev/null \
+		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" \
+		--default-branch "${PROVENANCE_DEFAULT_BRANCH}" > "${PROVENANCE_RESULT}" 2>/dev/null \
 		|| ! jq -e 'type == "object" and (.status == "ok" or .status == "rejected") and (.run_refs | type == "array") and (.rejections | type == "array")' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
 		printf '{"status":"rejected","reason":"verifier_error","rejections":[]}\n' > "${PROVENANCE_RESULT}"
 	fi
@@ -263,8 +485,6 @@ fi
 
 # --- Collect failed jobs + logs --------------------------------------------
 
-LOG_DIR="${RUNTIME_DIR}/logs"
-mkdir -p "${LOG_DIR}"
 SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
 printf '[]' > "${SUMMARIES_FILE}"
 LOG_FILES=()
@@ -277,8 +497,31 @@ while IFS=$'\t' read -r run_id run_url; do
 	if [ "${RUN_COUNT}" -gt "${MAX_RUNS}" ]; then
 		break
 	fi
+	RUN_INFO_FILE="${LOG_DIR}/run-${run_id}-info.json"
+	# Reuse the run already read by the provenance gate (§14); only label
+	# escalation reports, which skip that gate, read the run here.
+	run_info_ready=false
+	if [ -n "${PROVENANCE_DIR:-}" ] && [ -s "${PROVENANCE_DIR}/run-${run_id}.json" ] && cp "${PROVENANCE_DIR}/run-${run_id}.json" "${RUN_INFO_FILE}"; then
+		run_info_ready=true
+	elif gh_api_json_to_file "${RUN_INFO_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}"; then
+		run_info_ready=true
+	fi
+	verify_pending_args=()
+	if [ -n "${PENDING_CURRENT_RUN}" ] && [ "${run_id}" = "${PENDING_CURRENT_RUN}" ]; then
+		verify_pending_args=(--allow-pending)
+	fi
+	if [ "${run_info_ready}" != true ] \
+		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" \
+			--head-sha "$({ [ "${SOURCE_KIND}" = autofix_failure ] || [ "${SOURCE_KIND}" = workflow_run ]; } && printf '%s' "${HEAD_SHA}" || true)" > "${RUN_INFO_FILE}.verified" 2>/dev/null \
+		|| ! jq -e --argjson id "${run_id}" '.run_id == $id' "${RUN_INFO_FILE}.verified" >/dev/null; then
+		log "run_ref_rejected run=${run_id} reason=unverified"
+		continue
+	fi
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
-	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
+	if [ -s "${JOBS_DIR}/${run_id}.json" ]; then
+		# Already read (and bound) above.
+		cp "${JOBS_DIR}/${run_id}.json" "${JOBS_FILE}"
+	elif ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
 		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
 			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
@@ -304,8 +547,10 @@ while IFS=$'\t' read -r run_id run_url; do
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
 		exit 0
 	fi
+	SELECTED_JOBS_FILE="${LOG_DIR}/run-${run_id}-selected.json"
+	python3 "${HEAL_PY}" select-evidence-jobs --jobs-json "${JOBS_FILE}" --kind "${SOURCE_KIND}" --limit "${MAX_FAILED_JOBS}" > "${SELECTED_JOBS_FILE}"
 	JOB_COUNT=0
-	while IFS=$'\t' read -r job_id job_name workflow_name failing_step; do
+	while IFS=$'\t' read -r job_id job_name workflow_name failing_step selection; do
 		[ -n "${job_id}" ] || continue
 		[[ "${job_id}" =~ ^[0-9]+$ ]] || continue
 		JOB_COUNT=$((JOB_COUNT + 1))
@@ -318,7 +563,10 @@ while IFS=$'\t' read -r run_id run_url; do
 		# refuses the body ("the response contains terminal escape sequences")
 		# even when stdout is a file, and every job read as "(job log
 		# unavailable)": no error signature, no downstream-gate dedup.
-		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
+		# gh_retry buffers stdout in an unredacted temp file. Fetch directly:
+		# the pipe redacts bytes before the first filesystem write.
+		if gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" 2>/dev/null \
+			| python3 "${HEAL_PY}" redact-stream > "${RAW_LOG}" && [ -s "${RAW_LOG}" ]; then
 			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
 				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 				: > "${FILTERED_LOG}"
@@ -334,13 +582,12 @@ while IFS=$'\t' read -r run_id run_url; do
 		if [ "${SOURCE_KIND}" != "phase_failure" ]; then
 			LOG_FILES+=("${FILTERED_LOG}")
 		fi
-		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" \
+		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" --arg selection "${selection}" \
 			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" \
-			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file}]' \
+			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file, selection: $selection}]' \
 			"${SUMMARIES_FILE}" > "${SUMMARIES_FILE}.tmp" && mv "${SUMMARIES_FILE}.tmp" "${SUMMARIES_FILE}"
-	done < <(jq -r '.jobs[] | select((.conclusion // "") | IN("failure","timed_out","cancelled"))
-		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
-		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
+	done < <(jq -r '.[] | [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // ""), .selection]
+		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 
 if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
@@ -683,9 +930,9 @@ _git_fetch_ownership_refs()
 		GIT_CONFIG_COUNT=1 \
 			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
 			GIT_CONFIG_VALUE_0="${ownership_auth_header}" \
-			git fetch --quiet --depth 1 origin "$@" >/dev/null 2>&1
+		git fetch --quiet --depth "${HEAL_OWNERSHIP_FETCH_DEPTH:-1}" origin "$@" >/dev/null 2>&1
 	else
-		git fetch --quiet --depth 1 origin "$@" >/dev/null 2>&1
+		git fetch --quiet --depth "${HEAL_OWNERSHIP_FETCH_DEPTH:-1}" origin "$@" >/dev/null 2>&1
 	fi
 }
 
@@ -766,6 +1013,27 @@ elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 		log "crash_ownership=pr crash_file=none basis=pipeline_files files=$(printf '%s\n' "${PIPELINE_OWNERSHIP_FILES}" | wc -l | tr -d ' ') base=${PAYLOAD_BASE_BRANCH:-unknown} source=${SOURCE_LABEL}"
 	fi
 fi
+
+# Freeze the heal-scope inputs before the diagnosis prompt assembles any
+# untrusted evidence (#6463): only validated report fields, authenticated run metadata
+# and the ownership facts computed above. _open_issue reads this snapshot,
+# never the diagnosis, so neither evidence nor a model verdict can widen it.
+SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
+# Failing tests reported by the verified runs' own job logs (Q37: A): the
+# render step resolves them to test files and the subjects they cover at the
+# scope commit, so a CI heal may fix the code a test exercises instead of
+# being confined to tests/**. Logs are run metadata, not diagnosis output.
+FAILING_TESTS_JSON="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt 2>/dev/null || echo '{"names":[],"files":[]}')"
+jq -e 'type == "object" and (.names | type == "array") and (.files | type == "array")' <<< "${FAILING_TESTS_JSON}" >/dev/null 2>&1 || FAILING_TESTS_JSON='{"names":[],"files":[]}'
+jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
+	--argjson failing_tests "${FAILING_TESTS_JSON}" \
+	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
+	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
+	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
+	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 
 # --- Run the diagnosis model -----------------------------------------------
 
@@ -993,11 +1261,67 @@ _comment_on_source()
 		|| log "warn source_comment_failed source=${SOURCE_LABEL}"
 }
 
+# Fetch the consumer commit a heal issue will be implemented against (the
+# failing head when known, else its default branch) into a private bare repo.
+# No credential prompt; any failure leaves the consumer scope unresolved.
+_git_fetch_consumer_scope_ref()
+{
+	local consumer_repo="$1" scope_dir="$2" consumer_ref="HEAD" consumer_auth_header=""
+	[[ "${consumer_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+	if [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then consumer_ref="${HEAD_SHA}"; fi
+	rm -rf -- "${scope_dir}"
+	GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git init --bare -q "${scope_dir}" >/dev/null 2>&1 || return 1
+	if [ -n "${GH_TOKEN:-}" ]; then
+		consumer_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+	fi
+	GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+		GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="${consumer_auth_header}" \
+		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
 	local title_file="${RUNTIME_DIR}/issue_title.txt" body_file="${RUNTIME_DIR}/issue_body.md"
 	local label_args=(--label "${HEAL_LABEL}")
+	local scope_marker_file="${RUNTIME_DIR}/scope_marker.txt"
+	: > "${scope_marker_file}"
+	# Scope is derived only from validated report fields and authenticated run
+	# metadata. The diagnosis and its files_touched prose are never inputs.
+	# This selection is fixed by the validated report, not the diagnosis's
+	# classification or target branch: a model verdict cannot expand scope.
+	local checkout_ref="${WRAPPER_SHA:-${TARGET_BRANCH_DEFAULT}}"
+	if [ "${SOURCE_KIND}" = workflow_run ]; then checkout_ref="${HEAD_SHA:-${TARGET_BRANCH_DEFAULT}}"; fi
+	if [ "${SOURCE_KIND}" = autofix_failure ] && [ -n "${PAYLOAD_SCRIPT_REF}" ]; then checkout_ref="${PAYLOAD_SCRIPT_REF}"; fi
+	local scope_ref=""
+	if [[ "${checkout_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+		_git_fetch_ownership_refs "${checkout_ref}" || true
+		scope_ref="${checkout_ref}"
+	elif [[ "${checkout_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] && git check-ref-format --branch "${checkout_ref}" >/dev/null 2>&1; then
+		_git_fetch_ownership_refs "+refs/heads/${checkout_ref}:refs/remotes/origin/${checkout_ref}" || true
+		scope_ref="refs/remotes/origin/${checkout_ref}"
+	fi
+	local scope_checkout="." scope_workflows_key=self_workflows
+	if [ "${repo}" != "${SELF_REPO}" ]; then
+		# The issue is implemented in the consumer checkout, so its scope must be
+		# checked against the consumer's own tree, never coding-workflows'. Only
+		# the run's own workflow path applies there (referenced_paths name
+		# coding-workflows files). An unreadable consumer tree leaves the scope
+		# unresolved, which implement refuses at ai:needs-human (fail closed).
+		scope_checkout="${RUNTIME_DIR}/consumer-scope.git"
+		scope_workflows_key=consumer_workflows
+		scope_ref=""
+		if _git_fetch_consumer_scope_ref "${repo}" "${scope_checkout}"; then
+			scope_ref="$(git --git-dir "${scope_checkout}" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+		fi
+	fi
+	# A missing pre-diagnosis snapshot leaves the scope unresolved (fail closed).
+	if [ -n "${scope_ref}" ] && [ -s "${SCOPE_INPUTS_FROZEN:-}" ] && git -C "${scope_checkout}" rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
+		jq --arg key "${scope_workflows_key}" '{crash_file: .crash_file, runs: .runs, workflow_paths: .[$key], changed_files: .changed_files, failing_tests: (.failing_tests // {names: [], files: []})}' \
+			"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"
+		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
+	fi
+	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
 	rm -f "${title_file}" "${body_file}"
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${PAYLOAD_FILE}" \
@@ -1009,6 +1333,7 @@ _open_issue()
 		--classification "${CLASSIFICATION}" \
 		--target-branch "${target_branch}" \
 		--integration-branch "${integration_branch}" \
+		--scope-marker-file "${scope_marker_file}" \
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
@@ -1048,14 +1373,21 @@ case "${CLASSIFICATION}" in
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
 		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
-			# A review/autofix run in this repo executes the pull request's own
-			# workflow code (review_autofix.yml resolves SCRIPT_REF to
-			# github.sha here), so the defect it hit lives on that PR's branch
-			# and may not exist on the stable line at all. A fix aimed at
-			# stable cannot unblock the PR and would drag the PR's unreleased
-			# changes into stable, so the fix targets the PR's head branch.
+			# Review/autofix stages support scripts from SCRIPT_REF, not
+			# necessarily this PR's head. Only a verified support ref on main
+			# (or stable) redirects the fix; an unknown ref retains the PR-head
+			# target instead of guessing a branch from untrusted report prose.
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="source_pr_head"
+			if [ "${PAYLOAD_SCRIPT_REF}" = stable ]; then
+				TARGET_BRANCH=stable
+				TARGET_BRANCH_SOURCE=support_ref
+			elif [[ "${PAYLOAD_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${PAYLOAD_SCRIPT_REF}" != "${HEAD_SHA}" ] \
+				&& HEAL_OWNERSHIP_FETCH_DEPTH=1024 _git_fetch_ownership_refs "+refs/heads/main:refs/remotes/origin/main" \
+				&& git merge-base --is-ancestor "${PAYLOAD_SCRIPT_REF}" refs/remotes/origin/main 2>/dev/null; then
+				TARGET_BRANCH=main
+				TARGET_BRANCH_SOURCE=support_ref
+			fi
 		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then

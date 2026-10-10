@@ -648,6 +648,11 @@ unblock_main()
 	local -a decide_args=(decide --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --comments-file "${RUNTIME_DIR}/item_comments.json"
 		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
+	# An ai:security issue never gets accept_with_followup on its menu (#6541);
+	# unblock_actions.py refuses it again if this flag is ever missing.
+	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
+		decide_args+=(--security-issue)
+	fi
 	if [[ "${tracking}" =~ ^[0-9]+$ ]]; then
 		if [ "${tracking}" = "${ITEM}" ]; then
 			cp "${RUNTIME_DIR}/item_comments.json" "${RUNTIME_DIR}/project_comments.json"
@@ -737,6 +742,42 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	if [ -z "${marker_line}" ]; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=marker_failed"
 		return 0
+	fi
+	if [ "${verdict_name}" = "close" ]; then
+		# Issue #6557: the decision and the model run can be minutes old, so a
+		# close is recorded and acted on only against a fresh, verified block
+		# state: the item must still be open and still carry the same stop.
+		# Comment text never decides this. Any read failure fails closed.
+		local recheck_stop_json recheck_stop
+		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json" 2>/dev/null \
+			|| ! jq -e '.number' "${RUNTIME_DIR}/item_recheck.json" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_recheck_unavailable"
+			return 0
+		fi
+		if [ "$(jq -r '.state' "${RUNTIME_DIR}/item_recheck.json")" != "open" ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=closed"
+			return 0
+		fi
+		if [ "${project_failed_substituted}" != "true" ]; then
+			# A failed project without a block label is re-checked against its
+			# trusted state just below instead.
+			if ! recheck_stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop \
+				--labels-json "$(jq -c '[.labels[]?.name]' "${RUNTIME_DIR}/item_recheck.json")" 2>/dev/null)"; then
+				# Only the ledger's own "no block label" error means the item was
+				# unblocked; any other failure (crash, bad input) is a failed recheck.
+				if [ "$(jq -r '.error // ""' <<< "${recheck_stop_json}" 2>/dev/null || true)" = "no block label on this item" ]; then
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=unblocked"
+				else
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_recheck_unavailable"
+				fi
+				return 0
+			fi
+			recheck_stop="$(jq -r '.stop // ""' <<< "${recheck_stop_json}" 2>/dev/null || true)"
+			if [ "${recheck_stop}" != "${ITEM_STOP}" ]; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=stop_changed"
+				return 0
+			fi
+		fi
 	fi
 	if [ "${project_failed_substituted}" = "true" ]; then
 		# The model can take minutes; never record or act on a stale verdict.

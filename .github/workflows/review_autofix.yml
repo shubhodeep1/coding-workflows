@@ -112,6 +112,9 @@ env:
   # the same base that edit the same files (scripts/review_merge_train.sh).
   MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
   MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+  MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
+  MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
+  MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
   MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -590,6 +593,8 @@ jobs:
           # evaluating the cap (failure comments keep their marker).
           REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
           REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
+          # #6625: markers from other support versions are not counted.
+          REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
           set -euo pipefail
 
@@ -1177,7 +1182,8 @@ jobs:
                 if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
                   --comments-json "${gate_marker_comments_file}" \
                   --head-sha "${pr_head_sha_gate}" \
-                  --author-login "${gate_marker_author_login}" 2>/dev/null)"; then
+                  --author-login "${gate_marker_author_login}" \
+                  --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)"; then
                   fingerprint_cap_decision=""
                 fi
                 fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
@@ -1198,9 +1204,9 @@ jobs:
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
-                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE} support=${REVIEW_SUPPORT_SHA:-none}"
                   else
-                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
+                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} support=${REVIEW_SUPPORT_SHA:-none}"
                   fi
                 fi
               fi
@@ -2094,7 +2100,30 @@ jobs:
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator
+      # decision Q35: A), read from the same verified support commit the
+      # gate resolved.
+      MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+      # Required-checks wait before `gh pr merge --auto` (pr_checks_lib.sh):
+      # without branch protection, auto-merge lands the PR immediately.
+      AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+      AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
     steps:
+      - name: Checkout merge-base freshness helper
+        id: checkout_freshness_helper
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.gate.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-freshness-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/pr_checks_lib.sh
+            scripts/gh_helpers.sh
+          sparse-checkout-cone-mode: false
+
       - name: Record GH_PAT budget at deterministic-skip-merge start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -2110,6 +2139,9 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
+        env:
+          FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
+          REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
 
@@ -2153,6 +2185,34 @@ jobs:
             local label="$1" repo="$2" color="$3" desc="$4"
             gh_retry gh label create "${label}" --repo "${repo}" --color "${color}" --description "${desc}" >/dev/null 2>&1 || true
           }
+
+          # Merge-base freshness gate: a gate-observed head whose base moved
+          # under files this PR touches is updated from the base instead of
+          # auto-merged, so CI runs on the combined tree first (the
+          # synchronize run then re-enters this job). The helper is read
+          # from the verified support commit; when the checkout is missing
+          # or unverified the freshness gate is skipped with a warning and
+          # the required-checks wait fails closed (auto-merge refused). `_safe_gh_jq` is the library's gh
+          # transport; the inline retry wrapper above serves as gh_retry.
+          _pr_base_fresh_for_merge() {
+            echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
+            return 0
+          }
+          _pr_wait_for_required_checks() {
+            PR_CHECKS_WAIT_OUTCOME="unavailable"
+            echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+            return 1
+          }
+          if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
+            && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
+            && [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+            && [ "$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}" ]; then
+            _safe_gh_jq() { gh api "$@"; }
+            # shellcheck disable=SC1091
+            source .codex-freshness-src/scripts/pr_checks_lib.sh
+          else
+            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
+          fi
 
           write_deterministic_skip_summary()
           {
@@ -2243,7 +2303,16 @@ jobs:
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
-              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
+              if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+              elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
                 echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
@@ -2261,7 +2330,16 @@ jobs:
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
-            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
+            if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+            elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+            elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
               echo "Auto-merge enabled. PR will merge once all required checks pass."
@@ -2397,6 +2475,7 @@ jobs:
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
       FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
+      REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
       REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2509,8 +2588,17 @@ jobs:
             echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
             exit 0
           fi
-          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
-            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")))' \
+          # #6625: a cap marker of another support version does not count; the
+          # support SHA must be a field of a marker on its own line, not text
+          # elsewhere (an inline "First error" quote can hold a whole marker).
+          cap_support=""
+          if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            cap_support="${REVIEW_SUPPORT_SHA}"
+          elif [ -n "${REVIEW_SUPPORT_SHA:-}" ]; then
+            echo "::warning::REVIEW_SUPPORT_SHA is not a 40-hex SHA; the cap marker is written without support=."
+          fi
+          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" --arg support "${cap_support}" \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | test("(^|\\n)<!-- review-autofix-failure-cap:v1 head=" + $head + "( [^ >\\n]+)* support=" + $support + "( [^ >\\n]+)* -->[ \\r]*(\\n|$)"))))' \
             "${fresh_cap_comments_file}" >/dev/null; then
             echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
             exit 0
@@ -2561,7 +2649,7 @@ jobs:
             labeled_summary="this pull request (no linked issue found)"
           fi
 
-          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->"
           cap_title="identical failure repeated"
           cap_first_error=""
           cap_lead="The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way"
@@ -2721,6 +2809,8 @@ jobs:
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # #6625: failure markers record support= for the version-aware cap.
+      REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       # Issue #6308: host Python must not import modules from the PR checkout
       # (or its workspace copy) when running -c, -, or -m.
       PYTHONSAFEPATH: "1"
@@ -3108,7 +3198,7 @@ jobs:
           fi
 
       - name: Install OpenCode CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:
           opencode_version: ${{ env.OPENCODE_VERSION }}
 
@@ -3203,87 +3293,13 @@ jobs:
 
       - name: Initialize runtime workspace
         run: |
-          set -euo pipefail
-
-          RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
-          PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
-          RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
-          job_start_epoch="$(date +%s)"
-          review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"
-          review_soft_deadline_minutes_raw="${review_soft_deadline_minutes}"
-
-          case "${review_soft_deadline_minutes}" in
-            ''|*[!0-9]*)
-              echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes}'; defaulting to 210." >&2
-              review_soft_deadline_minutes="210"
-              ;;
-            *)
-              review_soft_deadline_minutes="$(( 10#${review_soft_deadline_minutes} ))"
-              if [ "${review_soft_deadline_minutes}" -le 0 ]; then
-                echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes_raw}'; defaulting to 210." >&2
-                review_soft_deadline_minutes="210"
-              fi
-              ;;
-          esac
-
-          codex_run_budget_total_secs="$(( review_soft_deadline_minutes * 60 ))"
-          codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
-
-          install -d -m 0700 "${RUNTIME_DIR}" "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
-
-          {
-            echo "JOB_START_EPOCH=${job_start_epoch}"
-            echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"
-            echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"
-            echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
-            echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
-            echo "RUNTIME_DIR=${RUNTIME_DIR}"
-            echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
-            echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
-            echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
-            echo "PR_META_FILE=${RUNTIME_DIR}/pr_meta.json"
-            echo "PR_DIFF_FILE=${RUNTIME_DIR}/pr_diff.patch"
-            echo "ORIGINAL_PR_DIFF_FILE=${RUNTIME_DIR}/original_pr_diff.patch"
-            echo "PR_ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/pr_issue_comments.json"
-            echo "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json"
-            echo "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md"
-            echo "PR_REVIEWS_FILE=${RUNTIME_DIR}/pr_reviews.json"
-            echo "PR_REVIEW_COMMENTS_FILE=${RUNTIME_DIR}/pr_review_comments.json"
-            echo "PR_ALL_COMMENTS_CONTEXT_FILE=${RUNTIME_DIR}/pr_all_comments_context.txt"
-            echo "PR_CHECK_RUNS_CONTEXT_FILE=${RUNTIME_DIR}/pr_check_runs_context.txt"
-            echo "LAST_RUN_DIFF_FILE=${RUNTIME_DIR}/last_run_diff.patch"
-            echo "LAST_RUN_CHANGED_FILES_FILE=${RUNTIME_DIR}/last_run_changed_files.txt"
-            echo "PR_CHANGED_FILES_FILE=${RUNTIME_DIR}/pr_changed_files.txt"
-            echo "LAST_COMMIT_STAT_FILE=${RUNTIME_DIR}/last_commit_stat.txt"
-            echo "LAST_RUN_DIFF_STAT_FILE=${RUNTIME_DIR}/last_run_diff_stat.txt"
-            echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"
-            echo "REVIEWER_PROMPT_BODY_FILE=${RUNTIME_DIR}/reviewer_prompt_body.txt"
-            echo "EDITOR_PROMPT_BODY_FILE=${RUNTIME_DIR}/editor_prompt_body.txt"
-            echo "REVIEWER_PROMPT_FILE=${RUNTIME_DIR}/reviewer_prompt.txt"
-            echo "EDITOR_PROMPT_FILE=${RUNTIME_DIR}/editor_prompt.txt"
-            echo "EDITOR_SUMMARY_FILE=${RUNTIME_DIR}/editor_summary.txt"
-            echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
-            echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
-            echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
-            echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"
-            echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
-            echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
-            echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
-            echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"
-            echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
-            echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
-            echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
-            echo "SEMBLE_AVAILABLE=false"
-            echo "SEMBLE_BIN="
-            echo "SEMBLE_INDEX_AVAILABLE=false"
-            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
-            echo "SERENA_AVAILABLE=false"
-            echo "SERENA_PROJECT_PREEXISTED=false"
-            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
-            echo "HAS_PR_DIFF=false"
-            echo "PR_DIFF_SOURCE=uninitialized"
-            echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
-          } >> "$GITHUB_ENV"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_init_runtime_workspace.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_init_runtime_workspace.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_init_runtime_workspace.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Initialize runtime workspace'."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Initialize workspace metadata
         if: env.PR_CLOSED != 'true'
@@ -3660,213 +3676,13 @@ jobs:
       - name: Restore same-head partial resume state
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
-          set -euo pipefail
-
-          current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-          if [ -z "${current_head_sha}" ]; then
-            echo "::warning::Unable to resolve git HEAD for partial-resume restore; continuing without same-head resume state."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_restore_partial_resume.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_restore_partial_resume.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_restore_partial_resume.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Restore same-head partial resume state'."
+            exit 1
           fi
-
-          resume_round_limit="${REVIEW_MAX_RESUME_ROUNDS:-3}"
-          if ! [[ "${resume_round_limit}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::warning::Invalid REVIEW_MAX_RESUME_ROUNDS='${resume_round_limit}'; falling back to 3."
-            resume_round_limit=3
-          fi
-
-          resume_env_file="$(mktemp)"
-          CURRENT_HEAD_SHA="${current_head_sha}" \
-          CURRENT_BASE_REF="${RETARGETED_BASE_REF:-}" \
-          CURRENT_BASE_UPDATED_AT="${RETARGETED_BASE_UPDATED_AT:-}" \
-          CURRENT_BASE_RETARGETED="${RETARGETED_BASE_THIS_RUN:-false}" \
-          RESUME_ROUND_LIMIT="${resume_round_limit}" \
-          CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
-          CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
-          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
-          from __future__ import annotations
-
-          import json
-          import os
-          import shutil
-          import sys
-          from pathlib import Path
-
-
-          def bool_to_env(value: bool) -> str:
-              return "true" if value else "false"
-
-
-          def parse_list(value: object) -> list[str]:
-              if not isinstance(value, list):
-                  return []
-              parsed: list[str] = []
-              for item in value:
-                  if isinstance(item, str) and item.strip():
-                      parsed.append(item.strip())
-              return parsed
-
-
-          def parse_bool(value: object, default: bool = False) -> bool:
-              if isinstance(value, bool):
-                  return value
-              if isinstance(value, str):
-                  normalized = value.strip().lower()
-                  if normalized in {"1", "true", "yes", "on"}:
-                      return True
-                  if normalized in {"0", "false", "no", "off"}:
-                      return False
-              return default
-
-
-          def sanitize_round(value: object) -> int:
-              try:
-                  parsed = int(value)
-              except (TypeError, ValueError):
-                  return 0
-              return parsed if parsed >= 0 else 0
-
-
-          def optional_path(value: str) -> Path | None:
-              value = value.strip()
-              return Path(value) if value else None
-
-
-          def restore_cached_artifacts(source_dir: Path | None, destination_dir: Path | None) -> int:
-              restored = 0
-              if source_dir is None or destination_dir is None or not source_dir.is_dir():
-                  return restored
-              try:
-                  destination_dir.mkdir(parents=True, exist_ok=True)
-              except OSError as exc:
-                  print(
-                      f"::warning::Could not prepare resume artifact directory {destination_dir}: {exc}",
-                      file=sys.stderr,
-                  )
-                  return restored
-              for source_path in sorted(source_dir.iterdir()):
-                  if not source_path.is_file():
-                      continue
-                  try:
-                      shutil.copy2(source_path, destination_dir / source_path.name)
-                  except OSError as exc:
-                      print(
-                          f"::warning::Could not restore same-head artifact {source_path} -> {destination_dir / source_path.name}: {exc}",
-                          file=sys.stderr,
-                      )
-                      continue
-                  restored += 1
-              return restored
-
-
-          current_head_sha = os.environ.get("CURRENT_HEAD_SHA", "").strip()
-          current_base_ref = os.environ.get("CURRENT_BASE_REF", "").strip()
-          current_base_updated_at = os.environ.get("CURRENT_BASE_UPDATED_AT", "").strip()
-          current_base_retargeted = os.environ.get("CURRENT_BASE_RETARGETED") == "true"
-          resume_round_limit = os.environ.get("RESUME_ROUND_LIMIT", "3").strip() or "3"
-          pr_number = os.environ.get("PR_NUMBER", "").strip() or "0"
-          marker_root = Path(f".ai/review_runtime/pr-{pr_number}")
-          current_previous_reviews_dir = optional_path(os.environ.get("CURRENT_PREVIOUS_REVIEWS_DIR", ""))
-          current_runtime_dir = optional_path(os.environ.get("CURRENT_RUNTIME_DIR", ""))
-
-          selected_payload: dict[str, object] | None = None
-          selected_marker: Path | None = None
-          selected_sort_key: tuple[int, int, str] = (-1, -1, "")
-          if current_head_sha and marker_root.is_dir():
-              for marker_path in sorted(marker_root.glob("round-*/partial_finalize.json")):
-                  try:
-                      payload = json.loads(marker_path.read_text(encoding="utf-8"))
-                  except (OSError, json.JSONDecodeError):
-                      continue
-                  if not isinstance(payload, dict):
-                      continue
-                  head_sha = payload.get("head_sha")
-                  if not isinstance(head_sha, str) or head_sha.strip() != current_head_sha:
-                      continue
-                  marker_base = payload.get("base_ref")
-                  if marker_base and marker_base != current_base_ref:
-                      continue
-                  # Cache restoration can change mtime, and PR updated_at is
-                  # not a base-change timestamp. Legacy state is unverifiable.
-                  if not marker_base:
-                      continue
-                  resume_round = sanitize_round(payload.get("resume_round"))
-                  try:
-                      marker_mtime_ns = marker_path.stat().st_mtime_ns
-                  except OSError:
-                      marker_mtime_ns = -1
-                  sort_key = (resume_round, marker_mtime_ns, marker_path.as_posix())
-                  if sort_key > selected_sort_key:
-                      selected_sort_key = sort_key
-                      selected_payload = payload
-                      selected_marker = marker_path
-
-          exports = {
-              "AUTOFIX_RESUME_RESTORED": "false",
-              "AUTOFIX_RESUME_TERMINAL": "false",
-              "AUTOFIX_RESUME_ROUND": "0",
-              "AUTOFIX_RESUME_ROUND_LIMIT": resume_round_limit,
-              "AUTOFIX_RESUME_STATE": "fresh",
-              "AUTOFIX_RESUME_SHOULD_CONTINUE": "false",
-              "AUTOFIX_RESUME_HEAD_SHA": current_head_sha,
-              "AUTOFIX_RESUME_COMPLETED_SCOPE": "",
-              "AUTOFIX_RESUME_INCOMPLETE_SCOPE": "",
-              "AUTOFIX_RESUME_PROGRESS_FINGERPRINT": "",
-              "AUTOFIX_RESUME_REASON": "",
-              "AUTOFIX_RESUME_PHASE": "",
-              "AUTOFIX_RESUME_COMMENT_POSTED": "false",
-              "AUTOFIX_RESUME_MARKER_FILE": "",
-              "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",
-          }
-
-          if selected_payload is not None and selected_marker is not None:
-              resume_state = selected_payload.get("resume_state")
-              if not isinstance(resume_state, str) or not resume_state.strip():
-                  resume_state = "resumable"
-              resume_state = resume_state.strip()
-              resume_should_continue = parse_bool(
-                  selected_payload.get("resume_should_continue"),
-                  default=(resume_state == "resumable"),
-              )
-              restored_artifact_count = 0
-              selected_marker_root = selected_marker.parent
-              restored_artifact_count += restore_cached_artifacts(
-                  selected_marker_root / "previous_reviews",
-                  current_previous_reviews_dir,
-              )
-              restored_artifact_count += restore_cached_artifacts(
-                  selected_marker_root / "runtime",
-                  current_runtime_dir,
-              )
-              exports.update(
-                  {
-                      "AUTOFIX_RESUME_RESTORED": "true",
-                      "AUTOFIX_RESUME_TERMINAL": bool_to_env(not resume_should_continue),
-                      "AUTOFIX_RESUME_ROUND": str(sanitize_round(selected_payload.get("resume_round"))),
-                      "AUTOFIX_RESUME_STATE": resume_state,
-                      "AUTOFIX_RESUME_SHOULD_CONTINUE": bool_to_env(resume_should_continue),
-                      "AUTOFIX_RESUME_COMPLETED_SCOPE": ",".join(parse_list(selected_payload.get("completed_scope"))),
-                      "AUTOFIX_RESUME_INCOMPLETE_SCOPE": ",".join(parse_list(selected_payload.get("incomplete_scope"))),
-                      "AUTOFIX_RESUME_PROGRESS_FINGERPRINT": str(selected_payload.get("progress_fingerprint", "") or ""),
-                      "AUTOFIX_RESUME_REASON": str(selected_payload.get("reason", "") or ""),
-                      "AUTOFIX_RESUME_PHASE": str(selected_payload.get("phase", "") or ""),
-                      "AUTOFIX_RESUME_COMMENT_POSTED": bool_to_env(parse_bool(selected_payload.get("comment_posted"))),
-                      "AUTOFIX_RESUME_MARKER_FILE": selected_marker.as_posix(),
-                      "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": str(restored_artifact_count),
-                  }
-              )
-
-          for key, value in exports.items():
-              print(f"{key}={value}")
-          PY
-
-          cat "${resume_env_file}" >> "$GITHUB_ENV"
-
-          if grep -q '^AUTOFIX_RESUME_RESTORED=true$' "${resume_env_file}"; then
-            echo "Restored same-head partial resume state from $(awk -F= '$1 == "AUTOFIX_RESUME_MARKER_FILE" { print $2 }' "${resume_env_file}" | tail -n 1) with $(awk -F= '$1 == "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT" { print $2 }' "${resume_env_file}" | tail -n 1) cached artifacts."
-          else
-            echo "No cached same-head partial resume state matched HEAD=${current_head_sha:-<unknown>}."
-          fi
-
-          rm -f "${resume_env_file}"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Detect smoke test and tune LLM settings
         env:
@@ -4240,144 +4056,13 @@ jobs:
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
-          set -euo pipefail
-
-          echo "Generating reviewer diff context"
-          bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
-
-          # Helper: ensure the merge-base between HEAD and origin/<base>
-          # is reachable in the local (possibly shallow) clone.
-          # `git diff origin/<base>...HEAD` and the merge precheck both
-          # need this merge-base; on a shallow clone (codex-agent uses
-          # fetch-depth: 100) it may sit below the boundary for long-
-          # running PRs.  Deepens iteratively, falling back to
-          # --unshallow as a last resort.  Fail-open: callers that need
-          # the merge-base check `git rev-parse --verify origin/<base>`
-          # themselves and degrade gracefully.
-          #
-          # Refspec discipline: every `git fetch` here passes explicit
-          # refspecs limited to BASE_BRANCH + (when known) TARGET_BRANCH.
-          # Without them, `git fetch ... origin` defers to the default
-          # `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`
-          # and would pull every remote branch on each deepen call —
-          # undoing the fetch-depth: 100 budget this PR is trying to
-          # enforce.  Either side of the merge-base reaching its full
-          # ancestor is sufficient for git merge-base to resolve, so
-          # deepening just these two refs is enough.
-          _ensure_merge_base_reachable() {
-            local _remote_ref="$1"
-            local _local_ref="${2:-HEAD}"
-            local _iter=0
-            local -a _refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
-            if [ -n "${TARGET_BRANCH:-}" ]; then
-              _refspecs+=("+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
-            fi
-            while [ "${_iter}" -lt 4 ]; do
-              if [ ! -f "$(git rev-parse --git-dir)/shallow" ]; then
-                return 0
-              fi
-              if git merge-base "${_remote_ref}" "${_local_ref}" >/dev/null 2>&1; then
-                return 0
-              fi
-              _iter=$((_iter + 1))
-              echo "merge-base ${_remote_ref}…${_local_ref} unreachable in shallow clone — deepening (attempt ${_iter}/4) on refs: ${_refspecs[*]}."
-              if ! git fetch --no-tags --prune --deepen=200 origin "${_refspecs[@]}" 2>/dev/null; then
-                echo "::warning::git fetch --deepen=200 origin ${_refspecs[*]} failed during deepen-on-miss; falling back to --unshallow on the same refs."
-                git fetch --no-tags --prune --unshallow origin "${_refspecs[@]}" 2>/dev/null || true
-                return 0
-              fi
-            done
-            if ! git merge-base "${_remote_ref}" "${_local_ref}" >/dev/null 2>&1; then
-              echo "::warning::merge-base ${_remote_ref}…${_local_ref} still unreachable after 4 deepen attempts; trying final --unshallow on refs: ${_refspecs[*]}."
-              git fetch --no-tags --prune --unshallow origin "${_refspecs[@]}" 2>/dev/null || true
-            fi
-          }
-
-          PR_DIFF_ATTEMPTED_PATHS="${PR_DIFF_ATTEMPTED_PATHS:-gh_pr_diff:${PR_DIFF_FILE}}"
-          if [ ! -s "${PR_DIFF_FILE}" ]; then
-            echo "Primary gh pr diff output is empty. Attempting git fallback diff generation."
-            PR_DIFF_ATTEMPTED_PATHS="${PR_DIFF_ATTEMPTED_PATHS};git_diff_origin_base_head:${PR_DIFF_FILE}"
-            if ! git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"; then
-              echo "Warning: git fetch origin ${BASE_BRANCH} failed in fallback path; fallback git diff requires an existing origin/${BASE_BRANCH} ref."
-            fi
-            if git rev-parse --verify "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
-              _ensure_merge_base_reachable "origin/${BASE_BRANCH}" "HEAD"
-              git diff "origin/${BASE_BRANCH}...HEAD" > "${PR_DIFF_FILE}" || true
-            else
-              echo "Warning: origin/${BASE_BRANCH} is unavailable in fallback path; skipping fallback git diff generation."
-              : > "${PR_DIFF_FILE}"
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_generate_diff_context.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_generate_diff_context.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_generate_diff_context.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Generate diff context'."
+            exit 1
           fi
-
-          if [ ! -s "${PR_DIFF_FILE}" ]; then
-            echo "Both primary and fallback diff generation produced empty output. Writing placeholder diff context."
-            printf '%s\n' "[NO_PR_DIFF_AVAILABLE] Unable to generate PR patch content from both gh pr diff and git diff origin/<base>...HEAD for this run." > "${PR_DIFF_FILE}"
-            echo "HAS_PR_DIFF=false" >> "$GITHUB_ENV"
-            echo "PR_DIFF_SOURCE=placeholder_no_diff_available" >> "$GITHUB_ENV"
-          else
-            if [ "${PR_DIFF_SOURCE:-gh_pr_diff_empty}" = "gh_pr_diff_empty" ]; then
-              echo "PR_DIFF_SOURCE=git_fallback_origin_base_head" >> "$GITHUB_ENV"
-            fi
-            echo "HAS_PR_DIFF=true" >> "$GITHUB_ENV"
-          fi
-          echo "PR_DIFF_ATTEMPTED_PATHS=${PR_DIFF_ATTEMPTED_PATHS}" >> "$GITHUB_ENV"
-
-          cp "${PR_DIFF_FILE}" "${ORIGINAL_PR_DIFF_FILE}"
-
-          pr_diff_bytes="$(wc -c < "${PR_DIFF_FILE}" | tr -d '[:space:]')"
-          original_pr_diff_bytes="$(wc -c < "${ORIGINAL_PR_DIFF_FILE}" | tr -d '[:space:]')"
-          echo "Final PR diff bytes (${PR_DIFF_FILE}): ${pr_diff_bytes}"
-          echo "Final PR diff bytes (${ORIGINAL_PR_DIFF_FILE}): ${original_pr_diff_bytes}"
-          echo "Final PR diff sha256 (${PR_DIFF_FILE}): $(sha256sum "${PR_DIFF_FILE}" | awk '{print $1}')"
-          echo "Final PR diff sha256 (${ORIGINAL_PR_DIFF_FILE}): $(sha256sum "${ORIGINAL_PR_DIFF_FILE}" | awk '{print $1}')"
-          echo "Final PR diff preview (${PR_DIFF_FILE}) suppressed in logs for security."
-
-          if ! git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"; then
-            echo "Warning: git fetch origin ${BASE_BRANCH} failed before changed-files generation; continuing with current refs."
-          fi
-
-          if git rev-parse --verify "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
-            _ensure_merge_base_reachable "origin/${BASE_BRANCH}" "HEAD"
-            git diff --name-only "origin/${BASE_BRANCH}...HEAD" > "${PR_CHANGED_FILES_FILE}" || true
-          else
-            echo "Warning: origin/${BASE_BRANCH} is unavailable; writing empty changed-files list."
-            : > "${PR_CHANGED_FILES_FILE}"
-          fi
-          git show --stat HEAD > "${LAST_COMMIT_STAT_FILE}" || true
-
-          # LAST_RUN_DIFF must reflect actual prior AI autofix work on PR head,
-          # not whatever HEAD~1 happens to be. The downstream OSCILLATION GUARD
-          # in the editor prompt (scripts/review_apply_fixes.sh:441-462) tells
-          # the model to leave any hunk visible in LAST_RUN_DIFF alone unless
-          # it can attach a "regression fingerprint" + "runtime failure path".
-          # The previous unconditional `git diff HEAD~1...HEAD` fed the editor
-          # the diff of impl commits, smoke-test bait commits, and manual
-          # pushes — falsely tripping the guardrail on first-iteration runs.
-          # Smoke run 25254574828 hit this: bait commit was at HEAD,
-          # last_run_diff showed the bait line, OSCILLATION GUARD activated,
-          # editor produced empty output across 6 attempts (3 + 3 retry) at
-          # reasoning=low → Phase 4b bait-removed verification failed.
-          # Walk back recent commits and only use the diff of the most recent
-          # `[ai-autofix]`/`[judge-fix]` commit on the PR head's first-parent
-          # chain, matching the iteration counter at line 2096-2105 and the
-          # in-step retry gate further down in this file (see the
-          # `_prior_autofix_count` block in the `Apply fixes with editor model`
-          # step). `--first-parent` is load-bearing: without it, `git log`
-          # walks merged-in history and could pick up an unrelated autofix
-          # commit from base (e.g. a `[ai-autofix]` commit on `main` pulled
-          # in by a merge), polluting LAST_RUN_DIFF on a first-iteration PR.
-          LAST_AUTOFIX_SHA="$(git log --first-parent --format='%H%x09%s' -n 50 2>/dev/null \
-            | awk -F'\t' '$2 ~ /^\[(ai-autofix|judge-fix)\]/ { print $1; exit }' \
-            || true)"
-          if [ -n "${LAST_AUTOFIX_SHA}" ] && git rev-parse "${LAST_AUTOFIX_SHA}^" >/dev/null 2>&1; then
-            git diff "${LAST_AUTOFIX_SHA}^...${LAST_AUTOFIX_SHA}" > "${LAST_RUN_DIFF_FILE}" || true
-            git diff --name-only "${LAST_AUTOFIX_SHA}^...${LAST_AUTOFIX_SHA}" > "${LAST_RUN_CHANGED_FILES_FILE}" || true
-            git diff --stat "${LAST_AUTOFIX_SHA}^...${LAST_AUTOFIX_SHA}" > "${LAST_RUN_DIFF_STAT_FILE}" || true
-          else
-            echo "No previous AI autofix run on PR head" > "${LAST_RUN_DIFF_FILE}"
-            echo "No previous AI autofix run on PR head" > "${LAST_RUN_CHANGED_FILES_FILE}"
-            echo "FIRST_RUN_NO_PREVIOUS_AI_CHANGES" > "${LAST_RUN_DIFF_STAT_FILE}"
-          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Collect local slop-scan findings
         continue-on-error: true
@@ -4554,187 +4239,13 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
-          set -euo pipefail
-
-          abs_path() {
-            local p="$1"
-            if [ -z "${p}" ]; then
-              p="."
-            fi
-            if [[ "${p}" = /* ]]; then
-              realpath -m "${p}"
-            else
-              realpath -m "$(pwd)/${p}"
-            fi
-          }
-
-          declare -a missing=()
-          preflight_reviewer_model="$(printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed -n '/[^[:space:]]/ { s/^[[:space:]]*//; s/[[:space:]]*$//; p; q; }')"
-          if [ -z "${preflight_reviewer_model}" ]; then
-            preflight_reviewer_model="unknown"
-          fi
-          preflight_reviewer_model="$(printf '%s' "${preflight_reviewer_model}" | LC_ALL=C tr -c 'A-Za-z0-9_.:/+-' '_')"
-
-          emit_opencode_preflight_alert() {
-            local alert_rc="$1"
-            local failure_class="$2"
-            local alert_payload
-            if [ -f "${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh" ]; then
-              # shellcheck source=/dev/null
-              source "${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh" 2>/dev/null || true
-            fi
-            if type opencode_emit_failure_alert >/dev/null 2>&1; then
-              opencode_emit_failure_alert review_autofix_preflight reviewer "${preflight_reviewer_model}" "${alert_rc}" "${failure_class}" || true
-              return 0
-            fi
-            alert_payload="opencode_agent_failure phase=review_autofix_preflight role=reviewer model=${preflight_reviewer_model} rc=${alert_rc} failure_class=${failure_class}"
-            if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
-              # shellcheck source=/dev/null
-              source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true
-            fi
-            if type tg_send_msg >/dev/null 2>&1; then
-              tg_send_msg "${alert_payload}" ERROR >/dev/null || true
-            fi
-            echo "${alert_payload}" >&2
-          }
-
-          check_required_dir() {
-            local path="$1"
-            local abs
-            abs="$(abs_path "${path}")"
-            if [ ! -d "${path}" ]; then
-              echo "MISSING: ${abs}"
-              missing+=("${abs}")
-            fi
-          }
-
-          check_required_file() {
-            local path="$1"
-            local abs
-            abs="$(abs_path "${path}")"
-            if [ ! -f "${path}" ]; then
-              echo "MISSING: ${abs}"
-              missing+=("${abs}")
-            fi
-          }
-
-          check_required_nonempty_file() {
-            local path="$1"
-            local abs
-            abs="$(abs_path "${path}")"
-            if [ ! -s "${path}" ]; then
-              echo "MISSING_OR_EMPTY: ${abs}"
-              missing+=("${abs} (missing or empty)")
-            fi
-          }
-
-          check_soft_file() {
-            local path="$1"
-            local abs
-            abs="$(abs_path "${path}")"
-            if [ ! -f "${path}" ]; then
-              echo "::warning::SOFT_MISSING: ${abs}"
-            fi
-          }
-
-          check_required_dir "${RUNTIME_DIR}"
-          check_required_dir "${PREVIOUS_REVIEWS_DIR}"
-          check_required_dir "${RUNTIME_CONTEXT_DIR}"
-          check_required_dir "${SUPPORT_SCRIPTS_DIR}"
-          check_required_dir "${SUPPORT_PROMPTS_DIR}"
-
-          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh" ]; then
-            emit_opencode_preflight_alert 1 helpers_missing
-          fi
-          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh" ]; then
-            emit_opencode_preflight_alert 1 config_writer_missing
-          fi
-          for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do
-            check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"
-          done
-          for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do
-            check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"
-          done
-          check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
-          check_required_file "./pre_assembled_static.txt"
-          check_required_file "${PR_DIFF_FILE}"
-          check_required_file "${ORIGINAL_PR_DIFF_FILE}"
-          check_required_file "${PR_CHANGED_FILES_FILE}"
-          check_required_file "${PR_ALL_COMMENTS_CONTEXT_FILE}"
-          check_required_file "${PR_CHECK_RUNS_CONTEXT_FILE}"
-          check_required_file "${SYMBOL_DIFF_SUMMARY_FILE}"
-          check_required_file "${MEMORY_CONTEXT_FILE}"
-          if ! opencode_bin="$(command -v opencode 2>/dev/null)"; then
-            opencode_missing_message="opencode binary (not found in PATH)"
-            echo "MISSING: ${opencode_missing_message}"
-            missing+=("${opencode_missing_message}")
-            emit_opencode_preflight_alert 127 binary_missing
-          else
-            echo "Found opencode binary: ${opencode_bin}"
-          fi
-
-          check_soft_file "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
-          check_soft_file "${SUPPORT_AGENTS_FILE}"
-          check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
-          check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
-          check_soft_file "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
-          check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
-          check_soft_file "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
-          case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
-          esac
-          case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ;;
-          esac
-          case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ;;
-          esac
-          case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ;;
-          esac
-          check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
-          check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
-          check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
-          check_soft_file "${LAST_RUN_DIFF_FILE}"
-          check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
-          check_soft_file "${LAST_RUN_DIFF_STAT_FILE}"
-          check_soft_file "${LAST_COMMIT_STAT_FILE}"
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "Preflight check FAILED: ${#missing[@]} required file(s) missing:"
-            printf '  %s\n' "${missing[@]}"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_preflight_required_files.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_preflight_required_files.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_preflight_required_files.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Preflight: Verify required files before reviewer invocation'."
             exit 1
           fi
-          echo "Preflight check PASSED: all required files present."
-
-          # Editor preflight: run the staged editor script's precondition
-          # guards now, so a deterministic editor failure (PR #4259: a
-          # `: "${VAR:?…}"` guard) fails here in seconds instead of after the
-          # reviewers. Skipped when the editor is not scheduled for this run,
-          # and fail-open for a staged copy that predates --preflight. On
-          # failure the run takes the ordinary failure path with
-          # EDITOR_PREFLIGHT_FAILED=true (failure_reason editor_preflight_failed).
-          # Kill switch: REVIEW_EDITOR_PREFLIGHT_ENABLED=false.
-          case "$(printf '%s' "${REVIEW_EDITOR_PREFLIGHT_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
-            0|false|no|off)
-              echo "REVIEW_EDITOR_PREFLIGHT skip reason=disabled script_ref=${SCRIPT_REF:-unknown}"
-              ;;
-            *)
-              if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" = "true" ] || [ "${AUTOFIX_RESUME_TERMINAL:-false}" = "true" ]; then
-                echo "REVIEW_EDITOR_PREFLIGHT skip reason=editor_not_scheduled script_ref=${SCRIPT_REF:-unknown}"
-              elif ! grep -q '^# supports: --preflight' "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2>/dev/null; then
-                echo "REVIEW_EDITOR_PREFLIGHT skip reason=unsupported script_ref=${SCRIPT_REF:-unknown}"
-              else
-                editor_preflight_rc=0
-                bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" --preflight 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2) || editor_preflight_rc=$?
-                if [ "${editor_preflight_rc}" -ne 0 ]; then
-                  echo "EDITOR_PREFLIGHT_FAILED=true" >> "$GITHUB_ENV"
-                  echo "::error::REVIEW_EDITOR_PREFLIGHT result=fail rc=${editor_preflight_rc} script_ref=${SCRIPT_REF:-unknown}"
-                  exit 1
-                fi
-              fi
-              ;;
-          esac
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Show disk usage (pre LLM call)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -5029,6 +4540,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
+          DEPENDENCY_INSTALL_TIMEOUT_SECONDS: ${{ vars.DEPENDENCY_INSTALL_TIMEOUT_SECONDS || '600' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
@@ -5088,168 +4600,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
-          set -euo pipefail
-
-          # On the workflow source repo, snapshot the working-tree state before
-          # the editor runs.  The "Commit changes" step below uses this snapshot
-          # to stage ONLY files the editor actually wrote to (computed by
-          # hashing each file pre/post plus executable-bit changes), instead of
-          # relying on hardcoded
-          # ':!scripts/<helper>' pathspec excludes that cannot unstage files
-          # already in the index.  This lets any script — including former
-          # "canonical helpers" like review_apply_fixes.sh — be legitimately
-          # modified, while still blocking files the editor never touched from
-          # riding along in the commit.
-          # Consumer repos use per-file exclusions from scripts/.gitignore
-          # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
-          #
-          # Both repo kinds: record which paths are ALREADY untracked before
-          # the editor runs.  scripts/review_commit_changes.sh uses this in
-          # consumer repos to tell an editor-created file (new since this
-          # snapshot: keep and stage it) from a pre-existing stray or
-          # runtime leftover (remove it).  Without it the consumer cleanup
-          # deleted every new file, which turned any review round whose fix
-          # was a new file (a db/contracts/*.yml contract, a regression
-          # test) into a deterministic EDITOR_CHANGES_LOST dead end
-          # (tele-funtoken-msg-scoring#4287).
-          PRE_EDITOR_UNTRACKED_FILE="${RUNTIME_DIR}/pre_editor_untracked.txt"
-          if git ls-files --others --exclude-standard -z | sort -zu > "${PRE_EDITOR_UNTRACKED_FILE}.tmp" \
-              && mv -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"; then
-            echo "Pre-editor untracked snapshot captured: $(tr -cd '\0' < "${PRE_EDITOR_UNTRACKED_FILE}" | wc -c | tr -d '[:space:]') paths"
-          else
-            rm -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"
-            echo "::warning::Pre-editor untracked snapshot capture failed; legacy delete-all fallback will apply."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_apply_fixes_editor.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_apply_fixes_editor.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_apply_fixes_editor.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Apply fixes with editor model'."
+            exit 1
           fi
-          echo "PRE_EDITOR_UNTRACKED_FILE=${PRE_EDITOR_UNTRACKED_FILE}" >> "$GITHUB_ENV"
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-            PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
-            : > "${PRE_EDITOR_STATE_FILE}"
-            PRE_EDITOR_DIFF_BASELINE_FILE="${RUNTIME_DIR}/pre_editor_head_diff_paths.txt"
-            git diff --name-only HEAD | sort -u > "${PRE_EDITOR_DIFF_BASELINE_FILE}" || true
-            # `sort -zu` dedupes: in an active merge state, `git ls-files -z`
-            # emits conflicted paths once per index stage (1/2/3).  The
-            # autofix step should never run in merge state, but the guard is
-            # cheap and makes the snapshot reusable from the resolver step.
-            while IFS= read -r -d '' snap_path; do
-              [ -f "${snap_path}" ] || [ -L "${snap_path}" ] || continue
-              snap_exec=0
-              if [ -L "${snap_path}" ]; then
-                # Hash a symlink as git stores it (its link text), never the file it
-                # points to: workflow-templates/CLAUDE.md -> ../CLAUDE.md otherwise
-                # "changes" whenever CLAUDE.md does, and the touched-set check rejects
-                # a correct resolution as out-of-scope (PR #4443, run 36120214576).
-                snap_sha="$(printf '%s' "$(readlink -- "${snap_path}")" | git hash-object --stdin)"
-              else
-                [ -x "${snap_path}" ] && snap_exec=1
-                snap_sha="$(git hash-object -- "${snap_path}")"
-              fi
-              printf 'T\t%s\t%s\t%s\n' \
-                "${snap_sha}" \
-                "${snap_exec}" \
-                "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
-            done < <(git ls-files -z | sort -zu)
-            while IFS= read -r snap_path; do
-              [ -n "${snap_path}" ] && \
-                printf 'U\t%s\n' "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
-            done < <(git ls-files --others --exclude-standard)
-            echo "PRE_EDITOR_STATE_FILE=${PRE_EDITOR_STATE_FILE}" >> "$GITHUB_ENV"
-            echo "PRE_EDITOR_DIFF_BASELINE_FILE=${PRE_EDITOR_DIFF_BASELINE_FILE}" >> "$GITHUB_ENV"
-            echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
-          fi
-
-          # Keep the editor's stderr for the failure fingerprint ("Assemble
-          # failure evidence"); it still reaches the step log through tee.
-          bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
-
-          # Bounded in-step retry for first-iteration empty-output failures.
-          #
-          # When the editor crashes/times out on the very first autofix
-          # iteration (no prior `[ai-autofix]` commits on HEAD), the
-          # downstream "Post editor summary comment" step posts a "will
-          # retry" comment and exits non-zero, deferring the retry to
-          # the stall poller's next cron tick — typically 1–3 hours
-          # later, which directly contributes to ai:done elapsed time.
-          # On iteration 2+ an empty editor output is a legitimate
-          # convergence signal (no new defects), so the retry is
-          # gated to the first-iteration case only.
-          #
-          # Skipped when AUTOFIX_INSTEP_RETRY_ENABLED=false so consumers
-          # can opt out without redeploying the workflow.  Tune the
-          # cooldown via AUTOFIX_INSTEP_RETRY_SLEEP_SECS (default 30) so
-          # slower runner environments can give the editor more time to
-          # recover from transient crashes/timeouts without holding the
-          # job for an excessive fixed window.
-          _instep_retry_enabled="${AUTOFIX_INSTEP_RETRY_ENABLED:-true}"
-          _instep_retry_sleep="${AUTOFIX_INSTEP_RETRY_SLEEP_SECS:-30}"
-          if ! [[ "${_instep_retry_sleep}" =~ ^[0-9]+$ ]] || [ "${_instep_retry_sleep}" -lt 1 ] || [ "${_instep_retry_sleep}" -gt 600 ]; then
-            echo "::warning::AUTOFIX_INSTEP_RETRY_SLEEP_SECS must be an integer in [1, 600]; defaulting to 30."
-            _instep_retry_sleep=30
-          fi
-          # Detect whether the editor's just-written summary is unusable
-          # for downstream consumers (commit step, push step, validator).
-          # Two signals count, both of which mean "no productive editor
-          # output landed":
-          #   1. The summary file is missing or zero-length (the original
-          #      retry condition).
-          #   2. The summary file exists but contains the same fallback /
-          #      failure markers that the downstream "Validate editor no-op
-          #      disposition" step greps for to set EDITOR_NOOP_SUSPICIOUS.
-          #      `scripts/review_apply_fixes.sh` writes a ~600-byte fallback
-          #      summary when all editor attempts fail — non-empty on disk,
-          #      so the original `[ ! -s ... ]` test missed it. The marker
-          #      regex must stay in lockstep with the validate step's grep
-          #      (both reference "editor failed before producing" /
-          #      "unavailable (editor fallback)") — a divergence that lets
-          #      the fallback summary slip past the validator would
-          #      reintroduce the run-25126757724 cascade.
-          # The flag name is "unusable" rather than "empty" because case
-          # (2) leaves a non-empty summary on disk that nonetheless cannot
-          # drive a productive autofix commit.
-          _instep_retry_summary_unusable="false"
-          if [ ! -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
-            _instep_retry_summary_unusable="true"
-          elif grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}" 2>/dev/null; then
-            _instep_retry_summary_unusable="true"
-            # Wording deliberately omits the literal substring
-            # "Editor summary contains failure/fallback markers" — the e2e
-            # poller in test-and-mark-stable.yml greps live job logs for
-            # the validator's `::warning::` annotation that uses that
-            # phrase, and a retry-side echo carrying the same literal
-            # would false-trigger the poller's early-exit before the
-            # retry has had a chance to succeed (see PR #1798 review).
-            echo "::notice::Editor summary present but matched fallback-marker regex — treating as unusable for in-step retry decision."
-          fi
-          if [ "${_instep_retry_enabled}" = "true" ] \
-              && [ "${_instep_retry_summary_unusable}" = "true" ]; then
-            # `git log` here intentionally walks HEAD on the already-
-            # checked-out PR branch (the surrounding workflow checks
-            # out the PR head before this step runs, see "Checkout PR
-            # head branch" earlier in the job).  If this block is ever
-            # extracted to a standalone script, the caller must ensure
-            # the PR branch is current.
-            # `grep -c` prints "0" AND exits 1 when there are no matches, so
-            # `|| echo 0` would append a second "0" (yielding "0\n0") and the
-            # subsequent equality check would silently fail — the retry would
-            # never fire because the comparison is never the literal "0".
-            # Use `|| true` instead so grep's own "0" output is the only value
-            # captured.  See PR #1703 review comment by copilot-pull-request-reviewer.
-            # The grouping (`^(A|B)`) is semantically equivalent to
-            # `^A|^B` under standard ERE precedence, but is more
-            # robust against refactors and reviewer-bot misreadings.
-            _prior_autofix_count="$(git log --format='%s' -n 5 2>/dev/null \
-              | grep -cE '^(\[ai-autofix\]|\[judge-fix\])' || true)"
-            if [ "${_prior_autofix_count}" = "0" ]; then
-              echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
-              sleep "${_instep_retry_sleep}"
-              bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2) || {
-                echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
-              }
-            fi
-          fi
-
-      - name: Clean up isolated review workspace
-        if: always() && env.REVIEW_SANDBOX_ROOT != ''
-        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Remove slop-scan runtime artifact
         if: always()
@@ -5334,6 +4691,18 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Runs after the commit (#6484, run 37666355049): a failed cleanup must not
+      # skip the commit and be misreported as editor_changes_lost; push and the
+      # other success()-gated steps still stay blocked.
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: |
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
+          else
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
+          fi
 
       - name: Run interim judge
         if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -5470,6 +4839,7 @@ jobs:
                 --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
                 --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+                --support-sha "${REVIEW_SUPPORT_SHA:-}" \
                 --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
               if [ -n "${autofix_failure_marker_line}" ]; then
                 AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -5641,116 +5011,13 @@ jobs:
         # reviewer-phase partial finalizes retain the existing skip behavior.
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
-          set -euo pipefail
-
-          EDITOR_NOOP_SUSPICIOUS="false"
-          # Additive refusal-specific signal (per CLAUDE.md §6 — do NOT
-          # rename EDITOR_NOOP_SUSPICIOUS; add alongside). Set when the
-          # fallback summary contains the "model refused (safety filter)"
-          # sentinel that review_apply_fixes.sh writes after detecting an
-          # OpenAI-style refusal. Lets downstream consumers (Telegram
-          # alerts, operators) distinguish "model refused — re-run" from
-          # generic "no-op suspicious — manual review".
-          EDITOR_NOOP_REFUSAL="false"
-          # Additive recoverable-failure signal (CLAUDE.md §6 — add
-          # alongside, never rename). Set when the summary is the
-          # `recoverable_failure` partial-finalize fallback that
-          # review_apply_fixes.sh writes after every editor attempt
-          # failed (provider/broker error, timeout, empty output). Lets
-          # the Telegram step say "editor failed on every attempt" with
-          # the real provider error instead of the generic "editor
-          # claimed no changes needed" wording, which is wrong for this
-          # case: the editor never produced output at all.
-          EDITOR_NOOP_RECOVERABLE_FAILURE="false"
-
-          if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
-            echo "::warning::Editor summary file is missing or empty — editor never produced output."
-            EDITOR_NOOP_SUSPICIOUS="true"
-          else
-            # ── Check 1: Detect editor fallback/failure markers ──
-            # The fallback summary (review_apply_fixes.sh) writes known
-            # sentinel phrases when all editor attempts fail.  These must
-            # never reach auto-merge.
-            if grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}"; then
-              echo "::warning::Editor summary contains failure/fallback markers — editor never completed a validated review."
-              EDITOR_NOOP_SUSPICIOUS="true"
-            fi
-
-            # ── Check 1b: Detect refusal-specific sentinel ──
-            # When the editor model returns a safety-policy refusal,
-            # review_apply_fixes.sh writes "Runtime failure path: -
-            # model refused (safety filter)" into the fallback summary
-            # (§20.10). Set both flags here because the partial-finalize
-            # refusal summary does not carry Check 1's failure markers,
-            # and Check 2 is skipped when REVIEWERS_SUCCESSFUL=0. The
-            # refusal flag selects the more specific downstream alert.
-            if grep -qiE 'model refused \(safety filter\)' "${EDITOR_SUMMARY_FILE}"; then
-              echo "::notice::Editor returned a safety-policy refusal — re-run is likely to succeed once the provider-side cache expires."
-              EDITOR_NOOP_SUSPICIOUS="true"
-              EDITOR_NOOP_REFUSAL="true"
-            fi
-
-            # ── Check 1c: Detect recoverable-failure partial-finalize sentinel ──
-            # When all editor attempts fail, review_apply_fixes.sh writes
-            # the recoverable_failure partial-finalize summary whose
-            # "Runtime failure path:" line carries the sentinel below.
-            # This is the same class of failure Check 1 exists for (the
-            # editor never completed a validated review), so it sets
-            # EDITOR_NOOP_SUSPICIOUS=true itself instead of relying on
-            # Check 2: Check 2 runs only when REVIEWERS_SUCCESSFUL > 0, and
-            # the editor can run with zero successful reviewers when every
-            # reviewer slot was skipped fail-open (skipped_open /
-            # skipped_unmapped, scripts/review_run_reviewers.sh) — in that
-            # state the summary used to leave EDITOR_NOOP_SUSPICIOUS=false,
-            # so the "Telegram editor-noop-suspicious warning" alert never
-            # fired and the merge-conflict detect/resolver chain gated on
-            # `EDITOR_NOOP_SUSPICIOUS != 'true'` still ran with nothing to
-            # land (§20.10). With reviewers > 0 the result is unchanged
-            # (Check 2 flagged the fallback-only audit section anyway).
-            # The additive flag classifies the cause for the alert.
-            # Observed on PR #4077 (runs 34692519987, 34700918528,
-            # 34702442346): the editor's broker returned HTTP 429 on every
-            # attempt and the operator was told the editor "claimed no
-            # changes needed". The sentinel must stay verbatim in lockstep
-            # with review_apply_fixes.sh (tests/test_review_autofix_editor_noop_cascade_contract.py).
-            # The soft-deadline fallback summary ("partial finalize
-            # requested at the soft deadline before another editor
-            # attempt") is deliberately NOT matched here: it means the run
-            # budget was exhausted, not that the editor failed.
-            if grep -qiE 'partial finalize requested after a recoverable editor failure' "${EDITOR_SUMMARY_FILE}"; then
-              echo "::notice::Editor stopped after a recoverable failure on every attempt — no editor output was produced; see the editor step log for the provider error."
-              EDITOR_NOOP_SUSPICIOUS="true"
-              EDITOR_NOOP_RECOVERABLE_FAILURE="true"
-            fi
-
-            # ── Check 2: Reviewer audit sanity ──
-            # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
-            # but the editor claims no changes, verify the audit section has
-            # real entries and the arithmetic adds up. The check itself
-            # lives in scripts/validate_editor_audit.sh so the orchestrator
-            # poll's noop-suspicious recovery sweep can call the exact
-            # same regex/arithmetic logic when deciding whether a
-            # force-merge fallback is safe — keeping the two paths in
-            # lockstep prevents drift between "what the workflow flagged
-            # as noop-suspicious" and "what the poller considers an
-            # audit-healthy fallback candidate".
-            if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
-              # shellcheck disable=SC1091
-              source "${SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh"
-              _vea_rc=0
-              validate_editor_audit_arithmetic \
-                "${EDITOR_SUMMARY_FILE}" \
-                "${REVIEWERS_SUCCESSFUL:-0}" \
-                || _vea_rc=$?
-              if [ "${_vea_rc}" -ne 0 ]; then
-                EDITOR_NOOP_SUSPICIOUS="true"
-              fi
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_noop_disposition.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_disposition.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_editor_noop_disposition.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Validate editor no-op disposition'."
+            exit 1
           fi
-
-          echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
-          echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"
-          echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Detect merge conflicts
         # The pre-review gate above only short-circuits deterministic stale/
@@ -6107,6 +5374,9 @@ jobs:
           FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+          AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
@@ -6279,6 +5549,9 @@ jobs:
           JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'high' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+          AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # Single-issue security pass settings, the same as the
@@ -6899,6 +6172,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
               --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
             if [ -n "${autofix_failure_marker_line}" ]; then
               AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -6988,6 +6262,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
               --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
             if [ -n "${autofix_failure_marker_line}" ]; then
               AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -7265,6 +6540,7 @@ jobs:
             --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
             --evidence-out "${evidence_out}" \
             --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+            --support-sha "${REVIEW_SUPPORT_SHA:-}" \
             --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
           failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
           failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"
@@ -7530,106 +6806,13 @@ jobs:
         # editor-changes-lost" alerts.
         if: always() && env.RUNTIME_DIR != '' && (failure() || cancelled() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')
         run: |
-          set -euo pipefail
-          # Stage everything under RUNNER_TEMP so the Cleanup step
-          # below cannot race the upload — it rm -rf's RUNTIME_DIR.
-          # The upload step's path: glob is also more predictable when
-          # rooted at a single dir we own.
-          STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-review-autofix-failure-logs"
-          rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}/runtime" "${STAGE_DIR}/previous_reviews" "${STAGE_DIR}/codex-home-log"
-
-          if [ -d "${RUNTIME_DIR:-}" ]; then
-            # Top-level prompts, summaries, and diagnostic context. The
-            # editor_* and conflict_resolver_* files are the codex stdout
-            # / synthesised summaries; floor_tags / review_issues /
-            # ledger_status / consolidator_raw / parser_stats are the
-            # advisory editor inputs declared at the top of
-            # scripts/review_apply_fixes.sh — without them a cold post-
-            # mortem can't tell whether bad consolidator/parser output
-            # was the upstream cause of an empty editor turn.
-            # pr_check_runs_context.txt and reviewer_consensus.txt let
-            # us reconstruct what context the editor saw without re-
-            # fetching from the API. summariser_{pass1,review}.log hold
-            # each consensus-summariser attempt's stderr tail (issue
-            # #4653: exit 0 with empty stdout had no uploaded trace).
-            for f in editor_summary.txt editor_prompt.txt editor_prompt_body.txt \
-                     pr_editor_comment.txt reviewer_consensus.txt \
-                     reviewer_prompt.txt reviewer_prompt_body.txt \
-                     reviewer_prompt_pass1.txt reviewer_prompt_pass2.txt \
-                     cross_pollination_summary.txt \
-                     reviewer_bundle.txt reviewer_manifest.txt \
-                     conflict_resolver_summary.txt conflict_resolver_prompt.txt \
-                     committed_files.txt pr_check_runs_context.txt \
-                     pr_meta.json pr_all_comments_context.txt \
-                     linked_issue_context.txt memory_context.txt \
-                     pr_diff.patch original_pr_diff.patch \
-                     last_run_diff.patch last_run_changed_files.txt \
-                     pr_changed_files.txt last_commit_stat.txt \
-                     last_run_diff_stat.txt \
-                     symbol_diff_summary.txt \
-                     floor_tags.txt review_issues.txt ledger_status.txt \
-                     consolidator_raw.txt parser_stats.txt \
-                     summariser_pass1.log summariser_review.log; do
-              [ -f "${RUNTIME_DIR}/${f}" ] && \
-                cp -f "${RUNTIME_DIR}/${f}" "${STAGE_DIR}/runtime/${f}" || true
-            done
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_stage_codex_logs.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_stage_codex_logs.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_stage_codex_logs.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Stage codex logs for upload (failure or empty-editor)' (fail open)."
+            exit 0
           fi
-
-          # Per-attempt editor stdout / stderr — the primary signal for
-          # the empty-output failure. review_apply_fixes.sh writes
-          # editor_attempt_${attempt}.txt (codex stdout) and
-          # editor_attempt_${attempt}.err (codex stderr) for every retry,
-          # plus editor_attempt_${attempt}_changes_lost.txt when the
-          # claimed-changes-lost guard fires. The reviewer-side .log /
-          # .txt / status_* files plus pass1/pass2 two-pass logs and
-          # consensus_pass1.txt cover the reviewer-fanout failure modes
-          # (all written by review_run_reviewers.sh into
-          # PREVIOUS_REVIEWS_DIR — note: reviewers produce .log not
-          # .err, the .err extension is editor-only). Without these the
-          # only remaining trace of why a codex stage produced 0 bytes
-          # is the truncated stderr in the live job log.
-          if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
-            for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err \
-                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/review_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/review_*.log \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass1_*.log \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass2_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass2_*.log \
-                     "${PREVIOUS_REVIEWS_DIR}"/status_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/consensus_pass1.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.log; do
-              [ -f "${f}" ] && cp -f "${f}" "${STAGE_DIR}/previous_reviews/" || true
-            done
-          fi
-
-          # Codex CLI's own session log directory carries the raw
-          # OpenRouter wire trace (request/response bodies, finish_reason,
-          # tool-router rejections). The editor stage runs under the
-          # default ${CODEX_HOME:-$HOME/.codex}, which survives until
-          # this step. Reviewer-fanout and summariser stages run under
-          # ephemeral ${RUNNER_TEMP}/codex_home_{reviewers,summariser,
-          # consolidator,...} dirs that those scripts rm -rf themselves
-          # before this step runs (see review_run_reviewers.sh L816,
-          # L958, L970, L1019 and summarize_reviewer_consensus.sh L211
-          # trap), so this glob captures editor wire logs but NOT
-          # reviewer/summariser ones — those are reconstructed from the
-          # PREVIOUS_REVIEWS_DIR/.log files copied above. Preserving
-          # reviewer wire logs would require a script-side change
-          # (logged as a follow-up). Copy unconditionally with no
-          # mtime filter so multi-attempt failures don't lose the
-          # earliest session log to a sliding window; retention-days
-          # on the upload step bounds storage cost.
-          if [ -d "${CODEX_HOME:-$HOME/.codex}/log" ]; then
-            cp -rf "${CODEX_HOME:-$HOME/.codex}/log/." "${STAGE_DIR}/codex-home-log/" 2>/dev/null || true
-          fi
-
-          echo "CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR=${STAGE_DIR}" >> "$GITHUB_ENV"
-          echo "Staged $(find "${STAGE_DIR}" -type f | wc -l) file(s) for review_autofix failure-log upload."
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Upload codex logs (failure or empty-editor)
         if: always() && env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR != ''

@@ -57,6 +57,14 @@ def _rejection_line(exc):
 		line += f" depth={depth}"
 	return line
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
+# Live copies the resolver may sync from their workflow-templates twin
+# (issue #6595). The live path stays excluded from allowed(), snapshot and
+# transfer: only the runner writes it, byte-identical to the resolved template.
+PAIRED_LIVE_COPIES = {
+	".claude/hooks/pr_merge_status_guard.py": "workflow-templates/.claude/hooks/pr_merge_status_guard.py",
+}
+_UNMERGED_MODE_RE = re.compile(r"[0-7]{6}")
+_UNMERGED_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def _unsafe_directory_category(name, *, is_symlink=False):
@@ -143,6 +151,10 @@ def admitted_commands_path(manifest):
 	return manifest.with_name(manifest.name + ".admitted_commands.json")
 
 
+def synthetic_git_config_path(manifest):
+	return manifest.with_name(manifest.name + ".git_config.sha256")
+
+
 def template_command_inventory(host):
 	try:
 		directory = checked_path(host, COMMAND_TWIN_DIR)
@@ -208,7 +220,7 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root, host=None, commands=None):
+def enumerate_workspace(root, host=None, commands=None, strict=False):
 	count = 0
 	total = 0
 	entries = 0
@@ -232,6 +244,8 @@ def enumerate_workspace(root, host=None, commands=None):
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
 			if not allowed(name, commands=commands):
+				if strict and name.startswith((".github/ai/", ".claude/")):
+					raise ValueError("out of heal scope")
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
@@ -289,6 +303,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	(workspace / ".git/info/exclude").write_text(".review-venv/\nnode_modules/\n.venv/\n__pycache__/\n*.egg-info/\n*.dist-info/\n.pytest_cache/\n", encoding="utf-8")
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "add", "--all"], cwd=workspace, check=True, env=env)
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=isolated", "-c", "user.email=isolated@invalid", "commit", "--allow-empty", "-qm", "snapshot"], cwd=workspace, check=True, env=env)
+	synthetic_git_config_path(manifest).write_text(hashlib.sha256((workspace / ".git/config").read_bytes()).hexdigest(), encoding="ascii")
 
 
 def _check_destination_parents(host, name, deleted_names):
@@ -308,10 +323,12 @@ def _check_destination_parents(host, name, deleted_names):
 		raise _rejection("new result conflicts with host path", "result_conflicts_host")
 
 
-def transfer(host, workspace, manifest):
+def transfer(host, workspace, manifest, scope=None):
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	if scope is not None and hashlib.sha256(read_regular(workspace / ".git/config")[0]).hexdigest() != synthetic_git_config_path(manifest).read_text(encoding="ascii"):
+		raise ValueError("out of heal scope")
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, strict=scope is not None)}
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -326,6 +343,16 @@ def transfer(host, workspace, manifest):
 			continue
 		if not allowed(name, None, commands):
 			raise _rejection("unsafe result path", "unsafe_result_path")
+		if scope is not None:
+			from files_touched_scope_guard import entry_matches
+
+			# Git attribute/module files at any depth can name filters or drivers
+			# the credentialed host commit would honour; never transfer them.
+			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
+			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
+				raise ValueError("out of heal scope")
+			if new is not None and old is not None and new[1] != old[1]:
+				raise ValueError("out of heal scope")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
 			raise ValueError("new result conflicts with host path")
@@ -492,6 +519,32 @@ def seed(host, workspace, manifest, name, payload):
 	os.chmod(target, baseline[name][1])
 
 
+def _log_safe_path(name):
+	"""Return a rejected path only when it cannot inject log or workflow text."""
+	if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-][A-Za-z0-9._/-]{0,127}", name):
+		return "redacted"
+	parts = name.split("/")
+	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") for part in parts):
+		return "redacted"
+	return name
+
+
+def _path_rejection_reason(name):
+	"""Name, as a fixed token, the allowed() rule that refused a path."""
+	parts = PurePosixPath(name).parts
+	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
+		return "unsafe_name"
+	if name == "tests/test_audit_plans_command.py":
+		return "operator_input"
+	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
+		return "excluded_component"
+	if name in PAIRED_LIVE_COPIES:
+		return "live_safety_hook"
+	if parts[0].startswith("."):
+		return "dot_directory"
+	return "unsupported_type"
+
+
 # Names the conflict-path report may echo: plain relative paths only, so a
 # rejected name can never carry a workflow command, markup or a newline.
 REPORTABLE_PATH_RE = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9._/-]{0,199}")
@@ -506,7 +559,9 @@ def check_paths(host, paths_file, report_file=None):
 	plainly named path that sits on the host checkout as a regular file or is
 	absent (the sandbox policy keeps it out, so only a human can resolve it),
 	``unsafe`` with no name otherwise (symlinks, odd names, unreadable
-	entries). Unsafe names are never echoed.
+	entries). Unsafe names are never echoed. Each rejection also prints one
+	``REVIEW_RESOLVER_PATH_REJECTED reason=<token> path=<path|redacted>``
+	line to stderr; an ``unsafe`` entry always prints ``path=redacted``.
 	"""
 	with paths_file.open(encoding="utf-8", newline="") as handle:
 		path_lines = handle.read().split("\n")
@@ -514,14 +569,23 @@ def check_paths(host, paths_file, report_file=None):
 	for name in path_lines:
 		if not name:
 			continue
+		reason = "unsafe_file"
 		try:
 			if not allowed(name):
+				reason = _path_rejection_reason(name)
 				raise LookupError("policy")
 			checked_path(host, name)
 		except LookupError:
 			rejections.append(_host_only_or_unsafe(host, name))
 		except (ValueError, OSError):
 			rejections.append("unsafe")
+		else:
+			continue
+		# Fixed reason token plus a charset-limited path (or "redacted"):
+		# the name is PR-controlled and must never reach logs verbatim, and
+		# an unsafe entry (symlink, odd name) never echoes its name.
+		shown_path = "redacted" if rejections[-1] == "unsafe" else _log_safe_path(name)
+		print(f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={shown_path}", file=sys.stderr)
 		if rejections and report_file is None:
 			break
 	if report_file is not None:
@@ -541,6 +605,103 @@ def _host_only_or_unsafe(host, name):
 	except (ValueError, OSError):
 		return "unsafe"
 	return "host_only\t" + name
+
+
+def _read_conflicted_paths(paths_file):
+	with paths_file.open(encoding="utf-8", newline="") as handle:
+		names = [name for name in handle.read().split("\n") if name]
+	return list(dict.fromkeys(names))
+
+
+def _parse_unmerged_index(unmerged_file):
+	"""Parse `git ls-files -u -z` output into {path: {stage: (mode, sha)}}."""
+	data = unmerged_file.read_bytes()
+	entries = {}
+	if not data:
+		return entries
+	if not data.endswith(b"\0"):
+		raise ValueError("malformed unmerged record")
+	for record in data[:-1].split(b"\0"):
+		meta, sep, raw_name = record.partition(b"\t")
+		fields = meta.split(b" ")
+		if not sep or not raw_name or len(fields) != 3:
+			raise ValueError("malformed unmerged record")
+		mode, sha, stage = (field.decode("ascii") for field in fields)
+		if not _UNMERGED_MODE_RE.fullmatch(mode) or not _UNMERGED_SHA_RE.fullmatch(sha) or stage not in ("1", "2", "3"):
+			raise ValueError("malformed unmerged record")
+		stages = entries.setdefault(raw_name.decode("utf-8"), {})
+		if stage in stages:
+			raise ValueError("malformed unmerged record")
+		stages[stage] = (mode, sha)
+	return entries
+
+
+def paired_live_copies(host, paths_file, unmerged_file, pairs_out, model_paths_out):
+	"""Split conflicted paths into runner-synced live copies and model paths.
+
+	A live copy is paired only when it and its template conflict with exactly
+	the same base/ours/theirs index entries, so the resolved template is the
+	resolved live file. Any other shape stays in the model paths, where
+	check-paths still refuses the live hook (fail closed).
+	"""
+	conflicted = _read_conflicted_paths(paths_file)
+	unmerged = _parse_unmerged_index(unmerged_file)
+	conflicted_set = set(conflicted)
+	pairs = []
+	for live, template in sorted(PAIRED_LIVE_COPIES.items()):
+		if live not in conflicted_set or template not in conflicted_set:
+			continue
+		live_stages = unmerged.get(live)
+		template_stages = unmerged.get(template)
+		if not live_stages or live_stages != template_stages or "2" not in live_stages or "3" not in live_stages:
+			continue
+		if not allowed(template):
+			continue
+		try:
+			checked_path(host, live)
+			checked_path(host, template)
+		except (ValueError, OSError):
+			continue
+		pairs.append((live, template))
+	paired_live = {live for live, _ in pairs}
+	pairs_out.write_text("".join(f"{live}\t{template}\n" for live, template in pairs), encoding="utf-8")
+	model_paths_out.write_text("".join(f"{name}\n" for name in conflicted if name not in paired_live), encoding="utf-8")
+
+
+def _has_conflict_markers(data):
+	return any(line.startswith((b"<<<<<<< ", b">>>>>>> ")) for line in data.split(b"\n"))
+
+
+def mirror_live_copies(host, pairs_file):
+	"""Copy each resolved template byte-for-byte over its live copy."""
+	pairs = []
+	for line in pairs_file.read_text(encoding="utf-8").split("\n"):
+		if not line:
+			continue
+		live, sep, template = line.partition("\t")
+		# Never trust the file for the mapping itself: only known pairs.
+		if not sep or PAIRED_LIVE_COPIES.get(live) != template:
+			raise ValueError("unknown paired live copy")
+		data, mode = read_regular(checked_path(host, template))
+		if _has_conflict_markers(data):
+			raise ValueError("template still has conflict markers")
+		live_path = checked_path(host, live)
+		if not stat.S_ISREG(live_path.lstat().st_mode):
+			raise ValueError("live copy is not a regular file")
+		pairs.append((live, live_path, data, mode))
+	for live, live_path, data, mode in pairs:
+		fd, tmp_name = tempfile.mkstemp(dir=live_path.parent, prefix=".review-live-copy-")
+		try:
+			with os.fdopen(fd, "wb") as out:
+				out.write(data)
+			os.chmod(tmp_name, mode)
+			# Do not follow a path that changed since validation.
+			if not stat.S_ISREG(checked_path(host, live).lstat().st_mode):
+				raise ValueError("live copy is not a regular file")
+			os.replace(tmp_name, live_path)
+		finally:
+			if os.path.exists(tmp_name):
+				os.unlink(tmp_name)
 
 
 def main():
@@ -567,6 +728,24 @@ def main():
 			print("::error::Review static README output failed", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
+	if sys.argv[1:2] == ["paired-live-copies"]:
+		if len(sys.argv) != 7:
+			raise SystemExit(2)
+		try:
+			paired_live_copies(*map(Path, sys.argv[2:7]))
+		except Exception:  # noqa: BLE001 - any failure must fail closed without detail
+			print("paired live copy check failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
+	if sys.argv[1:2] == ["mirror-live-copies"]:
+		if len(sys.argv) != 4:
+			raise SystemExit(2)
+		try:
+			mirror_live_copies(Path(sys.argv[2]), Path(sys.argv[3]))
+		except Exception:  # noqa: BLE001 - never print file content or paths
+			print("paired live copy mirror failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
 	# check-paths takes an optional fourth argument: the rejection report.
 	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):
 		try:
@@ -580,7 +759,8 @@ def main():
 			raise SystemExit(2)
 	else:
 		# snapshot alone takes an optional fifth argument: the host Git dir.
-		if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
+		# transfer alone takes an optional "--scope-file <path>" pair.
+		if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot") or (len(sys.argv) == 7 and sys.argv[1] == "transfer" and sys.argv[5] == "--scope-file")):
 			raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
@@ -591,7 +771,12 @@ def main():
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:
-			transfer(host, workspace, manifest)
+			scope = None
+			if len(sys.argv) == 7:
+				scope = Path(sys.argv[6]).read_text(encoding="utf-8").splitlines()
+				if not scope or any(not entry or entry not in ("tests/**", "changelog.d/*.md") and not re.fullmatch(r"[A-Za-z0-9_./-]+", entry) for entry in scope):
+					raise ValueError("out of heal scope")
+			transfer(host, workspace, manifest, scope)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
 		if isinstance(exc, UnsafeWorkspaceDirectory):
 			category = exc.category if exc.category in _DIRECTORY_CATEGORIES else "other"
@@ -614,6 +799,7 @@ def main():
 				"new result conflicts with host path": "result_conflicts_host",
 				"transfer rollback failed": "transfer_rollback_failed",
 				"unsafe result path": "unsafe_result_path",
+				"out of heal scope": "out_of_heal_scope",
 			}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "size_limit" if sys.argv[1] == "snapshot" and str(exc) == "snapshot size limit exceeded" else "unknown"
 			print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
