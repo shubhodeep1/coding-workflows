@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Auto-decision AD-1 chose \"A+B: Try to reproduce and fix the failing test, and also add the end-of-step failure summary so the next triage is not inconclusive.\" The PR must both fix the failing test AND add the CI summary.\n  expected_change_site: tests/test_orchestrate_poll_process.py line 6391 (test test_security_pass_cap_converts_low_keep_fixing_to_advisory) and/or scripts/orchestrate_poll_process.sh\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff changes only .github/workflows/ci.yml (summary logic), changelog.d/6889-orchestrate-poll-shard-failure-summary.md, and tests/test_ci_poll_test_sharding.py (contract tests for the summary). There is zero diff hunk in tests/test_orchestrate_poll_process.py or scripts/orchestrate_poll_process.sh. The new CI summary now correctly identifies the failing test (visible in the check-run log tail: \"orchestrate-poll shard 1 exit 1 failed tests: test_security_pass_cap_converts_low_keep_fixing_to_advisory\"), confirming the test failure is real and not a flake. CI remains red because the \"fix the failing test\" half of AD-1 was not attempted., The PR diff contains no changes to tests/test_orchestrate_poll_process.py or scripts/orchestrate_poll_process.sh. The PR only addresses the failure logging improvement in ci.yml, but does not fix the underlying test failure (`test_security_pass_cap_converts_low_keep_fixing_to_advisory` as identified in the check-run log tail)., The PR diff contains no changes to tests/test_orchestrate_poll_process.py or scripts/orchestrate_poll_process.sh. The only changed files are .github/workflows/ci.yml (summary addition), changelog.d/6889-orchestrate-poll-shard-failure-summary.md, and tests/test_ci_poll_test_sharding.py (contract tests for the summary). The new summary correctly identifies the failing test (`##[error]orchestrate-poll shard 1 exit 1 failed tests: test_security_pass_cap_converts_low_keep_fixing_to_advisory` in the check-run log tail), but the test itself remains unfixed and CI remains red. The \"fix the failing test\" half of the auto-decision was not attempted.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: Auto-decision AD-1 chose \"A+B: Try to reproduce and fix the failing test, and also add the end-of-step failure summary so the next triage is not inconclusive.\" The PR must both fix the failing test AND add the CI summary.\nExpected change site: tests/test_orchestrate_poll_process.py line 6391 (test test_security_pass_cap_converts_low_keep_fixing_to_advisory) and/or scripts/orchestrate_poll_process.sh (the poller code that the test exercises)\nEvidence of absence: The PR diff changes only .github/workflows/ci.yml (summary logic), changelog.d/6889-orchestrate-poll-shard-failure-summary.md, and tests/test_ci_poll_test_sharding.py (contract tests for the summary). There is zero diff hunk in tests/test_orchestrate_poll_process.py or scripts/orchestrate_poll_process.sh. The new CI summary now correctly identifies the failing test (visible in the check-run log tail: \"orchestrate-poll shard 1 exit 1 failed tests: test_security_pass_cap_converts_low_keep_fixing_to_advisory\"), confirming the test failure is real and not a flake. CI remains red because the \"fix the failing test\" half of AD-1 was not attempted.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: Auto-decision AD-1 chose \"A+B: Try to reproduce and fix the failing test, and also add the end-of-step failure summary so the next triage is not inconclusive.\" The PR must both fix the failing test AND add the CI summary.\nExpected change site: tests/test_orchestrate_poll_process.py near line 6391 (test test_security_pass_cap_converts_low_keep_fixing_to_advisory) and/or scripts/orchestrate_poll_process.sh (the poller code under test).\nEvidence of absence: The PR diff contains no changes to tests/test_orchestrate_poll_process.py or scripts/orchestrate_poll_process.sh. The PR only addresses the failure logging improvement in ci.yml, but does not fix the underlying test failure (`test_security_pass_cap_converts_low_keep_fixing_to_advisory` as identified in the check-run log tail).\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: Auto-decision AD-1 chose \"A+B: Try to reproduce and fix the failing test, and also add the end-of-step failure summary so the next triage is not inconclusive.\" The PR must both fix the failing test AND add the CI summary.\nExpected change site: tests/test_orchestrate_poll_process.py near line 6391 (test `test_security_pass_cap_converts_low_keep_fixing_to_advisory`) and/or scripts/orchestrate_poll_process.sh (the poller code under test)\nEvidence of absence: The PR diff contains no changes to tests/test_orchestrate_poll_process.py or scripts/orchestrate_poll_process.sh. The only changed files are .github/workflows/ci.yml (summary addition), changelog.d/6889-orchestrate-poll-shard-failure-summary.md, and tests/test_ci_poll_test_sharding.py (contract tests for the summary). The new summary correctly identifies the failing test (`##[error]orchestrate-poll shard 1 exit 1 failed tests: test_security_pass_cap_converts_low_keep_fixing_to_advisory` in the check-run log tail), but the test itself remains unfixed and CI remains red. The \"fix the failing test\" half of the auto-decision was not attempted.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3525290b013ad485af666bbe3ccb3718122d386bda27ce00e8381dfa8e5a69d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6901,
+    "run_id": "38035434628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035434628",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010081611_38f85bb483",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6901,
+    "run_id": "38035434628"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T08:16:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
