@@ -2843,6 +2843,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/audit_consumer_drift.yml
 .github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
+.github/workflows/check-failure-triage-historical.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml

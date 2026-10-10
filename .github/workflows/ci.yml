@@ -693,6 +693,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's

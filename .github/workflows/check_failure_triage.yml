@@ -34,6 +34,23 @@ name: AI Check Failure Triage (Reusable)
         required: false
         type: string
         default: ""
+      # Historical mode (#7093): triage one finished CI run of a PR that is no
+      # longer open. All three default to empty, which keeps the normal path.
+      historical_run_id:
+        description: "Failed CI workflow run id to triage after the PR closed (historical mode)"
+        required: false
+        type: string
+        default: ""
+      historical_job_id:
+        description: "Failed job id inside historical_run_id"
+        required: false
+        type: string
+        default: ""
+      historical_repro_artifact_prefix:
+        description: "Name prefix of same-run reproduction artifacts, used when the job log is gone"
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -75,9 +92,24 @@ jobs:
           CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
           HEAD_SHA: ${{ inputs.head_sha }}
           DETAILS_URL: ${{ inputs.details_url }}
+          HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
+          HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
+          HISTORICAL_REPRO_PREFIX: ${{ inputs.historical_repro_artifact_prefix }}
         run: |
           set -euo pipefail
 
+          if [ -n "${HISTORICAL_RUN_ID}${HISTORICAL_JOB_ID}" ]; then
+            if ! [[ "${HISTORICAL_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${HISTORICAL_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Invalid historical run/job id (both must be set and numeric)"
+              exit 1
+            fi
+          fi
+          if [ -n "${HISTORICAL_REPRO_PREFIX}" ]; then
+            if [ -z "${HISTORICAL_RUN_ID}" ] || ! [[ "${HISTORICAL_REPRO_PREFIX}" =~ ^[a-z0-9-]{1,64}$ ]]; then
+              echo "::error::Invalid historical reproduction artifact prefix"
+              exit 1
+            fi
+          fi
           if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Invalid PR number"
             exit 1
@@ -223,9 +255,22 @@ jobs:
           printf 'Head SHA: %s\n' "${HEAD_SHA}"
 
       - name: Checkout PR head (failing branch)
+        id: checkout_pr_head
+        # Historical mode only: a closed PR's head may no longer be fetchable.
+        # Normal mode evaluates to false and fails on a checkout error as before.
+        continue-on-error: ${{ inputs.historical_run_id != '' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.head_sha || github.sha }}
+          fetch-depth: 1
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Checkout default-branch fallback (historical mode)
+        if: ${{ inputs.historical_run_id != '' && steps.checkout_pr_head.outcome == 'failure' }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
           fetch-depth: 1
           token: ${{ github.token }}
           persist-credentials: false
@@ -280,7 +325,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py workflow_failure_heal.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -355,6 +400,8 @@ jobs:
           done
           install -m 0755 .codex-workflow-src/scripts/check_failure_triage.sh "${trusted_dir}/scripts/check_failure_triage.sh"
           install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
+          # Historical mode redacts job logs with redact-stream before diagnosis.
+          install -m 0755 .codex-workflow-src/scripts/workflow_failure_heal.py "${trusted_dir}/scripts/workflow_failure_heal.py"
           install -m 0755 .codex-workflow-src/scripts/clarify_isolated_run.sh "${trusted_dir}/scripts/clarify_isolated_run.sh"
           install -m 0755 .codex-workflow-src/scripts/sandbox_image.sh "${trusted_dir}/scripts/sandbox_image.sh"
           install -m 0755 .codex-workflow-src/scripts/clarify_openrouter_broker.py "${trusted_dir}/scripts/clarify_openrouter_broker.py"
@@ -384,6 +431,16 @@ jobs:
           mkdir -p "${RUNTIME_DIR}"
           echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
 
+      # Historical mode only: reproduction results uploaded by the caller's
+      # credential-free job in this run. Data only; never sourced or executed.
+      - name: Download historical reproduction results
+        if: ${{ inputs.historical_repro_artifact_prefix != '' }}
+        uses: actions/download-artifact@v6
+        with:
+          pattern: ${{ inputs.historical_repro_artifact_prefix }}*
+          path: ${{ env.RUNTIME_DIR }}/historical_repro
+          merge-multiple: false
+
       - name: Collect check-failure context
         id: collect_triage
         env:
@@ -396,6 +453,9 @@ jobs:
           CHECK_TRIAGE_CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
           CHECK_TRIAGE_HEAD_SHA: ${{ inputs.head_sha }}
           CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
+          CHECK_TRIAGE_HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
+          CHECK_TRIAGE_HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
+          CHECK_TRIAGE_HISTORICAL_REPRO_DIR: ${{ inputs.historical_repro_artifact_prefix != '' && format('{0}/historical_repro', env.RUNTIME_DIR) || '' }}
         run: |
           set -euo pipefail
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
