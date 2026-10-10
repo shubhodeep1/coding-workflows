@@ -1914,6 +1914,17 @@ def test_intake_keeps_stable_when_it_contains_the_pin_or_the_compare_is_unavaila
 	assert "target_branch_source=default" in result.stdout
 
 
+def test_intake_retarget_uses_the_configured_default_branch_for_consumer_issue_reports() -> None:
+	"""Consumer issue reports skip the provenance block; the retarget must still
+	read WORKFLOW_HEAL_DEFAULT_BRANCH instead of assuming `main`."""
+	state = _intake_state(compare=_compare(0, [], status="behind"), branches=["stable", "main", "develop"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "develop"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "develop"
+	assert "target_branch_retarget from=stable to=develop" in result.stdout
+
+
 def test_intake_retarget_falls_back_to_main_without_a_known_default_branch() -> None:
 	state = _intake_state(compare=_compare(0, [], status="behind"))
 	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": ""})
