@@ -194,7 +194,7 @@ def test_managed_open_pr_guard_reroutes_before_dispatch() -> None:
 	dispatch = POLLER_TEXT.index('_dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?')
 	block = POLLER_TEXT[dispatch - 1500:dispatch]
 	assert '_stall_retired_host_only_conflict_check "${issue_num}" "${_lpr_num}" "${_opr_json}"' in block
-	assert 'execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue"' in block
+	assert '"${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue"' in block
 
 
 def test_standalone_guard_reroutes_to_close_and_reissue_case() -> None:
@@ -351,6 +351,23 @@ def test_helper_fork_head_fails_closed(tmp_path: Path) -> None:
 
 
 @needs_tools
+def test_reissue_dispatch_fn_targets_the_stall_action_and_is_not_env_controlled() -> None:
+	# The reroutes call execute_stall_recovery_action through a variable so
+	# ShellCheck's dataflow analysis does not inline it at each new site.
+	assert "declare -g STALL_RETIRED_CONFLICT_REISSUE_FN='execute_stall_recovery_action'" in POLLER_TEXT
+	assert POLLER_TEXT.count('"${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue"') == 3
+	assert "${STALL_RETIRED_CONFLICT_REISSUE_FN:-" not in POLLER_TEXT
+
+
+@needs_tools
+def test_helper_fetch_failure_fails_closed(tmp_path: Path) -> None:
+	# A failed refresh must not let cached (possibly stale) base refs decide.
+	poller, head_sha = _scratch(tmp_path, base_deletes=RETIRED)
+	_git(poller, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+	result = _run_helper(tmp_path, poller, _pr(head_sha))
+	assert "RC=1" in result.stdout and "reason=fetch_failed" in result.stdout, result.stdout + result.stderr
+
+
 def test_helper_missing_support_fails_closed(tmp_path: Path) -> None:
 	poller, head_sha = _scratch(tmp_path, base_deletes=RETIRED)
 	result = _run_helper(tmp_path, poller, _pr(head_sha), support=False)
@@ -384,7 +401,7 @@ def test_managed_dispatch_rb_judge_reroutes_before_judge_dispatch() -> None:
 	block = POLLER_TEXT[start:dispatch]
 	check = block.index('_stall_retired_host_only_conflict_check "${issue_num}" "${rb_pr_num}" "${STALL_IMPL_PR_JSON:-}"')
 	assert block.index('_stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}"') < check
-	assert 'execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue"' in block[check:]
+	assert '"${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue"' in block[check:]
 	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"' in block[check:]
 
 

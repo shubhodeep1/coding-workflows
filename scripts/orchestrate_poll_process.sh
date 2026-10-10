@@ -10333,6 +10333,13 @@ declare -g STALL_RETIRED_CONFLICT_PATHS=''
 declare -g STALL_RETIRED_CONFLICT_BASE=''
 declare -g STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=''
 declare -g STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=''
+# The retired-conflict reroutes call execute_stall_recovery_action from
+# inside execute_stall_recovery_action and recover_stalled_issue. They go
+# through this variable so ShellCheck's dataflow analysis does not inline
+# that ~900-line function again at each new call site: with direct calls
+# the CI ShellCheck step ran out of resources on this file. Set here, never
+# read from the environment.
+declare -g STALL_RETIRED_CONFLICT_REISSUE_FN='execute_stall_recovery_action'
 _stall_retired_conflict_branch_ok() {
   local branch="$1"
   [[ "${branch}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || return 1
@@ -10417,6 +10424,17 @@ _stall_retired_host_only_conflict_check() {
   fi
   if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || ! _stall_retired_conflict_branch_ok "${head_ref}" || ! _stall_retired_conflict_branch_ok "${base_ref}"; then
     _srcc_skip invalid_pr_refs
+    return 1
+  fi
+
+  # _list_integration_conflict_files ignores a failed fetch and would then
+  # probe whatever refs are cached locally. A stale base could still show
+  # the retired file as deleted after the base restored it, so refresh both
+  # refs here and keep the resolver dispatch when that fails.
+  if ! git fetch --no-tags --quiet origin \
+    "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" \
+    "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+    _srcc_skip fetch_failed
     return 1
   fi
 
@@ -15908,7 +15926,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         add_healing_note "Issue #${issue_num}: PR #${target_pr} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; closing and re-issuing instead of dispatching the conflict resolver"
         STALL_HEALING_CHANGED=true
         local _rmc_reissue_rc=0
-        execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rmc_reissue_rc=$?
+        "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rmc_reissue_rc=$?
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rmc_reissue_rc}"
       fi
@@ -15965,7 +15983,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         add_healing_note "Issue #${issue_num}: review-blocked PR #${rb_pr_num} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; closing and re-issuing instead of dispatching the review-blocked judge"
         STALL_HEALING_CHANGED=true
         local _rbj_reissue_rc=0
-        execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
+        "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rbj_reissue_rc}"
       fi
@@ -19645,7 +19663,7 @@ recover_stalled_issue() {
             add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS} (phase=${phase}); closing and re-issuing instead of '${action}'"
             STALL_HEALING_CHANGED=true
             local _opr_reissue_rc=0
-            execute_stall_recovery_action "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _opr_reissue_rc=$?
+            "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _opr_reissue_rc=$?
             STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
             return "${_opr_reissue_rc}"
           fi
