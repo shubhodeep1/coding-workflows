@@ -1354,6 +1354,9 @@ _autofix_pr_named_review_runs()
 	local review_default_branch
 	review_default_branch=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || return 1
 	[[ "${review_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+	# A response without .default_branch prints the literal "null", which
+	# passes the regex; fail closed like the poller's resolver (issue #6629).
+	[ "${review_default_branch}" != "null" ] || return 1
 	local review_wrapper review_page review_response review_total review_count review_page_count
 	local review_error_file review_all='[]' review_wrapper_runs
 	review_error_file=$(mktemp "${TMPDIR:-/tmp}/autofix_pr_named_runs.XXXXXX") || return 1
