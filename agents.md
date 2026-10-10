@@ -671,6 +671,18 @@ Both sites reuse `scope_violation_*` outputs and `ai:scope-blocked`; the
 General `ENFORCE_FILES_TOUCHED` and `ALLOW_OUT_OF_SCOPE_FILES` switches cannot
 bypass it. Log prefix: `IMPLEMENT_AUTOMATION_PATH_GUARD`.
 
+Plan auto-approval gate (#6769): with `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`
+off (the default), no automatic `/approved` is posted for a plan that lists
+automation paths: plan.yml's auto-approve step, both stall-recovery `auto_approve`
+arms and both `retrigger_implement` arms in `ai:awaiting-approval` hold it. On,
+every listed protected path needs an exact trusted `files_touched` grant; the
+open pipeline-author grant does not count. The poller reads only the newest
+`<!-- ai:plan-proposal:v1 -->` comment by the `GH_PAT` login, and the batched
+issue GraphQL now carries `author_login` / `author_association`. Decider:
+`files_touched_scope_guard.py --plan-auto-approval-gate` (exit 0 approve, 30
+hold, every error holds). The implement-time guard and the staged-support latch
+release are unchanged.
+
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
   dynamic issue label of the form `ai:scope:<glob>` and copies the glob into
   the implementation context.

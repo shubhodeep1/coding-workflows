@@ -696,6 +696,157 @@ def test_label_contract_and_helper_have_scope_blocked() -> None:
 		assert "ai:scope-blocked" not in group.get("members", [])
 
 
+# --------------------------------------------------------------------------
+# Plan auto-approval gate (issue #6769)
+# --------------------------------------------------------------------------
+
+_PROTECTED_PLAN = """Implementation Plan
+
+### 1. Files likely to change
+
+- `scripts/security_audit.sh`: fix the finding.
+- `./.GitHub/workflows/plan.yml`
+- `README.md`
+- `prompts/` and `scripts/**/*.py`
+
+No changes to:
+- `scripts/hidden_negated.sh`
+
+### 2. Functions
+Mention `scripts/outside_section.sh` in prose.
+"""
+
+
+def test_plan_extractor_reads_files_section() -> None:
+	assert guard.extract_plan_automation_paths(_PROTECTED_PLAN) == [
+		"scripts/security_audit.sh", ".GitHub/workflows/plan.yml", "prompts/", "scripts/**/*.py"]
+
+
+def test_plan_extractor_heading_lead_in_and_bullet_negatives() -> None:
+	plan = ("## Files to change\n- `scripts/a.sh`\n- No changes to `scripts/b.sh`\n"
+		"## Other\n- `scripts/c.sh`\n")
+	# A bullet-prefixed negative is scanned normally (it cannot hide siblings).
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/a.sh", "scripts/b.sh"]
+
+
+def test_plan_extractor_falls_back_to_whole_text() -> None:
+	plan = "Edit /scripts/x.sh, keep src/scripts/y.sh, and update scripts/z.py:12.\nAlso README.md."
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/x.sh", "scripts/z.py"]
+	assert guard.extract_plan_automation_paths("### Files to change\n- `src/app.py`\n") == []
+
+
+def _owner_meta(*entries: str, number: int = 42) -> dict:
+	return {"number": number, "user": {"login": "maintainer"}, "author_association": "OWNER",
+		"body": _body(*entries) if entries else "no block"}
+
+
+def _pipeline_meta(number: int = 42) -> dict:
+	return {"number": number, "user": {"login": "pipeline[bot]"}, "author_association": "NONE",
+		"body": "Security finding fix. No files_touched block."}
+
+
+def test_plan_gate_flag_off_holds_protected_and_approves_ordinary() -> None:
+	assert guard.evaluate_plan_auto_approval([], None, flag_enabled=False, allow_workflow_edits="true",
+		issue_number="42") == ("approve", "none", [])
+	assert guard.evaluate_plan_auto_approval(["README.md"], None, flag_enabled=False,
+		allow_workflow_edits="true", issue_number="42") == ("approve", "none", [])
+	granted = guard.build_automation_grant(_owner_meta("scripts/a.sh"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(["scripts/a.sh"], granted, flag_enabled=False,
+		allow_workflow_edits="true", issue_number="42") == (
+		"hold", "automation_path_plan_auto_approval_disabled", ["scripts/a.sh"])
+
+
+def test_plan_gate_flag_on_requires_exact_trusted_grants() -> None:
+	paths = ["scripts/a.sh", ".github/workflows/x.yml"]
+	open_grant = guard.build_automation_grant(_pipeline_meta(), "pipeline[bot]")
+	assert open_grant["open"] is True
+	assert guard.evaluate_plan_auto_approval(paths, open_grant, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42") == ("hold", "open_grant_not_exact", paths)
+	full = guard.build_automation_grant(_owner_meta(*paths), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(paths, full, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42") == ("approve", "granted", [])
+	partial = guard.build_automation_grant(_owner_meta("scripts/a.sh"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(paths, partial, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42") == ("hold", "path_not_granted", [".github/workflows/x.yml"])
+	untrusted = guard.build_automation_grant(dict(_owner_meta(*paths), author_association="NONE"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(paths, untrusted, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42")[1] == "untrusted_author"
+	assert guard.evaluate_plan_auto_approval(paths, full, flag_enabled=True, allow_workflow_edits="false",
+		issue_number="42")[1] == "workflow_edits_disabled"
+	assert guard.evaluate_plan_auto_approval(paths, full, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="43")[1] == "grant_issue_mismatch"
+	# Directory and glob entries can never be granted exactly.
+	dir_grant = guard.build_automation_grant(_owner_meta("prompts/"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(["prompts/"], dir_grant, flag_enabled=True,
+		allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def test_plan_gate_preserves_implement_guard_open_grant() -> None:
+	# Regression: the implement-time guard still accepts the open grant.
+	open_grant = guard.build_automation_grant(_pipeline_meta(), "pipeline[bot]")
+	assert guard.check_automation_paths(["scripts/security_audit.sh"], open_grant, "true", "42") == (
+		"in-scope", [], "pipeline_author_no_allowlist")
+
+
+def _run_plan_gate_cli(plan: str | None, flag: str, meta: dict | str | None, *,
+	login: str = "pipeline[bot]") -> tuple[int, dict]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		plan_file = tdp / "plan.md"
+		if plan is not None:
+			plan_file.write_text(plan, encoding="utf-8")
+		args = [sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate", "--plan-file", str(plan_file),
+			"--flag-enabled", flag, "--pipeline-login", login, "--allow-workflow-edits", "true",
+			"--issue-number", "42"]
+		if meta is not None:
+			meta_file = tdp / "meta.json"
+			meta_file.write_text(meta if isinstance(meta, str) else json.dumps(meta), encoding="utf-8")
+			args += ["--issue-meta-file", str(meta_file)]
+		proc = subprocess.run(args, capture_output=True, text=True, check=False)
+		return proc.returncode, json.loads(proc.stdout)
+
+
+def test_plan_gate_cli_ungranted_security_finding_held() -> None:
+	plan = "### Files likely to change\n- `scripts/security_audit.sh`\n"
+	for flag, reason in (("false", "automation_path_plan_auto_approval_disabled"), ("true", "open_grant_not_exact")):
+		code, record = _run_plan_gate_cli(plan, flag, _pipeline_meta())
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED, (flag, record)
+		assert record["decision"] == "hold" and record["reason"] == reason
+		assert record["protected_paths"] == ["scripts/security_audit.sh"]
+		assert record["log_paths"] == "scripts/security_audit.sh"
+
+
+def test_plan_gate_cli_granted_and_ordinary_plans() -> None:
+	plan = "### Files likely to change\n- `scripts/a.sh`\n- `.github/workflows/x.yml`\n"
+	meta = _owner_meta("scripts/a.sh", ".github/workflows/x.yml")
+	code, record = _run_plan_gate_cli(plan, "true", meta)
+	assert code == 0 and record["decision"] == "approve" and record["reason"] == "granted"
+	code, record = _run_plan_gate_cli(plan, "off", meta)
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "automation_path_plan_auto_approval_disabled"
+	code, record = _run_plan_gate_cli("### Files likely to change\n- `src/app.py`\n", "false", None)
+	assert code == 0 and record == {"decision": "approve", "reason": "none", "protected_paths": [],
+		"denied_paths": [], "log_paths": "none"}
+
+
+def test_plan_gate_cli_fails_closed() -> None:
+	plan = "### Files likely to change\n- `scripts/a.sh`\n"
+	assert _run_plan_gate_cli(None, "false", None)[1]["reason"] == "plan_gate_error"
+	assert _run_plan_gate_cli("   \n", "false", None)[1]["reason"] == "plan_gate_error"
+	assert _run_plan_gate_cli(plan, "true", None)[1]["reason"] == "issue_meta_unavailable"
+	assert _run_plan_gate_cli(plan, "true", "{not json")[1]["reason"] == "plan_gate_error"
+	assert _run_plan_gate_cli(plan, "true", _owner_meta("scripts/a.sh"), login="")[1]["reason"] == \
+		"identity_unavailable"
+
+
+def test_plan_gate_log_paths_are_sanitized() -> None:
+	rendered = guard.plan_gate_log_paths(["scripts/a\n::error::x.sh", "scripts/" + "b" * 300] + [
+		f"scripts/{i}.sh" for i in range(30)])
+	assert "\n" not in rendered and "::" not in rendered and " " not in rendered
+	assert len(rendered.split(",")) == guard.PLAN_LOG_PATHS_MAX_ENTRIES
+	assert all(len(item) <= guard.PLAN_LOG_PATH_MAX_CHARS for item in rendered.split(","))
+	assert guard.plan_gate_log_paths([]) == "none"
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

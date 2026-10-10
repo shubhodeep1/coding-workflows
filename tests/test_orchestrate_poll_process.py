@@ -707,6 +707,7 @@ def _run_poller(
 	issue_bodies: dict[int, str] | None = None,
 	issue_events: dict[int, list[dict]] | None = None,
 	issue_events_after_first_get: dict[int, list[dict]] | None = None,
+	issue_authors: dict[int, dict] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	gql_comments_unavailable_for: list[int] | None = None,
@@ -808,6 +809,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
+	issue_authors = issue_authors or {}
 	issue_events = issue_events or {}
 	issue_events_after_first_get = issue_events_after_first_get or {}
 	gql_labels = gql_labels or {}
@@ -1196,6 +1198,8 @@ esac
 				"comments": issue_comment_entries,
 				"body": issue_bodies.get(inum, f"Issue {inum}"),
 				"closed": bool(issue_closed.get(inum, False)),
+				"author_login": str(issue_authors.get(inum, {}).get("login", "octocat")),
+				"author_association": str(issue_authors.get(inum, {}).get("association", "OWNER")),
 			}
 
 		store = {
@@ -1943,6 +1947,10 @@ if args[0] == 'api':
 				issue_payload['state'] = issue_state
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
+			if re.search(r'(?m)^\s*author \{ login \}\s*$', query):
+				issue_payload['author'] = {'login': str(issue.get('author_login', 'octocat'))}
+			if re.search(r'(?m)^\s*authorAssociation\s*$', query):
+				issue_payload['authorAssociation'] = str(issue.get('author_association', 'OWNER'))
 			if 'labels(first:' in query:
 				label_limit = int(re.search(r'labels\(first:\s*(\d+)\)', query).group(1))
 				issue_payload['labels'] = {
@@ -5780,7 +5788,7 @@ def test_staged_support_release_guard_is_comment_order_independent() -> None:
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
 		# Deliberately newest-first, matching the former REST fallback shape.
-		issue_comments={501: [release_comment, latch_comment, standalone_state_comment]},
+		issue_comments={501: [release_comment, latch_comment, standalone_state_comment, _trusted_plan_comment()]},
 		mock_gh_issue_list_label_filter=True,
 	)
 
@@ -18921,6 +18929,7 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:awaiting-approval"]},
+		issue_comments={10: [_trusted_plan_comment()]},
 		mock_stall_judge_json={
 			"action": "nonsense",
 			"justification": "bad output",
@@ -19295,7 +19304,7 @@ def test_standalone_stall_recovery_skips_destructive_blocked_latch():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
-		issue_comments={501: [standalone_state_comment]},
+		issue_comments={501: [_trusted_plan_comment(), standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["501"]["comments"]]
@@ -23930,6 +23939,142 @@ def test_linked_pr_is_issue_implementation_predicate_contract():
 		got = {line.rsplit("|", 1)[0]: int(line.rsplit("|", 1)[1]) for line in result.stdout.splitlines() if line}
 		for issue, head, body, expected in cases:
 			assert got[f"{issue}|{head}|{body}"] == expected, (issue, head, body, got)
+
+
+# --------------------------------------------------------------------------
+# Plan auto-approval gate in stall recovery (issue #6769)
+# --------------------------------------------------------------------------
+
+_PLAN_GATE_LOGIN = "github-actions[bot]"
+_ORDINARY_PLAN_FILES = ("src/app.py", "README.md")
+_PROTECTED_PLAN_FILES = ("scripts/security_audit.sh", ".github/workflows/security-audit.yml")
+
+
+def _trusted_plan_comment(files: tuple[str, ...] = _ORDINARY_PLAN_FILES, *, login: str = _PLAN_GATE_LOGIN,
+	created_at: str = "2026-01-01T00:00:00Z") -> dict:
+	listing = "\n".join(f"- `{path}`" for path in files)
+	return {
+		"body": f"Implementation Plan\n\n### 1. Files likely to change\n{listing}\n\nSTATUS: CLEAR\n\n<!-- ai:plan-proposal:v1 -->",
+		"user": {"login": login},
+		"author_association": "OWNER",
+		"created_at": created_at,
+	}
+
+
+def _managed_awaiting_approval_state() -> dict:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1,
+		"stall_recovery_count": 0})
+	return state
+
+
+def _standalone_awaiting_approval_state_comment() -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({"schema_version": 1, "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1,
+			"stall_recovery_count": 0})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _approved_bodies(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") for c in result["issues"][issue]["comments"] if c.get("body", "").startswith("/approved")]
+
+
+def test_managed_auto_approve_holds_protected_plan_with_flag_off() -> None:
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve "
+		"reason=automation_path_plan_auto_approval_disabled outcome=defer issue=10 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_managed_auto_approve_posts_for_ordinary_plan() -> None:
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment()]},
+	)
+	assert _approved_bodies(result, "10"), result["stdout"] + result["stderr"]
+	assert "reason=automation_path_plan_hold" not in result["stdout"]
+
+
+def test_managed_auto_approve_holds_without_trusted_plan_comment() -> None:
+	forged = _trusted_plan_comment(login="outsider")
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [forged]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == []
+	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
+
+
+def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> None:
+	# Pipeline-authored security finding without files_touched: open grant,
+	# never an exact grant for auto-approval.
+	held = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		issue_bodies={10: "Security finding. No allowlist."},
+		issue_authors={10: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	assert _approved_bodies(held, "10") == []
+	assert "reason=open_grant_not_exact outcome=defer issue=10" in held["stdout"] + held["stderr"]
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		issue_bodies={10: granted_body},
+		issue_authors={10: {"login": "maintainer", "association": "OWNER"}},
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	assert _approved_bodies(granted, "10"), granted["stdout"] + granted["stderr"]
+
+
+def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert "reason=automation_path_plan_auto_approval_disabled outcome=defer issue=501" in log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+
+
+def test_plan_gate_poller_wiring() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"' in poller
+	# Batched GraphQL carries the issue author (no new API call).
+	assert "          author { login }\n          authorAssociation\n" in poller
+	assert "author_login: (.value.author.login // \"\")," in poller
+	# Both auto_approve arms and both retrigger_implement arms (awaiting-approval only) gate.
+	assert poller.count('_plan_auto_approval_gate "${issue_num}"') == 4
+	assert poller.count('if [ "${phase}" = "ai:awaiting-approval" ]; then') >= 2
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "workflow_failure_heal.py files_touched_scope_guard.py; do" in workflow
+	assert workflow.count(
+		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}") == 4
+	# The staged-support latch release is intentionally not gated (AD-3: B).
+	release = poller.split("release_staged_support_needs_human_latches()", 1)[1].split("\n}\n", 1)[0]
+	assert "_plan_auto_approval_gate" not in release
 
 
 def main() -> int:

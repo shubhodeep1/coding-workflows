@@ -31,6 +31,12 @@ Inputs:
   --check-automation-paths --automation-grant-file PATH --staged-file PATH
                           --allow-workflow-edits VALUE --issue-number NUMBER
                           Verify staged automation paths against the snapshot.
+  --plan-auto-approval-gate --plan-file PATH --flag-enabled VALUE
+                          [--issue-meta-file PATH --pipeline-login LOGIN
+                          --allow-workflow-edits VALUE --issue-number NUMBER]
+                          Decide whether an automatic `/approved` may be posted
+                          for a plan that lists automation paths (issue #6769).
+                          Prints one JSON line; exit 0 approves, 30 holds.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
@@ -340,6 +346,156 @@ def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: lis
 	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles)
 
 
+# --- Plan auto-approval gate (issue #6769) ---------------------------------
+# Automatic `/approved` posts (plan.yml "Auto-approve clear plan" and the
+# poller's stall-recovery arms) are held for plans that list automation
+# paths. While AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off (the default)
+# every such plan is held; when it is on, every protected path the plan lists
+# needs a trusted, exact issue-body grant. The open pipeline-author grant
+# (PIPELINE_AUTHOR_OPEN_REASON) never counts as exact here, although the
+# implement-time guard (check_automation_paths) still accepts it.
+
+PLAN_DECISION_APPROVE = "approve"
+PLAN_DECISION_HOLD = "hold"
+PLAN_LOG_PATHS_MAX_ENTRIES = 20
+PLAN_LOG_PATH_MAX_CHARS = 200
+_PLAN_FILES_LEADIN_RE = re.compile(
+	r"^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchange\b", re.IGNORECASE)
+_PLAN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+_PLAN_NEG_LEADIN_RE = re.compile(r"^\s*(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
+_PLAN_NEG_WORD_RE = re.compile(r"(?:chang|modif|edit|touch|affect|updat)", re.IGNORECASE)
+_PLAN_NEG_RESET_RE = re.compile(r"^\s*(?:\*\*|__)?\s*Files\b[^\n]*\bchang(?:e|ed|es|ing)\b", re.IGNORECASE)
+_PLAN_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s)")
+_PLAN_CONTINUATION_RE = re.compile(r"^\s{2,}\S")
+# A protected path token: optional "./" or "/" prefix, an automation prefix in
+# any letter case, a slash, then path characters (globs kept so they hold).
+_PLAN_PATH_TOKEN_RE = re.compile(
+	r"(?:^|[^A-Za-z0-9_./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[A-Za-z0-9_.\-/*?\[\]]*)",
+	re.IGNORECASE)
+_PLAN_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]")
+
+
+def _plan_files_section(plan_text: str) -> str | None:
+	"""Port of plan.yml's Files-section filter; None when no section exists.
+
+	A heading or numbered lead-in naming "Files ... change" opens the section,
+	the next markdown heading ends it, and a non-bulleted negated lead-in
+	("No changes to:") suppresses the list that follows it. A bullet-prefixed
+	negative is scanned normally so it cannot hide positive sibling bullets.
+	"""
+	found = False
+	inside = False
+	negated = False
+	kept: list[str] = []
+	for line in plan_text.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			found = True
+			inside = True
+			negated = False
+			continue
+		if inside and _PLAN_HEADING_RE.match(line):
+			inside = False
+			negated = False
+		if not inside:
+			continue
+		if _PLAN_NEG_LEADIN_RE.match(line) and _PLAN_NEG_WORD_RE.search(line):
+			negated = True
+			continue
+		if negated and _PLAN_NEG_RESET_RE.match(line):
+			negated = False
+		if negated:
+			if not line.strip() or _PLAN_LIST_ITEM_RE.match(line) or _PLAN_CONTINUATION_RE.match(line):
+				continue
+			negated = False
+		kept.append(line)
+	return "\n".join(kept) if found else None
+
+
+def extract_plan_automation_paths(plan_text: str) -> list[str]:
+	"""Protected paths a plan lists, scanning its Files section.
+
+	Falls back to the whole plan text when no Files section exists, so a plan
+	without the section errs toward holding. Directory and glob entries are
+	kept: they can never be granted exactly, so they hold the plan.
+	"""
+	section = _plan_files_section(plan_text or "")
+	text = section if section is not None else (plan_text or "")
+	seen: set[str] = set()
+	paths: list[str] = []
+	for line in text.splitlines():
+		for match in _PLAN_PATH_TOKEN_RE.finditer(line):
+			path = normalize_path(match.group(1).rstrip(".,"))
+			if not path or not is_automation_path(path) or path in seen:
+				continue
+			seen.add(path)
+			paths.append(path)
+	return paths
+
+
+def evaluate_plan_auto_approval(plan_paths: list[str], grant: object, *, flag_enabled: bool,
+	allow_workflow_edits: str, issue_number: str) -> tuple[str, str, list[str]]:
+	"""Decide whether an automatic `/approved` may be posted for a plan."""
+	protected = [path for path in (normalize_path(p) for p in plan_paths) if path and is_automation_path(path)]
+	if not protected:
+		return PLAN_DECISION_APPROVE, "none", []
+	if not flag_enabled:
+		return PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+	if isinstance(grant, dict) and grant.get("open") is True:
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	status, denied, reason = check_automation_paths(protected, grant, allow_workflow_edits, issue_number)
+	if status == STATUS_IN_SCOPE and reason == "granted":
+		return PLAN_DECISION_APPROVE, "granted", []
+	if status == STATUS_IN_SCOPE:
+		# Any other in-scope reason (the open pipeline-author grant) is not an
+		# exact grant for auto-approval.
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	return PLAN_DECISION_HOLD, reason, denied or protected
+
+
+def plan_gate_log_paths(paths: list[str]) -> str:
+	"""Log-safe, comma-joined rendering of untrusted plan paths."""
+	rendered: list[str] = []
+	for path in paths[:PLAN_LOG_PATHS_MAX_ENTRIES]:
+		safe = _PLAN_LOG_UNSAFE_RE.sub("", path)[:PLAN_LOG_PATH_MAX_CHARS]
+		if safe:
+			rendered.append(safe)
+	return ",".join(rendered) if rendered else "none"
+
+
+def _flag_enabled(value: str) -> bool:
+	return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
+	pipeline_login: str, allow_workflow_edits: str, issue_number: str) -> tuple[dict, int]:
+	"""CLI body: returns (decision record, exit code). Errors always hold."""
+	protected: list[str] = []
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		flag_on = _flag_enabled(flag_value)
+		grant: object = None
+		if protected and flag_on:
+			if not issue_meta_file:
+				record = {"decision": PLAN_DECISION_HOLD, "reason": "issue_meta_unavailable",
+					"protected_paths": protected, "denied_paths": protected}
+				record["log_paths"] = plan_gate_log_paths(protected)
+				return record, EXIT_AUTOMATION_UNGRANTED
+			with open(issue_meta_file, encoding="utf-8") as handle:
+				metadata = json.load(handle)
+			grant = build_automation_grant(metadata, pipeline_login)
+		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
+			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
 def _read_text_file(path: str) -> str:
 	try:
 		with open(path, encoding="utf-8") as handle:
@@ -374,7 +530,15 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--automation-grant-file", default="")
 	parser.add_argument("--allow-workflow-edits", default="false")
 	parser.add_argument("--issue-number", default="")
+	parser.add_argument("--plan-auto-approval-gate", action="store_true")
+	parser.add_argument("--plan-file", default="")
+	parser.add_argument("--flag-enabled", default="false")
 	args = parser.parse_args(argv)
+	if args.plan_auto_approval_gate:
+		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
+			args.pipeline_login, args.allow_workflow_edits, args.issue_number)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
 	if args.emit_automation_grant:
 		try:
 			metadata = json.loads(_read_text_file(args.issue_meta_file))
