@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: Issue 1 (`issue-1-canary-a`), set the two lines of the E2E smoke canary\n\n**Planning ref:** `orchestrator/project-7005` @ `af7d2fb8118e43be0c565fa3d7c9677e0f1a7a79`. This matches the integration branch named in the issue metadata, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue changes a single fixture file, and its acceptance criteria are spelled out exactly. Nothing needs a helper, a pattern or new code, so the plan keeps to the requested edit and touches nothing else.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (the file already exists, so it is edited, not created). No other file changes.\n\nWhat the file holds now:\n```\nstatus: ok\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\nLine 1 is already `status: ok` with no trailing whitespace.\n\n### 2. Functions or modules to implement\nNone. The work is one text edit:\n- Leave line 1 (`status: ok`) unchanged.\n- Insert a new line 2: `decompose-run: 38010697715`.\n- The existing `run_id: 26151428977` and `updated-by: ai-pipeline` lines move down to lines 3 and 4, unchanged.\n- Keep the file's trailing newline.\n\nResult:\n```\nstatus: ok\ndecompose-run: 38010697715\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\n\n### 3. Data structures affected\nNone.\n\n### 4. API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Insert line 2 instead of overwriting the existing `run_id` line\n- Chosen: insert `decompose-run: 38010697715` as the new line 2 and keep the existing lines below it.\n- Alternatives considered: replace the existing `run_id: 26151428977` line with the new value.\n- Why: the issue says \"Do not reflow or rewrite unrelated content\" and only puts lines 1 and 2 in the acceptance criteria. Inserting meets both criteria without deleting any existing content.\n\n## Security considerations\n- No trust boundaries, endpoints or external inputs are involved; this is a static test fixture.\n- No secrets, credentials or money-handling code are touched.\n- The implement scope guard will accept the change because `tests/` is not an automation path and the edit stays inside `files_touched`.\n\n### 5. Risks and edge cases\n- The second line must have no stray whitespace or CRLF line ending.\n- `tests/e2e_smoke_canary_b.txt` belongs to the sibling issue running in parallel and must not be touched. `tests/e2e_smoke_canary_spec.txt` is also left alone.\n- If a reviewer reads \"second line exactly\" as \"replace the old line 2\", that choice is recorded in D1.\n\n### 6. Testing considerations\n- `sed -n '1p' tests/e2e_smoke_canary.txt` should print exactly `status: ok`.\n- `sed -n '2p' tests/e2e_smoke_canary.txt` should print exactly `decompose-run: 38010697715`.\n- `cat -A` on the file should show `$` with no `^M` at the end of each line.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n\n### 7. Pre-execution self-check\nThe plan is ready to implement: it changes one file, meets both acceptance criteria, makes no changes outside `files_touched`, and the ref matches the integration branch.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "ddc3807fe978d45640be435c833657d2b2899f180a9b2b448db8e94325809224",
+  "lineage": {
+    "issue_number": 7006,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38011203963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38011203963",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7006"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261010010427_cd25ef7e6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7006,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38011203963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7006",
+  "timestamps": {
+    "created_at": "2026-10-10T01:04:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
