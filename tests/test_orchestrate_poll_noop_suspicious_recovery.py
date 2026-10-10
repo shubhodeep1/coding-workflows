@@ -659,6 +659,9 @@ def _run_cap_skip(comments: list, commits: list, login: str | None, *, repo: str
 	import subprocess
 	import tempfile
 
+	# Fixture JSON is single-quoted with shlex.quote so Bash performs no
+	# command substitution (backticks, $(...)) or parameter expansion on
+	# comment bodies before the verbatim snippet sees them.
 	with tempfile.TemporaryDirectory() as tmp:
 		calls = Path(tmp) / "calls"
 		if ai_review is not None:
@@ -802,6 +805,17 @@ def test_cap_skip_suppresses_redispatch_when_cap_applied_on_head():
 	assert f"NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=4332 head={CAP_HEAD} count=2 max=3" in out, out
 	assert "SKIPPED=2" in out, out
 	assert calls == 1, f"GET /user must be issued once per cycle, got {calls}"
+
+
+def test_cap_skip_harness_preserves_shell_metacharacters():
+	"""Fixture bodies with backticks, `$(...)` and `$VAR` must reach the
+	snippet byte for byte. Double-quoted assignment let Bash run command
+	substitution on them (an unbalanced backtick aborted the shell)."""
+	stray = {"user": {"login": "mallory"}, "body": "stray ` backtick and $(nope) and $HOME"}
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1"), stray], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert "DISPATCH" not in out, out
+	assert "SKIPPED=2" in out, out
+	assert f"NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=4332 head={CAP_HEAD}" in out, out
 
 
 def test_cap_skip_ignores_marker_for_older_head():
