@@ -76,8 +76,9 @@ run_editor_claude()
 			return 75
 			;;
 		*)
-			# Includes 76: a fallback the capacity-only AI_ENGINE_FALLBACK_POLICY
-			# refused. Fail closed rather than run codex for that reason.
+			# Any other exit (claude_run already maps its internal 76 to 75; a
+			# 76 seen here would be a refused fallback) fails closed rather
+			# than running codex for a non-capacity reason.
 			echo "HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=failed reason=editor_exit_${claude_rc}" >&2
 			return 1
 			;;
