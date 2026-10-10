@@ -230,6 +230,14 @@ jobs:
           set -euo pipefail
           make generate-check
 
+      # CLAUDE.md §30: every pending agents.d/ fragment must fold into
+      # agents.md; the release job would otherwise skip it with a warning.
+      - name: agents.d fragment check and tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py check --repo-root .
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py
+
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"

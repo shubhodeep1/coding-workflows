@@ -1590,7 +1590,10 @@ jobs:
                   materiality = "medium"
 
           print(json.dumps({
-              "agents_md_changed": "agents.md" in seen,
+              # CLAUDE.md §30: an agents.d/*.md fragment documents agents.md.
+              "agents_md_changed": "agents.md" in seen or any(
+                  gate_fragment.startswith("agents.d/") and gate_fragment.endswith(".md") and gate_fragment.count("/") == 1 for gate_fragment in seen
+              ),
               "materiality": materiality,
           }))
           PY
