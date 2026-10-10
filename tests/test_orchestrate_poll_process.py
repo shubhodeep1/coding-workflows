@@ -5928,6 +5928,8 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert waived[0]["file"] == "scripts/example.py"
 	assert waived[0]["line"] == 1
 	assert waived[0]["owasp_or_stride_category"] == "A01: Broken Access Control"
+	assert waived[0]["exploit_scenario"] == remaining["exploit_scenario"]
+	assert len(waived[0]["exploit_scenario"]) <= 600
 	assert waived[0]["waived_at_cycle"] == 3
 	created = result.get("created_issues", [])
 	assert len(created) == 1
@@ -6902,8 +6904,10 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	"""A waiver reaches the engine as accepted and is enforced poller-side too.
 
 	The mock engine ignores SECURITY_AUDIT_WAIVED_FINDINGS (an older staged
-	engine would), so the re-reports below prove the poller's own suppression:
-	exact id, and same file + category within the line window under a new id.
+	engine would), so the results below prove the poller's own suppression:
+	only an exact finding_id whose recorded category, severity and exploit
+	scenario also match is dropped.  A new id near a waived location, and the
+	waived id with a different severity, stay blocking (#6987).
 	"""
 	state = _security_pass_exhausted_state(
 		security_pass_cycle=0,
@@ -6914,6 +6918,7 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 				"line": 1,
 				"owasp_or_stride_category": "A01: Broken Access Control",
 				"severity": "high",
+				"exploit_scenario": _security_pass_test_finding()["exploit_scenario"],
 				"source": "judge",
 			},
 			{
@@ -6929,6 +6934,9 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	)
 	renamed_dos = _security_pass_second_test_finding()
 	renamed_dos["finding_id"] = "NEW-DOS-ID"
+	old_dos_new_severity = _security_pass_second_test_finding()
+	old_dos_new_severity["finding_id"] = "OLD-DOS"
+	old_dos_new_severity["severity"] = "high"
 	survivor = _security_pass_second_test_finding()
 	survivor["finding_id"] = "SURVIVOR"
 	survivor["owasp_or_stride_category"] = "A07: Identification and Authentication Failures"
@@ -6937,7 +6945,9 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), renamed_dos, survivor]),
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), renamed_dos, old_dos_new_severity, survivor]
+		),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
@@ -6946,18 +6956,41 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-TEST-1", "OLD-DOS"]
 	latest_state = result["latest_state"]
 	assert latest_state["status"] == "security-pass-fixing"
-	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SURVIVOR"]
+	assert sorted(row["finding_id"] for row in latest_state["security_pass_reported_findings"]) == [
+		"NEW-DOS-ID",
+		"OLD-DOS",
+		"SURVIVOR",
+	]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "waived_findings=2" in combined_log
-	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=2 ids=SEC-TEST-1,NEW-DOS-ID" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=1 ids=SEC-TEST-1" in combined_log
+	assert "::notice::SECURITY_AUDIT_WAIVER_LINE_WINDOW=40 no longer controls waiver suppression (exact finding_id match only)" in combined_log
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192" in combined_log
-	assert "findings=1 cycle=0" in combined_log
+	assert "findings=3 cycle=0" in combined_log
 	created = result.get("created_issues", [])
 	assert len(created) == 1
 	fix_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "| SURVIVOR |" in fix_body
+	assert "| NEW-DOS-ID |" in fix_body
+	assert "| OLD-DOS |" in fix_body
 	assert "| SEC-TEST-1 |" not in fix_body
-	assert "| NEW-DOS-ID |" not in fix_body
+
+
+def test_security_pass_invalid_waiver_line_window_warns_and_keeps_running() -> None:
+	state = _security_pass_exhausted_state(security_pass_cycle=0, security_pass_waived_findings=[{
+		"finding_id": "SEC-TEST-1", "file": "scripts/example.py", "line": 1,
+		"owasp_or_stride_category": "A01: Broken Access Control", "severity": "high",
+	}])
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_AUDIT_WAIVER_LINE_WINDOW": "abc"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "::warning::SECURITY_AUDIT_WAIVER_LINE_WINDOW=abc is invalid; it no longer controls waiver suppression" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=1 ids=SEC-TEST-1" in combined_log
+	assert result["latest_state"]["security_pass_reported_findings"] == []
 
 
 def test_security_pass_waiver_does_not_suppress_a_nearby_new_exploit() -> None:
@@ -7039,7 +7072,9 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert waived["SEC-OLD"]["waived_by"] == "octocat"
 	assert waived["SEC-OLD"]["file"] == "scripts/example.py"
 	assert waived["SEC-OLD"]["line"] == 1
+	assert waived["SEC-OLD"]["exploit_scenario"] == "Ledger growth by an authenticated caller."
 	assert waived["unknown.id-1"]["file"] == ""
+	assert waived["unknown.id-1"]["exploit_scenario"] == ""
 	# Operator waivers defer their advisory follow-up the same way the judge
 	# does: the known finding keeps its payload and pending flag, an id that
 	# matched nothing gets no follow-up at all, and no issue is filed until
@@ -15958,6 +15993,9 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:ready-to-merge"]},
+		# Issue #6631: the PR merged into orchestrator/project-192, so the
+		# issue must declare that branch for the merge to count.
+		issue_bodies={10: "Issue 10\n\n- Integration branch: orchestrator/project-192\n"},
 		issue_linked_prs={10: 901},
 		prs=[merged_pr],
 		mock_gh_issue_list_label_filter=True,
@@ -16079,6 +16117,196 @@ def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=951 origin=merged_label status=closed" in result["stdout"], (
 		"Missing CLOSE_MERGED_SWEEP closure log line in poller stdout"
 	)
+
+
+def _sweep_closing_pr(number: int, base: str) -> dict:
+	"""A merged PR on a non-conventional head whose body closes issue #10."""
+	return {
+		"number": number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-28T10:40:00Z",
+		"baseRefName": base,
+		"headRefName": "claude/implement-plan-issue-10-x-fix",
+		"headRefFromApi": "claude/implement-plan-issue-10-x-fix",
+		"body": "Completion PR.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def test_close_merged_issues_sweep_rejects_closing_pr_merged_into_non_target_base():
+	"""Issue #6631 (incident #4688 / PR #4748): a closing-keyword PR merged
+	into a branch that is neither the default branch nor the issue's declared
+	integration branch must not close the issue. It falls through to the
+	merged_label no_merged_pr_found policy."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 960},
+		prs=[_sweep_closing_pr(960, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert 10 not in result.get("closed_issues", []), (
+		f"Non-target-base merge must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=960 rejected=non_target_base "
+		"base=claude/implement-plan-issue-10-x declared=none"
+	) in result["stdout"]
+	assert "no_merged_pr_found non_target_base_seen=true" in combined
+
+
+def test_close_merged_issues_sweep_closes_closing_pr_merged_into_default_branch():
+	"""Issue #6631: a default-branch merge still closes the issue."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 961},
+		prs=[_sweep_closing_pr(961, "main")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=961 accepted reason=default_branch" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=961 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_closes_merge_into_declared_integration_branch():
+	"""Issue #6631: a merge into the issue's own declared `Integration
+	branch:` counts, even for a non-managed issue."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: "Follow-up.\n\n- Integration branch: orchestrator/project-192\n"},
+		issue_linked_prs={10: 962},
+		prs=[_sweep_closing_pr(962, "orchestrator/project-192")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=962 accepted reason=declared_integration_branch"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_rejects_merge_into_other_branch_than_declared():
+	"""Issue #6631: a declared integration branch narrows the accepted bases;
+	a merge into a different non-default branch does not count."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_bodies={10: "Child.\n\n- **Integration branch:** `orchestrator/project-192`\n"},
+		issue_linked_prs={10: 963},
+		prs=[_sweep_closing_pr(963, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert (
+		"rejected=non_target_base base=claude/implement-plan-issue-10-x declared=orchestrator/project-192"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_managed_child_without_metadata_still_closes():
+	"""Issue #6631: an orchestrator-managed child whose own body declares no
+	branch (the branch lives on the tracking issue) keeps the any-base
+	behaviour so waves are not stranded."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_linked_prs={10: 964},
+		prs=[_sweep_closing_pr(964, "orchestrator/project-192")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=964 accepted reason=managed_no_child_metadata"
+	) in result["stdout"]
+
+
+def test_close_merged_issues_sweep_ready_label_non_target_base_stays_open_silently():
+	"""Issue #6631: an ai:ready-to-merge issue whose only merge is into a
+	non-target base stays open with no backfill and no Telegram alert."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 965},
+		prs=[_sweep_closing_pr(965, "claude/implement-plan-issue-10-x")],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert "ai:merged" not in result["issues"]["10"]["labels"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=ready_label no_merged_pr_found non_target_base_seen=true" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" not in result["stdout"]
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+
+
+def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
+	"""Issue #6631: when the default branch cannot be resolved the sweep
+	fails closed for the cycle."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	assert '_sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"' in body
+	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
+	# so the sweep must not reuse it.
+	assert "${FINAL_DEFAULT_BRANCH" not in body
+	assert "--jq '.default_branch'" in body
+	assert "|| echo main" not in body
+	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
+	skip_pos = body.index("reason=default_branch_unavailable")
+	assert body.index("return 0", skip_pos) < body.index("for ((idx=0; idx<count; idx++))")
+
+
+def test_pr_json_base_is_target_merge_helper_rules():
+	"""Issue #6631: unit-level check of _pr_json_base_is_target_merge."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	# The module's custom runner does not inject pytest fixtures such as
+	# tmp_path, so the test owns its temporary directory.
+	with tempfile.TemporaryDirectory() as _helper_tmp:
+		_run_target_merge_helper_rules(Path(_helper_tmp))
+
+
+def _run_target_merge_helper_rules(tmp_path: Path) -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	end = script.index("\n# Issue #6325:", start)
+	helper = tmp_path / "helper.sh"
+	helper.write_text(script[start:end] + "\n", encoding="utf-8")
+
+	def run(base: str, default: str, declared: str, managed: str) -> str:
+		pr_json = json.dumps({"base": {"ref": base}}) if base is not None else "{}"
+		proc = subprocess.run(
+			[
+				"bash", "-c",
+				'source "$1"; if _pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), pr_json, default, declared, managed,
+			],
+			check=True, capture_output=True, text=True,
+		)
+		return proc.stdout.strip()
+
+	assert run("main", "main", "", "false") == "yes:default_branch"
+	assert run("orchestrator/project-5", "main", "orchestrator/project-5", "false") == "yes:declared_integration_branch"
+	assert run("orchestrator/project-5", "main", "", "true") == "yes:managed_no_child_metadata"
+	assert run("orchestrator/project-5", "main", "orchestrator/project-6", "true") == "no"
+	assert run("feature/other", "main", "", "true") == "no"
+	assert run("claude/x", "main", "", "false") == "no"
+	assert run("", "main", "", "true") == "no"
+	assert run(None, "main", "", "true") == "no"
+	assert run("Main", "main", "", "false") == "no"
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():

@@ -4553,6 +4553,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # closing-keyword body reference — _pr_json_is_issue_implementation_pr).
 # A merged PR that merely mentions the issue (e.g. "Refs #<n>") does not
 # qualify and falls through to the no_merged_pr_found policy per origin.
+# Issue #6631: the PR must also have merged into the repository's default
+# branch or the issue's declared integration branch, with a fallback for
+# orchestrator-managed issues whose body declares no branch and whose PR
+# merged into an orchestrator/project-* branch
+# (_pr_json_base_is_target_merge); other bases log rejected=non_target_base.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
@@ -4577,13 +4582,13 @@ close_merged_issues_sweep() {
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
   ready_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:ready-to-merge" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
 
   # Build a single deduplicated list of {number, labels, origin} entries.
@@ -4596,7 +4601,7 @@ close_merged_issues_sweep() {
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
-          | {number: .number, labels: (.labels // []), origin: $origin}
+          | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
         );
       ($merged | normalize("merged_label")) as $m
       | ($ready | normalize("ready_label")) as $r
@@ -4614,9 +4619,33 @@ close_merged_issues_sweep() {
     return 0
   fi
 
+  # Issue #6631: a merge only counts when it lands on the repository's
+  # default branch or on the issue's own declared integration branch
+  # (_pr_json_base_is_target_merge). §14 audit: DEFAULT_BRANCH is assigned
+  # later in the tick (after this sweep runs), and CWS_DEFAULT_BRANCH is a
+  # per-tracking-issue value that is unset on sweep-only ticks, so reuse it
+  # when present and otherwise make one repos/<repo> read per sweep, only on
+  # ticks that have candidates. FINAL_DEFAULT_BRANCH is deliberately not
+  # reused: its lookups fall back to a literal "main" on API failure, which
+  # would let a main-based merge count in a repo whose default differs. An
+  # unresolvable default branch closes nothing this cycle (fail closed: the
+  # close is the destructive step); the next tick retries.
+  local _sweep_default_branch=""
+  _sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"
+  if [ -z "${_sweep_default_branch}" ]; then
+    _sweep_default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+  fi
+  _sweep_default_branch="$(printf '%s' "${_sweep_default_branch}" | tr -d '\r\n')"
+  if [ -z "${_sweep_default_branch}" ] || [ "${_sweep_default_branch}" = "null" ]; then
+    echo "::warning::CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable — closing nothing this cycle."
+    return 0
+  fi
+
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
-  local sweep_pr_fetch_failed
+  local sweep_pr_fetch_failed sweep_non_target_seen
+  local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
+  local _sweep_base_log _sweep_declared_log _sweep_non_target_note
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -4668,8 +4697,22 @@ close_merged_issues_sweep() {
     # the smallest sufficient call; candidates are the rare merged cross-refs
     # of an already-labeled issue (almost always exactly one, which the
     # conventional `ai/issue-<n>` head check accepts on the first fetch).
+    # Managed-child classification mirrors issue_pr_status.yml: the
+    # ai:orchestrator-managed label or the "Managed by: AI Orchestrator"
+    # body marker. The declared branch is parsed lazily (only once a
+    # candidate is the implementation PR) so most issues spawn no python.
+    _sweep_issue_body="$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].body // ""' 2>/dev/null || echo "")"
+    _sweep_is_managed=false
+    if echo "${issues_json}" | jq -e --argjson i "${idx}" '([.[$i].labels[]?.name] | index("ai:orchestrator-managed")) != null' >/dev/null 2>&1 \
+        || [[ "${_sweep_issue_body}" == *"Managed by: AI Orchestrator"* ]]; then
+      _sweep_is_managed=true
+    fi
+    _sweep_declared_branch=""
+    _sweep_declared_parsed=false
+
     merged_pr_num=""
     sweep_pr_fetch_failed=false
+    sweep_non_target_seen=false
     for _sweep_candidate_pr in ${merged_pr_candidates}; do
       [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
       _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
@@ -4679,8 +4722,20 @@ close_merged_issues_sweep() {
         continue
       fi
       if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
-        merged_pr_num="${_sweep_candidate_pr}"
-        break
+        if [ "${_sweep_declared_parsed}" != "true" ]; then
+          _sweep_declared_branch="$(printf '%s' "${_sweep_issue_body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null | head -n 1 || echo "")"
+          _sweep_declared_parsed=true
+        fi
+        if _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then
+          echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} accepted reason=${_TARGET_MERGE_REASON}"
+          merged_pr_num="${_sweep_candidate_pr}"
+          break
+        fi
+        _sweep_base_log="$(_close_sweep_log_ref "$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")" "unknown")"
+        _sweep_declared_log="$(_close_sweep_log_ref "${_sweep_declared_branch}" "none")"
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base base=${_sweep_base_log} declared=${_sweep_declared_log}"
+        sweep_non_target_seen=true
+        continue
       fi
       echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
     done
@@ -4694,13 +4749,17 @@ close_merged_issues_sweep() {
       if [ "${origin}" = "ready_label" ]; then
         # Normal pending state for ai:ready-to-merge. No alert — the
         # label is not a contract that a merged PR exists yet.
-        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — pending, leaving open."
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — pending, leaving open."
         skipped_count=$((skipped_count + 1))
         continue
       fi
       # ai:merged origin: stale-label path retained — alert and skip.
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — leaving open and alerting."
-      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline. The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — leaving open and alerting."
+      _sweep_non_target_note=""
+      if [ "${sweep_non_target_seen}" = "true" ]; then
+        _sweep_non_target_note=" Only merges into non-target branches were found (neither the default branch nor the issue's declared integration branch)."
+      fi
+      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline.${_sweep_non_target_note} The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
       alert_count=$((alert_count + 1))
       continue
     fi
@@ -6494,21 +6553,28 @@ security_pass_findings_rows_json() {
 # security_pass_apply_waivers_to_findings <findings_file>
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
-# result: drops re-reports of accepted findings (exact finding_id, or the
-# same file, category, severity and exploit scenario within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line) and rewrites the
-# findings file in place with the kept
-# rows and an updated counts.kept / counts.suppressed_waived.  The engine
-# applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
-# keeps an older staged engine honest.  Fail-open: any error leaves the file
-# untouched and logs a warning.
+# result: drops a re-report of an accepted finding only when its non-empty
+# finding_id exactly matches the waiver's and every category, severity and
+# exploit scenario the waiver recorded also matches (no proximity match: a
+# different finding_id is a new finding, even at the waived file and line),
+# and rewrites the findings file in place with the kept rows and an updated
+# counts.kept / counts.suppressed_waived.  The engine applies the same rule
+# when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this keeps an older staged
+# engine honest.  SECURITY_AUDIT_WAIVER_LINE_WINDOW is still accepted and
+# validated, but no longer controls suppression.  Fail-open: any error leaves
+# the file untouched (nothing is suppressed) and logs a warning.
 security_pass_apply_waivers_to_findings() {
   local findings_file="$1"
   local waived_count suppressed_summary
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+  if [ -n "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-}" ] && ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW} is invalid; it no longer controls waiver suppression"
+  else
+    echo "::notice::SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40} no longer controls waiver suppression (exact finding_id match only)"
+  fi
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6517,7 +6583,6 @@ from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-line_window = int(sys.argv[3])
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -6528,33 +6593,42 @@ def norm_category(value: object) -> str:
 	return " ".join(str(value or "").lower().split())
 
 
+def norm_scenario(value: object) -> str:
+	# Backticks are dropped and whitespace collapsed (as the engine's prompt
+	# renders the scenario), then both sides are cut to 600 characters (the
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.replace("`", "").split())[:600]
+
+
 def waiver_for(finding: dict) -> str | None:
-	finding_id = str(finding.get("finding_id") or "")
+	finding_id = finding.get("finding_id")
+	if not isinstance(finding_id, str) or not finding_id.strip():
+		return None
+	finding_id = finding_id.strip()
 	for waiver in waivers:
-		waived_id = str(waiver.get("finding_id") or "")
+		waived_id = waiver.get("finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip():
+			continue
+		# Exact match on the recorded id only; a displayed (backtick-free)
+		# form is never an alias, so a distinct id cannot match.
+		if waived_id.strip() != finding_id:
+			continue
 		waived_finding = waiver.get("finding")
-		waived_scenario = norm_category(waiver.get("exploit_scenario") or (waived_finding.get("exploit_scenario") if isinstance(waived_finding, dict) else ""))
-		waived_severity = norm_category(waiver.get("severity"))
-		waived_category = norm_category(waiver.get("owasp_or_stride_category"))
-		if (waived_id and waived_id == finding_id
-			and (not waived_scenario or waived_scenario == norm_category(finding.get("exploit_scenario")))
-			and (not waived_severity or waived_severity == norm_category(finding.get("severity")))
-			and (not waived_category or waived_category == norm_category(finding.get("owasp_or_stride_category")))):
-			return waived_id
-		waived_line = waiver.get("line")
-		if (
-			str(waiver.get("file") or "")
-			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and waived_category
-			and waived_category == norm_category(finding.get("owasp_or_stride_category"))
-			and waived_severity == norm_category(finding.get("severity"))
-			and waived_scenario
-			and waived_scenario == norm_category(finding.get("exploit_scenario"))
-			and isinstance(waived_line, int)
-			and not isinstance(waived_line, bool)
-			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
-		):
-			return waived_id or "(unnamed waiver)"
+		waived_scenario = norm_scenario(waiver.get("exploit_scenario"))
+		if not waived_scenario and isinstance(waived_finding, dict):
+			waived_scenario = norm_scenario(waived_finding.get("exploit_scenario"))
+		waived_severity = norm_category(waiver.get("severity") if isinstance(waiver.get("severity"), str) else "")
+		waived_category = norm_category(waiver.get("owasp_or_stride_category") if isinstance(waiver.get("owasp_or_stride_category"), str) else "")
+		if waived_category and waived_category != norm_category(finding.get("owasp_or_stride_category")):
+			continue
+		if waived_severity and waived_severity != norm_category(finding.get("severity")):
+			continue
+		if waived_scenario and waived_scenario != norm_scenario(finding.get("exploit_scenario")):
+			continue
+		return finding_id
 	return None
 
 
@@ -6593,7 +6667,10 @@ PY
 # drop the same ids from security_pass_reported_findings so the next delta
 # audit does not ask the engine to re-verify them, and keep the array
 # bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
-# severity, justification, source, waived_by, waived_at_cycle, issue}.
+# severity, exploit_scenario (at most 600 characters), justification, source,
+# waived_by, waived_at_cycle, issue}.  Waivers match a later finding only by
+# exact finding_id plus the recorded category, severity and exploit scenario
+# (security_pass_apply_waivers_to_findings).
 security_pass_record_waivers() {
   local waivers_json="$1"
   if ! jq --argjson waivers "${waivers_json}" '
@@ -7262,7 +7339,7 @@ ${decisions_table}}"
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
         severity: .finding.severity,
-        exploit_scenario: .finding.exploit_scenario,
+        exploit_scenario: ((.finding.exploit_scenario // "") | tostring | .[0:600]),
         justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
@@ -16487,6 +16564,73 @@ _pr_json_is_issue_implementation_pr() {
   return 1
 }
 
+# _pr_json_base_is_target_merge — issue #6631. Decide whether a merged
+# implementation PR (full REST `pulls/N` JSON) landed on a branch that makes
+# the issue done.  The sweep used to close on a merge into ANY base: PR #4748
+# merged into its own `claude/implement-plan-issue-4688-*` project branch,
+# which still had to merge into project #4586's branch, and #4688 was closed
+# early.  GitHub itself only auto-closes on default-branch merges.
+#
+# Args: <issue_num> <pr_json> <default_branch> <declared_branch> <is_managed>
+# Accepts (rc=0, sets _TARGET_MERGE_REASON) when:
+#   - .base.ref equals the default branch            -> default_branch
+#   - .base.ref equals the issue's declared branch   -> declared_integration_branch
+#     (`Integration branch:` / `Target branch:` body line)
+#   - the issue is orchestrator-managed, declares no branch in its own
+#     body (its branch may live only on the tracking issue), and .base.ref
+#     is an `orchestrator/project-*` branch (same rule as issue_pr_status.yml)
+#                                                    -> managed_no_child_metadata
+# Anything else, including an empty or unparseable base, returns 1 (fail
+# closed: the caller's next step closes the issue).  Refs compare exactly.
+_TARGET_MERGE_REASON=""
+_pr_json_base_is_target_merge() {
+  local issue_num="$1"
+  local pr_json="$2"
+  local default_branch="$3"
+  local declared_branch="$4"
+  local is_managed="$5"
+  _TARGET_MERGE_REASON=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _target_base_ref
+  _target_base_ref="$(printf '%s' "${pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+  [ -n "${_target_base_ref}" ] || return 1
+  if [ -n "${default_branch}" ] && [ "${_target_base_ref}" = "${default_branch}" ]; then
+    _TARGET_MERGE_REASON="default_branch"
+    return 0
+  fi
+  if [ -n "${declared_branch}" ] && [ "${_target_base_ref}" = "${declared_branch}" ]; then
+    _TARGET_MERGE_REASON="declared_integration_branch"
+    return 0
+  fi
+  # Mirrors issue_pr_status.yml: the no-metadata fallback only accepts an
+  # orchestrator integration branch, never an arbitrary base.
+  if [ "${is_managed}" = "true" ] && [ -z "${declared_branch}" ] \
+      && [[ "${_target_base_ref}" == orchestrator/project-* ]]; then
+    _TARGET_MERGE_REASON="managed_no_child_metadata"
+    return 0
+  fi
+  return 1
+}
+
+# _close_sweep_log_ref <value> <empty_placeholder> — print a ref for a log
+# line with CR/LF removed, length capped at 200, and a leading `::` escaped
+# so an author-controlled branch line cannot fake workflow commands.
+_close_sweep_log_ref() {
+  local _log_ref
+  _log_ref="$(printf '%s' "${1:-}" | tr -d '\r\n' | cut -c1-200)"
+  if [ -z "${_log_ref}" ]; then
+    printf '%s' "${2:-none}"
+    return 0
+  fi
+  if [[ "${_log_ref}" == ::* ]]; then
+    _log_ref="\\${_log_ref}"
+  fi
+  printf '%s' "${_log_ref}"
+}
+
 # Issue #6325: a fork can give its head the name of a branch in this repo.
 # Never use a PR's head ref as a write target without verifying its owner.
 _pr_json_head_is_same_repo() {
@@ -19985,7 +20129,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
                   severity: ($known.severity // ""),
-                  exploit_scenario: ($known.exploit_scenario // ""),
+                  exploit_scenario: (($known.exploit_scenario // "") | tostring | .[0:600]),
                   justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,

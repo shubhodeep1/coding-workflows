@@ -377,12 +377,15 @@ def test_release_gate_only_mode_contract() -> None:
 
 	# Release path: the stable-ref guard exits 1 for any other ref, and only
 	# after it is `branch=stable` written.
-	# Since #6546 the guard compares the full ref (`refs/heads/stable`); the
-	# short form is still accepted for older checkouts of this workflow.
-	guard = source_run.find('!= "refs/heads/stable"', gate_exit)
-	if guard == -1:
-		guard = source_run.find('!= "stable"', gate_exit)
-	assert guard > gate_exit, "release path must check the dispatch ref against 'stable'"
+	# Since #6546 the guard must compare the full ref "${DISPATCH_REF}" with
+	# `refs/heads/stable`: a bare `stable` comparison against `github.ref_name`
+	# also accepts a dispatch from the `stable` tag.
+	stable_guard_marker = 'if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then'
+	guard = source_run.find(stable_guard_marker, gate_exit)
+	assert guard > gate_exit, (
+		"release path must guard with "
+		"'if [ \"${DISPATCH_REF}\" != \"refs/heads/stable\" ]; then' after the gate-only exit"
+	)
 	guard_exit = source_run.find("exit 1", guard)
 	assert guard_exit != -1, "the stable-ref guard must exit 1 for any other ref"
 	# Search for the write only after the guard's closing `fi`: a write between
