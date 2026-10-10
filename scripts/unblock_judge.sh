@@ -26,8 +26,13 @@
 # branch for the model; default SUPPORT_DIR), RUNTIME_DIR,
 # UNBLOCK_JUDGE_ENABLED (default true), UNBLOCK_JUDGE_MODEL,
 # UNBLOCK_JUDGE_REASONING, UNBLOCK_JUDGE_TIMEOUT_SECS (default 1500),
-# UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
-# only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
+# UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72),
+# UNBLOCK_PROTECTED_HANDOFF_ENABLED (default false; #7060: on an issue whose
+# newest trusted guard comment is an automation-path grant rejection,
+# `descope` / `operator_step` record an operator handoff instead of a fix-up,
+# and a trusted handoff hold marker keeps later runs from judging it again),
+# MOCK_UNBLOCK_JUDGE_JSON (tests only: used instead of the model),
+# MOCK_UNBLOCK_JUDGE_NOW (tests only).
 #
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
@@ -643,6 +648,32 @@ unblock_main()
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" rejection --item "${ITEM}" --stop "${ITEM_STOP}" \
 		--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${RUNTIME_DIR}/rejection.json"; then
 		echo '{"status":"none","reason":"unreadable"}' > "${RUNTIME_DIR}/rejection.json"
+	fi
+	# Protected-path handoff (#7060), off by default. Reads only the comments
+	# already fetched; it never changes the guard or override eligibility.
+	if [ "$(printf '%s' "${UNBLOCK_PROTECTED_HANDOFF_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ] \
+		&& [ "${ITEM_KIND}" = "issue" ]; then
+		local protected_file="${RUNTIME_DIR}/protected_rejection.json"
+		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" protected-rejection --item "${ITEM}" \
+			--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${protected_file}" \
+			|| ! jq -e 'type == "object"' "${protected_file}" >/dev/null 2>&1; then
+			echo '{"status":"none","reason":"unreadable"}' > "${protected_file}"
+			unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=unreadable"
+		fi
+		if jq -e '.status == "ok" and .handoff_pending == true' "${protected_file}" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=operator_handoff_pending run=$(jq -r '.run' "${protected_file}")"
+			return 0
+		fi
+		if jq -e '.status == "ok"' "${protected_file}" >/dev/null 2>&1; then
+			if jq --slurpfile protected "${protected_file}" \
+				'. + {protected_rejection: ($protected[0] | {guard, run, paths, truncated})}' \
+				"${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context.json.tmp" 2>/dev/null; then
+				mv "${RUNTIME_DIR}/context.json.tmp" "${RUNTIME_DIR}/context.json"
+			else
+				rm -f "${RUNTIME_DIR}/context.json.tmp"
+				unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=context_merge"
+			fi
+		fi
 	fi
 
 	local -a decide_args=(decide --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --comments-file "${RUNTIME_DIR}/item_comments.json"

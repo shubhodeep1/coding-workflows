@@ -22,6 +22,15 @@ the network; the shell only executes.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
        or a resume command, so the finding stays blocked (#6541).
+       Optional `protected_rejection` (`{"guard": "automation-path", "run",
+       "paths", "truncated"}`, issues only; the judge sets it only with
+       UNBLOCK_PROTECTED_HANDOFF_ENABLED=true, #7060): the newest trusted
+       guard comment on the issue is an automation-path grant rejection, so a
+       fix-up would hit the same guard. `descope` and `operator_step` then
+       record an operator handoff (a comment ending in the hold marker
+       `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`,
+       an operator step and a WARNING) and create no fix-up; the issue stays
+       blocked. A malformed value is dropped and the normal path runs.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -79,6 +88,10 @@ INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch
 TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
 SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 MAX_COMMAND_TEXT = 300
+PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
+PROTECTED_HANDOFF_MAX_PATHS = 100
+PROTECTED_HANDOFF_SHOWN_PATHS = 20
+PROTECTED_HANDOFF_PATH_MAX_LEN = 300
 
 
 class UsageError(Exception):
@@ -156,6 +169,7 @@ def _context(raw: object) -> dict:
 		and isinstance(pr_head_sha, str)
 		and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", pr_head_sha) is not None
 	)
+	protected_rejection = _protected_rejection(raw.get("protected_rejection")) if kind == "issue" else None
 	security_source_body = raw.get("security_source_body")
 	if kind != "issue" or SECURITY_LABEL not in labels or not isinstance(security_source_body, str) or len(security_source_body) > 65536:
 		security_source_body = None
@@ -184,7 +198,28 @@ def _context(raw: object) -> dict:
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
+		"protected_rejection": protected_rejection,
 	}
+
+
+def _protected_rejection(raw: object) -> dict | None:
+	"""A verified automation-path rejection carried by the judge, or None when malformed."""
+	if not isinstance(raw, dict) or raw.get("guard") != "automation-path":
+		return None
+	run = raw.get("run")
+	paths = raw.get("paths")
+	truncated = raw.get("truncated")
+	if not isinstance(run, str) or re.fullmatch(r"[0-9]{1,20}", run) is None or not isinstance(truncated, bool):
+		return None
+	if not isinstance(paths, list) or not 0 < len(paths) <= PROTECTED_HANDOFF_MAX_PATHS:
+		return None
+	for path in paths:
+		if (
+			not isinstance(path, str) or not path or len(path) > PROTECTED_HANDOFF_PATH_MAX_LEN
+			or "`" in path or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in path)
+		):
+			return None
+	return {"guard": "automation-path", "run": run, "paths": list(paths), "truncated": truncated}
 
 
 def _provenance_line(ctx: dict) -> str:
@@ -313,12 +348,64 @@ def _fixup_ops(ctx: dict, verdict: dict, kind_word: str) -> list[dict]:
 	return [{"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": ctx["item"]}]
 
 
+def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
+	"""Operator handoff for a protected-path rejection: no fix-up, the item stays blocked."""
+	item = ctx["item"]
+	rejection = ctx["protected_rejection"]
+	run = rejection["run"]
+	paths = rejection["paths"]
+	shown = ", ".join(f"`{path}`" for path in paths[:PROTECTED_HANDOFF_SHOWN_PATHS])
+	more = len(paths) - PROTECTED_HANDOFF_SHOWN_PATHS
+	paths_line = "Protected paths: " + shown + (f" and {more} more" if more > 0 else "")
+	if rejection["truncated"]:
+		paths_line += " (the rejection listed only the first 100 paths)"
+	name = verdict["verdict"]
+	body = "\n".join(
+		[
+			f"The unblock judge chose `{name}`, but implementation run {run} was rejected by the automation-path grant guard. "
+			"A fix-up issue would hit the same guard, so none was created. "
+			"This issue stays blocked until a person grants or makes the change.",
+			"",
+			paths_line,
+			"",
+			f"Change: {verdict.get('instructions', '')}",
+			"",
+			f"Why: {verdict['reason']}",
+			"",
+			f"<!-- ai:unblock-wait:v1 item={item} reason=operator_handoff run={run} -->",
+		]
+	)
+	operator_text = verdict.get("operator_instructions") if name == "operator_step" else verdict.get("instructions")
+	step = {
+		"title": f"Make the protected-path change for #{item}",
+		"instructions": "\n".join(
+			[
+				_one_line(operator_text or ""),
+				f"Rejected run: {run}",
+				"Paths: " + ", ".join(paths[:PROTECTED_HANDOFF_SHOWN_PATHS]) + (f" and {more} more" if more > 0 else ""),
+			]
+		),
+	}
+	if name == "operator_step" and verdict.get("placeholder"):
+		step["dormant_until"] = verdict["placeholder"]
+	return [
+		{"op": "comment", "issue": item, "body": body},
+		{"op": "operator_step", "key": f"unblock-{item}", "source": f"Unblock judge, #{item}", "steps": [step]},
+		{
+			"op": "telegram", "level": "WARNING",
+			"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",
+		},
+	]
+
+
 def plan(verdict: dict, ctx: dict) -> list[dict]:
 	name = verdict.get("verdict")
 	item = ctx["item"]
 	ops: list[dict] = []
 	if ctx["kind"] == "pr" and not ctx["pr_trusted"] and name in ("reissue", "descope", "operator_step", "accept_with_followup"):
 		return _untrusted_pr_ops(ctx, name)
+	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
+		return _protected_handoff_ops(ctx, verdict)
 	if name == "retry_budget":
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
 		ops += reset_ops(ctx, verdict["instructions"])

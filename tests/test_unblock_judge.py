@@ -2140,3 +2140,163 @@ def test_verdict_record_cannot_carry_a_command_line(tmp_path: Path) -> None:
 	record = state["comments"][0]["body"]
 	assert not COMMAND_LINE.search(record)
 	assert not COMMAND_LINE.search(state["created"][0]["body"])
+
+
+# --- Protected-path operator handoff (#7060, UNBLOCK_PROTECTED_HANDOFF_ENABLED) ---
+
+
+def _automation_marker(paths: list[str] | None = None, *, item: int = 7, run: str = "555", **extra) -> str:
+	return _rejection_marker(paths or ["scripts/a.sh", ".github/workflows/x.yml"], item=item,
+		guard="automation-path", reason="automation-path", run=run, **extra)
+
+
+def _handoff_marker(item: int = 7, run: str = "555") -> str:
+	return f"Handoff\n\n<!-- ai:unblock-wait:v1 item={item} reason=operator_handoff run={run} -->"
+
+
+def test_protected_rejection_reads_the_newest_trusted_automation_path_marker() -> None:
+	comments = [_comment("🚨 **Automation-path grant guard rejected this implementation run.**\n" + _automation_marker())]
+	result = ledger.latest_protected_rejection(comments, BOT, 7)
+	assert result["status"] == "ok" and result["run"] == "555" and result["truncated"] is False
+	assert result["paths"] == ["scripts/a.sh", ".github/workflows/x.yml"] and result["handoff_pending"] is False
+	# A later verdict marker does not make it stale (unlike latest_rejection).
+	comments.append(_comment(_marker(verdict="operator_step")))
+	assert ledger.latest_protected_rejection(comments, BOT, 7)["status"] == "ok"
+	assert ledger.latest_protected_rejection([_comment(_automation_marker(), "mallory")], BOT, 7) == {"status": "none", "reason": "untrusted"}
+	assert ledger.latest_protected_rejection([], BOT, 7) == {"status": "none", "reason": "missing"}
+	assert ledger.latest_protected_rejection([_comment(_automation_marker(item=8))], BOT, 7)["reason"] == "missing"
+	truncated = ledger.latest_protected_rejection(
+		[_comment(_automation_marker([f"scripts/{index}.sh" for index in range(100)], truncated=True))], BOT, 7)
+	assert truncated["status"] == "ok" and truncated["truncated"] is True and len(truncated["paths"]) == 100
+
+
+@pytest.mark.parametrize("later", [
+	_rejection_marker(["src/a.py"]),
+	"🚨 **files_touched scope guard rejected this implementation run.**\nEncoding failed",
+])
+def test_protected_rejection_is_superseded_by_a_newer_guard_comment(later: str) -> None:
+	comments = [_comment(_automation_marker()), _comment(later)]
+	assert ledger.latest_protected_rejection(comments, BOT, 7) == {"status": "none", "reason": "superseded"}
+
+
+@pytest.mark.parametrize("line", [
+	_automation_marker().replace("paths=", "paths=!!!"),
+	_automation_marker(count=5),
+	_automation_marker(["../escape"]),
+])
+def test_protected_rejection_refuses_malformed_markers(line: str) -> None:
+	assert ledger.latest_protected_rejection([_comment(line)], BOT, 7) == {"status": "none", "reason": "malformed"}
+
+
+def test_handoff_marker_holds_only_when_trusted_and_newer_than_the_rejection() -> None:
+	comments = [_comment(_automation_marker()), _comment(_handoff_marker(), "mallory")]
+	assert ledger.latest_protected_rejection(comments, BOT, 7)["handoff_pending"] is False
+	comments.append(_comment(_handoff_marker()))
+	assert ledger.latest_protected_rejection(comments, BOT, 7)["handoff_pending"] is True
+	comments.append(_comment(_automation_marker(run="556")))
+	result = ledger.latest_protected_rejection(comments, BOT, 7)
+	assert result["run"] == "556" and result["handoff_pending"] is False
+
+
+def test_automation_path_rejection_never_enables_override_guard() -> None:
+	comments = [_comment(_automation_marker())]
+	rejection = ledger.latest_rejection(comments, BOT, 7, "scope-blocked")
+	assert rejection == {"status": "none", "reason": "malformed"}
+	assert "override_guard" not in ledger.decide(7, "scope-blocked", FP, [], None, NOW, rejection=rejection)["allowed"]
+
+
+def test_protected_rejection_cli_round_trip(tmp_path: Path) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([_comment(_automation_marker()), _comment(_handoff_marker())]), encoding="utf-8")
+	rc, result = _cli("protected-rejection", "--item", "7", "--comments-file", str(comments), "--trusted-login", BOT)
+	assert rc == 0 and result["status"] == "ok" and result["handoff_pending"] is True
+	rc, result = _cli("protected-rejection", "--item", "7", "--comments-file", str(comments), "--trusted-login", "bad login")
+	assert rc == 1
+
+
+PROTECTED = {"guard": "automation-path", "run": "555", "paths": ["scripts/a.sh", ".github/workflows/x.yml"], "truncated": False}
+
+
+@pytest.mark.parametrize(("name", "extra"), [
+	("operator_step", {"instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "grant the paths"}),
+	("descope", {"instructions": "drop the workflow edit"}),
+])
+@pytest.mark.parametrize("tracking", [None, 40])
+def test_protected_rejection_hands_off_without_a_fixup(name: str, extra: dict, tracking: int | None) -> None:
+	ops = actions.plan(_verdict(name, **extra), _ctx(tracking=tracking, protected_rejection=PROTECTED))
+	assert [op["op"] for op in ops] == ["comment", "operator_step", "telegram"]
+	assert all(op.get("issue") in (None, 7) for op in ops)
+	body = ops[0]["body"]
+	assert body.splitlines()[-1] == "<!-- ai:unblock-wait:v1 item=7 reason=operator_handoff run=555 -->"
+	assert "`scripts/a.sh`" in body and "run 555" in body
+	assert not COMMAND_LINE.search(body)
+	step = ops[1]["steps"][0]
+	assert "Rejected run: 555" in step["instructions"]
+	assert step.get("dormant_until") == ("NIGHTLY_ENABLED" if name == "operator_step" else None)
+	assert ops[2]["level"] == "WARNING"
+
+
+@pytest.mark.parametrize("bad", [
+	dict(PROTECTED, guard="scope"),
+	dict(PROTECTED, run="12a"),
+	dict(PROTECTED, paths=["bad`path"]),
+	dict(PROTECTED, paths=[]),
+	dict(PROTECTED, truncated="no"),
+	"automation-path",
+])
+def test_invalid_protected_rejection_falls_back_to_the_fixup(bad: object) -> None:
+	ops = actions.plan(_verdict("descope", instructions="drop the cache"), _ctx(protected_rejection=bad))
+	assert ops[0]["op"] == "create_issue" and ops[0]["wait_on"] == 7
+
+
+def test_protected_rejection_is_ignored_for_prs_and_other_verdicts() -> None:
+	pr_ops = actions.plan(_verdict("descope", instructions="x"), _ctx("pr", protected_rejection=PROTECTED))
+	assert all("operator_handoff" not in op.get("body", "") for op in pr_ops)
+	retry = actions.plan(_verdict("retry_budget", instructions="use the cache"), _ctx(protected_rejection=PROTECTED))
+	assert _bodies(retry)[-1] == "/answer use the cache"
+
+
+def test_unblock_workflow_keeps_protected_handoff_off_by_default() -> None:
+	import yaml
+
+	reusable = yaml.safe_load((ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8"))
+	steps = {step["name"]: step for step in reusable["jobs"]["unblock-judge"]["steps"]}
+	assert steps["Judge the blocked item"]["env"]["UNBLOCK_PROTECTED_HANDOFF_ENABLED"] == "${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}"
+
+
+HANDOFF_VERDICT = {"verdict": "operator_step", "reason": "needs a grant", "instructions": "gate it",
+	"placeholder": "NIGHTLY_ENABLED", "operator_instructions": "grant the workflow paths"}
+
+
+def _fixups(state: dict) -> list[dict]:
+	return [created for created in state["created"] if "ai:unblock-fixup:v1" in created.get("body", "")]
+
+
+def test_judge_protected_handoff_is_off_by_default(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, [_comment(_automation_marker())], verdict=HANDOFF_VERDICT)
+	assert "verdict=operator_step round=1 outcome=acted" in result.stdout, result.stdout
+	assert _fixups(state)
+	assert not any("operator_handoff" in comment["body"] for comment in state["comments"])
+
+
+def test_judge_protected_handoff_records_operator_step_and_keeps_item_blocked(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, [_comment(_automation_marker())], verdict=HANDOFF_VERDICT,
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true")
+	assert "verdict=operator_step round=1 outcome=acted" in result.stdout, result.stdout
+	assert _fixups(state) == []
+	assert state["labels_removed"] == []
+	assert not any(endpoint.endswith("/issues/7") for endpoint, _ in state["patched"])
+	handoff = [comment for comment in state["comments"] if "reason=operator_handoff run=555" in comment["body"]]
+	assert len(handoff) == 1 and handoff[0]["endpoint"] == "repos/o/r/issues/7/comments"
+	assert not any(comment["body"].startswith(("/approved", "/answer", "/reclarify")) for comment in state["comments"])
+
+
+def test_judge_skips_while_the_operator_handoff_is_pending(tmp_path: Path) -> None:
+	comments = [
+		_comment(_automation_marker(), created_at="2026-10-04T01:00:00Z"),
+		_comment(_marker(verdict="operator_step"), created_at="2026-10-04T02:00:00Z"),
+		_comment(_handoff_marker(), created_at="2026-10-04T02:00:01Z"),
+	]
+	result, state = _judge(tmp_path, ISSUE, comments, verdict="must not be read", UNBLOCK_PROTECTED_HANDOFF_ENABLED="TRUE")
+	assert "outcome=skip reason=operator_handoff_pending run=555" in result.stdout, result.stdout
+	assert state["comments"] == [] and state["created"] == [] and state["labels_removed"] == []
