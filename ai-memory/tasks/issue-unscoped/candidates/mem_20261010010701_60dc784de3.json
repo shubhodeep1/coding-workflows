@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "When changing release-manifest generation, verification, publication, or updater behavior, check the related GitHub Actions workflows as well as the scripts. The merged changes repeatedly pair these paths with verifier and workflow-contract tests, and sometimes update the release inventory or documentation.",
+  "fingerprint": "0cf92f2183452a1dd8cffe3d206e55439342042a84692d2ea37063d03eaf4440",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38011728017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38011728017",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6630",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6632",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6981",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6988",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6645",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6646",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6991",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6993",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6994"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261010010701_60dc784de3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release-manifest changes in this repository span the verifier, publishing or updater workflows, and workflow-contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-10T01:07:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
