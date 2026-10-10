@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: REFRAME\nQ3: B\n\nRATIONALE:\nQ1: GitHub shows PR #6922 merged into `main` at 2026-10-09T11:59:12Z, about an hour after failing run 37920705068 on head `481d3df1b38b`. Two of the options assume the PR is still open, so neither can work now. Option A would target `ai/issue-6908`, which is finished; `scripts/retarget_merged_base.sh` would map that branch back to `main` anyway. Option C would send review/autofix to a merged PR, and that path does not act on merged PRs. The PR's code now lives only on `main`, so the work has to land there.\nQ2: Option A asks for a human to paste the log excerpt, and no human is waiting, so the data-provision guard rules it out. Option B depends on the PR's check-run autofix path, which no longer applies after the merge. Option C would invent a fix. The failing test can still be found without the log: the orchestrate-poll matrix uses a fixed `NR % total == n` partition (`.github/workflows/ci.yml` lines 1517-1605). So the shard's test set can be rebuilt and run against the merged code.\nQ3: The isolated planner and implementer have no GitHub credential, so they cannot open a separate issue. Option C would widen the scope. The timeout will instead be recorded and triaged in the deliverable itself. The `timeout-minutes: 20` budget (`ci.yml` line 387) and its contract test stay unchanged.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: reframe\n  inputs:\n    - .github/workflows/ci.yml lines 1497-1615 (`orchestrate-poll` matrix: `poll-group: [0, 1, 2, 3]`, the subset step, `CI_POLL_TEST_SHARDS` default 4, the two-level `awk 'NR % total == n'` partition)\n    - .github/workflows/ci.yml line 1515 (CI dependency set: `yamllint coverage pyyaml jsonschema jinja2 pytest ruff`, plus `jq` from ubuntu-latest)\n    - tests/test_orchestrate_poll_process.py\n    - tests/test_ci_poll_test_sharding.py\n  steps:\n    - Rebuild the CI test lists on current `main` with the same Python as the \"Derive orchestrate poll test subsets\" step: sorted top-level `test_*` functions, with the fast-fail set being names starting with `test_implementation_failed_`.\n    - \"Shard 1\" could mean matrix group 1 or local shard 1 inside a group. Cover both readings: compute group 1 of 4 (`NR % 4 == 1` over the remaining list), then every local shard of that group (`NR % 4 == k`). Also run local shard 1 of each group.\n    - Run those tests with `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py <names>`, and run `tests/test_ci_poll_test_sharding.py`. Only treat a run as valid if `jq` and PyYAML are both present.\n    - If a test fails, fix only the cause that failure shows, then rerun the affected tests.\n    - If `jq` or PyYAML is missing in the sandbox, mark the local run UNVERIFIED. Do not declare a pass.\n    - If the tests are UNVERIFIED, or all pass, do not close the issue as a no-op and do not invent a change. Emit `BLOCKED:` with this evidence: the PR merged after failing head `481d3df1b38b`, the exact rebuilt test list, and the local result. That hands the issue to the unblock judge, which has host-side access to the run log.\n  replaces_acceptance_criterion: \"obtain the full failed shard 1 log from run 37920705068 \u2026 and reproduce it against PR #6922's head\"\n  equivalence_argument: The partition is deterministic, so rebuilding it gives the exact test set that ran in the failed shard. Running that set against `main`, which now holds PR #6922's merged code, either reproduces the failure or proves it does not affect the code that shipped. That is what the original criterion was meant to establish. Failing to reproduce ends in BLOCKED with evidence, not a no-op closure, so the issue's prohibitions still hold.\n  reversibility: A trusted human can post the failing test name from the shard log and `/reclarify`. That targets the exact test and supersedes this reconstruction.\n\nQ3 (letter decision; triage content to include): The PR body, or the BLOCKED evidence if no PR is opened, gets a \"Follow-up: CI timeout\" section. It cites run 37920705068, the `tests-hooks-and-orchestrator` job, its 20-minute budget at `ci.yml` line 387, and the budget pin in `tests/test_ci_job_split_contract.py`. It states that the budget is left unchanged.",
+  "fingerprint": "5dc7f065d2afb3927427d94608e6f4e5abaff709dad92715302b4993f2021eb1",
+  "lineage": {
+    "issue_number": 7080,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38049277731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38049277731",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7080"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010114955_a1d1fb4d12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7080,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38049277731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7080",
+  "timestamps": {
+    "created_at": "2026-10-10T11:49:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
