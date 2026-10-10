@@ -1715,7 +1715,10 @@ V1 and V2 state comments are read only when every selected comment is authored b
 When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
 enters `security-pass` before validation or finalization. A pass is valid only
 when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
-matches the current integration head. Findings enter `security-pass-fixing`
+matches the current integration head (so the periodic `main` sync skips both
+security-pass states; a final PR that `main` makes unmergeable is synced and
+healed during the pass by `security_pass_sync_final_pr_if_unmergeable`, see
+README 12d). Findings enter `security-pass-fixing`
 through one consolidated `ai:orchestrator-managed` issue (whose body asks the
 implementer to clear every instance of each finding's defect class, not only
 the cited line); a merged fix advances `security_pass_cycle`, clears the
@@ -2161,6 +2164,9 @@ and shipped:
 - `DRIFT_SCAN_OK`
 - `DRIFT_SCAN_ERROR`
 - `SECURITY_PASS_STARTED`
+- `SECURITY_PASS_FINAL_PR_SYNC`
+- `SMOKE_FIXTURE_PROJECT`
+- `TG_NOTIFY_SMOKE_SILENCED`
 - `ORCHESTRATOR_STATE_AUTHOR_FILTER` (`tracking_issue= outcome=identity_unavailable|filtered ignored=<count>` when filtered)
 - `SECURITY_PASS_SCOPE`
 - `SECURITY_PASS_CLEAN`
@@ -2405,6 +2411,9 @@ LOG_PREFIX.name=DRIFT_SCAN_DIFF
 LOG_PREFIX.name=DRIFT_SCAN_OK
 LOG_PREFIX.name=DRIFT_SCAN_ERROR
 LOG_PREFIX.name=SECURITY_PASS_STARTED
+LOG_PREFIX.name=SECURITY_PASS_FINAL_PR_SYNC
+LOG_PREFIX.name=SMOKE_FIXTURE_PROJECT
+LOG_PREFIX.name=TG_NOTIFY_SMOKE_SILENCED
 LOG_PREFIX.name=ORCHESTRATOR_STATE_AUTHOR_FILTER
 LOG_PREFIX.name=SECURITY_PASS_SCOPE
 LOG_PREFIX.name=SECURITY_PASS_CLEAN

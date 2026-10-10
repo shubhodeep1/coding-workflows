@@ -601,6 +601,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
 
+      - name: Security-pass final PR sync tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_final_pr_sync.py
+
       - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
