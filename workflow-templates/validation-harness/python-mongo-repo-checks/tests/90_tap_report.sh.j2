@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "1..{{ slots.get('tap_plan', 5) }}"
+_default_tap_plan={{ slots.get('tap_plan', 5) | shell_quote }}
+echo "1..${_default_tap_plan}"
 current=1
-while [ "${current}" -le "{{ slots.get('tap_plan', 5) }}" ]; do
+while [ "${current}" -le "${_default_tap_plan}" ]; do
 	echo "ok ${current} - tap summary slot ${current}"
 	current=$((current + 1))
 done
