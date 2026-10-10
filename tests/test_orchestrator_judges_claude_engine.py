@@ -338,6 +338,10 @@ def test_poller_capability_markers_exist_in_the_real_sandbox_helper() -> None:
 	count_marker = 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then'
 	assert count_marker in markers
 	assert helper.count(count_marker) >= 2
+	assert {
+		"# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.",
+		"# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.",
+	} <= set(markers), markers
 
 
 FAKE_RB_SANDBOX = r"""#!/usr/bin/env bash
