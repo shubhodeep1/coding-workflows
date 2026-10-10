@@ -956,6 +956,49 @@ jobs:
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
+      # The ACTIVATION_VERIFY role runs on Claude unless AI_ENGINE_ACTIVATION_VERIFY
+      # or AI_ENGINE say codex (scripts/ai_engine.sh, from the trusted support
+      # checkout only). The CLI and the pool credential are fetched only for
+      # Claude. This job adds no permissions: a caller that does not grant
+      # id-token: write gets no pool credential, and the verifier then runs the
+      # unchanged isolated codex command (exit 75), so these steps never fail it.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          # The merged PR is the work item: its ai:codex label keeps the role on codex.
+          AI_ENGINE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -uo pipefail
+          engine="codex"
+          engine_helper="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/ai_engine.sh"
+          if [ -f "${engine_helper}" ] && [ ! -L "${engine_helper}" ]; then
+            # shellcheck source=/dev/null
+            if source "${engine_helper}"; then
+              engine="$(ai_engine_for_role ACTIVATION_VERIFY || echo codex)"
+            else
+              echo "::warning::Failed to source the trusted ai_engine.sh; activation verification stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Verify activation
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -976,6 +1019,13 @@ jobs:
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           # Codex version baked into the isolated verifier image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          # A caller without id-token: write (the consumer wrapper before its sync)
+          # gets no pool credential (oidc_unavailable); the documented behaviour is
+          # isolated codex, not the capacity policy's refusal (exit 76).
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && 'codex' || vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          AI_ENGINE_LABELS: ${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && '["ai:codex"]' || toJSON(github.event.pull_request.labels.*.name) }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
         run: |
           SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \
           TARGET_DIR="${GITHUB_WORKSPACE}/target" \

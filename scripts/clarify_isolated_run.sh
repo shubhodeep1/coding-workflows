@@ -12,8 +12,8 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
-[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
 support="scripts"
 if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
 	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
@@ -165,11 +165,30 @@ fi
 # Claude engine branch: the same isolation, with the Claude Code CLI inside
 # the container and scripts/claude_anthropic_relay.py on the host. The real
 # OAuth token stays in the host relay; the container sees a placeholder.
-# Exit 75 means Claude is unavailable and the caller runs the codex path (D1).
+# Exit 75 means Claude is out of capacity and the caller runs the codex path;
+# exit 76 means Claude is unavailable for any other reason and the caller must
+# fail closed (AI_ENGINE_FALLBACK_POLICY=capacity, the default; plan item 3e,
+# D1). AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
 if [ "${engine}" = claude ]; then
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Mirror ai_engine_fallback's record so the job's report step sees it.
+	unsourced_fallback_record()
+	{
+		local rec_role rec_policy=capacity rec_action=refused rec_file="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+		rec_role="$(printf '%s' "$1" | tr -c 'A-Z0-9_' '_' | cut -c1-40)"
+		[[ "${rec_role}" =~ ^[A-Z] ]] || rec_role="UNKNOWN"
+		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && { rec_policy=always; rec_action=codex; }
+		[ -L "${rec_file}" ] || printf 'v1\t%s\t%s\t%s\tnon_capacity\t%s\t%s\n' "$(date -u +%s)" "${rec_role}" "$2" "${rec_action}" "${rec_policy}" >> "${rec_file}" 2>/dev/null || true
+	}
 	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
-		[ -f "${engine_dir}/${required}" ] || { echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2; exit 75; }
+		if [ ! -f "${engine_dir}/${required}" ]; then
+			# ai_engine.sh cannot be sourced: decide the policy inline.
+			echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2
+			unsourced_fallback_record "${engine_role}" support_missing
+			[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && exit 75
+			echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${engine_role} reason=support_missing" >&2
+			exit 76
+		fi
 	done
 	# shellcheck source=ai_engine.sh
 	source "${engine_dir}/ai_engine.sh"
@@ -177,17 +196,18 @@ if [ "${engine}" = claude ]; then
 	claude_effort="$(ai_engine_effort "${engine_role}" "${MODEL_REASONING_EFFORT}")"
 	claude_version="$(ai_engine_cli_version)"
 	probe_model="$(_ai_engine_py config --key probe_model)"
-	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit 75; }
-	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit 75; }
-	_ai_engine_py settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py || { ai_engine_fallback "${engine_role}" policy_unavailable; exit 75; }
+	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	_ai_engine_py settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
-	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
+	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" "$(ai_engine_no_account_reason)"; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	if ! image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}")"; then
 		ai_engine_fallback "${engine_role}" image_build_failed
-		exit 75
+		exit "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
-	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit 75; }
+	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	all_usage_limit=true
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
@@ -201,6 +221,7 @@ if [ "${engine}" = claude ]; then
 		if [ ! -S "${run_root}/socket/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			all_usage_limit=false
 			continue
 		fi
 		run_rc=0
@@ -259,7 +280,11 @@ if [ "${engine}" = claude ]; then
 				install -m 0600 "${run_root}/results/output" "${output_file}"
 				exit 0
 				;;
-			usage_limit|auth_failed)
+			usage_limit)
+				continue
+				;;
+			auth_failed)
+				all_usage_limit=false
 				continue
 				;;
 			*)
@@ -267,8 +292,13 @@ if [ "${engine}" = claude ]; then
 				;;
 		esac
 	done
-	ai_engine_fallback "${engine_role}" all_accounts_failed
-	exit 75
+	# Every account at its usage limit is the capacity reason (D1).
+	if [ "${all_usage_limit}" = true ]; then
+		ai_engine_fallback "${engine_role}" all_usage_limit
+	else
+		ai_engine_fallback "${engine_role}" all_accounts_failed
+	fi
+	exit "${AI_ENGINE_FALLBACK_EXIT}"
 fi
 
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.

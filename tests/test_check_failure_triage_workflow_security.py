@@ -937,7 +937,7 @@ esac
 		jobs = workflow["jobs"]
 		derive_job = jobs["derive_check_name_key"]
 		triage_job = jobs["triage"]
-		self.assertEqual(triage_job["permissions"], {"contents": "read"})
+		self.assertEqual(triage_job["permissions"], {"contents": "read", "id-token": "write"})
 		self.assertEqual(_step(triage_job, name="Checkout PR head (failing branch)")["with"]["token"], "${{ github.token }}")
 		stage_script = _step(triage_job, name="Stage workflow support files")["run"]
 		for filename in ("clarify_isolated_run.sh", "clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile"):

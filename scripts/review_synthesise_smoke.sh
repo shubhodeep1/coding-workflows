@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+# Resolve support helpers from this script's own directory unless the
+# workflow passed an absolute SUPPORT_SCRIPTS_DIR: a relative default resolves
+# against the PR checkout, whose copies of the sandbox and engine helpers are
+# untrusted (finding review-smoke-host-opencode).
+_self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+	echo "::warning::review_synthesise_smoke: SUPPORT_SCRIPTS_DIR is unset or not absolute; using this script's own directory." >&2
+	SUPPORT_SCRIPTS_DIR="${_self_dir}"
+fi
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
 	if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
 		SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
@@ -212,6 +220,43 @@ def strip_outer_code_fence(text: str) -> str:
 	return text
 
 
+# Pipeline credential names a generated body must never reference.  The
+# generated wrapper refuses to run its body while any credential-shaped
+# variable (CREDENTIAL_NAME_POLICY) is set (finding
+# smoke-synth-credentialed-test-exec).
+SANDBOX_CREDENTIAL_NAMES = (
+	'GH_TOKEN',
+	'GITHUB_TOKEN',
+	'GH_PAT',
+	'OPENROUTER_API_KEY',
+	'TG_BOT_SECRET',
+	'CHECK_TRIAGE_ISSUES_TOKEN',
+	'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+	'ACTIONS_ID_TOKEN_REQUEST_URL',
+	'ACTIONS_RUNTIME_TOKEN',
+	'CLAUDE_CODE_OAUTH_TOKEN',
+	'ANTHROPIC_API_KEY',
+)
+CREDENTIAL_REFERENCE_RE = re.compile(
+	r'(?<![A-Za-z0-9_])(?:' + '|'.join(SANDBOX_CREDENTIAL_NAMES) + r')(?![A-Za-z0-9_])'
+)
+NETWORK_DEVICE_RE = re.compile(r'/dev/(?:tcp|udp)/')
+NETWORK_CLIENT_TOKENS = {
+	'curl',
+	'wget',
+	'nc',
+	'ncat',
+	'netcat',
+	'socat',
+	'ssh',
+	'scp',
+	'sftp',
+	'telnet',
+	'ftp',
+	'rsync',
+}
+
+
 def normalize_content(text: str) -> str:
 	text = text.replace("\r\n", "\n").replace("\r", "\n")
 	text = strip_outer_code_fence(text)
@@ -230,6 +275,10 @@ def normalize_content(text: str) -> str:
 		stripped = raw_line.strip()
 		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
 			raise ValueError("body_unsafe_shell_construct")
+		if CREDENTIAL_REFERENCE_RE.search(stripped):
+			raise ValueError("body_credential_reference")
+		if NETWORK_DEVICE_RE.search(stripped):
+			raise ValueError("body_network_client")
 		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
 		lexer.whitespace_split = True
 		# Keep '#' literal so shlex does not hide trailing separators/commands
@@ -315,6 +364,8 @@ def normalize_content(text: str) -> str:
 				raise ValueError("body_unsafe_shell_construct")
 			if expect_command and token_basename in dangerous_command_tokens:
 				raise ValueError("body_unsafe_shell_construct")
+			if expect_command and token_basename in NETWORK_CLIENT_TOKENS:
+				raise ValueError("body_network_client")
 			expect_command = False
 			passthrough_command = ""
 			passthrough_option_value = False
@@ -482,6 +533,56 @@ def build_wrapper(issue, generated_item, round_value: int, slug: str) -> str:
 		f'EXPECTED_TO_FAIL_UNTIL_FIXED={expected_flag}',
 		'',
 		'echo "1..1"',
+		'',
+		'# Run the model-written body only inside the validation driver sandbox',
+		'# (no network, no credentials); anywhere else it is reported, not run.',
+		'# The env flag alone can be set by a host test, so the gate also needs',
+		'# the sandbox mount path, a loopback-only network and no pipeline',
+		'# credentials; any failed check fails closed (finding',
+		'# smoke-synth-credentialed-test-exec).',
+		'_synth_sandbox_detail=""',
+		'if [ "${BEHAVIOURAL_SMOKE_SANDBOXED:-}" != "1" ]; then',
+		'	_synth_sandbox_detail="env"',
+		'elif [ "${BASH_SOURCE[0]:-}" != "/synth/test.sh" ]; then',
+		'	_synth_sandbox_detail="path"',
+		'elif [ ! -d /sys/class/net ]; then',
+		'	_synth_sandbox_detail="network"',
+		'else',
+		'	for _synth_iface in /sys/class/net/*; do',
+		'		if [ ! -e "${_synth_iface}" ] && [ ! -L "${_synth_iface}" ]; then',
+		'			continue',
+		'		fi',
+		'		if [ "${_synth_iface##*/}" != "lo" ]; then',
+		'			_synth_sandbox_detail="network"',
+		'			break',
+		'		fi',
+		'	done',
+		'	if [ -z "${_synth_sandbox_detail}" ]; then',
+		'		# Any non-empty credential-shaped variable blocks the run; the names',
+		'		# follow the harness scrub in validate_process.sh.  GPG_KEY is the',
+		'		# public CPython release-signing key ID the sandbox image sets.',
+		'		while IFS= read -r _synth_cred_name; do',
+		'			case "${_synth_cred_name}" in',
+		'				VALIDATION_TEST_*|TEST_*|BEHAVIOURAL_SMOKE_SANDBOXED|GPG_KEY)',
+		'					continue',
+		'					;;',
+		'			esac',
+		'			# CREDENTIAL_NAME_POLICY (keep identical to validate_process.sh)',
+		'			if [[ "${_synth_cred_name}" =~ ^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|ACTIONS_CACHE_|ACTIONS_RESULTS_|CLAUDE_|ANTHROPIC_|GIT_CONFIG_|GIT_ASKPASS$|SSH_ASKPASS$|SSH_AUTH_SOCK$) ]] \\',
+		'				|| [[ "${_synth_cred_name}" =~ (_TOKEN|_SECRET|_KEY|_API_KEY|_PAT|_PRIVATE_KEY|_PASSWORD|_PASSWD|_CREDENTIAL|_CREDENTIALS|_COOKIE)$ ]]; then',
+		'				if [ -n "${!_synth_cred_name:-}" ]; then',
+		'					_synth_sandbox_detail="credentials"',
+		'					break',
+		'				fi',
+		'			fi',
+		'		done < <(compgen -e)',
+		'	fi',
+		'fi',
+		'if [ -n "${_synth_sandbox_detail}" ]; then',
+		'	echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} reason=not_sandboxed detail=${_synth_sandbox_detail}"',
+		'	echo "ok 1 - ${TAP_LABEL}"',
+		'	exit 0',
+		'fi',
 		'',
 		'_synth_output_file=""',
 		'if ! _synth_output_file="$(mktemp "${TMPDIR:-/tmp}/behavioural_smoke.XXXXXX" 2>/dev/null)"; then',
@@ -732,7 +833,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
 	behavioural_smoke_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
 	exit 0
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" 1 config_writer_missing || true
 	behavioural_smoke_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
 	exit 0
@@ -756,25 +857,117 @@ if ! opencode_require_bootstrap review_synthesise_smoke reviewer "${BEHAVIOURAL_
 	exit 0
 fi
 
-behavioural_smoke_opencode_cmd=(
-	bash -c
-	# shellcheck disable=SC2016
-	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-	opencode-behavioural-smoke
-	"${OPENCODE_HELPERS_PATH}"
-	reviewer
-	"${BEHAVIOURAL_SMOKE_MODEL}"
-	low
-	"${BEHAVIOURAL_SMOKE_OPENCODE_CONFIG}"
-	"${BEHAVIOURAL_SMOKE_OPENCODE_WORKSPACE}"
-)
+# ── Engine selection (role BEHAVIOURAL_SMOKE, plan item 3d) ──────────────
+# The synthesiser reads PR-derived diffs and findings, so every engine runs
+# only in the network-isolated review sandbox (review_untrusted_sandbox.sh,
+# read-only, credential-free relay), like the consolidator; host claude_run
+# refuses review roles. Order: Claude in a fresh sandbox; on exit 75 (Claude
+# unavailable) or 2 (outdated helper) OpenCode in a fresh sandbox. A codex
+# selection (AI_ENGINE_BEHAVIOURAL_SMOKE=codex, AI_ENGINE=codex, the ai:codex
+# label, no pool credential) starts with sandboxed OpenCode. Host OpenCode is
+# never used: when the sandbox cannot be prepared the run is refused with
+# rc 77, a REVIEW_UTILITY_ISOLATION line and the advisory
+# BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable. Every input
+# has a default here because review_autofix.yml does not export one
+# (unattended §8).
+behavioural_smoke_sandbox_sh="${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh"
+behavioural_smoke_sandbox_root=""
+behavioural_smoke_sandbox_unavailable=false
+behavioural_smoke_sandbox_cleanup()
+{
+	[ -n "${behavioural_smoke_sandbox_root:-}" ] || return 0
+	if ! REVIEW_SANDBOX_ROOT="${behavioural_smoke_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s \
+		bash "${behavioural_smoke_sandbox_sh}" cleanup >/dev/null 2>&1; then
+		echo "::warning::behavioural smoke: review sandbox cleanup failed." >&2
+	fi
+	behavioural_smoke_sandbox_root=""
+}
+trap behavioural_smoke_sandbox_cleanup EXIT
+behavioural_smoke_engine_resolve()
+{
+	local engine_script="${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" resolved_engine accounts
+	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	resolved_engine="$(AI_ENGINE_MODEL_HINT="${BEHAVIOURAL_SMOKE_MODEL}" AI_ENGINE_EFFORT_HINT=low \
+		bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_for_role BEHAVIOURAL_SMOKE' "${engine_script}" || true)"
+	if [ "${resolved_engine}" != "claude" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	# Without a pool credential the sandboxed Claude run can only exit 75
+	# (no_credential) before any model call; skip the image build and start
+	# with sandboxed OpenCode.
+	accounts="$(bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_accounts' "${engine_script}" 2>/dev/null || true)"
+	if [ -z "${accounts}" ]; then
+		echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=no_credential" >&2
+		printf 'codex\n'
+		return 0
+	fi
+	printf 'claude\n'
+}
+# One sandboxed attempt on <engine> (claude|codex); sets
+# behavioural_smoke_sandbox_unavailable=true when the sandbox could not be prepared.
+behavioural_smoke_sandbox_attempt()
+{
+	local sandbox_engine="$1" attempt_rc=0
+	behavioural_smoke_sandbox_unavailable=false
+	if [ ! -f "${behavioural_smoke_sandbox_sh}" ] || [ -L "${behavioural_smoke_sandbox_sh}" ]; then
+		behavioural_smoke_sandbox_unavailable=true
+		return 1
+	fi
+	if ! behavioural_smoke_sandbox_root="$(timeout --signal=TERM --kill-after=10s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash "${behavioural_smoke_sandbox_sh}" prepare-ephemeral "${sandbox_engine}" 2>>"${STDERR_FILE}")" || [ -z "${behavioural_smoke_sandbox_root}" ]; then
+		behavioural_smoke_sandbox_root=""
+		behavioural_smoke_sandbox_unavailable=true
+		return 1
+	fi
+	REVIEW_SANDBOX_ROOT="${behavioural_smoke_sandbox_root}" timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash "${behavioural_smoke_sandbox_sh}" run "${PROMPT_FILE}" "${RAW_OUTPUT_FILE}" \
+		"${BEHAVIOURAL_SMOKE_MODEL}" low "${BEHAVIOURAL_SMOKE_OPENCODE_CONFIG}" \
+		"${sandbox_engine}" BEHAVIOURAL_SMOKE read \
+		< "${PROMPT_FILE}" >/dev/null 2>>"${STDERR_FILE}" || attempt_rc=$?
+	behavioural_smoke_sandbox_cleanup
+	return "${attempt_rc}"
+}
 
-if timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
-	"${behavioural_smoke_opencode_cmd[@]}" \
-	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
-	cmd_rc=0
-else
-	cmd_rc=$?
+: > "${RAW_OUTPUT_FILE}"
+: > "${STDERR_FILE}"
+behavioural_smoke_engine_state="sandbox_opencode"
+if [ "$(behavioural_smoke_engine_resolve)" = "claude" ]; then
+	behavioural_smoke_engine_state="claude"
+fi
+behavioural_smoke_isolation_refused_rc=77
+behavioural_smoke_isolation_refuse()
+{
+	echo "::error::REVIEW_UTILITY_ISOLATION role=BEHAVIOURAL_SMOKE engine=$1 outcome=refused reason=$2" >&2
+	: > "${RAW_OUTPUT_FILE}"
+	behavioural_smoke_engine_state="refused"
+	cmd_rc="${behavioural_smoke_isolation_refused_rc}"
+}
+cmd_rc=0
+if [ "${behavioural_smoke_engine_state}" = "claude" ]; then
+	behavioural_smoke_sandbox_attempt claude || cmd_rc=$?
+	if [ "${behavioural_smoke_sandbox_unavailable}" = "true" ]; then
+		behavioural_smoke_isolation_refuse claude sandbox_unavailable
+	elif [ "${cmd_rc}" -eq 75 ] || [ "${cmd_rc}" -eq 2 ]; then
+		grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${STDERR_FILE}" >&2 || true
+		if [ "${cmd_rc}" -eq 2 ]; then
+			echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=sandbox_helper_outdated" >&2
+		fi
+		behavioural_smoke_engine_state="sandbox_opencode"
+		: > "${RAW_OUTPUT_FILE}"
+		cmd_rc=0
+	fi
+fi
+if [ "${behavioural_smoke_engine_state}" = "sandbox_opencode" ]; then
+	behavioural_smoke_sandbox_attempt codex || cmd_rc=$?
+	if [ "${behavioural_smoke_sandbox_unavailable}" = "true" ]; then
+		behavioural_smoke_isolation_refuse codex sandbox_unavailable
+	elif [ "${cmd_rc}" -eq 2 ]; then
+		behavioural_smoke_isolation_refuse codex sandbox_helper_outdated
+	fi
 fi
 
 behavioural_smoke_clean_output="${RAW_OUTPUT_FILE}.ansi-clean"
@@ -789,7 +982,9 @@ if opencode_strip_ansi < "${STDERR_FILE}" > "${behavioural_smoke_clean_stderr}";
 else
 	rm -f "${behavioural_smoke_clean_stderr}"
 fi
-if [ "${cmd_rc}" -ne 0 ]; then
+if [ "${behavioural_smoke_engine_state}" = "refused" ]; then
+	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" "${cmd_rc}" isolation_unavailable || true
+elif [ "${cmd_rc}" -ne 0 ]; then
 	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" "${cmd_rc}" invocation_failed || true
 fi
 
@@ -815,7 +1010,9 @@ fi
 
 rm -rf "${SYNTH_DIR}"
 failure_reason="json_parse_failed"
-if [ "${cmd_rc}" -eq 124 ]; then
+if [ "${cmd_rc}" -eq "${behavioural_smoke_isolation_refused_rc}" ] && [ "${behavioural_smoke_engine_state}" = "refused" ]; then
+	failure_reason="isolation_unavailable"
+elif [ "${cmd_rc}" -eq 124 ]; then
 	failure_reason="timeout"
 elif [ "${cmd_rc}" -eq 137 ]; then
 	failure_reason="killed"

@@ -277,6 +277,27 @@ CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
 mkdir -p "${RUNTIME_DIR}"
 printf 'null\n' > "${NULL_JSON_FILE}"
 
+# Bind the driver Phase 3 launches to the copy present before any model
+# phase runs (findings smoke-synth-unsandboxed-driver /
+# validation-harness-credential-inheritance).  At this point the in-tree
+# scripts/validate_driver.sh is the copy staged with this script, so it is
+# exactly as trusted as validate_process.sh itself; generate, self-heal and
+# hook phases that write back into the workspace must not be able to swap it.
+# The snapshot lives in the private RUNTIME_DIR and survives self-heal
+# re-execs, which reuse the first invocation's record.
+VALIDATE_DRIVER_SNAPSHOT_FILE="${RUNTIME_DIR}/validate_driver_trusted_snapshot.sh"
+VALIDATE_DRIVER_SNAPSHOT_STATE_FILE="${RUNTIME_DIR}/validate_driver_trusted_snapshot.state"
+if [ ! -f "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" ]; then
+  rm -f -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+  if [ -f scripts/validate_driver.sh ] && [ ! -L scripts/validate_driver.sh ] \
+    && cp -- scripts/validate_driver.sh "${VALIDATE_DRIVER_SNAPSHOT_FILE}"; then
+    printf 'present\n' > "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}"
+  else
+    rm -f -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+    printf 'absent\n' > "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}"
+  fi
+fi
+
 export VALIDATION_TEST_USERNAME
 export VALIDATION_TEST_PASSWORD
 export VALIDATION_TEST_API_KEY
@@ -1384,6 +1405,33 @@ ensure_runtime_validation_driver()
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This fallback runner has no sandbox, so synthesised behavioural smoke tests
+# are skipped below and this flag must never be inherited (finding
+# smoke-synth-fallback-driver-host-exec).
+unset BEHAVIOURAL_SMOKE_SANDBOXED
+
+# Same rule as validate_driver.sh: a synthesised test is recognised by a
+# synth_round_*.sh name in any letter case or by the generated-wrapper
+# marker; a file whose content cannot be checked counts as synthesised and
+# is skipped (fail closed).
+is_synthesised_test()
+{
+  local synth_candidate_path="$1"
+  local synth_candidate_name="${synth_candidate_path##*/}"
+  local synth_marker_status=0
+
+  synth_candidate_name="${synth_candidate_name,,}"
+  if [[ "${synth_candidate_name}" == synth_round_*.sh ]]; then
+    return 0
+  fi
+  if [ -L "${synth_candidate_path}" ] || [ ! -f "${synth_candidate_path}" ] || [ ! -r "${synth_candidate_path}" ]; then
+    return 0
+  fi
+  grep -qF -e 'BEHAVIOURAL_SMOKE_SANDBOXED' -e '__BEHAVIOURAL_SMOKE_' -- "${synth_candidate_path}" 2>/dev/null \
+    || synth_marker_status=$?
+  [ "${synth_marker_status}" -ne 1 ]
+}
+
 COMPOSE_FILE="validation/docker-compose.test.yml"
 TEST_DIR="validation/tests"
 LOG_DIR="validation/logs"
@@ -1506,7 +1554,9 @@ if [ "${#test_scripts[@]}" -eq 0 ]; then
   exit 1
 fi
 
-if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ]; then
+# A synthesised test is skipped below, so it can never serve as the canary
+# (same rule as validate_driver.sh's discover_tests).
+if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ] || is_synthesised_test "${test_scripts[0]}"; then
   TOTAL_TESTS=$((TOTAL_TESTS + 1))
   FAILED_TESTS=$((FAILED_TESTS + 1))
   append_failure "canary_missing" "first validation test script must be validation/tests/00_canary.sh"
@@ -1543,10 +1593,32 @@ for test_script in "${test_scripts[@]}"; do
   test_log="${LOG_DIR}/${test_name}.log"
 
   echo "=== RUN ${test_name} ==="
-  set +e
-  run_test_without_credentials "${test_script}" > "${test_log}" 2>&1
-  test_rc=$?
-  set -e
+  if is_synthesised_test "${test_script}"; then
+    # Model-written synthesised tests run only in validate_driver.sh's
+    # credential-free, network-less sandbox; this fallback runner has none,
+    # so they are reported as skipped, never run on the host (finding
+    # smoke-synth-fallback-driver-host-exec).
+    {
+      echo "1..1"
+      echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE reason=sandbox_unavailable detail=fallback_driver"
+      echo "ok 1 - ${test_name} # SKIP behavioural smoke sandbox unavailable"
+    } > "${test_log}"
+    echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" >&2
+    test_rc=0
+  else
+    # Template-rendered tests exist only when
+    # run_template_validation_harness_renderer's manifest shell-safety gate
+    # passed: it refuses to render when a shell-reachable .ai/validate.yml
+    # value is shell-unsafe (finding
+    # validation-manifest-shell-injection-fallback). This runner itself is
+    # launched through VALIDATION_HARNESS_CREDENTIAL_SCRUB. The validation-refresh
+    # path, which renders without validate_process.sh, applies the same check
+    # in validation_refresh_runner.py before it renders.
+    set +e
+    run_test_without_credentials "${test_script}" > "${test_log}" 2>&1
+    test_rc=$?
+    set -e
+  fi
 
   cat "${test_log}" || true
 
@@ -1605,15 +1677,111 @@ materialize_synthesised_behavioural_smoke_tests()
 
   if ! materialize_output="$(PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import json
+import os
 import re
-import shutil
+import stat
+import subprocess
 import sys
 from pathlib import Path
 
 
 repo_root = Path('.').resolve()
 runtime_root = (repo_root / '.ai' / 'review_runtime').resolve()
+# Cached synthesised wrappers are small generated shell scripts; anything
+# larger is not one of ours (finding smoke-manifest-canary-overwrite).
+SYNTH_SOURCE_MAX_BYTES = 1048576
 target_root = (repo_root / 'validation' / 'tests').resolve()
+# The manifest is restored from a PR-scoped cache, so its names are
+# untrusted: only synth_round_* names may be written, which validate_driver.sh
+# routes into its credential-free sandbox (finding
+# smoke-synth-credentialed-test-exec).  A non-matching name could plant a
+# host-run test or overwrite the canary.
+SYNTH_TARGET_NAME_RE = re.compile(r'^synth_round_([0-9]+)_[a-z0-9_]{1,72}\.sh$')
+SYNTH_MANIFEST_NAME_RE = re.compile(r'^synth_round_([0-9]+)_manifest\.json$')
+
+
+class _SynthSourceRejected(Exception):
+    pass
+
+
+def _read_regular_nofollow(name, dir_fd=None) -> bytes:
+    # Opens without following a final-component symlink, requires a regular
+    # file and bounds the size (finding smoke-manifest-canary-overwrite).
+    fd = os.open(name, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0), dir_fd=dir_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise _SynthSourceRejected('not_regular')
+        if info.st_size > SYNTH_SOURCE_MAX_BYTES:
+            raise _SynthSourceRejected('source_too_large')
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > SYNTH_SOURCE_MAX_BYTES:
+                raise _SynthSourceRejected('source_too_large')
+            chunks.append(chunk)
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _write_new_file(data: bytes, name: str, mode: int, dir_fd: int) -> str:
+    # Never follow a symlink or overwrite a different file at the target
+    # (finding smoke-manifest-canary-overwrite).  Every check, the create and
+    # the chmod are relative to the already-opened validation/tests directory
+    # descriptor, so swapping a path component after the checks cannot
+    # redirect the write.  A byte-identical regular file counts as already
+    # materialized, so a self-heal re-run stays idempotent.  Returns
+    # 'written', 'identical' or a skip reason.
+    if not name or '/' in name or name in ('.', '..'):
+        return 'target_invalid'
+    try:
+        existing_info = os.lstat(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        existing_info = None
+    except OSError:
+        return 'target_unreadable'
+    if existing_info is not None:
+        if not stat.S_ISREG(existing_info.st_mode):
+            return 'target_not_regular'
+        try:
+            existing = _read_regular_nofollow(name, dir_fd=dir_fd)
+        except (OSError, _SynthSourceRejected):
+            return 'target_unreadable'
+        return 'identical' if existing == data else 'target_exists'
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(name, flags, mode, dir_fd=dir_fd)
+    except OSError:
+        return 'target_create_failed'
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'wb') as handle:
+            fd = -1
+            handle.write(data)
+    finally:
+        if fd != -1:
+            os.close(fd)
+    return 'written'
+
+
+def _open_target_dir() -> int:
+    # Opens validation/tests one component at a time without following
+    # symlinks, so the descriptor is the real in-repository directory.
+    dir_flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    root_fd = os.open(str(repo_root), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        validation_fd = os.open('validation', dir_flags, dir_fd=root_fd)
+    finally:
+        os.close(root_fd)
+    try:
+        return os.open('tests', dir_flags, dir_fd=validation_fd)
+    finally:
+        os.close(validation_fd)
 
 
 def _manifest_key(path: Path):
@@ -1627,23 +1795,67 @@ def _manifest_key(path: Path):
 def _safe_target(relpath: object, expected_root: Path):
     if not isinstance(relpath, str) or not relpath.strip():
         return None
-    candidate = (repo_root / relpath).resolve()
-    try:
-        candidate.relative_to(expected_root)
-    except ValueError:
+    unresolved = repo_root / relpath
+    # Checks run on the unresolved path: resolving first would follow a
+    # symlink planted under validation/tests onto another file (finding
+    # smoke-manifest-canary-overwrite).
+    if unresolved.parent.resolve() != expected_root:
         return None
-    if candidate.parent != expected_root:
+    if unresolved.name in ('', '.', '..'):
         return None
-    return candidate
+    return expected_root / unresolved.name
 
+
+# Provenance (finding smoke-manifest-canary-overwrite): the cache root must
+# be the real .ai/review_runtime inside this checkout, and the PR must not
+# have committed anything there (a force-added file would be taken for cache
+# output).  A failed tracked-file check fails closed when this is a git
+# checkout.
+if (
+    (repo_root / '.ai').is_symlink()
+    or (repo_root / '.ai' / 'review_runtime').is_symlink()
+    or not str(runtime_root).startswith(str(repo_root) + os.sep)
+):
+    print('validate_process: skipping synthesised smoke materialization because .ai or .ai/review_runtime is a symlink or escapes the repository.', file=sys.stderr)
+    sys.exit(0)
+try:
+    tracked_runtime = subprocess.run(
+        ['git', '-c', 'core.fsmonitor=', 'ls-files', '-z', '--', '.ai/review_runtime'],
+        cwd=str(repo_root),
+        capture_output=True,
+        timeout=60,
+    )
+except (OSError, subprocess.SubprocessError):
+    tracked_runtime = None
+in_git_checkout = (repo_root / '.git').exists() or bool(os.environ.get('GIT_DIR'))
+if tracked_runtime is not None and tracked_runtime.returncode == 0:
+    if tracked_runtime.stdout:
+        print('validate_process: skipping synthesised smoke materialization because of tracked review-runtime files.', file=sys.stderr)
+        sys.exit(0)
+elif in_git_checkout:
+    print('validate_process: skipping synthesised smoke materialization because the tracked review-runtime files check failed.', file=sys.stderr)
+    sys.exit(0)
 
 manifest_paths = sorted(runtime_root.glob('pr-*/round-*/synth/synth_round_*_manifest.json'))
 if not manifest_paths:
     sys.exit(0)
 
 manifest_path = max(manifest_paths, key=_manifest_key)
-with open(manifest_path, 'r', encoding='utf-8') as handle:
-    payload = json.load(handle)
+if manifest_path.is_symlink():
+    print('validate_process: skipping synthesised smoke materialization because the manifest is a symlink.', file=sys.stderr)
+    sys.exit(0)
+try:
+    manifest_path.resolve().relative_to(runtime_root)
+except ValueError:
+    print('validate_process: skipping synthesised smoke materialization because the manifest is outside the review-runtime root.', file=sys.stderr)
+    sys.exit(0)
+try:
+    manifest_bytes = _read_regular_nofollow(str(manifest_path))
+except (OSError, _SynthSourceRejected) as exc:
+    reason = str(exc) if isinstance(exc, _SynthSourceRejected) else 'unreadable'
+    print(f'validate_process: skipping synthesised smoke materialization because the manifest was rejected ({reason}).', file=sys.stderr)
+    sys.exit(0)
+payload = json.loads(manifest_bytes.decode('utf-8'))
 
 if not isinstance(payload, dict):
     raise ValueError(f'invalid manifest payload at {manifest_path}')
@@ -1652,15 +1864,41 @@ rows = payload.get('files')
 if not isinstance(rows, list):
     raise ValueError(f'invalid manifest files list at {manifest_path}')
 
+source_manifest_match = SYNTH_MANIFEST_NAME_RE.match(manifest_path.name)
+if source_manifest_match is None:
+    print('validate_process: skipping synthesised smoke materialization because the manifest name is invalid.', file=sys.stderr)
+    sys.exit(0)
+manifest_round = source_manifest_match.group(1)
+
 target_manifest_relpath = payload.get('target_manifest_relpath')
 target_manifest_path = _safe_target(target_manifest_relpath, target_root)
-if target_manifest_path is None:
+if (
+    target_manifest_path is None
+    or not SYNTH_MANIFEST_NAME_RE.match(target_manifest_path.name)
+    or target_manifest_path.name != manifest_path.name
+):
     print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
     sys.exit(0)
 
+# A symlinked validation/ or validation/tests would resolve target_root
+# outside the repository; refuse to write anywhere in that case.
+if (
+    (repo_root / 'validation').is_symlink()
+    or (repo_root / 'validation' / 'tests').is_symlink()
+    or not str(target_root).startswith(str(repo_root) + os.sep)
+):
+    print('validate_process: skipping synthesised smoke materialization because validation/tests is a symlink or escapes the repository.', file=sys.stderr)
+    sys.exit(0)
+
 target_root.mkdir(parents=True, exist_ok=True)
+try:
+    target_dir_fd = _open_target_dir()
+except OSError:
+    print('validate_process: skipping synthesised smoke materialization because validation/tests could not be opened without following symlinks.', file=sys.stderr)
+    sys.exit(0)
 
 copied = 0
+seen_targets = set()
 for row in rows:
     if not isinstance(row, dict):
         continue
@@ -1669,7 +1907,11 @@ for row in rows:
     if not isinstance(source_relpath, str) or not isinstance(target_relpath, str):
         continue
 
-    source_path = (repo_root / source_relpath).resolve()
+    unresolved_source = repo_root / source_relpath
+    if unresolved_source.is_symlink():
+        print(f'validate_process: skipping synthesised smoke source that is a symlink: {source_relpath}', file=sys.stderr)
+        continue
+    source_path = unresolved_source.resolve()
     try:
         source_path.relative_to(runtime_root)
     except ValueError:
@@ -1683,13 +1925,36 @@ for row in rows:
     if target_path is None:
         print(f'validate_process: skipping synthesised smoke target outside validation/tests: {target_relpath}', file=sys.stderr)
         continue
+    target_name_match = SYNTH_TARGET_NAME_RE.match(target_path.name)
+    if target_name_match is None:
+        print(f'validate_process: skipping synthesised smoke target not named synth_round_<n>_<slug>.sh: {target_relpath}', file=sys.stderr)
+        continue
+    if target_name_match.group(1) != manifest_round:
+        print(f'validate_process: skipping synthesised smoke target whose round does not match the manifest: {target_relpath}', file=sys.stderr)
+        continue
+    if target_path.name in seen_targets:
+        print(f'validate_process: skipping duplicate synthesised smoke target: {target_relpath}', file=sys.stderr)
+        continue
+    seen_targets.add(target_path.name)
 
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, target_path)
+    try:
+        source_data = _read_regular_nofollow(str(unresolved_source))
+    except _SynthSourceRejected as exc:
+        print(f'validate_process: skipping synthesised smoke source ({exc}): {source_relpath}', file=sys.stderr)
+        continue
+    except OSError:
+        print(f'validate_process: skipping synthesised smoke source (source_unreadable): {source_relpath}', file=sys.stderr)
+        continue
+    outcome = _write_new_file(source_data, target_path.name, 0o755, target_dir_fd)
+    if outcome not in ('written', 'identical'):
+        print(f'validate_process: skipping synthesised smoke target ({outcome}): {target_relpath}', file=sys.stderr)
+        continue
     copied += 1
 
-target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-shutil.copy2(manifest_path, target_manifest_path)
+manifest_outcome = _write_new_file(manifest_bytes, target_manifest_path.name, 0o644, target_dir_fd)
+os.close(target_dir_fd)
+if manifest_outcome not in ('written', 'identical'):
+    print(f'validate_process: warning: synthesised smoke manifest not copied ({manifest_outcome}).', file=sys.stderr)
 
 if copied == 0 and rows:
     print(
@@ -2014,15 +2279,11 @@ cleanup_runtime_containers()
   fi
 }
 
-ensure_validate_wrapper()
+# The only validation/validate.sh content Phase 3 will launch (findings
+# smoke-synth-unsandboxed-driver / validation-harness-credential-inheritance).
+canonical_validate_wrapper_text()
 {
-	# Only generate the wrapper if the canonical driver exists.
-	# When absent, the runtime fallback driver will be used instead.
-	if [ ! -f scripts/validate_driver.sh ]; then
-		return 0
-	fi
-	mkdir -p validation
-	cat > validation/validate.sh <<'EOF'
+	cat <<'EOF'
 #!/usr/bin/env bash
 # Auto-generated by coding-workflows — DO NOT EDIT
 
@@ -2030,7 +2291,34 @@ set -euo pipefail
 
 exec bash scripts/validate_driver.sh "$@"
 EOF
-	chmod +x validation/validate.sh
+}
+
+ensure_validate_wrapper()
+{
+	local validate_wrapper_tmp=""
+
+	# Only generate the wrapper if the canonical driver exists.
+	# When absent, the runtime fallback driver will be used instead.
+	if [ ! -f scripts/validate_driver.sh ]; then
+		return 0
+	fi
+	if [ -L validation ]; then
+		echo "::warning::validate_process: validation/ is a symlink; refusing to write validation/validate.sh." >&2
+		return 1
+	fi
+	mkdir -p validation || return 1
+	# Write a new file and rename it over validate.sh, so a symlinked
+	# validate.sh is replaced instead of written through.
+	if ! validate_wrapper_tmp="$(mktemp validation/.validate.sh.XXXXXX 2>/dev/null)"; then
+		return 1
+	fi
+	if ! canonical_validate_wrapper_text > "${validate_wrapper_tmp}" \
+		|| ! chmod 0755 "${validate_wrapper_tmp}" \
+		|| ! mv -f -- "${validate_wrapper_tmp}" validation/validate.sh; then
+		rm -f -- "${validate_wrapper_tmp}" >/dev/null 2>&1 || true
+		return 1
+	fi
+	return 0
 }
 
 run_template_validation_harness_renderer()
@@ -2123,6 +2411,108 @@ import yaml, jsonschema, jinja2
 ' "${RUNTIME_DIR}/renderer-venv" 2>&1)"; then
 		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
 		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are unavailable in the isolated environment; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	# Manifest shell-safety gate (finding validation-manifest-shell-injection-fallback).
+	# .ai/validate.yml is untrusted checkout data, and the renderer interpolates
+	# its values unescaped into shell scripts that validate_driver.sh and the
+	# runtime fallback runner execute on the host. Every render (first render and
+	# render recovery) passes through this function, so values in
+	# shell-reachable fields are rejected here, fail closed, before any template
+	# is written: quotes, $, backticks, backslashes, control characters and
+	# non-scalar YAML types. Exempt keys are commands by design (custom_tests,
+	# skip_tests), escaped where emitted (env_overrides), schema-constrained
+	# (port) or never interpolated (health_check, services). Parse errors and
+	# non-mapping roots are left to the renderer, which rejects them with the
+	# same yaml.safe_load. Violations name only a sanitized JSON pointer and the
+	# character class, never the raw value. The check is done here rather than
+	# in the renderer because this issue's automation-path grant covers this
+	# file only.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import sys
+import yaml
+MAX_BYTES = 2 * 1024 * 1024
+MAX_DEPTH = 32
+EXEMPT_TOP_LEVEL_KEYS = frozenset({"custom_tests", "skip_tests", "env_overrides", "health_check", "services", "port"})
+QUOTES = (chr(34), chr(39))
+BACKSLASH = chr(92)
+def pointer(parts):
+    if not parts:
+        return "$"
+    text = "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
+    text = "".join(ch if ch.isprintable() and ch not in QUOTES and ch not in ("$", "`", BACKSLASH) else "?" for ch in text)
+    return text if len(text) <= 120 else text[:117] + "..."
+def unsafe_classes(text):
+    found = []
+    if "$" in text:
+        found.append("dollar")
+    if "`" in text:
+        found.append("backtick")
+    if any(quote in text for quote in QUOTES):
+        found.append("quote")
+    if BACKSLASH in text:
+        found.append("backslash")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+        found.append("control")
+    return found
+with open(sys.argv[1], "rb") as handle:
+    raw = handle.read(MAX_BYTES + 1)
+if len(raw) > MAX_BYTES:
+    print("Manifest shell-safety check: manifest exceeds " + str(MAX_BYTES) + " bytes")
+    raise SystemExit(1)
+try:
+    manifest = yaml.safe_load(raw.decode("utf-8"))
+except (UnicodeDecodeError, yaml.YAMLError):
+    raise SystemExit(0)
+except RecursionError:
+    # Same message as validation_refresh_runner.manifest_shell_safety_violations.
+    print("Manifest validation failed (shell-unsafe values in shell-reachable fields):")
+    print("- $: manifest nesting too deep")
+    raise SystemExit(1)
+if not isinstance(manifest, dict):
+    raise SystemExit(0)
+stack = []
+for key in sorted(manifest, key=str, reverse=True):
+    if key == "slots" or key not in EXEMPT_TOP_LEVEL_KEYS:
+        stack.append(([key], manifest[key]))
+violations = []
+seen_containers = set()
+while stack:
+    parts, value = stack.pop()
+    if isinstance(value, (dict, list)):
+        # Aliases can make a container recursive or shared; each is checked once.
+        if id(value) in seen_containers:
+            continue
+        seen_containers.add(id(value))
+        if len(parts) > MAX_DEPTH:
+            violations.append(pointer(parts) + ": nesting exceeds " + str(MAX_DEPTH) + " levels")
+            continue
+    if isinstance(value, str):
+        classes = unsafe_classes(value)
+        if classes:
+            violations.append(pointer(parts) + ": contains shell-unsafe character class " + ",".join(classes))
+    elif isinstance(value, dict):
+        for key in sorted(value, key=str, reverse=True):
+            stack.append((parts + [key], value[key]))
+    elif isinstance(value, list):
+        for index in range(len(value) - 1, -1, -1):
+            stack.append((parts + [index], value[index]))
+    elif value is None or isinstance(value, (bool, int, float)):
+        continue
+    else:
+        violations.append(pointer(parts) + ": contains unsupported value type " + type(value).__name__)
+if violations:
+    print("Manifest validation failed (shell-unsafe values in shell-reachable fields):")
+    for line in violations[:10]:
+        print("- " + line)
+    if len(violations) > 10:
+        print("- ... " + str(len(violations) - 10) + " additional shell-safety violations")
+    raise SystemExit(1)
+' "${renderer_workspace}/${manifest_path}" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template manifest shell-safety check failed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' '::error::.ai/validate.yml has shell-unsafe values in shell-reachable fields; renderer not invoked (see validate_generate.log).' >&2
 		return 14
 	fi
 
@@ -3043,6 +3433,47 @@ run_validate_codex_attempt() {
   bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
 }
 
+# Engine selection for the validate agents (role VALIDATE): Claude by default
+# through the trusted engine root validate.yml stages from the verified
+# support clone (CLAUDE_ENGINE_SUPPORT_DIR, default
+# ${RUNNER_TEMP}/claude-engine-support), the unchanged
+# run_validate_codex_attempt otherwise (AI_ENGINE_VALIDATE=codex, the ai:codex
+# label, Claude unavailable, or no trusted root). ai_engine.sh is never sourced
+# from the checkout. The Claude run is read-only, like every codex attempt.
+run_validate_engine_attempt() {
+  local role="$1"
+  local phase_name="$2"
+  local prompt_file="$3"
+  local output_file="$4"
+  local log_file="$5"
+  local status_file="$6"
+  local effort_hint="${7:-${MODEL_REASONING_EFFORT:-}}"
+  local engine_root="${CLAUDE_ENGINE_SUPPORT_DIR:-${RUNNER_TEMP:-/tmp}/claude-engine-support}"
+  local engine_script="${engine_root}/scripts/ai_engine.sh"
+
+  if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+    echo "AI_ENGINE_FALLBACK role=${role} reason=engine_support_missing" >&2
+    run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+    return $?
+  fi
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
+
+  (
+    # shellcheck source=/dev/null
+    if ! source "${engine_script}"; then
+      echo "AI_ENGINE_FALLBACK role=${role} reason=engine_support_missing" >&2
+      run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+      exit $?
+    fi
+    AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${effort_hint}" \
+      claude_run_selected "${role}" "${prompt_file}" "${output_file}" "${PWD}" -- \
+      run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+  )
+}
+
 export PATH="${HOME}/.local/bin:${PATH}"
 
 
@@ -3243,7 +3674,7 @@ else
   emit_validate_substate "validate_discover" "discover" "InitializingSession" "${attempt}"
   emit_validate_substate "validate_discover" "discover" "StreamingTurn" "${attempt}"
   set +e
-  run_validate_codex_attempt "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}"
+  run_validate_engine_attempt "VALIDATE" "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}" "${MODEL_REASONING_EFFORT_DISCOVER:-${MODEL_REASONING_EFFORT:-}}"
   DISCOVER_EXIT=$?
   set -e
   emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
@@ -3677,6 +4108,51 @@ IDLE_TIMEOUT_SECS=$((VALIDATION_TIMEOUT * 60))
 VALIDATION_EXIT=0
 VALIDATION_IDLE_KILLED=0
 
+# Only trusted code decides how tests run (findings
+# smoke-synth-unsandboxed-driver / validation-harness-credential-inheritance).
+# Assumption: the in-tree scripts/validate_driver.sh is the trusted copy that
+# `stage_workflow_support.sh validate` installs from the verified support SHA
+# (stage_required_entry -> copy_from_ref_or_local).  With the driver present,
+# validation/validate.sh is regenerated here, after rendering, self-heal and
+# synthesised-test materialization, and must then equal the canonical wrapper
+# byte for byte; any other validate.sh (freehand, self-healed or committed)
+# is refused, never executed.  Without the driver the trusted fallback runner
+# is always used, whatever validate.sh contains.  The driver the wrapper
+# execs must also be byte-identical to the startup snapshot taken before any
+# model phase; a driver that appeared later is ignored (fallback runner) and
+# one that changed is refused.
+VALIDATION_USE_CANONICAL_WRAPPER="false"
+validate_driver_snapshot_state="$(cat -- "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" 2>/dev/null || true)"
+if [ "${validate_driver_snapshot_state}" != "present" ] && { [ -e scripts/validate_driver.sh ] || [ -L scripts/validate_driver.sh ]; }; then
+  echo "::warning::validate_process: scripts/validate_driver.sh was not present as a regular file before the model phases; using the trusted fallback runner." >&2
+fi
+if [ "${validate_driver_snapshot_state}" = "present" ]; then
+  validate_wrapper_canonical_ok="false"
+  validate_wrapper_canonical_file=""
+  if [ -f scripts/validate_driver.sh ] && [ ! -L scripts/validate_driver.sh ] && [ ! -L scripts ] \
+    && [ -f "${VALIDATE_DRIVER_SNAPSHOT_FILE}" ] \
+    && cmp -s -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" scripts/validate_driver.sh \
+    && ensure_validate_wrapper \
+    && validate_wrapper_canonical_file="$(mktemp "${TMPDIR:-/tmp}/validate_wrapper_canonical.XXXXXX" 2>/dev/null)" \
+    && canonical_validate_wrapper_text > "${validate_wrapper_canonical_file}" \
+    && [ ! -L validation ] && [ ! -L validation/validate.sh ] && [ -f validation/validate.sh ] \
+    && cmp -s -- "${validate_wrapper_canonical_file}" validation/validate.sh; then
+    validate_wrapper_canonical_ok="true"
+  fi
+  if [ -n "${validate_wrapper_canonical_file}" ]; then
+    rm -f -- "${validate_wrapper_canonical_file}" >/dev/null 2>&1 || true
+  fi
+  if [ "${validate_wrapper_canonical_ok}" != "true" ]; then
+    local_failure_summary="scripts/validate_driver.sh no longer matches the copy staged before the model phases, or validation/validate.sh could not be regenerated as the canonical wrapper around it; the harness was not run."
+    post_tracking_comment "## ⚠️ Runtime validation harness launch refused\n\n${local_failure_summary}"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "error" "Validation harness launch refused" "${local_failure_summary}" "harness_error"
+    tg_notify "Validation harness launch refused for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 1
+  fi
+  VALIDATION_USE_CANONICAL_WRAPPER="true"
+fi
+
 # Generated tests are untrusted. They never run in this credentialed
 # process: scripts/validation_harness_sandbox.sh runs the whole harness as a
 # separate unprivileged user with its own rootless Docker daemon, a screened
@@ -3719,21 +4195,70 @@ if ! bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" selfcheck "$$"; then
 fi
 
 set +e
-# Run validation in background, tee output to log file. The entry selection
-# is unchanged; only the launcher moved into the sandbox.
-if [ -f validation/validate.sh ]; then
-  if grep -q 'scripts/validate_driver.sh' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]; then
-    ensure_runtime_validation_driver
-    GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
-  else
-    GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
-  fi
+# The harness runs model-written tests, so it gets no pipeline credentials
+# (finding smoke-synth-credentialed-test-exec, sibling fix): every launch
+# below drops them from its environment.  The driver itself makes no GitHub or
+# OpenRouter calls.
+VALIDATION_HARNESS_CREDENTIAL_SCRUB=(
+  env
+  -u GH_TOKEN
+  -u GITHUB_TOKEN
+  -u GH_PAT
+  -u OPENROUTER_API_KEY
+  -u TG_BOT_SECRET
+  -u CHECK_TRIAGE_ISSUES_TOKEN
+  -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  -u ACTIONS_ID_TOKEN_REQUEST_URL
+  -u ACTIONS_RUNTIME_TOKEN
+  -u ACTIONS_RESULTS_URL
+  -u ACTIONS_CACHE_URL
+  -u CLAUDE_CODE_OAUTH_TOKEN
+  -u ANTHROPIC_API_KEY
+  -u BEHAVIOURAL_SMOKE_SANDBOXED
+)
+# Also drop every other credential-shaped variable in the environment
+# (finding validation-harness-credential-inheritance): pipeline prefixes,
+# Git/SSH credential helpers and config injection (GIT_CONFIG_*), and any
+# *_KEY, *_PASSWORD, *_CREDENTIAL(S) or *_COOKIE name.  VALIDATION_TEST_* and
+# TEST_* are test fixtures that validate_driver.sh re-defaults, so they stay;
+# tests that need other values read them from validation/validate.env.
+validation_harness_scrub_append()
+{
+  local scrub_name
+  local scrub_existing
+  while IFS= read -r scrub_name; do
+    [ -n "${scrub_name}" ] || continue
+    case "${scrub_name}" in
+      VALIDATION_TEST_*|TEST_*)
+        continue
+        ;;
+    esac
+    # CREDENTIAL_NAME_POLICY (keep identical to review_synthesise_smoke.sh)
+    if [[ "${scrub_name}" =~ ^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|ACTIONS_CACHE_|ACTIONS_RESULTS_|CLAUDE_|ANTHROPIC_|GIT_CONFIG_|GIT_ASKPASS$|SSH_ASKPASS$|SSH_AUTH_SOCK$) ]] \
+      || [[ "${scrub_name}" =~ (_TOKEN|_SECRET|_KEY|_API_KEY|_PAT|_PRIVATE_KEY|_PASSWORD|_PASSWD|_CREDENTIAL|_CREDENTIALS|_COOKIE)$ ]]; then
+      for scrub_existing in "${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}"; do
+        if [ "${scrub_existing}" = "${scrub_name}" ]; then
+          continue 2
+        fi
+      done
+      VALIDATION_HARNESS_CREDENTIAL_SCRUB+=(-u "${scrub_name}")
+    fi
+  done < <(compgen -e)
+}
+validation_harness_scrub_append
+# Run validation in background, tee output to log file.  Only the verified
+# canonical wrapper (driver present) or the trusted fallback runner (driver
+# absent) is selected; an arbitrary validation/validate.sh never is.  The
+# selected entry runs only inside the isolated harness sandbox, launched
+# without the pipeline credentials.
+if [ "${VALIDATION_USE_CANONICAL_WRAPPER}" = "true" ]; then
+  GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
 else
   ensure_runtime_validation_driver
   GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
 fi
 : > "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null || true
-bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}" > "${VALIDATION_LOG_FILE}" 2>&1 &
+"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}" > "${VALIDATION_LOG_FILE}" 2>&1 &
 VALIDATION_PID=$!
 
 # Monitor the log file for activity; kill if idle too long
@@ -4048,7 +4573,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   emit_validate_substate "validate_diagnose" "diagnose" "InitializingSession" "${attempt}"
   emit_validate_substate "validate_diagnose" "diagnose" "StreamingTurn" "${attempt}"
   set +e
-  run_validate_codex_attempt "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}"
+  run_validate_engine_attempt "VALIDATE" "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}" "${MODEL_REASONING_EFFORT:-}"
   DIAGNOSE_EXIT=$?
   set -e
   emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"

@@ -29,7 +29,10 @@
 # Optional env: SUPPORT_DIR (checkout with scripts/ and prompts/, default this
 # script's repository root), TARGET_DIR (read-only checkout of the default
 # branch for the model; default SUPPORT_DIR), RUNTIME_DIR,
-# UNBLOCK_JUDGE_ENABLED (default true), UNBLOCK_JUDGE_MODEL,
+# UNBLOCK_JUDGE_ENABLED (default true), NEEDS_HUMAN_DIGEST_ENABLED (default
+# true: a ledger-forced terminal parks the item in the needs-human digest,
+# scripts/operator_step_issue.py, instead of closing it; false restores the
+# terminal close), UNBLOCK_JUDGE_MODEL,
 # UNBLOCK_JUDGE_REASONING, UNBLOCK_JUDGE_TIMEOUT_SECS (default 1500),
 # UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
 # only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
@@ -61,6 +64,7 @@ TARGET_DIR="${TARGET_DIR:-${SUPPORT_DIR}}"
 RUNTIME_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}/unblock-judge}"
 mkdir -p "${RUNTIME_DIR}"
 UNBLOCK_SOURCE_REPO="shubhodeep1/coding-workflows"
+NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
 if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 	# shellcheck source=/dev/null
 	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
@@ -157,12 +161,33 @@ except ValueError:
 PY
 }
 
+# Re-reads a project-failed fallback's trusted state directly before a
+# terminal label (ai:unblock-closed or the needs-human park) is applied.
+# Returns 1, after logging, unless the project is still failed.
+unblock_project_terminal_recheck()
+{
+	local recheck_op="$1" terminal_project_status
+	if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json"; then
+		unblock_log "item=${ITEM} kind=project op=${recheck_op} outcome=skip reason=project_state_terminal_recheck_unavailable"
+		return 1
+	fi
+	if ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
+		unblock_log "item=${ITEM} kind=project op=${recheck_op} outcome=skip reason=project_state_terminal_unverified"
+		return 1
+	fi
+	if [ "${terminal_project_status}" != "failed" ]; then
+		unblock_log "item=${ITEM} kind=project op=${recheck_op} outcome=skip reason=project_state_changed_before_terminal_label status=$(printf '%s' "${terminal_project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
+		return 1
+	fi
+	return 0
+}
+
 # Runs the operations of unblock_actions.py output, in order. A failed
 # operation is logged and the rest still run, except a failed prerequisite
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" terminal_project_status unblock_removed_guard=""
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard=""
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -197,18 +222,7 @@ unblock_run_ops()
 						ensure_label_exists "${label}" "${REPOSITORY}" >/dev/null 2>&1 || true
 					fi
 					if [ "${project_failed_guard}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
-						if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json"; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_terminal_recheck_unavailable"
-							return 1
-						fi
-						if ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_terminal_unverified"
-							return 1
-						fi
-						if [ "${terminal_project_status}" != "failed" ]; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_changed_before_terminal_label status=$(printf '%s' "${terminal_project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
-							return 1
-						fi
+						unblock_project_terminal_recheck add_labels || return 1
 					fi
 					gh api -X POST "repos/${REPOSITORY}/issues/${issue}/labels" -f "labels[]=${label}" >/dev/null 2>&1 \
 						|| { ops_failed="true"; unblock_log "item=${ITEM} op=add_labels issue=${issue} label=${label} outcome=failed"; }
@@ -345,6 +359,33 @@ PY
 					gh api -X PATCH "repos/${REPOSITORY}/issues/${issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
 						&& close_succeeded="true" \
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
+				fi
+				;;
+			needs_human)
+				# Plan item 4a (D6): every round is spent, so park the item in the
+				# needs-human digest; it stays open and never gets ai:unblock-closed.
+				local -a park_args=(needs-human park --repo "${REPOSITORY}" --item "${issue}"
+					--kind "$(jq -r ".ops[${idx}].kind" "${ops_file}")" --stop "$(jq -r ".ops[${idx}].stop" "${ops_file}")"
+					--reason "$(jq -r ".ops[${idx}].reason" "${ops_file}")" --link "${UNBLOCK_VERDICT_URL:-}" --trusted-login "${UNBLOCK_LOGIN}")
+				if [ "${issue}" = "${ITEM}" ] && jq -e 'index("ai:needs-human") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
+					park_args+=(--item-labeled)
+				fi
+				if [ "${project_failed_guard}" = "true" ] && [ "${issue}" = "${ITEM}" ]; then
+					# Same late-resume guard as ai:unblock-closed: the poller may have
+					# resumed the project after the earlier recheck, and parking adds
+					# ai:needs-human, which would leave the resumed project blocked.
+					if declare -F ensure_label_exists >/dev/null 2>&1; then
+						ensure_label_exists "ai:needs-human" "${REPOSITORY}" >/dev/null 2>&1 || true
+					fi
+					unblock_project_terminal_recheck needs_human || return 1
+				fi
+				if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${park_args[@]}" > "${RUNTIME_DIR}/needs_human_park.json"; then
+					if jq -e '.newly_parked == true' "${RUNTIME_DIR}/needs_human_park.json" >/dev/null 2>&1; then
+						unblock_tg "CRITICAL" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
+					fi
+				else
+					ops_failed="true"
+					unblock_log "item=${ITEM} op=needs_human issue=${issue} outcome=failed"
 				fi
 				;;
 			dispatch_review)
@@ -668,7 +709,8 @@ unblock_main()
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
 		--arg security_body "${body_text}" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" \
+		'{needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
@@ -910,7 +952,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	' "${RUNTIME_DIR}/verdict.json")"
 	# The ledger record goes first, so a failed operation below can never
 	# make the same verdict available again.
-	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+	if ! UNBLOCK_VERDICT_URL="$(gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${comment_body}" --jq '.html_url // ""' 2>/dev/null)"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=record_failed"
 		return 0
 	fi

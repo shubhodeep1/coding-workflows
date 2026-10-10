@@ -11,6 +11,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
@@ -247,14 +249,10 @@ def _run_security_audit(
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
-		# Engine selection must not leak in from the caller's environment (CI jobs
-		# carry a real GITHUB_EVENT_PATH whose PR labels would override
-		# AI_ENGINE_SECURITY_AUDIT).
-		env = {
-			key: value
-			for key, value in env.items()
-			if not key.startswith(("AI_ENGINE", "CLAUDE_")) and key != "GITHUB_EVENT_PATH"
-		}
+		# Engine selection must not leak in from the caller's environment,
+		# including the pull_request event payload (GITHUB_EVENT_PATH), whose
+		# ai:engine-claude label would otherwise beat the role variables.
+		env = {key: value for key, value in env.items() if not key.startswith(("AI_ENGINE", "CLAUDE_", "GITHUB_EVENT"))}
 		existing_path_entries = env.get("PATH", "").split(os.pathsep)
 		if not codex_available:
 			existing_path_entries = [
@@ -2814,7 +2812,7 @@ def _assert_codex_fallback(proc, state: dict, payload: dict, reason: str, *, cla
 
 def test_security_audit_claude_fallback_no_account() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-noacct-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), accounts=())
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=(), claude_env={"AI_ENGINE_FALLBACK_POLICY": "always"})
 		_assert_codex_fallback(proc, state, payload, "no_credential", claude_called=False)
 
 
@@ -2828,20 +2826,22 @@ def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
 
 def test_security_audit_claude_fallback_every_account_usage_limited() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-limit-") as td:
+		# Every account at its usage limit is a capacity reason (plan item 3e,
+		# D1): codex runs under the default policy.
 		proc, state, payload = _claude_engine_audit(Path(td), accounts=("ACCT1", "ACCT2"), claude_env={"MOCK_CLAUDE_MODE": "limit"})
-		_assert_codex_fallback(proc, state, payload, "all_accounts_failed", claude_called=True)
+		_assert_codex_fallback(proc, state, payload, "all_usage_limit", claude_called=True)
 		assert len(state["claude_calls"]) == 2
 
 
 def test_security_audit_claude_fallback_crash() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-crash-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "crash"})
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "crash", "AI_ENGINE_FALLBACK_POLICY": "always"})
 		_assert_codex_fallback(proc, state, payload, "crashed_rc_1", claude_called=True)
 
 
 def test_security_audit_claude_fallback_timeout() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-timeout-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "timeout"})
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "timeout", "AI_ENGINE_FALLBACK_POLICY": "always"})
 		_assert_codex_fallback(proc, state, payload, "timeout", claude_called=True)
 
 
@@ -2858,8 +2858,36 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 	)
 	for result_text, reason in cases:
 		with tempfile.TemporaryDirectory(prefix="security-audit-claude-bad-") as td:
-			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text})
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text, "AI_ENGINE_FALLBACK_POLICY": "always"})
 			_assert_codex_fallback(proc, state, payload, reason, claude_called=True)
+
+
+def _assert_refused(proc, state: dict, payload: dict, reason: str) -> None:
+	assert proc.returncode != 0, proc.stderr
+	assert f"AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	assert f"::error::AI_ENGINE_FALLBACK_REFUSED role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	assert "phase=claude-engine" in proc.stderr
+	assert not state.get("codex_calls")
+	assert not payload
+
+
+@pytest.mark.parametrize(
+	("claude_env", "accounts", "reason"),
+	[
+		({}, (), "no_credential"),
+		({"MOCK_CLAUDE_MODE": "crash"}, ("ACCT1",), "crashed_rc_1"),
+		({"MOCK_CLAUDE_MODE": "timeout"}, ("ACCT1",), "timeout"),
+		({"MOCK_CLAUDE_RESULT": json.dumps({"findings": []})}, ("ACCT1",), "schema_mismatch"),
+		({"MOCK_CLAUDE_MODE": "crash", "AI_ENGINE_FALLBACK_POLICY": "bogus"}, ("ACCT1",), "crashed_rc_1"),
+	],
+)
+def test_security_audit_capacity_policy_refuses_non_capacity_fallbacks(claude_env: dict, accounts: tuple, reason: str) -> None:
+	# Plan item 3e (D1): under AI_ENGINE_FALLBACK_POLICY=capacity (the
+	# default; an unknown value is treated as capacity) only all_gated /
+	# all_usage_limit rerun on codex; every other reason fails the audit.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-refused-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=accounts, claude_env=claude_env)
+		_assert_refused(proc, state, payload, reason)
 
 
 def test_security_audit_codex_engine_or_codex_label_never_starts_claude() -> None:
@@ -2947,17 +2975,490 @@ def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
 	assert "uses: ./.github/actions/install-codex" in content
 	assert '--model "openai/gpt-6-sol"' in content
 	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
-	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in poll
+	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
 	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
 	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    bash scripts/codex_heartbeat.sh \\\n      --phase "orchestrate-security-pass"' in process
 
 
+def _parametrize_cases(func) -> list[dict]:
+	"""Expand a ``@pytest.mark.parametrize`` mark into keyword sets so the
+	script-style runner below can call the test the way pytest would."""
+	cases: list[dict] = [{}]
+	for mark in getattr(func, "pytestmark", []):
+		if mark.name != "parametrize":
+			continue
+		argnames, argvalues = mark.args[0], mark.args[1]
+		if isinstance(argnames, str):
+			argnames = tuple(part.strip() for part in argnames.split(","))
+		expanded: list[dict] = []
+		for base in cases:
+			for values in argvalues:
+				if len(argnames) == 1:
+					values = (values,)
+				expanded.append({**base, **dict(zip(argnames, values))})
+		cases = expanded
+	return cases
+
+
 def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
-			globals()[name]()
+			for kwargs in _parametrize_cases(globals()[name]):
+				globals()[name](**kwargs)
 	return 0
+
+
+
+# Line-ownership fixtures.  BASE_LINES pre-project lines put the project's
+# own edits well outside SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW (40) of
+# line 1, so "append" exercises the genuinely untouched-code advisory path.
+LINE_OWNERSHIP_BASE_LINES = 60
+LINE_OWNERSHIP_PROJECT_LINE = LINE_OWNERSHIP_BASE_LINES + 1
+
+
+def _line_ownership_base_text() -> str:
+	return "".join(f"BASE_{index} = {index}\n" for index in range(1, LINE_OWNERSHIP_BASE_LINES + 1))
+
+
+def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") -> tuple[Path, str, str]:
+	"""Build a base commit and one project commit; return (repo_dir, base_sha, head_sha).
+
+	Variants (``_run_line_ownership_audit`` passes a prior finding on mod.py,
+	so mod.py stays in scope even when the project leaves it unchanged):
+	- ``append``: pure addition of line 61; lines 1-60 predate the project.
+	- ``unrelated_change``: mod.py is unchanged; the project adds other.py,
+	  which names nothing.
+	- ``rewrite``: line 2 is rewritten (a deletion plus an addition).
+	- ``delete_guard``: a guard line above an unchanged operation is deleted.
+	- ``insert_near``: one line is inserted after line 50 (no deletion).
+	- ``cross_file``: mod.py is unchanged and auth.py loses a line.
+	- ``cross_file_import``: as ``cross_file``, but mod.py imports auth.
+	- ``cross_file_reverse``: as ``cross_file``, but auth.py names mod.
+	- ``cross_file_registry``: as ``cross_file``, but an unchanged registry.py
+	  names both auth and mod (neither names the other).
+	- ``cross_file_registry_short``: as ``cross_file_registry``, but the guard
+	  is deleted from the two-letter module db.py instead of auth.py.
+	- ``head_router``: as ``cross_file``, but the project adds router.py
+	  naming both auth and mod (the link exists only at the head).
+	- ``head_override``: no deletions; the project adds patch.py naming mod.
+	- ``test_added``: no deletions; the project adds tests/test_mod.py
+	  naming mod.
+	- ``one_letter_deleted``: as ``cross_file``, but the guard is deleted
+	  from the one-letter module a.py, whose name cannot be searched.
+	- ``cross_file_chain``: as ``cross_file``, but middleware.py names auth
+	  and app.py names middleware and mod (a two-hop link).
+	- ``cross_file_long_chain``: as ``cross_file``, but mod is named by a
+	  five-file reference chain longer than the search bound.
+	- ``cross_file_shared_dependency``: as ``cross_file``, but mod.py and
+	  auth.py both import an unchanged shared.py that names neither.
+	- ``cross_file_shared_one_letter``: as ``cross_file_shared_dependency``,
+	  but the shared module is the one-letter x.py.
+	"""
+	repo_dir = base_dir / "audited-repo"
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update(
+		{
+			"GIT_AUTHOR_NAME": "t",
+			"GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t",
+			"GIT_COMMITTER_EMAIL": "t@example.invalid",
+		}
+	)
+
+	def _git(*args: str) -> str:
+		return subprocess.run(
+			["git", *args],
+			cwd=repo_dir,
+			env=git_env,
+			check=True,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		).stdout.strip()
+
+	base_lines = _line_ownership_base_text().splitlines(keepends=True)
+	if variant == "delete_guard":
+		base_lines = ["require_admin()\n", *base_lines]
+	elif variant == "cross_file_import":
+		base_lines = [*base_lines[:-1], "import auth\n"]
+	elif variant == "cross_file_shared_dependency":
+		base_lines = [*base_lines[:-1], "import shared\n"]
+	elif variant == "cross_file_shared_one_letter":
+		base_lines = [*base_lines[:-1], "import x\n"]
+	auth_base_text = "def check():\n\treturn require_admin()\n"
+	if variant == "cross_file_shared_dependency":
+		auth_base_text = "import shared\n" + auth_base_text
+		(repo_dir / "shared.py").write_text("ADMIN_CHECKS = []\n", encoding="utf-8")
+	if variant == "cross_file_shared_one_letter":
+		auth_base_text = "import x\n" + auth_base_text
+		(repo_dir / "x.py").write_text("ADMIN_CHECKS = []\n", encoding="utf-8")
+	if variant == "cross_file_reverse":
+		auth_base_text = "import mod\n" + auth_base_text
+	_git("init", "-q")
+	(repo_dir / "mod.py").write_text("".join(base_lines), encoding="utf-8")
+	(repo_dir / "auth.py").write_text(auth_base_text, encoding="utf-8")
+	if variant == "cross_file_registry":
+		(repo_dir / "registry.py").write_text("import auth\nimport mod\n", encoding="utf-8")
+		_git("add", "registry.py")
+	if variant == "cross_file_shared_dependency":
+		_git("add", "shared.py")
+	if variant == "cross_file_shared_one_letter":
+		_git("add", "x.py")
+	if variant == "cross_file_chain":
+		(repo_dir / "middleware.py").write_text("import auth\n", encoding="utf-8")
+		(repo_dir / "app.py").write_text("import middleware\nimport mod\n", encoding="utf-8")
+		_git("add", "middleware.py", "app.py")
+	if variant == "cross_file_long_chain":
+		previous = "mod"
+		for index in range(1, 6):
+			(repo_dir / f"link{index}.py").write_text(f"import {previous}\n", encoding="utf-8")
+			_git("add", f"link{index}.py")
+			previous = f"link{index}"
+	db_base_text = "def guard():\n\treturn require_admin()\n"
+	if variant == "one_letter_deleted":
+		(repo_dir / "a.py").write_text(db_base_text, encoding="utf-8")
+		_git("add", "a.py")
+	if variant == "cross_file_registry_short":
+		(repo_dir / "db.py").write_text(db_base_text, encoding="utf-8")
+		(repo_dir / "registry.py").write_text("import db\nimport mod\n", encoding="utf-8")
+		_git("add", "db.py", "registry.py")
+	_git("add", "mod.py", "auth.py")
+	_git("commit", "-q", "-m", "base commit")
+	base_sha = _git("rev-parse", "HEAD")
+	if variant == "append":
+		project_lines = [*base_lines, f"PROJECT_{LINE_OWNERSHIP_PROJECT_LINE} = 1\n"]
+	elif variant == "rewrite":
+		project_lines = list(base_lines)
+		project_lines[1] = "PROJECT_TWO = 22\n"
+	elif variant == "delete_guard":
+		project_lines = base_lines[1:]
+	elif variant == "insert_near":
+		project_lines = [*base_lines[:50], "PROJECT_BYPASS = 1\n", *base_lines[50:]]
+	elif variant == "unrelated_change":
+		project_lines = list(base_lines)
+		(repo_dir / "other.py").write_text("OTHER = 1\n", encoding="utf-8")
+	elif variant in (
+		"cross_file",
+		"cross_file_import",
+		"cross_file_reverse",
+		"cross_file_registry",
+		"head_router",
+		"cross_file_chain",
+		"cross_file_long_chain",
+		"cross_file_shared_dependency",
+		"cross_file_shared_one_letter",
+	):
+		project_lines = list(base_lines)
+		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+		if variant == "head_router":
+			(repo_dir / "router.py").write_text("import auth\nimport mod\n", encoding="utf-8")
+	elif variant == "cross_file_registry_short":
+		project_lines = list(base_lines)
+		(repo_dir / "db.py").write_text(db_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+	elif variant == "one_letter_deleted":
+		project_lines = list(base_lines)
+		(repo_dir / "a.py").write_text(db_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+	elif variant == "head_override":
+		project_lines = list(base_lines)
+		(repo_dir / "patch.py").write_text("import mod\nmod.BASE_1 = 0\n", encoding="utf-8")
+	elif variant == "test_added":
+		project_lines = list(base_lines)
+		(repo_dir / "tests").mkdir()
+		(repo_dir / "tests" / "test_mod.py").write_text("import mod\n", encoding="utf-8")
+	else:
+		raise AssertionError(f"unknown line ownership fixture variant {variant}")
+	(repo_dir / "mod.py").write_text("".join(project_lines), encoding="utf-8")
+	_git("add", "-A")
+	_git("commit", "-q", "-m", "project commit")
+	head_sha = _git("rev-parse", "HEAD")
+	return repo_dir, base_sha, head_sha
+
+
+def _line_ownership_finding(
+	finding_id: str, line: int, *, exploit_scenario: str | None = None, file_path: str = "mod.py"
+) -> dict:
+	if exploit_scenario is None:
+		finding = _finding_payload(finding_id, file_path=file_path)
+	else:
+		finding = _finding_payload(finding_id, file_path=file_path, exploit_scenario=exploit_scenario)
+	finding["line"] = line
+	return finding
+
+
+def _run_line_ownership_audit(
+	findings: list[dict],
+	extra_env: dict | None = None,
+	variant: str = "append",
+) -> tuple[subprocess.CompletedProcess[str], dict]:
+	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, base_sha, head_sha = _git_fixture_repo_line_ownership(tmp_path, variant)
+		# A prior finding on mod.py keeps it in scope when the project leaves
+		# it unchanged, as a delta re-audit does in production.
+		prior_findings_path = tmp_path / "prior_findings.json"
+		prior_findings_path.write_text(json.dumps([_finding_payload("prior-mod", file_path="mod.py")]), encoding="utf-8")
+		env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
+		}
+		env.update(extra_env or {})
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env=env,
+		)
+	payload = json.loads(final_state["security_audit_findings_output"]) if "security_audit_findings_output" in final_state else {}
+	return proc, payload
+
+
+def test_security_audit_line_ownership_project_written_line_blocks() -> None:
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("project-line", LINE_OWNERSHIP_PROJECT_LINE)])
+	assert proc.returncode == 0, proc.stderr
+	assert [finding["advisory"] for finding in payload["findings"]] == [False]
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
+	assert "security-audit: line_ownership mode=project blocking=1 advisory=0 unknown=0" in proc.stdout
+	assert payload["schema_version"] == "security_audit_findings.v1"
+	assert payload["counts"]["kept"] == 1
+
+
+def test_security_audit_line_ownership_base_only_line_is_advisory() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1), _line_ownership_finding("project-line", 1, file_path="other.py")],
+		variant="unrelated_change",
+	)
+	assert proc.returncode == 0, proc.stderr
+	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
+	assert by_id == {"base-line": True, "project-line": False}
+	assert payload["line_ownership"]["advisory"] == 1
+	assert payload["line_ownership"]["blocking"] == 1
+	# counts.kept still covers every surviving finding; the gate split is the poller's.
+	assert payload["counts"]["kept"] == 2
+	assert "line_ownership mode=project blocking=1 advisory=1 unknown=0" in proc.stdout
+	assert "line_ownership_blocking" not in proc.stdout
+
+
+def test_security_audit_line_ownership_deleted_lines_in_file_block() -> None:
+	# Finding security-pass-deleted-guard-advisory: the project deletes a
+	# guard; the cited operation line itself predates the project.
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("guard-removed", 1), _line_ownership_finding("far-line", 30)],
+		variant="delete_guard",
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert [finding["advisory"] for finding in payload["findings"]] == [False, False]
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 2, "advisory": 0, "unknown": 0}
+	assert "security-audit: line_ownership_blocking finding=guard-removed reason=deleted_lines_in_file" in proc.stdout
+	assert "security-audit: line_ownership_blocking finding=far-line reason=deleted_lines_in_file" in proc.stdout
+
+
+def test_security_audit_line_ownership_rewritten_line_neighbours_block() -> None:
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="rewrite")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert "security-audit: line_ownership_blocking finding=base-line reason=deleted_lines_in_file" in proc.stdout
+
+
+def test_security_audit_line_ownership_added_hunk_within_window_blocks() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("near-line", 30), _line_ownership_finding("far-line", 1)],
+		variant="insert_near",
+	)
+	assert proc.returncode == 0, proc.stderr
+	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
+	assert by_id == {"near-line": False, "far-line": False}
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 2, "advisory": 0, "unknown": 0}
+	assert "security-audit: line_ownership_blocking finding=near-line reason=changed_hunk_within_window" in proc.stdout
+	assert "security-audit: line_ownership_blocking finding=far-line reason=added_lines_in_file" in proc.stdout
+
+
+def test_security_audit_line_ownership_distant_addition_blocks() -> None:
+	# Finding security-pass-distant-override-advisory: the project appends to
+	# the cited file more than the window away from the cited line; distance
+	# alone is no proof that the addition cannot change its execution.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="append")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
+	assert "security-audit: line_ownership_blocking finding=base-line reason=added_lines_in_file" in proc.stdout
+
+
+def test_security_audit_line_ownership_hunk_window_is_configurable() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("far-line", 1)],
+		variant="insert_near",
+		extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW": "60"},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert "reason=changed_hunk_within_window" in proc.stdout
+
+
+def test_security_audit_line_ownership_invalid_hunk_window_warns_and_uses_default() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("near-line", 30), _line_ownership_finding("far-line", 1)],
+		variant="insert_near",
+		extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW": "-3"},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW must be a non-negative integer; defaulting to 40" in proc.stdout
+	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
+	assert by_id == {"near-line": False, "far-line": False}
+	assert "security-audit: line_ownership_blocking finding=near-line reason=changed_hunk_within_window" in proc.stdout
+	assert "security-audit: line_ownership_blocking finding=far-line reason=added_lines_in_file" in proc.stdout
+
+
+def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[
+			_line_ownership_finding(
+				"cross-file",
+				1,
+				exploit_scenario="The admin check removed from auth.py no longer protects this operation.",
+			),
+			_line_ownership_finding("unrelated", 2),
+		],
+		variant="cross_file",
+	)
+	assert proc.returncode == 0, proc.stderr
+	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
+	assert by_id == {"cross-file": False, "unrelated": True}
+	assert "security-audit: line_ownership_blocking finding=cross-file reason=references_file_with_deletions" in proc.stdout
+
+
+@pytest.mark.parametrize(
+	"variant, reason",
+	[
+		("cross_file_import", "cited_file_references_module_with_deletions"),
+		("cross_file_reverse", "module_with_deletions_references_cited_file"),
+		("cross_file_registry", "shared_referrer_links_module_with_deletions"),
+		("cross_file_registry_short", "shared_referrer_links_module_with_deletions"),
+		("head_router", "shared_referrer_links_module_with_deletions"),
+		("head_override", "changed_file_references_cited_module"),
+		("cross_file_chain", "transitive_reference_links_module_with_deletions"),
+		("cross_file_shared_dependency", "shared_dependency_links_module_with_deletions"),
+	],
+)
+def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(variant: str, reason: str) -> None:
+	# The finding text never names auth.py; the module link alone keeps it blocking.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("unnamed-guard", 1)], variant=variant)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
+	assert f"security-audit: line_ownership_blocking finding=unnamed-guard reason={reason}" in proc.stdout
+
+
+def test_security_audit_line_ownership_project_test_file_naming_module_stays_advisory() -> None:
+	# Test code cannot change production execution.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="test_added")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is True
+	assert "line_ownership_blocking" not in proc.stdout
+
+
+def test_security_audit_line_ownership_reference_search_limit_blocks() -> None:
+	# A reference chain longer than the search bound cannot be ruled out, so
+	# the finding stays blocking (finding security-pass-deleted-guard-advisory).
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="cross_file_long_chain")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=reference_search_limit" in proc.stdout
+
+
+def test_security_audit_line_ownership_one_letter_shared_dependency_blocks() -> None:
+	# A one-letter shared dependency (x.py) named by both the cited file and
+	# the file that lost its guard cannot be searched reliably, so the link
+	# cannot be ruled out and the finding stays blocking (fail closed).
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)], variant="cross_file_shared_one_letter"
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=module_name_too_short" in proc.stdout
+
+
+def test_security_audit_line_ownership_one_letter_module_with_deletions_blocks() -> None:
+	# A one-letter module name cannot be searched reliably, so a link from
+	# the deleted guard to the cited operation cannot be ruled out.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="one_letter_deleted")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=module_name_too_short" in proc.stdout
+
+
+@pytest.mark.parametrize("variant", ["head_override", "cross_file_reverse"])
+def test_security_audit_line_ownership_module_reference_failure_blocks(variant: str) -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)],
+		variant=variant,
+		extra_env={
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": "grep.patternType",
+			"GIT_CONFIG_VALUE_0": "bogus",
+		},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=module_reference_check_failed" in proc.stdout
+
+
+def test_security_audit_line_ownership_blame_failure_blocks() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)],
+		extra_env={
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": "blame.ignoreRevsFile",
+			"GIT_CONFIG_VALUE_0": "/nonexistent/ignore-revs",
+		},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert [finding["advisory"] for finding in payload["findings"]] == [False]
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=blame_failed" in proc.stdout
+
+
+def test_security_audit_line_ownership_off_changes_nothing() -> None:
+	findings = [_line_ownership_finding("base-line", 1), _line_ownership_finding("project-line", LINE_OWNERSHIP_PROJECT_LINE)]
+	off_proc, off_payload = _run_line_ownership_audit(findings, extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP": "off"})
+	on_proc, on_payload = _run_line_ownership_audit(findings)
+	assert off_proc.returncode == 0, off_proc.stderr
+	assert on_proc.returncode == 0, on_proc.stderr
+	assert "line_ownership" not in off_payload
+	assert all("advisory" not in finding for finding in off_payload["findings"])
+	assert "line_ownership" not in off_proc.stdout
+	stripped = dict(on_payload)
+	stripped.pop("line_ownership")
+	stripped["findings"] = [{k: v for k, v in finding.items() if k != "advisory"} for finding in on_payload["findings"]]
+	assert stripped == off_payload
+
+
+def test_security_audit_line_ownership_invalid_value_warns_and_uses_project() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)],
+		extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP": "bogus"},
+		variant="unrelated_change",
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "SECURITY_AUDIT_LINE_OWNERSHIP must be project or off" in proc.stdout
+	assert payload["findings"][0]["advisory"] is True
+
+
+def test_security_audit_line_ownership_skips_issues_mode() -> None:
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'SECURITY_AUDIT_LINE_OWNERSHIP="$(printf \'%s\' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}"' in script
+	gate = script.split("SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE=\"off\"", 1)[1].split("fi\n", 1)[0]
+	assert '"${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json"' in gate
+	assert '-n "${SECURITY_AUDIT_DIFF_BASE}"' in gate
 
 
 if __name__ == "__main__":

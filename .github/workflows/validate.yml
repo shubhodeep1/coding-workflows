@@ -100,6 +100,8 @@ jobs:
       status_file: ${{ steps.collect_status.outputs.status_file }}
       metadata_file: ${{ steps.collect_status.outputs.metadata_file }}
 
+    env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
     steps:
       - name: Bootstrap GitHub API retry helper
         continue-on-error: true
@@ -365,6 +367,7 @@ jobs:
           mkdir -p "${hook_helper_dir}"
           install -m 0755 "${helper_stage_dir}/scripts/run_workspace_hook.sh" "${hook_helper_dir}/run_workspace_hook.sh"
           echo "VALIDATE_HOOK_HELPER=${hook_helper_dir}/run_workspace_hook.sh" >> "$GITHUB_ENV"
+          echo "VALIDATE_HELPER_STAGE_DIR=${helper_stage_dir}" >> "$GITHUB_ENV"
 
           manifest_path="${RUNNER_TEMP}/validate-support-manifest.json"
           cat > "${manifest_path}" <<'EOF'
@@ -542,6 +545,110 @@ jobs:
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"
+      - name: Stage trusted Claude engine support
+        env:
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+        run: |
+          set -euo pipefail
+          # The engine helpers (ai_engine.sh, policy, relay, isolation helper,
+          # guard hook, instructions) come only from the verified support
+          # clone, never from the checkout being validated. Without them every
+          # validate role keeps its unchanged codex path
+          # (AI_ENGINE_FALLBACK reason=engine_support_missing).
+          helper_stage_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+          if [ -n "${helper_stage_dir}" ] && [ -f "${helper_stage_dir}/scripts/ai_engine.sh" ] &&
+             bash -c 'source "$0" && declare -F ai_engine_stage_support >/dev/null && ai_engine_stage_support "$1" "$2"' \
+               "${helper_stage_dir}/scripts/ai_engine.sh" "${helper_stage_dir}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; the validate roles run codex."
+          fi
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE_INPUT: ${{ inputs.tracking_issue }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
+          AI_ENGINE_VALIDATE_SELF_HEAL: ${{ vars.AI_ENGINE_VALIDATE_SELF_HEAL || '' }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          engine_script="${CLAUDE_ENGINE_SUPPORT_DIR:-}/scripts/ai_engine.sh"
+          if [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${engine_script}" ] && [ ! -L "${engine_script}" ]; then
+            if [[ "${TRACKING_ISSUE_INPUT}" =~ ^[1-9][0-9]*$ ]]; then
+              # API audit (unattended section 14): no earlier step of this job
+              # reads the tracking issue's labels ("Resolve integration ref"
+              # exposes only the branch), and validate_process.sh reads the
+              # issue body after the CLI and pool steps that need the engine.
+              # One read; the labels go to GITHUB_ENV so validate_process.sh
+              # and self-heal reuse them. A failed read leaves them empty.
+              labels_json=""
+              if labels_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_INPUT}" --jq '[.labels[].name]' 2>/dev/null)" &&
+                 labels_json="$(printf '%s' "${labels_json}" | python3 -I -c 'import json,sys; v=json.load(sys.stdin); assert isinstance(v,list) and all(isinstance(x,str) for x in v); print(json.dumps(v))' 2>/dev/null)"; then
+                export AI_ENGINE_LABELS="${labels_json}"
+                echo "AI_ENGINE_LABELS=${labels_json}" >> "$GITHUB_ENV"
+              else
+                echo "::warning::Could not read the tracking issue labels; engine selection uses variables and the engine config."
+              fi
+            fi
+            # shellcheck disable=SC1090
+            source "${engine_script}"
+            for role in VALIDATE VALIDATE_SELF_HEAL; do
+              if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
+                engine="claude"
+              fi
+            done
+          fi
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage trusted Claude engine actions
+        id: claude_engine_actions
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # `uses:` resolves local actions only inside GITHUB_WORKSPACE. The
+          # copies come from the verified support clone (never the checkout)
+          # and live under .codex-workflow-src, which workspace_init.sh keeps
+          # out of the validation workspace. They stay until the job ends:
+          # the pool-token post step runs from there and deletes the tokens.
+          src="${VALIDATE_HELPER_STAGE_DIR:?}"
+          dest="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          if [ -e "${dest}" ] || [ -L "${dest}" ]; then
+            echo "::warning::${dest} already exists; not staging the Claude engine actions (codex runs)."
+            exit 1
+          fi
+          for rel in .github/actions/install-claude .github/actions/claude-pool-token; do
+            if [ ! -d "${src}/${rel}" ] || [ -L "${src}/${rel}" ] || [ -n "$(find "${src}/${rel}" ! -type f ! -type d -print -quit)" ]; then
+              echo "::warning::Trusted ${rel} is missing or holds a non-regular file; codex runs."
+              exit 1
+            fi
+          done
+          if [ ! -f "${src}/.github/ai/claude_engine.json" ] || [ -L "${src}/.github/ai/claude_engine.json" ]; then
+            echo "::warning::Trusted .github/ai/claude_engine.json is missing; codex runs."
+            exit 1
+          fi
+          mkdir -p "${dest}/.github/actions" "${dest}/.github/ai"
+          cp -R "${src}/.github/actions/install-claude" "${src}/.github/actions/claude-pool-token" "${dest}/.github/actions/"
+          install -m 0644 "${src}/.github/ai/claude_engine.json" "${dest}/.github/ai/claude_engine.json"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude' && steps.claude_engine_actions.outcome == 'success'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude' && steps.claude_engine_actions.outcome == 'success'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Initialize workspace metadata
         id: workspace_meta
         env:
@@ -1050,6 +1157,9 @@ jobs:
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
+          AI_ENGINE_VALIDATE_SELF_HEAL: ${{ vars.AI_ENGINE_VALIDATE_SELF_HEAL || '' }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}
@@ -1406,3 +1516,25 @@ jobs:
           fi
           echo "Validation did not pass."
           exit 1
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi

@@ -926,7 +926,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	assert '--json number,title,labels' in steps[names.index("Find active tracking issues")]["run"]
 	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' in resolve["run"]
 	assert 'any(.[]; all(.labels[]?; .name != "ai:codex"))' in resolve["run"]
-	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in resolve["run"]
+	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do" in resolve["run"]
 	for name, uses in (
 		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
 		("Resolve Claude credential", "./.codex-workflow-src/.github/actions/claude-pool-token"),

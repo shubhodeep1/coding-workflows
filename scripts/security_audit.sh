@@ -422,6 +422,55 @@ if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
 	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_BYTES must be a non-negative integer; defaulting to 96000"
 	SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="96000"
 fi
+# Line ownership (plan item 4b, decision D4; findings-json mode with an
+# explicit SECURITY_AUDIT_DIFF_BASE..SECURITY_AUDIT_DIFF_HEAD range only).
+# `project` (default) runs `git blame` over each finding's cited line at the
+# head and tags the finding `"advisory": true` when that line was not written
+# by a commit in base..head (it predates the project), `"advisory": false`
+# otherwise.  Any blame failure tags the finding blocking.  A pre-project
+# line still stays blocking when the project could have removed the control
+# that protected it (finding security-pass-deleted-guard-advisory): the cited
+# file lost or binary-changed lines in base..head (`deleted_lines_in_file`),
+# the project added lines within SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW
+# lines of it (`changed_hunk_within_window`), or the finding text names
+# another file that lost lines (`references_file_with_deletions`), the
+# cited file names a module that lost lines
+# (`cited_file_references_module_with_deletions`), or a module that lost
+# lines names the cited module (`module_with_deletions_references_cited_file`),
+# or a non-documentation file names both the cited module and a module that
+# lost lines (`shared_referrer_links_module_with_deletions`), or a chain of
+# references of any length links them through a common referrer
+# (`transitive_reference_links_module_with_deletions`; a search past
+# LINE_OWNERSHIP_REFERENCE_MAX_HOPS / _MAX_STEMS keeps it blocking as
+# `reference_search_limit`), or the cited file and a module that lost lines
+# both name a third repository module (`shared_dependency_links_module_with_deletions`).  Module
+# references are read at both the base and the head, so a router the project
+# adds is seen too.  Any project addition in the cited file keeps the finding
+# blocking (finding security-pass-distant-override-advisory): within the
+# window it logs `changed_hunk_within_window`, further away
+# `added_lines_in_file`; the window only selects the logged reason.  A
+# project-changed, non-documentation, non-test file that names the cited
+# module at the head keeps it blocking as well
+# (`changed_file_references_cited_module`), since such a file can wire or
+# override the cited operation without deleting anything.
+# A failed project diff, hunk read or module-reference read keeps the
+# finding blocking too, as does a one-letter module name that cannot be
+# searched (`module_name_too_short`).  `off` restores
+# the previous payload exactly (no `advisory` field, no `line_ownership` key).
+SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
+case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
+	project|off)
+		;;
+	*)
+		echo "::warning::security-audit: SECURITY_AUDIT_LINE_OWNERSHIP must be project or off; defaulting to project"
+		SECURITY_AUDIT_LINE_OWNERSHIP="project"
+		;;
+esac
+SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW="${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW:-40}"
+if ! [[ "${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW must be a non-negative integer; defaulting to 40"
+	SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW="40"
+fi
 SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES:-16777216}"
 if ! [[ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" -eq 0 ]; then
 	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES must be a positive integer; defaulting to 16777216"
@@ -591,6 +640,8 @@ OVERSIZED_EXPORT_DIR="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-chunks"
 OVERSIZED_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-scope.txt"
 OVERSIZED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-prompt.txt"
 OVERSIZED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-error.txt"
+LINE_OWNERSHIP_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-summary.json"
+LINE_OWNERSHIP_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -1428,7 +1479,11 @@ fi
 # failure -- the account pool gated at gate_utilization (CLAUDE_POOL_REASON=
 # all_gated), no usable account, no isolation, a crash, a timeout, or output
 # that is missing or is not a JSON array of objects -- logs
-# AI_ENGINE_FALLBACK role=SECURITY_AUDIT and reruns the same prompt on codex.
+# AI_ENGINE_FALLBACK role=SECURITY_AUDIT. Under AI_ENGINE_FALLBACK_POLICY=
+# capacity (the default; plan item 3e, D1) only the capacity reasons
+# (all_gated, all_usage_limit) rerun the same prompt on codex; every other
+# reason logs ::error::AI_ENGINE_FALLBACK_REFUSED and fails the audit.
+# AI_ENGINE_FALLBACK_POLICY=always reruns on codex for every reason.
 CLAUDE_AUDIT_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/claude-output.txt"
 SECURITY_AUDIT_ENGINE="codex"
 SECURITY_AUDIT_AI_ENGINE_SCRIPT="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
@@ -1445,12 +1500,15 @@ fi
 [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
 
 # Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
-# post-filter reads), or 1 after logging the fallback reason.
+# post-filter reads), 1 after logging a fallback that may run codex, or 2
+# after logging a refused fallback (AI_ENGINE_FALLBACK_EXIT=76): the audit
+# then fails closed instead of running codex.
 security_audit_try_claude()
 {
 	local claude_rc=0 claude_include="" claude_check_reason=""
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
 		ai_engine_fallback SECURITY_AUDIT all_gated
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 		return 1
 	fi
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
@@ -1461,11 +1519,17 @@ security_audit_try_claude()
 		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
 	case "${claude_rc}" in
 		0) ;;
-		# claude_run already logged AI_ENGINE_FALLBACK with its reason.
+		# claude_run already logged AI_ENGINE_FALLBACK with its reason; 76
+		# also logged AI_ENGINE_FALLBACK_REFUSED.
 		75) return 1 ;;
-		124) ai_engine_fallback SECURITY_AUDIT timeout; return 1 ;;
-		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}"; return 1 ;;
+		76) return 2 ;;
+		124) ai_engine_fallback SECURITY_AUDIT timeout ;;
+		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}" ;;
 	esac
+	if [ "${claude_rc}" -ne 0 ]; then
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+		return 1
+	fi
 	# Same top-level contract the post-filter enforces on codex output: a JSON
 	# array. One outer ```json fence is stripped; anything else falls back.
 	if ! claude_check_reason="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
@@ -1497,12 +1561,22 @@ print("ok")
 PY
 )"; then
 		ai_engine_fallback SECURITY_AUDIT "${claude_check_reason:-malformed_output}"
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 		return 1
 	fi
 	return 0
 }
 
-if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] && security_audit_try_claude; then
+SECURITY_AUDIT_CLAUDE_RC=1
+if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ]; then
+	security_audit_try_claude && SECURITY_AUDIT_CLAUDE_RC=0 || SECURITY_AUDIT_CLAUDE_RC=$?
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 2 ]; then
+	# A refused (non-capacity) Claude fallback never reruns on codex (D1).
+	security_audit_emit_failure "claude-engine" "${CLAUDE_AUDIT_OUTPUT_FILE}" "Claude engine unavailable for a non-capacity reason (AI_ENGINE_FALLBACK_REFUSED); codex fallback refused"
+	exit 1
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 0 ]; then
 	echo "security-audit: engine=claude"
 else
 	security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"
@@ -1880,12 +1954,593 @@ summary_path.write_text(
 )
 PY
 
+# --- Line ownership (plan item 4b, decision D4) -----------------------------
+# Effective only for findings-json audits of an explicit range; otherwise the
+# mode is `off` and the payload is unchanged.  Blame always runs against the
+# explicit range base (the integration merge-base), never
+# SECURITY_AUDIT_DIFF_SINCE, so project code from earlier fix cycles stays
+# project-written.  Each finding cites exactly one line, so "every cited line"
+# (D4) and "any cited line" (issue wording) are the same test here.
+SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE="off"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ] \
+		&& [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] \
+		&& [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project" ]; then
+	SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE="project"
+fi
+if [ "${SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE}" = "project" ]; then
+	if LINE_OWNERSHIP_LOG="$(PYTHONDONTWRITEBYTECODE=1 python3 - \
+		"${REPO_ROOT}" \
+		"${FILTERED_FINDINGS_FILE}" \
+		"${LINE_OWNERSHIP_SUMMARY_FILE}" \
+		"${AUDIT_SCOPE_BASE_SHA}" \
+		"${AUDIT_SCOPE_HEAD_SHA}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW}" 2> "${LINE_OWNERSHIP_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1])
+findings_path = Path(sys.argv[2])
+summary_path = Path(sys.argv[3])
+base_sha = sys.argv[4].strip()
+head_sha = sys.argv[5].strip()
+try:
+	hunk_window = int(sys.argv[6]) if len(sys.argv) > 6 else 40
+except ValueError:
+	hunk_window = 40
+if hunk_window < 0:
+	hunk_window = 40
+
+# Per-call bound on `git blame` (and the one-off rev-list); a timeout marks
+# the finding's ownership unknown, which keeps it blocking.
+LINE_OWNERSHIP_BLAME_TIMEOUT_SECS = 30
+LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS = 120
+LINE_OWNERSHIP_DIFF_TIMEOUT_SECS = 120
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def git(args: list[str], timeout: int) -> subprocess.CompletedProcess:
+	# List-form argv: finding data never reaches a shell.  core.fsmonitor is
+	# cleared so no repository-configured hook runs.
+	return subprocess.run(
+		["git", "-c", "core.fsmonitor=", *args],
+		cwd=repo_root,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+		errors="replace",
+		timeout=timeout,
+		check=False,
+	)
+
+
+def safe_id(value: object) -> str:
+	return re.sub(r"[^A-Za-z0-9._:-]", "_", str(value or "?"))[:120] or "?"
+
+
+findings = json.loads(findings_path.read_text(encoding="utf-8"))
+if not isinstance(findings, list):
+	raise SystemExit("filtered findings must be a JSON array")
+
+global_reason = ""
+project_commits: set[str] = set()
+files_with_deletions: set[str] = set()
+# Every path the project diff touches, and the ones that gained lines (or
+# are binary).  Additions anywhere in the cited file keep a pre-project
+# finding blocking (finding security-pass-distant-override-advisory).
+files_with_additions: set[str] = set()
+project_changed_paths: set[str] = set()
+hunk_cache: dict[str, list[tuple[int, int]] | None] = {}
+if not SHA_RE.match(base_sha) or not SHA_RE.match(head_sha):
+	global_reason = "range_unresolved"
+else:
+	try:
+		shallow = git(["rev-parse", "--is-shallow-repository"], LINE_OWNERSHIP_BLAME_TIMEOUT_SECS)
+		if shallow.returncode != 0 or shallow.stdout.strip() == "true":
+			global_reason = "shallow_history"
+		elif git(["merge-base", "--is-ancestor", base_sha, head_sha], LINE_OWNERSHIP_BLAME_TIMEOUT_SECS).returncode != 0:
+			global_reason = "base_not_ancestor"
+		else:
+			revlist = git(["rev-list", "--end-of-options", f"{base_sha}..{head_sha}"], LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS)
+			if revlist.returncode != 0:
+				global_reason = "rev_list_failed"
+			else:
+				project_commits = {line.strip() for line in revlist.stdout.splitlines() if SHA_RE.match(line.strip())}
+				# One project-wide diff: every path that lost lines (or is
+				# binary) in base..head.  --no-renames reports a rename as a
+				# full delete plus add, the conservative reading.  A failure
+				# keeps every finding blocking.
+				numstat = git(
+					["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base_sha, head_sha],
+					LINE_OWNERSHIP_DIFF_TIMEOUT_SECS,
+				)
+				if numstat.returncode != 0:
+					global_reason = "diff_failed"
+				else:
+					for record in numstat.stdout.split("\0"):
+						parts = record.split("\t", 2)
+						if len(parts) != 3 or not parts[2]:
+							continue
+						added_count, deleted_count, changed_path = parts
+						project_changed_paths.add(changed_path)
+						if deleted_count == "-" or added_count == "-":
+							files_with_deletions.add(changed_path)
+							files_with_additions.add(changed_path)
+							continue
+						if deleted_count.isdigit() and int(deleted_count) > 0:
+							files_with_deletions.add(changed_path)
+						if not added_count.isdigit() or int(added_count) > 0:
+							files_with_additions.add(changed_path)
+	except subprocess.TimeoutExpired:
+		global_reason = "timeout"
+
+
+def added_hunks(path: str) -> list[tuple[int, int]] | None:
+	# Added line ranges [start, end] of the project diff for one file, or None
+	# when the diff cannot be read or parsed (the caller keeps it blocking).
+	if path in hunk_cache:
+		return hunk_cache[path]
+	ranges: list[tuple[int, int]] | None = []
+	try:
+		diff = git(
+			["diff", "-U0", "--no-ext-diff", "--no-textconv", "--no-renames", base_sha, head_sha, "--", path],
+			LINE_OWNERSHIP_DIFF_TIMEOUT_SECS,
+		)
+	except subprocess.TimeoutExpired:
+		ranges = None
+	else:
+		if diff.returncode != 0:
+			ranges = None
+		else:
+			for diff_line in diff.stdout.splitlines():
+				if not diff_line.startswith("@@"):
+					continue
+				match = HUNK_RE.match(diff_line)
+				if match is None:
+					ranges = None
+					break
+				start = int(match.group(1))
+				count = int(match.group(2)) if match.group(2) is not None else 1
+				if count > 0:
+					ranges.append((start, start + count - 1))
+	hunk_cache[path] = ranges
+	return ranges
+
+
+# Basenames too generic to identify a module; the parent directory names it.
+LINE_OWNERSHIP_GENERIC_MODULE_STEMS = {"__init__", "index", "init", "main", "mod"}
+# Files whose mention of two modules is prose, not wiring.
+LINE_OWNERSHIP_DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
+# Test files cannot change production execution, so a project-changed test
+# naming the cited module does not keep the finding blocking on its own.
+LINE_OWNERSHIP_TEST_PATH_RE = re.compile(
+	r"(?:^|/)(?:tests?|spec|__tests__)/|(?:^|/)test_[^/]*$|_test\.[^/]*$|\.(?:spec|test)\.[^/]*$",
+	re.IGNORECASE,
+)
+head_text_cache: dict[str, str | None] = {}
+mention_cache: dict[tuple[str, str], set[str] | None] = {}
+
+
+def module_stem(path: str) -> str:
+	pure = PurePosixPath(path)
+	stem = pure.stem
+	if stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure.parent.name:
+		stem = pure.parent.name
+	# Two characters minimum: a short module such as db.py or io.py can hold
+	# the deleted guard, but a one-letter stem (a.py, i.py) matches ordinary
+	# words and loop variables, so it is not searched; callers treat an empty
+	# stem as unanalysable and keep the finding blocking (module_name_too_short).
+	return stem if len(stem) >= 2 else ""
+
+
+def head_file_text(path: str) -> str | None:
+	# The cited file at the audited head, or None when it cannot be read.
+	if path not in head_text_cache:
+		try:
+			shown = git(["show", f"{head_sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			head_text_cache[path] = None
+		else:
+			head_text_cache[path] = shown.stdout if shown.returncode == 0 else None
+	return head_text_cache[path]
+
+
+def paths_mentioning_at(sha: str, stem: str) -> set[str] | None:
+	# Paths whose text at `sha` names `stem` as a word (one `git grep` per
+	# commit and stem), or None when the search fails.
+	key = (sha, stem)
+	if key not in mention_cache:
+		try:
+			grep = git(["grep", "-l", "-I", "-F", "-w", "-e", stem, sha, "--"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			mention_cache[key] = None
+		else:
+			if grep.returncode == 1:
+				mention_cache[key] = set()
+			elif grep.returncode != 0:
+				mention_cache[key] = None
+			else:
+				prefix = f"{sha}:"
+				mention_cache[key] = {
+					line[len(prefix):] if line.startswith(prefix) else line
+					for line in grep.stdout.splitlines()
+					if line
+				}
+	return mention_cache[key]
+
+
+def paths_mentioning(stem: str) -> set[str] | None:
+	# Union of the base and head references to `stem`: the base still holds a
+	# deleted guard's wiring, the head holds wiring the project added (a new
+	# router).  Either search failing returns None (the caller keeps blocking).
+	at_base = paths_mentioning_at(base_sha, stem)
+	at_head = paths_mentioning_at(head_sha, stem)
+	if at_base is None or at_head is None:
+		return None
+	return at_base | at_head
+
+
+def is_doc_path(path: str) -> bool:
+	return PurePosixPath(path).suffix.lower() in LINE_OWNERSHIP_DOC_SUFFIXES
+
+
+def is_test_path(path: str) -> bool:
+	return LINE_OWNERSHIP_TEST_PATH_RE.search(path) is not None
+
+
+def changed_file_reference_reason(path: str) -> tuple[str, bool]:
+	# A file the project changed (other than the cited one, documentation or
+	# tests) that names the cited module at the head can wire or override the
+	# cited operation without deleting a line anywhere.
+	cited_stem = module_stem(path)
+	candidates = {
+		changed for changed in project_changed_paths
+		if changed != path and not is_doc_path(changed) and not is_test_path(changed)
+	}
+	if not candidates:
+		return "", False
+	if not cited_stem:
+		# A one-letter module name cannot be searched reliably, so its links
+		# cannot be ruled out: keep the finding blocking (fail closed).
+		return "module_name_too_short", True
+	referencing = paths_mentioning_at(head_sha, cited_stem)
+	if referencing is None:
+		return "module_reference_check_failed", True
+	if candidates & referencing:
+		return "changed_file_references_cited_module", False
+	return "", False
+
+
+# Bounds on the transitive referrer search in deletion_block_reason.  A
+# search that cannot finish inside them proves nothing, so it keeps the
+# finding blocking (`reference_search_limit`, counted unknown).
+LINE_OWNERSHIP_REFERENCE_MAX_HOPS = 4
+LINE_OWNERSHIP_REFERENCE_MAX_STEMS = 32
+
+
+def referrer_closure(start_paths: set[str], searched_stems: set[str]) -> tuple[set[str], str]:
+	# Files that reach any of `start_paths` through a chain of module-name
+	# references at base or head.  Documentation and test files are not
+	# wiring and are not followed.  Returns (closure, reason); a non-empty
+	# reason means the search could not complete and the caller must keep
+	# the finding blocking (fail closed).
+	closure = set(start_paths)
+	frontier = set(start_paths)
+	for _ in range(LINE_OWNERSHIP_REFERENCE_MAX_HOPS):
+		next_frontier: set[str] = set()
+		for node in sorted(frontier):
+			stem = module_stem(node)
+			if not stem:
+				return closure, "module_name_too_short"
+			if stem not in searched_stems:
+				if len(searched_stems) >= LINE_OWNERSHIP_REFERENCE_MAX_STEMS:
+					return closure, "reference_search_limit"
+				searched_stems.add(stem)
+			referrers = paths_mentioning(stem)
+			if referrers is None:
+				return closure, "module_reference_check_failed"
+			for referrer in referrers:
+				if referrer in closure or is_doc_path(referrer) or is_test_path(referrer):
+					continue
+				closure.add(referrer)
+				next_frontier.add(referrer)
+		if not next_frontier:
+			return closure, ""
+		frontier = next_frontier
+	return closure, "reference_search_limit"
+
+
+tree_paths_cache: dict[str, set[str] | None] = {}
+revision_text_cache: dict[tuple[str, str], str | None] = {}
+LINE_OWNERSHIP_WORD_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def tree_paths_at(sha: str) -> set[str] | None:
+	# Every tracked path at `sha` (one `git ls-tree` per commit), or None
+	# when the listing fails.
+	if sha not in tree_paths_cache:
+		try:
+			listed = git(["ls-tree", "-r", "--name-only", "-z", sha], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			tree_paths_cache[sha] = None
+		else:
+			tree_paths_cache[sha] = (
+				{item for item in listed.stdout.split("\0") if item} if listed.returncode == 0 else None
+			)
+	return tree_paths_cache[sha]
+
+
+def text_at(sha: str, path: str) -> str | None:
+	key = (sha, path)
+	if key not in revision_text_cache:
+		try:
+			shown = git(["show", f"{sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			revision_text_cache[key] = None
+		else:
+			revision_text_cache[key] = shown.stdout if shown.returncode == 0 else None
+	return revision_text_cache[key]
+
+
+def named_stems(text: str, stems: set[str]) -> set[str]:
+	# The subset of `stems` that `text` names as a word.
+	words = set(LINE_OWNERSHIP_WORD_RE.findall(text))
+	found = {stem for stem in stems if stem in words}
+	for stem in stems - found:
+		if not LINE_OWNERSHIP_WORD_RE.fullmatch(stem) and re.search(
+			rf"(?<![A-Za-z0-9_]){re.escape(stem)}(?![A-Za-z0-9_])", text
+		):
+			found.add(stem)
+	return found
+
+
+def shared_dependency_reason(path: str, cited_text: str, guard_paths: set[str]) -> tuple[str, bool]:
+	# Downward hop (finding security-pass-deleted-guard-advisory): the cited
+	# file and a source file that lost lines both name a third repository
+	# module (A -> C <- B).  The deleted control may have guarded state or a
+	# registry in that shared module which the cited operation relies on, and
+	# the referrer search above only walks upward, so it never sees C.
+	# Candidates are non-documentation, non-test modules tracked at base or
+	# head.  A one-letter module name (x.py) cannot be searched reliably, so
+	# when both files name one as a word the link cannot be ruled out and the
+	# finding stays blocking (module_name_too_short, fail closed).
+	base_paths = tree_paths_at(base_sha)
+	head_paths = tree_paths_at(head_sha)
+	if base_paths is None or head_paths is None:
+		return "module_reference_check_failed", True
+	excluded_stems = {module_stem(path)} | {module_stem(guard) for guard in guard_paths}
+	candidate_stems: set[str] = set()
+	short_candidate_stems: set[str] = set()
+	for candidate in base_paths | head_paths:
+		if candidate == path or candidate in guard_paths or is_doc_path(candidate) or is_test_path(candidate):
+			continue
+		stem = module_stem(candidate)
+		if stem and stem not in excluded_stems:
+			candidate_stems.add(stem)
+		elif not stem:
+			pure_candidate = PurePosixPath(candidate)
+			raw_stem = pure_candidate.stem
+			if raw_stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure_candidate.parent.name:
+				raw_stem = pure_candidate.parent.name
+			if raw_stem:
+				short_candidate_stems.add(raw_stem)
+	cited_dependencies = named_stems(cited_text, candidate_stems)
+	cited_short_dependencies = named_stems(cited_text, short_candidate_stems)
+	if not cited_dependencies and not cited_short_dependencies:
+		return "", False
+	short_match = False
+	for guard in sorted(guard_paths):
+		# Base text holds the deleted guard's own imports; head text holds any
+		# the project added.  A side where the file does not exist is skipped.
+		guard_texts: list[str] = []
+		for sha, tree in ((base_sha, base_paths), (head_sha, head_paths)):
+			if guard not in tree:
+				continue
+			guard_text = text_at(sha, guard)
+			if guard_text is None:
+				return "module_reference_check_failed", True
+			guard_texts.append(guard_text)
+		if guard_texts and named_stems("\n".join(guard_texts), cited_dependencies):
+			return "shared_dependency_links_module_with_deletions", False
+		if guard_texts and named_stems("\n".join(guard_texts), cited_short_dependencies):
+			short_match = True
+	if short_match:
+		return "module_name_too_short", True
+	return "", False
+
+
+def finding_strings(value: object) -> list[str]:
+	if isinstance(value, str):
+		return [value]
+	if isinstance(value, dict):
+		return [text for item in value.values() for text in finding_strings(item)]
+	if isinstance(value, list):
+		return [text for item in value for text in finding_strings(item)]
+	return []
+
+
+def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, bool]:
+	# Returns (reason, unknown) when a pre-project line must stay blocking
+	# because the project may have removed or bypassed its protection.
+	# Matching only ever adds blocking, never removes it.
+	if path in files_with_deletions:
+		return "deleted_lines_in_file", False
+	ranges = added_hunks(path)
+	if ranges is None:
+		return "hunk_diff_failed", True
+	for start, end in ranges:
+		if start - hunk_window <= line <= end + hunk_window:
+			return "changed_hunk_within_window", False
+	# Any other addition in the cited file can still change how the cited
+	# line executes (an override appended far below it), so line distance is
+	# not proof of safety: the window only selects the reason logged above.
+	if ranges or path in files_with_additions:
+		return "added_lines_in_file", False
+	texts = finding_strings({key: value for key, value in finding.items() if key not in ("file", "line")})
+	for other_path in files_with_deletions:
+		if other_path != path and any(other_path in text for text in texts):
+			return "references_file_with_deletions", False
+	# A guard can also live in a module the finding never names: the cited
+	# file imports or calls a module that lost lines, or a module that lost
+	# lines (at base, where the guard still was) names the cited module, as a
+	# router or middleware registration would.  Word matches on module names
+	# only ever add blocking; a failed read keeps the finding blocking.
+	other_paths = sorted(other for other in files_with_deletions if other != path)
+	if not other_paths:
+		return changed_file_reference_reason(path)
+	cited_text = head_file_text(path)
+	if cited_text is None:
+		return "module_reference_check_failed", True
+	cited_stem = module_stem(path)
+	# A one-letter module name (x.py) on either side cannot be searched
+	# reliably, so a link to the removed guard cannot be ruled out: keep the
+	# finding blocking (fail closed) instead of skipping the dependency checks.
+	if not cited_stem or any(not module_stem(other_path) for other_path in other_paths):
+		return "module_name_too_short", True
+	for other_path in other_paths:
+		other_stem = module_stem(other_path)
+		if other_stem and re.search(rf"(?<![A-Za-z0-9_]){re.escape(other_stem)}(?![A-Za-z0-9_])", cited_text):
+			return "cited_file_references_module_with_deletions", False
+	if cited_stem:
+		referencing = paths_mentioning(cited_stem)
+		if referencing is None:
+			return "module_reference_check_failed", True
+		if any(other_path in referencing for other_path in other_paths):
+			return "module_with_deletions_references_cited_file", False
+		# One hop further: a source file (a router table, registry or
+		# dependency-injection configuration, existing at base or added by the
+		# project) that names both the cited module and a module that lost
+		# lines can wire the removed guard to the cited operation.
+		# Documentation files are not wiring.
+		cited_referrers = {
+			referrer for referrer in referencing
+			if referrer != path and not is_doc_path(referrer)
+		}
+		if cited_referrers:
+			for other_path in other_paths:
+				other_stem = module_stem(other_path)
+				if not other_stem or other_stem == cited_stem:
+					continue
+				other_referrers = paths_mentioning(other_stem)
+				if other_referrers is None:
+					return "module_reference_check_failed", True
+				if any(referrer != other_path and referrer in cited_referrers for referrer in other_referrers):
+					return "shared_referrer_links_module_with_deletions", False
+	# Several hops: follow referrer chains up from the cited file and
+	# from every source file that lost lines (a guard cannot live in
+	# documentation or tests).  A shared ancestor (an app entry point that
+	# imports a middleware which imports the guard module, and the cited
+	# module) can wire the removed control to the cited operation, so only a
+	# search that completes inside its bounds without one leaves the finding advisory
+	# (finding security-pass-deleted-guard-advisory).
+	guard_paths = {other for other in other_paths if not is_doc_path(other) and not is_test_path(other)}
+	if guard_paths:
+		searched_stems: set[str] = set()
+		cited_closure, closure_reason = referrer_closure({path}, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		guard_closure, closure_reason = referrer_closure(guard_paths, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		if cited_closure & guard_closure:
+			return "transitive_reference_links_module_with_deletions", False
+		dependency_reason, dependency_unknown = shared_dependency_reason(path, cited_text, guard_paths)
+		if dependency_reason:
+			return dependency_reason, dependency_unknown
+	return changed_file_reference_reason(path)
+
+blocking = advisory = unknown = 0
+log_lines: list[str] = []
+annotated: list[object] = []
+for finding in findings:
+	if not isinstance(finding, dict):
+		annotated.append(finding)
+		continue
+	reason = global_reason
+	is_advisory = False
+	if not reason:
+		file_value = finding.get("file")
+		line_value = finding.get("line")
+		if (not isinstance(file_value, str) or not file_value
+			or isinstance(line_value, bool) or not isinstance(line_value, int) or line_value < 1):
+			reason = "missing_line"
+		else:
+			try:
+				blame = git(
+					["blame", "--porcelain", "--no-textconv", "-L", f"{line_value},{line_value}", head_sha, "--", file_value],
+					LINE_OWNERSHIP_BLAME_TIMEOUT_SECS,
+				)
+			except subprocess.TimeoutExpired:
+				reason = "timeout"
+			else:
+				if blame.returncode != 0:
+					reason = "missing_line" if "no such path" in blame.stderr or "has only" in blame.stderr else "blame_failed"
+				else:
+					first_line = blame.stdout.splitlines()[0] if blame.stdout else ""
+					commit = first_line.split(" ", 1)[0] if first_line else ""
+					if not SHA_RE.match(commit):
+						reason = "parse_failed"
+					else:
+						is_advisory = commit not in project_commits
+						if is_advisory:
+							block_reason, block_unknown = deletion_block_reason(finding, file_value, line_value)
+							if block_reason:
+								is_advisory = False
+								if block_unknown:
+									reason = block_reason
+								else:
+									log_lines.append(
+										f"security-audit: line_ownership_blocking finding={safe_id(finding.get('finding_id'))} reason={block_reason}"
+									)
+	finding = dict(finding)
+	finding["advisory"] = is_advisory
+	annotated.append(finding)
+	if reason:
+		unknown += 1
+		log_lines.append(f"security-audit: line_ownership_unknown finding={safe_id(finding.get('finding_id'))} reason={reason}")
+	if is_advisory:
+		advisory += 1
+	else:
+		blocking += 1
+
+with tempfile.NamedTemporaryFile(
+	mode="w", encoding="utf-8", dir=findings_path.parent, prefix=".line-ownership.", suffix=".tmp", delete=False
+) as temporary_file:
+	json.dump(annotated, temporary_file, ensure_ascii=True, indent=2, sort_keys=True)
+	temporary_file.write("\n")
+	temporary_name = temporary_file.name
+summary_path.write_text(
+	json.dumps({"mode": "project", "blocking": blocking, "advisory": advisory, "unknown": unknown}, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+os.replace(temporary_name, findings_path)
+log_lines.append(f"security-audit: line_ownership mode=project blocking={blocking} advisory={advisory} unknown={unknown}")
+print("\n".join(log_lines))
+PY
+	)"; then
+		printf '%s\n' "${LINE_OWNERSHIP_LOG}"
+	else
+		# Fail safe: the findings file is replaced only after a full pass, so
+		# it is untouched here and every finding stays blocking at the poller.
+		rm -f "${LINE_OWNERSHIP_SUMMARY_FILE}"
+		echo "::warning::security-audit: line_ownership annotation failed; all findings stay blocking"
+	fi
+fi
+
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if python3 - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
 		"${SECURITY_AUDIT_FINDINGS_OUT}" \
-		"${OVERSIZED_EXPORT_DIR}/manifest.json" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+		"${OVERSIZED_EXPORT_DIR}/manifest.json" \
+		"${LINE_OWNERSHIP_SUMMARY_FILE}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1898,6 +2553,7 @@ findings_path = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
 output_path = Path(sys.argv[3])
 oversized_manifest_path = Path(sys.argv[4])
+line_ownership_summary_path = Path(sys.argv[5]) if len(sys.argv) > 5 else None
 count_keys = (
 	"kept",
 	"suppressed_excluded",
@@ -1942,6 +2598,14 @@ payload["coverage"] = {
 	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
 	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
 }
+# Additive (plan item 4b): present only when line ownership annotated the
+# findings; SECURITY_AUDIT_LINE_OWNERSHIP=off leaves the payload unchanged.
+if line_ownership_summary_path is not None and line_ownership_summary_path.is_file():
+	line_ownership = load_json(line_ownership_summary_path, label="line ownership summary")
+	if isinstance(line_ownership, dict):
+		payload["line_ownership"] = {
+			key: line_ownership.get(key) for key in ("mode", "blocking", "advisory", "unknown")
+		}
 
 temporary_path: Path | None = None
 try:

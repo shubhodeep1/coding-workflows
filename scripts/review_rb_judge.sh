@@ -2053,14 +2053,22 @@ case "${RB_ACTION}" in
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
         if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
-          echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+          fi
         elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
           # head: re-check that the base did not move under this PR meanwhile.
-          echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+          fi
         else
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
@@ -2116,14 +2124,22 @@ case "${RB_ACTION}" in
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
         if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
-          echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+          fi
         elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
           # head: re-check that the base did not move under this PR meanwhile.
-          echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+          fi
         else
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
@@ -2613,8 +2629,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
             # Merge-base freshness gate (Q35: A): the base moved under files
             # this PR touches; the update's synchronize run re-validates.
-            echo "::warning::PR #${PR_NUMBER} base moved under files it touches — branch update requested; merge_with_followup deferred. Leaving linked issues in ai:review-blocked."
-            echo "judge_skip_reason=base_moved_overlap" >> "$GITHUB_OUTPUT"
+            if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+              echo "::warning::PR #${PR_NUMBER} base moved under files it touches — branch update requested; merge_with_followup deferred. Leaving linked issues in ai:review-blocked."
+              echo "judge_skip_reason=base_moved_overlap" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
+              echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
+            fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation

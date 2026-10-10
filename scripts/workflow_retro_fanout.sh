@@ -114,6 +114,48 @@ consumer_retro_enabled() {
 	return 0
 }
 
+# The codex command of a consumer retro pass, unchanged: it runs when RETRO
+# resolves to codex (AI_ENGINE_RETRO=codex, the ai:codex label) and as the
+# fallback when Claude is unavailable.
+retro_fanout_codex_call()
+{
+	local retro_prompt_file="$1" retro_body_file="$2"
+	bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
+		--phase workflow_weekly_retro \
+		--stdout-file "${retro_body_file}" \
+		-- bash "${SCRIPT_DIR}/codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}" \
+		-- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${retro_prompt_file}"
+}
+
+# Engine selection for the RETRO role (plan item 3d). The engine root comes
+# only from the trusted support staged by the workflow's "Resolve AI engine"
+# step (CLAUDE_ENGINE_SUPPORT_DIR, default ${RUNNER_TEMP}/claude-engine-support),
+# never from SCRIPT_DIR. Claude runs read-only in the credential-free isolated
+# container; the cross-repo GH_PAT and Telegram secrets are dropped from the
+# selected call. Missing support keeps today's codex command.
+retro_fanout_model_call()
+{
+	local retro_prompt_file="$1" retro_body_file="$2"
+	local retro_engine_script="${CLAUDE_ENGINE_SUPPORT_DIR:-${RUNNER_TEMP:-/tmp}/claude-engine-support}/scripts/ai_engine.sh"
+	if [ -f "${retro_engine_script}" ] && [ ! -L "${retro_engine_script}" ]; then
+		(
+			unset GH_TOKEN GITHUB_TOKEN TG_BOT_SECRET TG_ADMIN_CHAT_ID TG_CHAT_ID
+			# shellcheck disable=SC1090
+			if ! source "${retro_engine_script}"; then
+				echo "AI_ENGINE_FALLBACK role=RETRO reason=engine_support_missing" >&2
+				retro_fanout_codex_call "${retro_prompt_file}" "${retro_body_file}"
+				exit $?
+			fi
+			AI_ENGINE_MODEL_HINT="${WORKFLOW_RETRO_MODEL}" AI_ENGINE_EFFORT_HINT="${WORKFLOW_RETRO_REASONING:-}" \
+				claude_run_selected RETRO "${retro_prompt_file}" "${retro_body_file}" "${REPO_ROOT}" \
+				-- retro_fanout_codex_call "${retro_prompt_file}" "${retro_body_file}"
+		)
+		return $?
+	fi
+	echo "AI_ENGINE_FALLBACK role=RETRO reason=engine_support_missing" >&2
+	retro_fanout_codex_call "${retro_prompt_file}" "${retro_body_file}"
+}
+
 run_consumer_retro() {
 	local target_repo="$1"
 	local safe_slug="${target_repo//\//__}"
@@ -174,11 +216,7 @@ run_consumer_retro() {
 			sanitize_codex_prompt_file "${prompt_file}"
 		fi
 		set +e
-		bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
-			--phase workflow_weekly_retro \
-			--stdout-file "${body_file}" \
-			-- bash "${SCRIPT_DIR}/codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}" \
-			-- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
+		retro_fanout_model_call "${prompt_file}" "${body_file}"
 		codex_exit=$?
 		set -e
 		if [ "${codex_exit}" -eq 0 ] && grep -q '[^[:space:]]' "${body_file}"; then

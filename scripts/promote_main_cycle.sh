@@ -70,6 +70,16 @@
 #                                       extra compare calls per tick)
 #   PROMOTE_CYCLE_TRACKING_LABEL        default ai:comprehensive-test-pending
 #   APPLY_ANALYSIS_DISPATCHER           default scripts/apply_analysis_on_main.sh
+#   PROMOTE_CYCLE_OPERATOR_STEP_HELPER  default scripts/operator_step_issue.py
+#
+# Operator-step drain (plan item 4d): whenever the `stable` tag resolves, the
+# cycle first runs `operator_step_issue.py tick` with the tag's commit, before
+# the code-change guard (right after a promotion that guard usually skips with
+# no_code_changes). Every ai:operator-step entry whose recorded merge commit is
+# an ancestor of the tag commit gets a superseding ticked comment. It fetches
+# commit history only (--filter=tree:0) for the local ancestor check, and it
+# is fail-open: a fetch or tick failure logs a ::warning:: and the cycle
+# continues unchanged. It rides PROMOTE_CYCLE_ENABLED and this nightly cron.
 
 set -euo pipefail
 
@@ -92,6 +102,7 @@ PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS:-2}"
 PROMOTE_CYCLE_MAX_ATTEMPTS="${PROMOTE_CYCLE_MAX_ATTEMPTS:-3}"
 PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-test-pending}"
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
+PROMOTE_CYCLE_OPERATOR_STEP_HELPER="${PROMOTE_CYCLE_OPERATOR_STEP_HELPER:-${SCRIPT_DIR}/operator_step_issue.py}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-0}"
 CYCLE_BASELINE_MARKER="apply-analysis-cycle-baseline-sha"
 # Same setting the poller and the dispatcher use: only marker comments from
@@ -286,6 +297,42 @@ require_code_changes()
 	fi
 }
 
+# tick_operator_steps <tag_commit>: tick ai:operator-step entries whose merge
+# commit the `stable` tag now includes (plan item 4d). Always returns 0.
+tick_operator_steps()
+{
+	local tag_sha="$1"
+	local helper="${PROMOTE_CYCLE_OPERATOR_STEP_HELPER}"
+	local tick_output tick_rc
+	local -a fetch_args=(--quiet --filter=tree:0)
+	if ! [[ "${tag_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "::warning::Operator-step tick skipped: invalid stable commit."
+		return 0
+	fi
+	if [ ! -f "${helper}" ]; then
+		echo "::warning::Operator-step tick skipped: ${helper} is missing."
+		return 0
+	fi
+	# The cycle checkout is shallow; the ancestor check needs commit history
+	# (no trees or blobs). A full clone rejects --unshallow, so ask first.
+	if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+		fetch_args+=(--unshallow)
+	fi
+	if ! git fetch "${fetch_args[@]}" origin "+refs/tags/${PROMOTE_CYCLE_STABLE_TAG}:refs/tags/${PROMOTE_CYCLE_STABLE_TAG}" "${PROMOTE_CYCLE_DEFAULT_BRANCH}" >/dev/null 2>&1; then
+		echo "::warning::Operator-step tick: commit history fetch failed; entries whose commits are missing stay open."
+	fi
+	set +e
+	tick_output="$(PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" tick --repo "${GITHUB_REPOSITORY}" --stable-sha "${tag_sha}" --repo-dir "${REPO_ROOT}" 2>&1)"
+	tick_rc=$?
+	set -e
+	if [ "${tick_rc}" -ne 0 ]; then
+		echo "::warning::Operator-step tick failed (rc=${tick_rc}): $(printf '%s' "${tick_output}" | tr '\r\n' '  ' | cut -c1-300)"
+		return 0
+	fi
+	printf '%s\n' "${tick_output}"
+	return 0
+}
+
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
 fi
@@ -318,6 +365,8 @@ tag_lookup_rc=$?
 set -e
 case "${tag_lookup_rc}" in
 	0)
+		# Before the code-change guard: right after a promotion it skips.
+		tick_operator_steps "${tag_commit}" || true
 		require_code_changes "${tag_commit}" "${main_tip}" no_code_changes
 		echo "Code changes since ${PROMOTE_CYCLE_STABLE_TAG} (${tag_commit:0:7}):"
 		printf '%s\n' "${CODE_CHANGES_OUT}" | sed 's/^/  /'

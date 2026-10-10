@@ -2302,6 +2302,7 @@ jobs:
           AI_ENGINE_IMPLEMENT: ${{ vars.AI_ENGINE_IMPLEMENT || '' }}
           AI_ENGINE_IMPLEMENT_REPAIR: ${{ vars.AI_ENGINE_IMPLEMENT_REPAIR || '' }}
           AI_ENGINE_IMPLEMENT_DIAGNOSE: ${{ vars.AI_ENGINE_IMPLEMENT_DIAGNOSE || '' }}
+          AI_ENGINE_SUMMARISER: ${{ vars.AI_ENGINE_SUMMARISER || '' }}
           AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
           AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
         run: |
@@ -2318,6 +2319,30 @@ jobs:
             [ "${engine}" = "claude" ] && any_claude="true"
             echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
           done
+          summariser_engine="codex"
+          if [ -f scripts/ai_engine.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/ai_engine.sh
+            summariser_engine="$(ai_engine_for_role SUMMARISER || echo codex)"
+          fi
+          [ "${summariser_engine}" = "claude" ] || summariser_engine="codex"
+          # The PR's AI issue summary (role SUMMARISER, plan item 3d) runs
+          # claude_run_selected from an engine root staged out of the verified
+          # support checkout (.codex-workflow-src), never the workspace. If
+          # staging fails the summary keeps its codex command.
+          if [ "${summariser_engine}" = "claude" ]; then
+            claude_engine_support_dest="${RUNNER_TEMP}/claude-engine-support"
+            # shellcheck disable=SC1091
+            if [ -f scripts/ai_engine.sh ] && source scripts/ai_engine.sh &&
+               ai_engine_stage_support "${GITHUB_WORKSPACE}/.codex-workflow-src" "${claude_engine_support_dest}"; then
+              echo "CLAUDE_ENGINE_SUPPORT_DIR=${claude_engine_support_dest}" >> "$GITHUB_ENV"
+              any_claude="true"
+            else
+              echo "::warning::Trusted Claude engine support is unavailable; the AI issue summary runs codex."
+              summariser_engine="codex"
+            fi
+          fi
+          echo "AI_ENGINE_RESOLVED_SUMMARISER=${summariser_engine}" >> "$GITHUB_ENV"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
@@ -5614,6 +5639,13 @@ jobs:
           _summary_combined_prompt="${RUNTIME_DIR}/issue_summary_combined_prompt.txt"
           trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt" "${_summary_combined_prompt}"' EXIT
 
+          implement_summary_codex_call()
+          {
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/codex_isolated_exec.sh" run --mode read-only \
+              --include "${RUNTIME_DIR}/issue_context_for_summary.txt" \
+              -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}"
+          }
+
           for _summary_attempt in 1 2 3; do
             # Materialise the concatenation into a temp file so we
             # can sanitize invalid UTF-8 before piping to codex
@@ -5625,9 +5657,21 @@ jobs:
             bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
             # Credential-free, network-isolated agent (read-only snapshot),
             # run from the trusted support copy, never from the workspace.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/codex_isolated_exec.sh" run --mode read-only \
-              --include "${RUNTIME_DIR}/issue_context_for_summary.txt" \
-              -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
+            # Role SUMMARISER (plan item 3d): Claude through claude_run_selected
+            # in the same isolated container, this codex command as fallback.
+            if [ "${AI_ENGINE_RESOLVED_SUMMARISER:-codex}" = "claude" ] &&
+               [ -f "${CLAUDE_ENGINE_SUPPORT_DIR:-}/scripts/ai_engine.sh" ] && [ ! -L "${CLAUDE_ENGINE_SUPPORT_DIR:-}/scripts/ai_engine.sh" ]; then
+              (
+                unset GH_TOKEN GITHUB_TOKEN TG_BOT_SECRET TG_ADMIN_CHAT_ID TG_CHAT_ID
+                # shellcheck disable=SC1091
+                source "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" || exit 2
+                AI_ENGINE_INCLUDE_PATHS="${RUNTIME_DIR}/issue_context_for_summary.txt" \
+                  AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="" \
+                  claude_run_selected SUMMARISER "${_summary_combined_prompt}" "${ISSUE_SUMMARY_FILE}" "${PWD}" -- implement_summary_codex_call
+              ) || true
+            else
+              implement_summary_codex_call || true
+            fi
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break

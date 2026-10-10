@@ -517,11 +517,16 @@ _pr_wait_for_required_checks()
 #       GitHub accepted the update.
 #   _pr_base_fresh_for_merge <pr> [<head_sha>] [<base_ref>]
 #       The one call merge paths make. Returns 0 when the merge may go
-#       ahead (fresh, clean, disabled, or unknown: an API failure is logged
-#       and never holds a merge that today's gates allow), and 1 after
-#       requesting the base update on overlap (also when that request
-#       failed), so the caller skips this round and lets the synchronize
-#       run re-validate.
+#       ahead (fresh, clean, disabled), 1 after requesting the base update
+#       on overlap (also when that request failed), so the caller skips this
+#       round and lets the synchronize run re-validate, and 1 without any
+#       update request on unknown (an API failure, or an unresolved head or
+#       base): freshness could not be proven, so the merge defers this round
+#       and the caller retries on its next poll tick or review round
+#       (security-pass finding merge-freshness-unknown-proceeds; before it,
+#       unknown proceeded, so a failed compare or PR-files read let a PR
+#       merge without re-validating the combined tree).
+#       MERGE_BASE_FRESHNESS_ENABLED=false remains the kill switch.
 #
 # API budget (§15): one `compare/{head}...{base}` call plus one paginated
 # `pulls/{n}/files` listing per gated merge, one `pulls/{n}` read when the
@@ -699,8 +704,10 @@ _pr_base_fresh_for_merge()
 			return 1
 			;;
 		unknown)
-			echo "::warning::MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${head_sha:-unknown} base=${base_ref:-unknown} outcome=unknown reason=${PR_BASE_FRESHNESS_LAST_REASON} action=proceed"
-			return 0
+			# Fail closed: no verified overlap, so no branch update either.
+			echo "::warning::MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=unknown reason=${PR_BASE_FRESHNESS_LAST_REASON} action=defer"
+			echo "  [base-freshness] PR #${pr_number}: could not verify the base against this PR's files (${PR_BASE_FRESHNESS_LAST_REASON}); deferring the merge to the next round."
+			return 1
 			;;
 		*)
 			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=proceed"

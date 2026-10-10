@@ -157,8 +157,8 @@ def test_isolated_runner_checks_role_support_and_timeout_before_docker() -> None
 def test_isolated_runner_support_override_and_optional_in_container_timeout() -> None:
 	runner = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
 	assert 'support="scripts"' in runner  # Existing clarify call sites keep their relative support paths.
-	assert '[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]]' in runner
-	assert '[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]]' in runner
+	assert '[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]]' in runner
+	assert '[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]]' in runner
 	assert '"${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"' in runner
 	assert 'install -D -m 0644 "${support}/write_codex_config.sh"' in runner
 	assert 'install -D -m 0644 "${support}/codex_model_catalog.json"' in runner
@@ -172,7 +172,7 @@ def test_isolated_runner_support_override_and_optional_in_container_timeout() ->
 def test_claude_image_build_failure_triggers_codex_fallback() -> None:
 	runner_text = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
 	claude_build = runner_text[runner_text.index('\tif ! image='):runner_text.index('\tfor account in "${claude_accounts[@]}"; do')]
-	build_script = 'set -euo pipefail\nenv() { return 1; }\nai_engine_fallback() { printf "AI_ENGINE_FALLBACK role=%s reason=%s\\n" "$1" "$2" >&2; }\nengine_role=CLARIFY\nversion=v0.114.0\nclaude_version=1.0.0\nsupport=scripts\n' + claude_build
+	build_script = 'set -euo pipefail\nenv() { return 1; }\nai_engine_fallback() { printf "AI_ENGINE_FALLBACK role=%s reason=%s\\n" "$1" "$2" >&2; AI_ENGINE_FALLBACK_EXIT=75; }\nengine_role=CLARIFY\nversion=v0.114.0\nclaude_version=1.0.0\nsupport=scripts\n' + claude_build
 	build_result = subprocess.run(["bash", "-c", build_script], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
 	assert build_result.returncode == 75, build_result.stderr
 	assert "AI_ENGINE_FALLBACK role=CLARIFY reason=image_build_failed" in build_result.stderr

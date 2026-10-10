@@ -1841,6 +1841,12 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 				"WORKFLOW_HEAL_SOURCE_CHECKOUT": "false",
 				"MOCK_DIAGNOSIS_FILE": str(diagnosis_file),
 				"MOCK_PROMPT_OUT": str(prompt_out),
+				# WORKFLOW_HEAL defaults to the Claude engine (plan item 3c) and
+				# refuses, rather than falls back, without a credential (plan
+				# item 3e, AI_ENGINE_FALLBACK_POLICY=capacity). These tests
+				# exercise the intake through the mock codex, so pin the role to
+				# codex the way an ai:codex label or repo var would.
+				"AI_ENGINE_WORKFLOW_HEAL": "codex",
 			}
 		)
 		if isinstance(payload, dict) and payload.get("source_kind") == "workflow_run":
@@ -2166,6 +2172,39 @@ def test_count_autofix_failure_streak_reads_trailing_failure_comments() -> None:
 			{"body": "⚠️ **Editor no-op suspicious** — disposition could not be verified."},
 		]
 	) == 2
+
+
+def test_count_autofix_failure_streak_author_filter_skips_untrusted_comments(tmp_path: Path) -> None:
+	"""Sibling of untrusted-comment-resets-identical-failure-cap: with the
+	pipeline login, another commenter's failure / summary text neither counts
+	nor ends the streak. Without it the legacy rules apply unchanged."""
+	pipeline = "workflow-pat-user"
+	comments = [
+		{"user": {"login": pipeline}, "body": AUTOFIX_NOOP_COMMENT},
+		{"user": {"login": "drive-by-user"}, "body": AUTOFIX_SUMMARY_COMMENT},
+		{"author_login": pipeline.upper(), "body": AUTOFIX_NOOP_COMMENT},
+		{"user": {"login": "drive-by-user"}, "body": AUTOFIX_NOOP_COMMENT},
+		{"body": AUTOFIX_NOOP_COMMENT},
+	]
+	assert heal.count_autofix_failure_streak(comments, author_login=pipeline) == 2
+	assert heal.count_autofix_failure_streak(comments, author_login=pipeline.upper()) == 2
+	# Legacy: every author counts and the untrusted summary ends the scan.
+	assert heal.count_autofix_failure_streak(comments) == 3
+	assert heal.count_autofix_failure_streak(comments, author_login="") == 3
+	assert heal.count_autofix_failure_streak(comments, author_login=None) == 3
+	# A trusted summary still ends the streak.
+	trusted_summary = [*comments[:1], {"user": {"login": pipeline}, "body": AUTOFIX_SUMMARY_COMMENT}, *comments[1:]]
+	assert heal.count_autofix_failure_streak(trusted_summary, author_login=pipeline) == 1
+	# CLI: the flag is optional and the sentinel lets the reporter probe for it.
+	assert heal.AUTOFIX_STREAK_AUTHOR_FILTER == "autofix-failure-streak-author-login:v1"
+	assert heal.AUTOFIX_STREAK_AUTHOR_FILTER in LIB_PATH.read_text(encoding="utf-8")
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	filtered = subprocess.run([sys.executable, str(LIB_PATH), "autofix-failure-streak", "--comments-json", str(comments_file), "--author-login", pipeline], capture_output=True, text=True, check=True, env=env)
+	assert filtered.stdout.strip() == "2"
+	legacy = subprocess.run([sys.executable, str(LIB_PATH), "autofix-failure-streak", "--comments-json", str(comments_file)], capture_output=True, text=True, check=True, env=env)
+	assert legacy.stdout.strip() == "3"
 
 
 def _autofix_payload(**overrides) -> dict:
@@ -2535,7 +2574,7 @@ def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, s
 def test_autofix_report_dispatches_past_streak_threshold() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-") as tmp_name:
 		tmp = Path(tmp_name)
-		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_SUMMARY_COMMENT}, {"body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_NOOP_SUSPICIOUS": "true"})
+		work, state_file, env = _stage_autofix_report(tmp, comments=[{"user": {"login": "workflow-bot"}, "body": AUTOFIX_SUMMARY_COMMENT}, {"user": {"login": "workflow-bot"}, "body": AUTOFIX_NOOP_COMMENT}], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "EDITOR_NOOP_SUSPICIOUS": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
 		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched pr=4174 failure=editor_empty_noop streak=2 workflow=AI Review" in result.stdout
@@ -2579,10 +2618,10 @@ def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 		work, state_file, env = _stage_autofix_report(
 			tmp,
 			comments=[
-				{"body": AUTOFIX_SUMMARY_COMMENT},
-				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
-				{"body": AUTOFIX_SUMMARY_COMMENT},
-				{"body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_SUMMARY_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_SUMMARY_COMMENT},
+				{"user": {"login": "workflow-bot"}, "body": AUTOFIX_POST_EDITOR_FAILED_COMMENT},
 			],
 			flags={"EDITOR_CHANGES_LOST": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "3"},
 		)
@@ -2597,7 +2636,7 @@ def test_autofix_report_skip_paths() -> None:
 		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "2"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
 		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
 		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
-		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
+		("dispatch_denied", [{"user": {"login": "workflow-bot"}, "body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
 	]
 	for name, comments, flags, expected in cases:
 		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-{name}-") as tmp_name:
@@ -2654,6 +2693,7 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	assert "${{" not in step["run"]
 	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '1' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
+	assert step["env"]["AUTOFIX_STREAK_AUTHOR_LOGIN"] == "${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
 	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
 	expanded_steps = yaml.safe_load(expanded_review_autofix_text())["jobs"]["codex-agent"]["steps"]
@@ -2938,6 +2978,60 @@ def test_failure_markers_are_support_version_aware() -> None:
 	parsed = heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
 	assert [marker["run"] for marker in parsed] == ["1", "2", "3"] and {marker["support"] for marker in parsed} == {SUPPORT_NEW}
 	assert len(heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)) == 6
+
+
+def test_failure_marker_must_be_the_trailing_standalone_line() -> None:
+	"""Security-pass finding support-version-failure-marker-shadowing: a marker
+	quoted earlier in a trusted comment (an echoed "First error" line carrying
+	an older support SHA) must not shadow the genuine trailing marker, and a
+	comment whose only marker is not its last line yields no marker."""
+	count = heal.count_identical_failures
+	fp = _cap_fp()
+	genuine = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (1, 2, 3)]
+	forged = heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "99", SUPPORT_OLD)
+	shadowed = [
+		{**comment, "body": comment["body"].replace(AUTOFIX_NOOP_COMMENT, AUTOFIX_NOOP_COMMENT + "\n\n**First error:** `" + forged + "`", 1)}
+		for comment in genuine
+	]
+	assert all(comment["body"].index(forged) < comment["body"].rindex("<!--") for comment in shadowed)
+	result = count(shadowed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert result["count"] == 3 and result["fp"] == fp
+	parsed = heal.parse_failure_markers(shadowed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert [marker["run"] for marker in parsed] == ["1", "2", "3"]
+	# Trailing whitespace after the genuine marker is tolerated.
+	trailing_ws = [{**comment, "body": comment["body"] + "\n  \n"} for comment in genuine]
+	assert count(trailing_ws, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	# Only an inline marker, or a marker followed by more text: no marker. The
+	# comment is treated as an unmarked failure comment, which ends the scan.
+	inline_only = {"id": 4, "author_login": CAP_AUTHOR, "body": AUTOFIX_NOOP_COMMENT + "\n\n**First error:** `" + heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "4", SUPPORT_NEW) + "`"}
+	followed = {"id": 5, "author_login": CAP_AUTHOR, "body": genuine[0]["body"] + "\n\nmore text"}
+	for odd in (inline_only, followed):
+		assert heal.parse_failure_markers([odd], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW) == []
+		assert count([*genuine, odd], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# Untrusted comments quoting a marker are still skipped without ending the scan.
+	attacker = {"id": 6, "author_login": "attacker", "body": AUTOFIX_NOOP_COMMENT + " `" + forged + "` trailing"}
+	assert count([*genuine, attacker], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	# Untrusted comments carrying failure or editor-summary text without a
+	# marker cannot end the scan (and so cannot reset the cap) either.
+	for text in (AUTOFIX_FAILED_COMMENT, AUTOFIX_SUMMARY_COMMENT):
+		untrusted = {"id": 7, "author_login": "attacker", "body": text}
+		assert count([*genuine, untrusted], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+		assert count([*genuine, {**untrusted, "author_login": CAP_AUTHOR}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+
+
+def test_verify_run_provenance_ignores_a_forged_inline_run_marker() -> None:
+	pr_payload = heal.validate_payload(_autofix_payload())
+	review = _provenance_run(path="ai-review.yml")
+	forged = f"<!-- review-autofix-failure:v1 run=500 head={SHA_A} fp={FP_HEX} -->"
+	genuine_other = f"<!-- review-autofix-failure:v1 run=1 head={SHA_A} fp={FP_HEX} -->"
+	for body in (f"**First error:** `{forged}`\n\n{genuine_other}", f"{forged}\n\ntrailing text"):
+		comments = [{"body": body, "user": {"login": "workflow-bot"}}]
+		assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=comments, trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "no_verified_runs"
+	cap_line = f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} run=500 -->"
+	comments = [{"body": f"capped\n{cap_line}\nmore", "user": {"login": "workflow-bot"}}]
+	assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=comments, trusted_login="workflow-bot", self_repo=SELF_REPO)["status"] == "ok"
+	comments = [{"body": f"capped `{cap_line}`", "user": {"login": "workflow-bot"}}]
+	assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=comments, trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "no_verified_runs"
 
 
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
@@ -4127,6 +4221,63 @@ def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None
 		assert "dispatched pr=4174 failure=identical_failure_cap streak=1" in result.stdout, result.stdout + result.stderr
 		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
 		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"]
+
+
+def test_autofix_report_streak_counts_only_the_pipeline_author() -> None:
+	untrusted = {"user": {"login": "drive-by-user"}, "body": AUTOFIX_SUMMARY_COMMENT}
+	trusted = [{"user": {"login": CAP_AUTHOR}, "body": AUTOFIX_NOOP_COMMENT}]
+	flags = {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_FAILURE_MARKER_AUTHOR": CAP_AUTHOR}
+	# An untrusted summary newer than the trusted failure no longer ends the streak.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-author-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags=flags)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=2 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=on" in result.stdout
+	# Without a resolvable pipeline login the streak counts only this run (fail
+	# closed): two untrusted failure comments must not raise it to 3.
+	forged = [{"user": {"login": "drive-by-user"}, "body": AUTOFIX_NOOP_COMMENT}] * 2
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-no-login-") as tmp_name:
+		work, state_file, env = _stage_autofix_report(Path(tmp_name), comments=forged, flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		state_file.write_text(json.dumps({"user_fetch_fail": True}), encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=off" in result.stdout
+		assert "warn reason=streak_author_login_unavailable pr=4174" in result.stdout
+	# A login that fails the format check is treated as unavailable.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-bad-login-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(
+			Path(tmp_name), comments=forged, flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "drive-by-user;rm"}
+		)
+		env["GH_TOKEN"] = ""
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
+		assert "warn reason=streak_author_login_unavailable pr=4174" in result.stdout
+	# The gate's login (AUTOFIX_STREAK_AUTHOR_LOGIN) filters the streak without
+	# changing run_refs, which list only this run on the normal path.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-gate-login-") as tmp_name:
+		work, state_file, env = _stage_autofix_report(
+			Path(tmp_name), comments=[*forged, *trusted, untrusted], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": CAP_AUTHOR}
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=2 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=on" in result.stdout
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"]
+		assert not any(call[:2] == ["api", "user"] for call in _state(state_file)["calls"])
+	# An older staged helper without the sentinel cannot filter by author, so
+	# the streak counts only this run (fail closed) and the drift is logged.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-old-helper-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags=flags)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		staged_helper.write_text(staged_helper.read_text(encoding="utf-8").replace("autofix-failure-streak-author-login:v1", "removed"), encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=off" in result.stdout
+		assert "warn reason=streak_author_filter_unavailable pr=4174" in result.stdout
+	text = AUTOFIX_REPORT_SCRIPT.read_text(encoding="utf-8")
+	assert "grep -q 'autofix-failure-streak-author-login:v1' \"${HEAL_PY}\"" in text
+	assert 'STREAK_ARGS+=(--author-login "${STREAK_AUTHOR_LOGIN}")' in text
+	assert 'STREAK_AUTHOR_LOGIN="${AUTOFIX_FAILURE_MARKER_AUTHOR:-}"' in text
 
 
 def test_reviewer_failure_evidence_names_exit_codes_and_self_named_errors() -> None:
@@ -5611,3 +5762,115 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# --- engine_fallback reports (plan item 3e, D1) ------------------------------------
+
+
+def _engine_fallback_payload(role: str = "PLAN", reason: str = "no_credential", **overrides) -> dict:
+	records = [
+		f"v1\t1700000000\t{role}\t{reason}\tnon_capacity\trefused\tcapacity",
+		"v1\tbad\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity",
+		"garbage",
+	]
+	payload = heal.build_engine_fallback_payload(
+		repo="owner/consumer", role=role, reason=reason, workflow_name="AI Plan",
+		run_id="42", wrapper_sha=None, reporter_run_url=None, records=records,
+	)
+	payload.update(overrides)
+	return payload
+
+
+def test_engine_fallback_payload_validates_and_is_deterministic() -> None:
+	payload = _engine_fallback_payload()
+	normalized = heal.validate_payload(payload)
+	assert normalized["source_kind"] == "engine_fallback"
+	assert normalized["engine_role"] == "PLAN" and normalized["engine_reason"] == "no_credential"
+	assert normalized["failure_reason"] == "engine_fallback_refused"
+	assert normalized["run_refs"] == [] and normalized["issue_number"] is None
+	assert "v1 1700000000 PLAN no_credential non_capacity refused capacity" in normalized["failure_evidence"]
+	assert "bad" not in normalized["failure_evidence"] and "garbage" not in normalized["failure_evidence"]
+	assert heal.is_deterministic_failure(normalized, 1) is True
+	assert heal.compose_issue_title(normalized, workflow_name=None) == "Workflow heal: AI engine fallback refused for PLAN (no_credential)"
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+	assert len(wrapped["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+
+
+@pytest.mark.parametrize(
+	"overrides",
+	[
+		{"engine_reason": "all_gated"},
+		{"engine_reason": "all_usage_limit"},
+		{"engine_reason": "bad reason"},
+		{"engine_role": "plan"},
+		{"engine_role": "P"},
+		{"engine_role": None},
+		{"run_refs": [{"repo": "owner/consumer", "run_id": "42"}]},
+	],
+)
+def test_engine_fallback_payload_rejects_capacity_and_malformed_fields(overrides: dict) -> None:
+	with pytest.raises(ValueError):
+		heal.validate_payload(_engine_fallback_payload(**overrides))
+
+
+@pytest.mark.parametrize("reason", ["all_gated", "all_usage_limit"])
+def test_engine_fallback_builder_refuses_capacity_reasons(reason: str) -> None:
+	with pytest.raises(ValueError):
+		_engine_fallback_payload(reason=reason)
+
+
+def test_engine_fallback_fingerprint_is_per_role_and_reason() -> None:
+	fp = heal.engine_fallback_fingerprint("PLAN", "no_credential")
+	assert re.fullmatch(r"[0-9a-f]{64}", fp)
+	# The intake's generic fingerprint call with the same inputs gives the same hash.
+	assert fp == heal.fingerprint("ai-engine-fallback", "PLAN", "no_credential")
+	assert fp != heal.engine_fallback_fingerprint("PLAN", "isolation_unavailable")
+	assert fp != heal.engine_fallback_fingerprint("CLARIFY", "no_credential")
+	# Workflow and run do not enter the fingerprint.
+	first = heal.validate_payload(_engine_fallback_payload(workflow_name="AI Plan"))
+	second = heal.validate_payload(_engine_fallback_payload(workflow_name="AI Clarify", reporter_run_url="https://github.com/o/r/actions/runs/9"))
+	assert heal.engine_fallback_fingerprint(first["engine_role"], first["engine_reason"]) == heal.engine_fallback_fingerprint(second["engine_role"], second["engine_reason"])
+	# One open heal issue per fingerprint: the second report is a duplicate.
+	now = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+	assert heal.budget_decision([], fp=fp, now=now)["action"] == "open"
+	assert heal.budget_decision([_heal_issue(10, state="open", fp=fp)], fp=fp, now=now)["action"] == "duplicate"
+
+
+def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
+	records = tmp_path / "records.tsv"
+	records.write_text(
+		"v1\t1700000000\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity\n"
+		"v1\t1700000001\tCLARIFY\tno_credential\tnon_capacity\trefused\tcapacity\n",
+		encoding="utf-8",
+	)
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	built = subprocess.run(
+		[sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		 "--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)],
+		capture_output=True, text=True, env=env, check=True,
+	)
+	payload = json.loads(built.stdout)
+	assert "CLARIFY" not in payload["failure_evidence"]
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(built.stdout, encoding="utf-8")
+	assert subprocess.run([sys.executable, script, "is-deterministic", "--payload-json", str(payload_file), "--gen", "1"],
+		capture_output=True, text=True, env=env, check=True).stdout.strip() == "true"
+	fp = subprocess.run([sys.executable, script, "engine-fallback-fingerprint", "--role", "PLAN", "--reason", "no_credential"],
+		capture_output=True, text=True, env=env, check=True).stdout.strip()
+	assert fp == heal.engine_fallback_fingerprint("PLAN", "no_credential")
+	bad = subprocess.run([sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		 "--reason", "all_gated", "--workflow-name", "AI Plan"], capture_output=True, text=True, env=env, check=False)
+	assert bad.returncode == 2
+
+
+def test_intake_fingerprints_engine_fallback_without_logs() -> None:
+	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	branch_start = text.index('if [ "${SOURCE_KIND}" = "engine_fallback" ]; then')
+	branch = text[branch_start:text.index('elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then', branch_start)]
+	assert 'FIRST_WORKFLOW_NAME="ai-engine-fallback"' in branch
+	assert 'FIRST_FAILING_STEP="${ENGINE_ROLE}"' in branch
+	assert 'SIGNATURE="${ENGINE_REASON}"' in branch
+	# engine_fallback reports carry no run_refs and never enter the log-reading provenance gate.
+	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text
