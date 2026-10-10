@@ -438,6 +438,14 @@ fi
 # The first unprocessed doc that still exists on the dispatch branch tip; the
 # plan and implement stages read the doc from that branch, not from this
 # cycle's pinned checkout.
+# Accepted residual race: this read, the dispatch below, and the purge's
+# in-flight check (APPLY_ANALYSIS_IN_FLIGHT_DOCS) are separate point-in-time
+# reads. A purge whose orchestrator-runs read lands in the few seconds between
+# `gh workflow run` returning and the new run becoming listable can still
+# delete the doc. Closing that fully needs a cross-workflow lock (a shared
+# concurrency group would hold the daily log analysis behind the up-to-340-
+# minute promote cycle); the outcome is a blocked plan the unblock judge
+# handles, as in #7022, not lost work.
 selected_doc=""
 gone_count=0
 while IFS= read -r candidate_doc; do
