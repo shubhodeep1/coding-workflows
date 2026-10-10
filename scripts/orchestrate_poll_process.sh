@@ -17390,7 +17390,7 @@ unblock_handover_merge_deferral() {
   [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
   ensure_label_exists "ai:needs-human"
   if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
-    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
       || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
   fi
   if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then
