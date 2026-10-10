@@ -250,6 +250,12 @@ def test_graphql_documents_in_files_are_classified(tmp_path: Path) -> None:
 		("query A { a } mutation B { b }", True),
 		("query { mutationCount }", False),
 		("# mutation in a comment\nquery { a }", False),
+		('query A { f(arg: "#") } mutation B { b }', True),
+		('query A { f(arg: "a\\"#") } mutation B { b }', True),
+		('query A { f(arg: """x # y""") } mutation B { b }', True),
+		('query A { f(arg: """\n# not a comment \\""" still\n""") }\nmutation B { b }', True),
+		('query A { f(arg: "#") }\n# c\nmutation B { b }', True),
+		('query A { f(arg: "} mutation") }', False),
 	],
 )
 def test_graphql_mutation_detection_matches_python_twin(tmp_path: Path, doc: str, is_mutation: bool) -> None:

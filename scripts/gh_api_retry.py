@@ -123,8 +123,53 @@ def graphql_doc_is_mutation(text: str) -> bool:
 	Mirrors bash _gh_graphql_doc_is_mutation: a query followed by a mutation
 	that operationName may select counts as a mutation, so it is not retried.
 	"""
-	stripped = " ".join(line.split("#", 1)[0] for line in text.splitlines())
-	return _GRAPHQL_MUTATION_RE.search(stripped) is not None
+	return _GRAPHQL_MUTATION_RE.search(_graphql_strip_strings_and_comments(text)) is not None
+
+
+_GRAPHQL_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+_GRAPHQL_STRING_OR_COMMENT_START_RE = re.compile(r'["#]')
+
+
+def _graphql_strip_strings_and_comments(text: str) -> str:
+	"""Drop string literals (quoted and triple-quoted block) and # comments, line by line.
+
+	Strings are skipped before comments are cut, so a "#" inside a string
+	cannot hide a later mutation. Mirrors bash _gh_graphql_doc_is_mutation.
+	"""
+	out: list[str] = []
+	in_block = False
+	for line in text.splitlines():
+		rest = line
+		while rest:
+			if in_block:
+				idx = rest.find('"""')
+				if idx < 0:
+					break
+				escaped = idx > 0 and rest[idx - 1] == "\\"
+				rest = rest[idx + 3:]
+				if not escaped:
+					in_block = False
+					out.append(" ")
+				continue
+			match = _GRAPHQL_STRING_OR_COMMENT_START_RE.search(rest)
+			if match is None:
+				out.append(rest)
+				break
+			out.append(rest[:match.start()])
+			rest = rest[match.start():]
+			if rest[0] == "#":
+				break
+			if rest.startswith('"""'):
+				in_block = True
+				rest = rest[3:]
+				continue
+			string_match = _GRAPHQL_STRING_RE.match(rest)
+			if string_match is None:
+				break
+			out.append(" ")
+			rest = rest[string_match.end():]
+		out.append(" ")
+	return "".join(out)
 
 
 def _read_doc(path: str) -> str | None:

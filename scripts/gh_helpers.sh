@@ -735,13 +735,52 @@ _gh_api_args_unsafe_post()
 # and # comments) is "mutation". A document holding a query and a mutation,
 # where operationName may select the mutation, therefore counts as a mutation.
 # A field named "mutation" after a "}" also matches; that only costs a retry.
+# String literals ("…" and """…""") are skipped before comments are cut, so a
+# "#" inside a string cannot hide a later mutation (scripts/gh_api_retry.py
+# graphql_doc_is_mutation uses the same scan).
 # Pure bash: no pipeline, so callers running under pipefail cannot see a
 # SIGPIPE status.
 _gh_graphql_doc_is_mutation()
 {
-	local _line _out="" _re='(^|\})[[:space:]]*[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]([^A-Za-z0-9_]|$)'
+	local _line _out="" _rest _pre _in_block=0
+	local _re='(^|\})[[:space:]]*[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]([^A-Za-z0-9_]|$)'
+	local _str_re='^"([^"\\]|\\.)*"(.*)$'
 	while IFS= read -r _line || [ -n "${_line}" ]; do
-		_out+="${_line%%#*} "
+		_rest="${_line}"
+		while [ -n "${_rest}" ]; do
+			if [ "${_in_block}" = "1" ]; then
+				# Inside a block string: find the closing """ (\""" is an escape).
+				_pre="${_rest%%\"\"\"*}"
+				if [ "${_pre}" = "${_rest}" ]; then
+					break
+				fi
+				_rest="${_rest#*\"\"\"}"
+				if [ "${_pre: -1}" != "\\" ]; then
+					_in_block=0
+					_out+=" "
+				fi
+				continue
+			fi
+			_pre="${_rest%%[\"#]*}"
+			_out+="${_pre}"
+			_rest="${_rest:${#_pre}}"
+			[ -n "${_rest}" ] || break
+			if [ "${_rest:0:1}" = "#" ]; then
+				break
+			fi
+			if [ "${_rest:0:3}" = '"""' ]; then
+				_in_block=1
+				_rest="${_rest:3}"
+				continue
+			fi
+			if [[ "${_rest}" =~ ${_str_re} ]]; then
+				_out+=" "
+				_rest="${BASH_REMATCH[2]}"
+			else
+				break
+			fi
+		done
+		_out+=" "
 	done <<< "$1"
 	[[ "${_out}" =~ ${_re} ]]
 }
