@@ -48,7 +48,7 @@
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 #   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
 #   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 6; 0 disables the age bypass;
-#                                          a non-integer warns and falls back to 24
+#                                          a non-integer warns and falls back to 6
 #   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
 #                                          (comma-separated); empty, none or off
 #                                          disables the priority lane
