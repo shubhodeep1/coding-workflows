@@ -5,9 +5,12 @@ Some gaps only a person can close: a missing secret or credential, a
 repository variable to set, a release to tag, an operation the pipeline must
 never perform by itself. The pipeline does not stop for them. Activation
 verification (port P4) and the unblock judge's `operator_step` verdict record
-each one here instead, and the work it belongs to stays safely off (a feature
-flag that defaults off, or a placeholder env var named `*_UNSET_OPERATOR_STEP`)
-until the operator acts.
+each one here instead, and the new work it belongs to stays safely off (a
+feature flag that defaults off, or a placeholder env var named
+`*_UNSET_OPERATOR_STEP`) until the operator acts. The flag gates only the new
+code path; everything that already runs keeps running. The judge also lists a
+blocked fix-up of its own here (key `unblock-fixup-<n>`) instead of filing a
+fix-up for it.
 
 There is one open `ai:operator-step` issue per repository. Its body starts
 with `<!-- ai:operator-step:v1 -->`; each new entry is an immutable keyed
