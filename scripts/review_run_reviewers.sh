@@ -5084,6 +5084,233 @@ run_reviewer() {
   reviewer_cleanup
   return 0
 }
+
+# ── Claude account-pool review-panel slot (engine role PANEL_REVIEWER) ──
+# An anthropic/claude-* REVIEWER_MODELS entry is served by the Claude account
+# pool, never by OpenRouter: the Claude Code CLI runs in a read-only
+# `prepare-ephemeral claude` review sandbox (the review-blocked judge's
+# pattern, scripts/review_rb_judge.sh), behind the host relay that holds the
+# OAuth token. The slot model comes from the slug (anthropic/claude-sonnet-5.5
+# -> claude-sonnet-5-5). A Sonnet run that does not succeed (crash, timeout,
+# refusal, malformed output, or a usage limit on every account) retries once
+# on REVIEWER_POOL_FALLBACK_MODEL (default claude-haiku-5-5) in the same pool.
+# A pool-wide outage (role resolved to codex, sandbox preparation failed, no
+# credential, support or policy missing) skips the slot with status
+# skipped_pool, because the pool gate is account-wide and the fallback model
+# would fail the same way. The slot has no OpenRouter fallback (a review
+# round then runs without it), and it writes the same output/status/log
+# files as run_reviewer.
+reviewer_is_pool_slot() {
+  case "${1:-}" in
+    anthropic/claude-*) return 0 ;;
+  esac
+  return 1
+}
+
+reviewer_pool_claude_model() {
+  local pool_slug_model="${1#anthropic/}"
+  pool_slug_model="${pool_slug_model//./-}"
+  [[ "${pool_slug_model}" =~ ^claude-[a-z0-9-]{1,60}$ ]] || return 1
+  printf '%s\n' "${pool_slug_model}"
+}
+
+run_pool_reviewer() {
+  local model="$1"
+  local safe_name="$2"
+  local output_prefix="${3:-review}"
+  local prompt_file="${4:-${REVIEWER_PROMPT_FILE}}"
+  local reasoning_level="${5:-}"
+  local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
+  local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
+  local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
+  local pool_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  local pool_fallback_model="${REVIEWER_POOL_FALLBACK_MODEL:-claude-haiku-5-5}"
+  local pool_primary_model=""
+  local pool_reasoning=""
+  local pool_runtime_dir=""
+  local pool_prompt_file=""
+  local pool_sandbox_root=""
+  local pool_skip_reason=""
+  local pool_last_reason=""
+  local pool_outcome="failed"
+  local pool_success_model=""
+  local pool_attempt=0
+  local pool_attempt_model=""
+  local pool_attempt_rc=0
+  local pool_attempt_output=""
+  local pool_attempt_stderr=""
+  local pool_attempt_wall=0
+  local pool_budget_remaining=0
+  local pool_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local -a pool_attempt_models=()
+
+  : > "${log_file}"
+
+  pool_log() {
+    printf '%s\n' "$*" | tee -a "${log_file}" >&2
+  }
+
+  pool_budget_remaining_now() {
+    local pool_now_epoch=""
+    local pool_remaining=""
+    pool_now_epoch="$(date +%s)"
+    if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+      pool_remaining="$(codex_run_budget_remaining_secs "${pool_now_epoch}" 2>/dev/null || true)"
+    else
+      pool_remaining="$(reviewer_budget_remaining_secs_fallback "${pool_now_epoch}")"
+    fi
+    case "${pool_remaining}" in
+      ''|*[!0-9]*) pool_remaining=0 ;;
+    esac
+    printf '%s\n' "${pool_remaining}"
+  }
+
+  pool_finish() {
+    local pool_final_status="$1"
+    local pool_final_message="$2"
+    if [ -n "${pool_sandbox_root}" ]; then
+      REVIEW_SANDBOX_ROOT="${pool_sandbox_root}" bash "${pool_sandbox_sh}" cleanup 2>>"${log_file}" \
+        || pool_log "::warning::Reviewer slot ${model}: pool review sandbox cleanup failed."
+      pool_sandbox_root=""
+    fi
+    [ -z "${pool_runtime_dir}" ] || rm -rf "${pool_runtime_dir}" 2>/dev/null || true
+    if [ "${pool_final_status}" != "success" ]; then
+      printf '%s\n' "${pool_final_message}" > "${output_file}"
+    fi
+    echo "${pool_final_status}" > "${status_file}"
+    pool_log "REVIEWER_POOL: slot=${model} pass=${output_prefix} status=${pool_final_status} model=${pool_success_model:-${pool_attempt_model:-none}} attempts=${pool_attempt} reason=${pool_skip_reason:-${pool_last_reason:-none}}"
+    reviewer_log_slot_state "${log_file}" "${model}" 0 none 0 false \
+      "$([ "${pool_success_model:-}" = "${pool_fallback_model}" ] && [ "${pool_fallback_model}" != "${pool_primary_model}" ] && echo true || echo false)" \
+      unknown false >&2
+  }
+
+  if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    pool_log "Reviewer slot ${model} skipped — PR #${PR_NUMBER} was closed/merged."
+    pool_finish pr_closed "Reviewer slot ${model} skipped because PR #${PR_NUMBER} was closed or merged."
+    return 0
+  fi
+
+  if [ "${AI_ENGINE_RESOLVED_PANEL_REVIEWER:-codex}" != "claude" ]; then
+    pool_skip_reason="engine_${AI_ENGINE_RESOLVED_PANEL_REVIEWER:-unresolved}"
+    pool_log "AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason=${pool_skip_reason} action=skip"
+    pool_finish skipped_pool "Reviewer slot ${model} skipped: the PANEL_REVIEWER engine role resolved to '${AI_ENGINE_RESOLVED_PANEL_REVIEWER:-unresolved}', and this slot only runs on the Claude account pool."
+    return 0
+  fi
+
+  if ! pool_primary_model="$(reviewer_pool_claude_model "${model}")" \
+    || ! [[ "${pool_fallback_model}" =~ ^claude-[a-z0-9-]{1,60}$ ]]; then
+    pool_skip_reason="invalid_model"
+    pool_log "::warning::Reviewer slot ${model}: invalid pool model (slot slug or REVIEWER_POOL_FALLBACK_MODEL='${pool_fallback_model}')."
+    pool_finish failed "Reviewer slot ${model} failed: its Claude pool model could not be resolved."
+    return 0
+  fi
+  pool_attempt_models=("${pool_primary_model}")
+  if [ "${pool_fallback_model}" != "${pool_primary_model}" ]; then
+    pool_attempt_models+=("${pool_fallback_model}")
+  fi
+  pool_reasoning="$(reviewer_base_reasoning_effort "${reasoning_level}")"
+
+  pool_runtime_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pool_reviewer.${safe_name}.XXXXXX")"
+  pool_prompt_file="$(prepare_reviewer_prompt_for_model "${model}" "${prompt_file}" "${safe_name}" "${pool_runtime_dir}" "${log_file}")"
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${pool_prompt_file}"
+  fi
+  if [ ! -s "${pool_prompt_file}" ]; then
+    pool_last_reason="empty_prompt"
+    pool_finish failed "Reviewer slot ${model} failed: its review prompt was empty."
+    return 0
+  fi
+
+  # The snapshot is read-only for this role; a dependency install is not
+  # needed, so the ephemeral prepare skips it.
+  if [ ! -f "${pool_sandbox_sh}" ] \
+    || ! pool_sandbox_root="$(cd "${WORKSPACE_PATH:-${GITHUB_WORKSPACE:-$PWD}}" && bash "${pool_sandbox_sh}" prepare-ephemeral claude 2>>"${log_file}")" \
+    || [ -z "${pool_sandbox_root}" ]; then
+    pool_sandbox_root=""
+    pool_skip_reason="sandbox_prepare_failed"
+    pool_log "AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason=${pool_skip_reason} action=skip"
+    pool_finish skipped_pool "Reviewer slot ${model} skipped: the Claude review sandbox could not be prepared."
+    return 0
+  fi
+
+  for pool_attempt_model in "${pool_attempt_models[@]}"; do
+    pool_attempt=$((pool_attempt + 1))
+    if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      pool_outcome="pr_closed"
+      break
+    fi
+    pool_budget_remaining="$(pool_budget_remaining_now)"
+    if [ "${pool_budget_remaining}" -lt 300 ]; then
+      pool_log "Reviewer slot ${model} (${pool_attempt_model}) skipped on attempt ${pool_attempt} — only ${pool_budget_remaining}s of run budget remain (need 300s)."
+      pool_outcome="skipped_budget"
+      break
+    fi
+    pool_attempt_wall=$((pool_budget_remaining - 120))
+    if [ "${pool_attempt_wall}" -gt "${pool_max_wall}" ]; then
+      pool_attempt_wall="${pool_max_wall}"
+    fi
+    pool_attempt_output="${pool_runtime_dir}/attempt_${pool_attempt}.txt"
+    pool_attempt_stderr="${pool_runtime_dir}/attempt_${pool_attempt}.err"
+    pool_attempt_rc=0
+    pool_log "Reviewer slot ${model} attempt ${pool_attempt}: ${pool_attempt_model} on the Claude account pool (effort ${pool_reasoning}, wall ${pool_attempt_wall}s)."
+    REVIEW_SANDBOX_ROOT="${pool_sandbox_root}" timeout --signal=TERM --kill-after=30s "${pool_attempt_wall}s" \
+      bash "${pool_sandbox_sh}" run "${pool_prompt_file}" "${pool_attempt_output}" "${pool_attempt_model}" "${pool_reasoning}" /dev/null claude PANEL_REVIEWER read \
+      2>"${pool_attempt_stderr}" || pool_attempt_rc=$?
+    # The sandbox's CLAUDE_POOL / AI_ENGINE_FALLBACK lines belong in the job log.
+    tee -a "${log_file}" < "${pool_attempt_stderr}" >&2 || true
+    if [ "${pool_attempt_rc}" -eq 0 ] && { reviewer_output_has_findings "${pool_attempt_output}" || reviewer_output_has_explicit_none "${pool_attempt_output}"; }; then
+      mv -f "${pool_attempt_output}" "${output_file}"
+      pool_success_model="${pool_attempt_model}"
+      pool_outcome="success"
+      pool_log "Reviewer slot ${model} (${pool_attempt_model}) succeeded on attempt ${pool_attempt}."
+      break
+    fi
+    case "${pool_attempt_rc}" in
+      0)
+        pool_last_reason="malformed_output"
+        ;;
+      2)
+        pool_skip_reason="sandbox_helper_outdated"
+        ;;
+      75)
+        pool_last_reason="$({ grep -Eo 'AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason=[a-z_]+' "${pool_attempt_stderr}" 2>/dev/null || true; } | tail -n 1 | sed 's/.*reason=//')"
+        pool_last_reason="${pool_last_reason:-claude_unavailable}"
+        # Every account usage-limited or rejected for this model: the next
+        # model may still run. Anything else is pool-wide.
+        [ "${pool_last_reason}" = "all_accounts_failed" ] || pool_skip_reason="${pool_last_reason}"
+        ;;
+      124|137)
+        pool_last_reason="timeout"
+        ;;
+      *)
+        pool_last_reason="exit_${pool_attempt_rc}"
+        ;;
+    esac
+    pool_log "Reviewer slot ${model} (${pool_attempt_model}) did not succeed on attempt ${pool_attempt} (exit=${pool_attempt_rc}, reason=${pool_skip_reason:-${pool_last_reason}})."
+    [ -z "${pool_skip_reason}" ] || break
+  done
+
+  case "${pool_outcome}" in
+    success)
+      pool_finish success ""
+      ;;
+    pr_closed)
+      pool_finish pr_closed "Reviewer slot ${model} stopped because PR #${PR_NUMBER:-unknown} was closed or merged."
+      ;;
+    skipped_budget)
+      pool_finish skipped_budget "Reviewer slot ${model} skipped because the run budget is nearly exhausted."
+      ;;
+    *)
+      if [ -n "${pool_skip_reason}" ]; then
+        pool_log "AI_ENGINE_FALLBACK role=PANEL_REVIEWER reason=${pool_skip_reason} action=skip"
+        pool_finish skipped_pool "Reviewer slot ${model} skipped: the Claude account pool is unavailable (${pool_skip_reason})."
+      else
+        pool_finish failed "Reviewer slot ${model} failed on the Claude account pool after ${pool_attempt} attempt(s) (last reason: ${pool_last_reason:-unknown})."
+      fi
+      ;;
+  esac
+  return 0
+}
 # ── Two-pass reviewer architecture ──────────────────────────────────────
 # Pass 1: broad sweep at lower thinking level → collect findings
 # Cross-pollination: summarise pass 1 findings for pass 2 context
@@ -5168,7 +5395,11 @@ run_reviewer_pass() {
       fi
     fi
 
-    run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
+    if reviewer_is_pool_slot "${model}"; then
+      run_pool_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
+    else
+      run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
+    fi
     pass_pids+=("$!")
     pass_pid_models+=("${model}")
   done <<< "$(get_active_reviewer_models_text)"
@@ -5203,7 +5434,7 @@ run_reviewer_pass() {
       success)
         pass_successful=$((pass_successful + 1))
         ;;
-      pr_closed|skipped_unmapped|skipped_open)
+      pr_closed|skipped_unmapped|skipped_open|skipped_pool)
         ;;
       skipped_budget)
         pass_budget_skipped=1
@@ -5215,12 +5446,15 @@ run_reviewer_pass() {
     esac
   done
 
-  # A skipped sole Mistral slot or a context overflow needs a successful
-  # larger-window reviewer before the PR can continue.
+  # A sole reviewer (the one-reviewer tier's seeded draw) that was skipped
+  # (no failback mapping, cached-open health, Claude pool unavailable) or
+  # overflowed its context window needs a successful larger-window reviewer
+  # before the PR can continue. Originally Mistral-only (PR #6438); any sole
+  # slot other than the rescue model itself qualifies.
   if [ "${#pass_models[@]}" -eq 1 ] \
-    && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
+    && [ "${pass_models[0]}" != "openai/gpt-6-luna" ] && [ "${pass_successful}" -eq 0 ] \
     && [ -f "${pass_status_files[0]}" ] \
-    && { [ "${sf_status}" = "skipped_unmapped" ] || [ "${sf_status}" = "skipped_open" ] || {
+    && { [ "${sf_status}" = "skipped_unmapped" ] || [ "${sf_status}" = "skipped_open" ] || [ "${sf_status}" = "skipped_pool" ] || {
       [ "${sf_status}" = "failed" ] \
         && grep -Eiq 'context.{0,50}(exceed|overflow|too long|length is [0-9]+ tokens|window full)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}"
     }; } \
@@ -5230,7 +5464,7 @@ run_reviewer_pass() {
       reviewer_health_dispatch_prepare "openai/gpt-6-luna"
       [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
     }; then
-      echo "::warning::Sole reviewer Mistral was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+      echo "::warning::Sole reviewer ${pass_models[0]} was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
       run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
       sf_status="$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)"
       if [ "${sf_status}" = "success" ]; then
@@ -5461,7 +5695,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
     [ -f "${status_file}" ] || continue
     status_value="$(cat "${status_file}" 2>/dev/null || true)"
     case "${status_value}" in
-      skipped_unmapped|skipped_open)
+      skipped_unmapped|skipped_open|skipped_pool)
         review_skip_only_statuses=$((review_skip_only_statuses + 1))
         ;;
       *)
@@ -5470,7 +5704,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
     esac
   done
   if [ "$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)" -gt 1 ] && [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
-    echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
+    echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open, unmapped or Claude pool unavailable). Continuing with REVIEWERS_SUCCESSFUL=0."
     echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
     exit 0
   fi
