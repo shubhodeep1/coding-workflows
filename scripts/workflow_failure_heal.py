@@ -1798,7 +1798,7 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
-def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_login: str) -> bool:
+def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_login: str, head_sha: str | None = None) -> bool:
 	"""True when the newest trusted autofix marker names the host-only stop.
 
 	``comments`` is oldest first. Only comments by ``author_login`` (the
@@ -1808,8 +1808,13 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 	``review-autofix-failure-cap:v1`` marker decides; a trusted editor summary
 	seen first means the host-only stop is no longer current. Markers from any
 	other author are ignored, so a forged marker cannot suppress a heal.
+
+	``head_sha`` (the labeled PR's current head, when known) binds the
+	deciding marker to that head, so a host-only marker left from an older head
+	cannot suppress a later, unrelated escalation.
 	"""
 	author = str(author_login or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
 	if not author:
 		return False
 	for comment in reversed([item for item in comments if isinstance(item, dict)]):
@@ -1820,7 +1825,10 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 		for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE):
 			match = pattern.search(body)
 			if match is not None:
-				return _marker_fields(match).get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+				fields = _marker_fields(match)
+				if head and fields.get("head", "").lower() != head:
+					return False
+				return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
 		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
 			return False
 	return False
@@ -2902,7 +2910,7 @@ def _cmd_host_only_conflict_marker(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json)
 	except (OSError, ValueError):
 		comments = None
-	result = isinstance(comments, list) and latest_trusted_autofix_marker_is_host_only(comments, args.author_login)
+	result = isinstance(comments, list) and latest_trusted_autofix_marker_is_host_only(comments, args.author_login, args.head_sha or None)
 	sys.stdout.write(("true" if result else "false") + "\n")
 	return 0
 
@@ -3275,6 +3283,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("host-only-conflict-marker", help="Print true when the newest trusted autofix marker names the host-only resolver stop")
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--author-login", required=True)
+	p.add_argument("--head-sha", default="", help="require the deciding marker to name this head")
 	p.set_defaults(func=_cmd_host_only_conflict_marker)
 
 	p = sub.add_parser("redact-stream")

@@ -202,7 +202,27 @@ if [ "${LABEL}" = "ai:needs-human" ]; then
 	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
 		log "warn host_only_check_identity_unavailable issue=${ISSUE_NUMBER}; dispatching without the host-only check"
 	elif [ "$(python3 "${HEAL_PY}" host-only-conflict-marker --comments-json "${COMMENTS_JSON_FILE}" --author-login "${HEAL_REPORTER_LOGIN}" 2>/dev/null || echo false)" = "true" ]; then
-		HEAL_SCOPE_SKIP_ARGS+=(--host-only-conflict)
+		HOST_ONLY_CONFIRMED=true
+		if [ "${KIND}" = "pull_request" ]; then
+			# Bind the marker to the PR's current head so a host-only stop on an
+			# older head cannot suppress a later, unrelated escalation. Read only
+			# once a host-only marker was found; an unreadable head dispatches.
+			HOST_ONLY_PR_JSON="${RUNTIME_DIR}/host_only_pull.json"
+			HOST_ONLY_PR_HEAD=""
+			if gh_api_json_to_file "${HOST_ONLY_PR_JSON}" gh api "repos/${REPO}/pulls/${ISSUE_NUMBER}" 2>/dev/null; then
+				HOST_ONLY_PR_HEAD="$(jq -r '.head.sha // ""' "${HOST_ONLY_PR_JSON}" 2>/dev/null || echo "")"
+			fi
+			if ! [[ "${HOST_ONLY_PR_HEAD}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+				log "warn host_only_check_head_unavailable issue=${ISSUE_NUMBER}; dispatching without the host-only check"
+				HOST_ONLY_CONFIRMED=false
+			elif [ "$(python3 "${HEAL_PY}" host-only-conflict-marker --comments-json "${COMMENTS_JSON_FILE}" --author-login "${HEAL_REPORTER_LOGIN}" --head-sha "${HOST_ONLY_PR_HEAD}" 2>/dev/null || echo false)" != "true" ]; then
+				log "info host_only_marker_stale issue=${ISSUE_NUMBER} head=${HOST_ONLY_PR_HEAD}"
+				HOST_ONLY_CONFIRMED=false
+			fi
+		fi
+		if [ "${HOST_ONLY_CONFIRMED}" = "true" ]; then
+			HEAL_SCOPE_SKIP_ARGS+=(--host-only-conflict)
+		fi
 	fi
 fi
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" "${HEAL_SCOPE_SKIP_ARGS[@]}" 2>/dev/null || echo "")"

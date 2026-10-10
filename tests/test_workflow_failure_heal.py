@@ -4663,6 +4663,9 @@ def test_latest_trusted_autofix_marker_is_host_only() -> None:
 	assert not check([], CAP_AUTHOR)
 	# An untrusted newer marker does not hide the trusted host-only one.
 	assert check([_host_only_cap_comment(), _host_only_cap_comment(author="contributor", reason="editor_empty_noop")], CAP_AUTHOR)
+	# Bound to the current head: a marker for another head is stale.
+	assert check([_host_only_cap_comment()], CAP_AUTHOR, SHA_B)
+	assert not check([_host_only_cap_comment()], CAP_AUTHOR, SHA_A)
 
 
 def test_host_only_conflict_marker_cli() -> None:
@@ -4731,8 +4734,8 @@ def test_autofix_report_skips_cap_repeating_host_only_conflict() -> None:
 				assert report.get("repeated_failure_reason") != HOST_ONLY_REASON
 
 
-def _host_only_label_state(comment_rows: list[dict]) -> dict:
-	state = _report_state()
+def _host_only_label_state(comment_rows: list[dict], *, pr_head: str = SHA_B) -> dict:
+	state = _report_state(pull_request={"head": {"sha": pr_head}})
 	state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].extend(comment_rows)
 	return state
 
@@ -4747,6 +4750,10 @@ def test_label_reporter_skips_needs_human_after_host_only_conflict() -> None:
 		(_host_only_label_state([trusted, summary]), "ai:needs-human", False, ""),
 		(dict(_host_only_label_state([trusted]), user_fetch_fail=True), "ai:needs-human", False, "warn host_only_check_identity_unavailable"),
 		(_host_only_label_state([trusted]), "ai:scope-blocked", False, ""),
+		# A host-only marker for an older head does not suppress a later
+		# escalation, and an unreadable PR head dispatches.
+		(_host_only_label_state([trusted], pr_head=SHA_A), "ai:needs-human", False, "info host_only_marker_stale"),
+		(dict(_host_only_label_state([trusted]), pull_fetch_fail=True), "ai:needs-human", False, "warn host_only_check_head_unavailable"),
 	]
 	for state, label, skipped, expected_line in cases:
 		with tempfile.TemporaryDirectory(prefix="heal-report-host-only-") as tmp_name:

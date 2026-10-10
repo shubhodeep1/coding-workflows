@@ -369,7 +369,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     heal: its per-run report, an `identical_failure_cap` report repeating it
     (`repeated_failure_reason`, from the gate's `FINGERPRINT_CAP_REASON` or the
     trusted head markers) and an `ai:needs-human` label on an item whose newest
-    autofix marker by the `GH_PAT` account names it are skipped by the
+    autofix marker by the `GH_PAT` account names it (on a PR, for its current
+    head) are skipped by the
     reporters and the intake (`skip reason=host_only_conflict_manual_merge`);
     the resolver's manual-merge error and the cap are unchanged. Before fingerprinting or mutation, the intake verifies
     phase reports against the GitHub-read run, failed phase job and a linking

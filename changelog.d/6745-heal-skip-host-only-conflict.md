@@ -7,11 +7,11 @@ The conflict resolver fails closed with `::error::Conflict resolver: host-only c
 | --- | --- |
 | Failure reason skipped | `conflict_resolver_sandbox_path_host_only` |
 | Report paths covered | 3 (per-run report, identical-failure cap, `ai:needs-human` label) |
-| New GitHub API calls | 0 |
+| New GitHub API calls | `GET /user` on every `ai:needs-human` report (before: only on heal-labeled items), plus one PR read when a host-only marker is found on a PR |
 
 What this means for operators: a host-only conflict shows up once, as the resolver's error and the cap comment on the PR, and waits for a manual merge. Heal issues still open for every other review/autofix failure.
 
 ### For contributors
 
 - `skip_reason()` in `scripts/workflow_failure_heal.py` decides all three paths. Cap reports carry an optional `repeated_failure_reason` (validated, `identical_failure_cap` reports only), taken from the gate's `FINGERPRINT_CAP_REASON` or the trusted head markers, never from the evidence text. Older reports without it route as before.
-- The label path counts only markers posted by the `GH_PAT` account (`host-only-conflict-marker` subcommand, newest marker wins, a newer editor summary clears it). If that identity cannot be read, the report is dispatched as before. An `ai:needs-human` label on a linked issue whose own comments carry no such marker is still reported.
+- The label path counts only markers posted by the `GH_PAT` account (`host-only-conflict-marker` subcommand, newest marker wins, a newer editor summary clears it). On a pull request the marker must also name the PR's current head (`--head-sha`), so a host-only stop on an older head never suppresses a later escalation; an unreadable head dispatches. If that identity cannot be read, the report is dispatched as before. An `ai:needs-human` label on a linked issue whose own comments carry no such marker is still reported.
