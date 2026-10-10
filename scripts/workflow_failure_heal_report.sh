@@ -178,6 +178,7 @@ if ! python3 "${HEAL_PY}" build-issue-payload \
 fi
 
 HEAL_SCOPE_SKIP_ARGS=()
+HEAL_REPORTER_LOGIN=""
 if [ "${LABEL}" = "ai:needs-human" ] && jq -e '[.labels[]?.name] | index("ai:workflow-heal") != null' "${ISSUE_JSON_FILE}" >/dev/null; then
 	# The comments are already fetched above. Only the authenticated account's
 	# refusal marker may suppress a new heal generation.
@@ -187,7 +188,24 @@ if [ "${LABEL}" = "ai:needs-human" ] && jq -e '[.labels[]?.name] | index("ai:wor
 		exit 1
 	fi
 	if [ -n "${HEAL_REPORTER_LOGIN}" ] && jq -e --arg login "${HEAL_REPORTER_LOGIN}" 'any(.[]; .author == $login and (.body | contains("<!-- ai:workflow-heal-scope-unverified:v1")))' "${COMMENTS_JSON_FILE}" >/dev/null; then
-		HEAL_SCOPE_SKIP_ARGS=(--heal-scope-unverified)
+		HEAL_SCOPE_SKIP_ARGS+=(--heal-scope-unverified)
+	fi
+fi
+# The heal intake applies ai:needs-human itself after posting a non-retryable
+# diagnosis (marker ai:workflow-heal-non-retryable:v1); that label event must
+# not dispatch another heal. Only the authenticated account's marker counts,
+# and only while it is newer than that account's latest failure marker. The
+# /user read happens only when the marker text is present.
+if [ "${LABEL}" = "ai:needs-human" ] && jq -e 'any(.[]; (.body // "") | contains("<!-- ai:workflow-heal-non-retryable:v1"))' "${COMMENTS_JSON_FILE}" >/dev/null 2>&1; then
+	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
+		HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+	fi
+	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
+		log 'error non_retryable_marker_author_unavailable; not dispatching another heal'
+		exit 1
+	fi
+	if [ "$(python3 "${HEAL_PY}" non-retryable-label-suppressed --comments-json "${COMMENTS_JSON_FILE}" --trusted-login "${HEAL_REPORTER_LOGIN}" 2>/dev/null || echo false)" = "true" ]; then
+		HEAL_SCOPE_SKIP_ARGS+=(--non-retryable-diagnosed)
 	fi
 fi
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" "${HEAL_SCOPE_SKIP_ARGS[@]}" 2>/dev/null || echo "")"
