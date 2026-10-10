@@ -531,3 +531,209 @@ def test_nightly_sandbox_check_fails_when_no_log_copies_back() -> None:
 			cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
 		assert again.returncode == 1
 		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing" in again.stdout
+
+
+# --- cgroup driver for the sandbox's rootless dockerd (#7063, Q57) -----------
+# Rootless dockerd picks the systemd cgroup driver on a systemd cgroup v2 host;
+# without a user session for the sandbox user every container start failed with
+# "open /sys/fs/cgroup/user.slice/user-<uid>.slice/cgroup.controllers"
+# (#6902, #6664). Provision now sets up the session, proves a container starts,
+# and falls back to cgroupfs before failing closed.
+
+def _driver(tmp: Path, *, session: bool, probe: dict[str, int], mode: str = "auto", ready: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Run sandbox_start_verified_dockerd with its collaborators stubbed out.
+
+	probe maps the daemon's driver (systemd/cgroupfs/reused) to the probe's exit code.
+	"""
+	calls = tmp / "calls"
+	status = tmp / "status"
+	probes = " ".join(f"[{key}]={value}" for key, value in probe.items())
+	script = f'''
+source "{HELPER}"
+sudo() {{ :; }}
+build_sandbox_env() {{ :; }}
+declare -A PROBE=({probes})
+DAEMON="{"reused" if ready else ""}"
+sandbox_systemd_session() {{ echo "session $*" >> "{calls}"; {"return 0" if session else "return 1"}; }}
+rootless_docker_ready() {{ [ -n "${{DAEMON}}" ]; }}
+start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
+stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
+rootless_docker_container_probe() {{ echo "probe ${{DAEMON}}" >> "{calls}"; return "${{PROBE[$DAEMON]:-1}}"; }}
+sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp), "VALIDATION_HARNESS_SANDBOX_CGROUP_MODE": mode,
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+	return result, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+
+
+def test_a_working_systemd_session_is_used_once_a_container_starts(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 0})
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]
+	assert "outcome=ok reason=systemd_user_session" in result.stderr
+	assert "outcome=ok reason=container_probe_systemd" in result.stderr
+
+
+def test_a_container_that_fails_under_systemd_restarts_the_daemon_with_cgroupfs(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 1, "cgroupfs": 0})
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd", "stop", "start cgroupfs", "probe cgroupfs"]
+	assert "outcome=retry reason=container_start_failed_systemd" in result.stderr
+	assert "outcome=ok reason=container_probe_cgroupfs" in result.stderr
+
+
+def test_no_systemd_session_goes_straight_to_cgroupfs(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=False, probe={"cgroupfs": 0})
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+	assert "outcome=ok reason=systemd_user_session_unavailable" in result.stderr
+
+
+def test_a_container_that_fails_under_both_drivers_fails_provision_closed(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 1, "cgroupfs": 1})
+	assert result.returncode == 3
+	assert calls[-2:] == ["start cgroupfs", "probe cgroupfs"]
+	assert "outcome=fail reason=container_start_failed" in result.stderr
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail provision container_start_failed\n"
+
+
+def test_cgroupfs_mode_never_touches_the_systemd_session(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode="cgroupfs")
+	assert result.returncode == 0, result.stderr
+	assert calls == ["start cgroupfs", "probe cgroupfs"]
+
+
+def test_an_inconclusive_probe_keeps_the_daemon_and_says_so(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 2})
+	assert result.returncode == 0, result.stderr
+	assert "stop" not in calls
+	assert "outcome=ok reason=container_probe_inconclusive" in result.stderr
+
+
+def test_a_reused_daemon_is_tested_too_and_replaced_when_containers_fail(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"reused": 1, "cgroupfs": 0}, ready=True)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "probe reused", "stop", "start cgroupfs", "probe cgroupfs"]
+
+
+def _probe(tmp: Path, run_rc: int) -> subprocess.CompletedProcess:
+	script = f'''
+source "{HELPER}"
+as_sandbox() {{
+	case "$*" in
+		"docker image inspect"*) return 0 ;;
+		"docker run"*) echo "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory" >&2; return {run_rc} ;;
+	esac
+}}
+rootless_docker_container_probe
+'''
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp)})
+
+
+@pytest.mark.parametrize("run_rc,expected", ((0, 0), (125, 1), (126, 2), (127, 2)))
+def test_only_a_daemon_refusal_counts_as_a_failed_container_start(tmp_path: Path, run_rc: int, expected: int) -> None:
+	result = _probe(tmp_path, run_rc)
+	assert result.returncode == expected, result.stderr
+	if run_rc:
+		assert f"probe_exit={run_rc} detail=docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers" in result.stderr
+
+
+@pytest.mark.skipif(shutil.which("ldd") is None or not Path("/usr/bin/true").exists(), reason="needs ldd and /usr/bin/true")
+def test_the_probe_image_is_built_locally_from_true_and_its_libraries(tmp_path: Path) -> None:
+	captured = tmp_path / "image.tar"
+	script = f'''
+source "{HELPER}"
+as_sandbox() {{
+	case "$*" in
+		"docker image inspect"*) return 1 ;;
+		"docker import"*) printf '%s\\n' "$*" > "{tmp_path}/import_args"; cat > "{captured}" ;;
+	esac
+}}
+build_probe_image
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	assert (tmp_path / "import_args").read_text(encoding="utf-8").strip() == 'docker import --change CMD ["/usr/bin/true"] - ai-validation-probe:local'
+	with tarfile.open(captured) as archive:
+		names = archive.getnames()
+		assert "usr/bin/true" in names
+		assert any(name.endswith("libc.so.6") for name in names) or len(names) == 1
+		assert all(archive.getmember(name).isfile() for name in names), "symlinks are dereferenced"
+		assert not any(name.startswith("/") or ".." in name for name in names)
+
+
+def _session(tmp: Path, *, systemd: bool = True, linger_rc: int = 0, bus: bool = True) -> tuple[subprocess.CompletedProcess, str]:
+	run_dir = tmp / "run-systemd"
+	if systemd:
+		run_dir.mkdir()
+	cgroup = tmp / "cgroup"
+	(cgroup / "user.slice" / "user-1002.slice").mkdir(parents=True)
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "loginctl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(bin_dir / "loginctl").chmod(0o755)
+	log = tmp / "sudo.log"
+	script = f'''
+source "{HELPER}"
+sudo() {{
+	shift
+	echo "$*" >> "{log}"
+	case "$1" in
+		loginctl) return {linger_rc} ;;
+		test) {"return 0" if bus else "return 1"} ;;
+	esac
+	return 0
+}}
+sleep() {{ :; }}
+sandbox_systemd_session ai-validation 1002
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "HOME": str(tmp), "SANDBOX_SYSTEMD_RUN_DIR": str(run_dir),
+			"SANDBOX_CGROUP_ROOT": str(cgroup), "SANDBOX_SESSION_WAIT_SECS": "2"})
+	return result, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_the_systemd_session_is_lingered_and_waits_for_the_user_bus(tmp_path: Path) -> None:
+	result, sudo_log = _session(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "loginctl enable-linger ai-validation" in sudo_log
+	assert "systemctl start user@1002.service" in sudo_log
+	assert "test -S /run/user/1002/bus" in sudo_log
+
+
+@pytest.mark.parametrize("kwargs", ({"systemd": False}, {"linger_rc": 1}, {"bus": False}))
+def test_the_systemd_session_reports_unavailable(tmp_path: Path, kwargs: dict) -> None:
+	result, _ = _session(tmp_path, **kwargs)
+	assert result.returncode == 1
+
+
+def test_dockerd_gets_the_user_bus_or_the_cgroupfs_driver(tmp_path: Path) -> None:
+	log = tmp_path / "sudo.log"
+	script = f'''
+source "{HELPER}"
+sudo() {{ printf '%s\\n' "$*" >> "{log}"; }}
+rootless_docker_ready() {{ return 0; }}
+start_rootless_dockerd systemd /home/ai-validation /run/user/1002
+start_rootless_dockerd cgroupfs /home/ai-validation /run/user/1002
+wait
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	systemd_line, cgroupfs_line = sorted(log.read_text(encoding="utf-8").splitlines(), key=lambda line: "cgroupfs" in line)
+	assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus" in systemd_line
+	assert "native.cgroupdriver" not in systemd_line
+	assert "XDG_RUNTIME_DIR=/run/user/1002" in cgroupfs_line
+	assert cgroupfs_line.endswith("setsid dockerd-rootless.sh --exec-opt native.cgroupdriver=cgroupfs")
+	assert "DBUS_SESSION_BUS_ADDRESS" not in cgroupfs_line
+
+
+def test_stopping_the_daemon_signals_only_as_the_sandbox_user() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	body = text.split("stop_rootless_dockerd()", 1)[1].split("\n}\n", 1)[0]
+	for line in body.splitlines():
+		if "pkill" in line or "pgrep" in line or "rm -rf" in line:
+			assert 'sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" --' in line, line
