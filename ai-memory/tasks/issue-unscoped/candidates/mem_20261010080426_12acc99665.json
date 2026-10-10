@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5122 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `run_pool_reviewer`, `pool_budget_remaining_now` calls the fallback function without checking whether it exists in the current shell context.\n  WHY: This could cause a shell error if the fallback function is missing, though that is unlikely in the provided workflow.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:5122 | severity=low | confidence=2\n  PROBLEM: In `run_pool_reviewer`, `pool_budget_remaining_now` uses `reviewer_budget_remaining_secs_fallback` without checking whether that function exists in the current shell context.\n  WHY: This could cause a shell error if the fallback function is missing, though that is unlikely in the provided workflow.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "87817e3d00874fe3d9949253d4c135c813c00a7f30e341fbeac8331dba49f765",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7024,
+    "run_id": "38034770436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38034770436",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010080426_12acc99665",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7024,
+    "run_id": "38034770436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T08:04:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
