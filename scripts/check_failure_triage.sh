@@ -248,6 +248,10 @@ HEAD_REF="$(printf '%s' "${PR_JSON}" | jq -r '.head.ref // ""')"
 PR_TITLE="$(printf '%s' "${PR_JSON}" | jq -r '.title // ""')"
 PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.html_url // ""')"
 HEAD_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.head.repo.full_name // ""')"
+PR_HEAD_SHA_CURRENT="$(printf '%s' "${PR_JSON}" | jq -r '.head.sha // ""')"
+if ! [[ "${PR_HEAD_SHA_CURRENT}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+	PR_HEAD_SHA_CURRENT=""
+fi
 [ -n "${PR_URL}" ] || PR_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/pull/${PR_NUMBER}"
 if ! PR_URL_DISPLAY="$(triage_single_line_metadata "${PR_URL}")"; then
 	log "error metadata_flatten_failed"
@@ -385,9 +389,31 @@ fi
 
 PR_PAYLOAD_FILE="${PR_JSON_FILE}"
 : > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+# Collect check runs for the failing check's SHA, not the PR's current head:
+# a push after the failure must not swap a later commit's checks into the
+# diagnosis (#6918). An empty HEAD_SHA keeps the PR-payload head fallback.
+pr_head_advanced="unknown"
+context_head_sha_label="pr_payload"
+if [ -n "${HEAD_SHA}" ]; then
+	if [[ "${HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		context_head_sha_label="${HEAD_SHA,,}"
+	else
+		# The collector rejects it as unavailable; never echo the raw value.
+		context_head_sha_label="invalid"
+	fi
+fi
+if [ "${context_head_sha_label}" != "pr_payload" ] && [ "${context_head_sha_label}" != "invalid" ] && [ -n "${PR_HEAD_SHA_CURRENT}" ]; then
+	if [ "${HEAD_SHA,,}" = "${PR_HEAD_SHA_CURRENT,,}" ]; then
+		pr_head_advanced="false"
+	else
+		pr_head_advanced="true"
+	fi
+fi
+log "context_head_sha=${context_head_sha_label} pr_head_sha=${PR_HEAD_SHA_CURRENT:-unknown} pr_head_advanced=${pr_head_advanced}"
 if [ -f scripts/collect_pr_check_runs_context.py ]; then
 	if PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" \
 		PR_CHECK_RUNS_CONTEXT_FILE="${PR_CHECK_RUNS_CONTEXT_FILE}" \
+		PR_CHECK_RUNS_HEAD_SHA_OVERRIDE="${HEAD_SHA}" \
 		CHECK_RUNS_WAIT_TIMEOUT_SECS="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-60}" \
 		PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/collect_pr_check_runs_context.py; then
 		:
