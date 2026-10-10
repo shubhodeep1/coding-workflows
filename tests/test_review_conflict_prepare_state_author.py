@@ -12,7 +12,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = (ROOT / "scripts/review_conflict_prepare.sh").read_text(encoding="utf-8")
 STATE_READ = SOURCE.split('if [ "${IS_INTEGRATION_SYNC}" = "true" ] &&', 1)[1]
-STATE_READ = 'if [ "${IS_INTEGRATION_SYNC}" = "true" ] &&' + STATE_READ.split('\nCONFLICT_RESOLVER_SEMBLE_QUERY_FILE=', 1)[0]
+# The block ends before the fingerprint-violation expansion that follows it
+# (that section runs git against the worktree and needs BASE_BRANCH).
+STATE_READ = 'if [ "${IS_INTEGRATION_SYNC}" = "true" ] &&' + STATE_READ.split('\n# Fingerprint-violation expansion of the resolver working set.', 1)[0]
 
 
 @pytest.mark.parametrize("identity_available", [True, False])
