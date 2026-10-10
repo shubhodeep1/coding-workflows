@@ -2168,6 +2168,39 @@ def test_count_autofix_failure_streak_reads_trailing_failure_comments() -> None:
 	) == 2
 
 
+def test_count_autofix_failure_streak_author_filter_skips_untrusted_comments(tmp_path: Path) -> None:
+	"""Sibling of untrusted-comment-resets-identical-failure-cap: with the
+	pipeline login, another commenter's failure / summary text neither counts
+	nor ends the streak. Without it the legacy rules apply unchanged."""
+	pipeline = "workflow-pat-user"
+	comments = [
+		{"user": {"login": pipeline}, "body": AUTOFIX_NOOP_COMMENT},
+		{"user": {"login": "drive-by-user"}, "body": AUTOFIX_SUMMARY_COMMENT},
+		{"author_login": pipeline.upper(), "body": AUTOFIX_NOOP_COMMENT},
+		{"user": {"login": "drive-by-user"}, "body": AUTOFIX_NOOP_COMMENT},
+		{"body": AUTOFIX_NOOP_COMMENT},
+	]
+	assert heal.count_autofix_failure_streak(comments, author_login=pipeline) == 2
+	assert heal.count_autofix_failure_streak(comments, author_login=pipeline.upper()) == 2
+	# Legacy: every author counts and the untrusted summary ends the scan.
+	assert heal.count_autofix_failure_streak(comments) == 3
+	assert heal.count_autofix_failure_streak(comments, author_login="") == 3
+	assert heal.count_autofix_failure_streak(comments, author_login=None) == 3
+	# A trusted summary still ends the streak.
+	trusted_summary = [*comments[:1], {"user": {"login": pipeline}, "body": AUTOFIX_SUMMARY_COMMENT}, *comments[1:]]
+	assert heal.count_autofix_failure_streak(trusted_summary, author_login=pipeline) == 1
+	# CLI: the flag is optional and the sentinel lets the reporter probe for it.
+	assert heal.AUTOFIX_STREAK_AUTHOR_FILTER == "autofix-failure-streak-author-login:v1"
+	assert heal.AUTOFIX_STREAK_AUTHOR_FILTER in LIB_PATH.read_text(encoding="utf-8")
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	filtered = subprocess.run([sys.executable, str(LIB_PATH), "autofix-failure-streak", "--comments-json", str(comments_file), "--author-login", pipeline], capture_output=True, text=True, check=True, env=env)
+	assert filtered.stdout.strip() == "2"
+	legacy = subprocess.run([sys.executable, str(LIB_PATH), "autofix-failure-streak", "--comments-json", str(comments_file)], capture_output=True, text=True, check=True, env=env)
+	assert legacy.stdout.strip() == "3"
+
+
 def _autofix_payload(**overrides) -> dict:
 	payload = heal.build_autofix_failure_payload(
 		repo=CONSUMER_REPO,
@@ -4150,6 +4183,36 @@ def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None
 		assert "dispatched pr=4174 failure=identical_failure_cap streak=1" in result.stdout, result.stdout + result.stderr
 		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
 		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"]
+
+
+def test_autofix_report_streak_counts_only_the_pipeline_author() -> None:
+	untrusted = {"user": {"login": "drive-by-user"}, "body": AUTOFIX_SUMMARY_COMMENT}
+	trusted = [{"user": {"login": CAP_AUTHOR}, "body": AUTOFIX_NOOP_COMMENT}]
+	flags = {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_FAILURE_MARKER_AUTHOR": CAP_AUTHOR}
+	# An untrusted summary newer than the trusted failure no longer ends the streak.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-author-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags=flags)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=2 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=on" in result.stdout
+	# Without the pipeline login the legacy count applies.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-legacy-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=off" in result.stdout
+	# An older staged helper without the sentinel keeps the legacy call.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-streak-old-helper-") as tmp_name:
+		work, _state_file, env = _stage_autofix_report(Path(tmp_name), comments=[*trusted, untrusted], flags=flags)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		staged_helper.write_text(staged_helper.read_text(encoding="utf-8").replace("autofix-failure-streak-author-login:v1", "removed"), encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=editor_empty_noop streak=1 " in result.stdout, result.stdout + result.stderr
+		assert "streak_author_filter=off" in result.stdout
+		assert "warn reason=streak_author_filter_unavailable pr=4174" in result.stdout
+	text = AUTOFIX_REPORT_SCRIPT.read_text(encoding="utf-8")
+	assert "grep -q 'autofix-failure-streak-author-login:v1' \"${HEAL_PY}\"" in text
+	assert 'STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")' in text
 
 
 def test_reviewer_failure_evidence_names_exit_codes_and_self_named_errors() -> None:
