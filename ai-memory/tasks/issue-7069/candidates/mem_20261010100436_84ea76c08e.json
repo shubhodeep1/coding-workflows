@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix target?\nChoices:\nA) PR #7066's head branch `ai/issue-7060`, where the failing tests and the `FAKE_GH` changes live. The fix lands in that PR and turns its CI green. (RECOMMENDED)\nB) The default branch (`main`). The cited tests are not there, so this works only after PR #7066 merges.\nC) Close this issue and fix the fixture directly in PR #7066 through its own review/autofix loop.\nQ2: If the tests still fail once `FAKE_GH` makes the new tracker show up in the label-filtered listing and returns the paginated comments, what is in scope?\nChoices:\nA) Change only test fixtures in `tests/test_unblock_judge.py`. Keep the writer's convergence check in `scripts/operator_step_issue.py` as it is. Record any remaining writer error as a finding instead of changing production code. (RECOMMENDED)\nB) Also allow a small change to `scripts/unblock_judge.sh` so it sends the writer's stderr to the log instead of suppressing it, keeping the existing outcome logic unchanged.\nC) Allow changes to `scripts/operator_step_issue.py` if the fixture alone does not fix the tests.",
+  "fingerprint": "b2104a8d2fae3ce99e9880ab61aeabb43f04c1f58e845c882316edc1f6cdfb2e",
+  "lineage": {
+    "issue_number": 7069,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38043303924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38043303924",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010100436_84ea76c08e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7069,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38043303924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7069 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T10:04:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
