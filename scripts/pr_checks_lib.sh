@@ -545,6 +545,7 @@ _pr_base_freshness()
 	PR_BASE_FRESHNESS_HEAD_SHA=""
 	PR_BASE_FRESHNESS_BEHIND_BY=""
 	PR_BASE_FRESHNESS_OVERLAP=""
+	PR_BASE_FRESHNESS_BASE_REF=""
 	case "$(printf '%s' "${MERGE_BASE_FRESHNESS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
 		*)
@@ -571,6 +572,7 @@ _pr_base_freshness()
 		return 0
 	fi
 	PR_BASE_FRESHNESS_HEAD_SHA="${head_sha}"
+	PR_BASE_FRESHNESS_BASE_REF="${base_ref}"
 
 	# `compare/{head}...{base}`: `ahead_by` counts the commits the base
 	# gained since the merge-base and `files` is the base-side diff. GitHub
@@ -683,6 +685,73 @@ _pr_base_sync_for_fresh_ci()
 	return 1
 }
 
+# Freshness-update markers and the update cap (#7084, Q60: A).
+#
+# Only merge paths call _pr_base_fresh_for_merge, so a head it updates has
+# already been approved for merge. Each accepted update posts one PR comment
+# ending in
+#   <!-- ai:merge-base-sync:v1 pr=<n> from=<40-hex head> sync=<k> -->
+# where `from` is that approved head. The review gate
+# (scripts/review_head_gate.sh freshness-sync) lets the GitHub-made merge of
+# exactly that head with the base skip the reviewer panel: the
+# deterministic-skip-merge job only waits for CI, then merges. Without this,
+# each update restarted the whole review cycle (about 20-25 minutes) and the
+# base moved again before it finished, so #6654 was updated four times in
+# two hours and never merged.
+#
+# MERGE_BASE_FRESHNESS_MAX_SYNCS (default 2, 0-9; anything else uses 2) caps
+# the updates per PR: once that many markers exist, an overlap no longer
+# updates the branch and the caller merges after its required-checks wait.
+# 0 never updates (the overlap is logged and the merge proceeds).
+#
+# `_pr_base_sync_count <pr>` sets PR_BASE_SYNC_COUNT to the number of markers
+# for <pr> posted by the token's own login; returns 1 (count unknown, caller
+# updates as before) when either read fails.
+# API budget (§15): one `user` read and one paginated issue-comments read,
+# only on the overlap path. No earlier call in this file reads comments or
+# the token's login; the review gate's own comments read happens in another
+# job and cannot be shared.
+_pr_base_sync_count()
+{
+	local pr_number="$1"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local sync_login sync_comments_json
+	PR_BASE_SYNC_COUNT=""
+	sync_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+	[[ "${sync_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 1
+	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
+		[ .[]? | if type == "array" then .[] else . end
+		  | select(type == "object" and ((.user.login // "") == $login))
+		  | (.body // "") | select(type == "string" and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+ -->\\s*$")) ]
+		| length' 2>/dev/null | tail -n1)"
+	if ! [[ "${PR_BASE_SYNC_COUNT}" =~ ^[0-9]+$ ]]; then
+		PR_BASE_SYNC_COUNT=""
+		return 1
+	fi
+}
+
+# Post the marker for an accepted update. A head that is not a full 40-hex
+# SHA gets no marker, so the synchronize run reviews normally (fail safe).
+_pr_base_sync_marker_post()
+{
+	local pr_number="$1" head_sha="$2" sync_number="$3" sync_max="$4"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha:-unknown} outcome=skipped reason=short_head_sha"
+		return 0
+	fi
+	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s of at most %s).\n\n`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first. This head was already approved for merge: the next review run only waits for CI on the updated head and then merges, without running the reviewers again. Once %s updates have happened, a green CI run on the latest head merges without another update.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s -->' \
+		"${base_label}" "${sync_number}" "${sync_max}" "${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${PR_BASE_FRESHNESS_OVERLAP:-shared paths}" "${sync_max}" "${pr_number}" "${head_sha}" "${sync_number}")"
+	if gh_retry _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
+		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=posted"
+	else
+		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"
+	fi
+	return 0
+}
+
 _pr_base_fresh_for_merge()
 {
 	local pr_number="$1"
@@ -694,8 +763,22 @@ _pr_base_fresh_for_merge()
 	case "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" in
 		overlap)
 			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} base=${base_ref:-unknown} outcome=overlap reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} overlap=${PR_BASE_FRESHNESS_OVERLAP:--}"
-			echo "  [base-freshness] PR #${pr_number}: the base gained ${PR_BASE_FRESHNESS_BEHIND_BY:-?} commit(s) touching ${PR_BASE_FRESHNESS_OVERLAP:-shared paths}; updating the branch so CI and review run on the combined tree before merging."
-			_pr_base_sync_for_fresh_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" || true
+			local sync_max="${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" sync_done=""
+			[[ "${sync_max}" =~ ^[0-9]$ ]] || sync_max=2
+			if [ "${sync_max}" -eq 0 ]; then
+				sync_done=0
+			elif _pr_base_sync_count "${pr_number}"; then
+				sync_done="${PR_BASE_SYNC_COUNT}"
+			fi
+			if [ -n "${sync_done}" ] && [ "${sync_done}" -ge "${sync_max}" ]; then
+				echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} outcome=overlap action=proceed reason=max_syncs syncs=${sync_done} max=${sync_max}"
+				echo "  [base-freshness] PR #${pr_number}: already updated from the base ${sync_done} time(s) (max ${sync_max}); merging after the required checks instead of updating again."
+				return 0
+			fi
+			echo "  [base-freshness] PR #${pr_number}: the base gained ${PR_BASE_FRESHNESS_BEHIND_BY:-?} commit(s) touching ${PR_BASE_FRESHNESS_OVERLAP:-shared paths}; updating the branch so CI runs on the combined tree before merging (update $(( ${sync_done:-0} + 1 )) of at most ${sync_max})."
+			if _pr_base_sync_for_fresh_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}"; then
+				_pr_base_sync_marker_post "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" "$(( ${sync_done:-0} + 1 ))" "${sync_max}"
+			fi
 			return 1
 			;;
 		unknown)

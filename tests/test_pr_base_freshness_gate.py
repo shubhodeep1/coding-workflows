@@ -477,5 +477,118 @@ class RequiredChecksWiring(unittest.TestCase):
 		self.assertLess(recheck_at, text.index('--squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
 
 
+# --- Update markers and the per-PR update cap (#7084, Q60: A) ----------------
+# #6654 was updated from main four times in two hours: every update restarted
+# the full review cycle, and main moved again before it finished.
+
+SYNC_LOGIN = "workflow-bot"
+
+
+def _sync_marker(sync: int, *, pr: int = 7, author: str = SYNC_LOGIN) -> dict:
+	return {"user": {"login": author}, "body": f"Branch updated.\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync} -->"}
+
+
+def _sync_gate(comments: list[dict] | None, *, max_syncs: str | None = None, user_ok: bool = True) -> tuple[int, str, list[str]]:
+	"""Overlap case with the user and comments reads answered from fixtures."""
+	comments_json = json.dumps([comments]) if comments is not None else ""
+	user_json = json.dumps({"login": SYNC_LOGIN}) if user_ok else ""
+	body = f'''
+eval "base_$(declare -f _safe_gh_jq)"
+_safe_gh_jq() {{
+  case "$*" in
+    user) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {user_json!r} ] || return 1; printf '%s' {user_json!r} ;;
+    *"/issues/7/comments?per_page=100"*) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {comments_json!r} ] || return 1; printf '%s' {comments_json!r} ;;
+    *) base__safe_gh_jq "$@" ;;
+  esac
+}}
+_pr_base_fresh_for_merge 7 {HEAD} main; rc=$?; printf "%s\\n" "rc=${{rc}}"
+'''
+	env = {"MERGE_BASE_FRESHNESS_MAX_SYNCS": max_syncs} if max_syncs is not None else None
+	res = _run(body, compare_json=_compare(2, ["agents.md"]), pr_files_json=_pr_files(["agents.md"]), env=env)
+	assert res.returncode == 0, res.stderr
+	rc = int([line for line in res.stdout.splitlines() if line.startswith("rc=")][-1][3:])
+	return rc, res.stdout + res.stderr, res.calls  # type: ignore[attr-defined]
+
+
+class FreshnessSyncCap(unittest.TestCase):
+	def test_first_update_posts_the_marker_for_the_approved_head(self) -> None:
+		rc, out, calls = _sync_gate([])
+		self.assertEqual(rc, 1)
+		self.assertIn("update 1 of at most 2", out)
+		# The comment body spans several log lines; match on the whole log.
+		log = "\n".join(calls)
+		self.assertEqual(len([c for c in calls if c.startswith("-X POST repos/owner/repo/issues/7/comments")]), 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=1 -->", log)
+		self.assertIn("**Branch updated from `main` before merging** (update 1 of at most 2)", log)
+		self.assertIn("MERGE_BASE_SYNC_MARKER pr=7 head_sha=" + HEAD + " sync=1 outcome=posted", out)
+
+	def test_second_update_counts_only_the_workflow_logins_markers_for_this_pr(self) -> None:
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(1, author="someone-else"), _sync_marker(1, pr=8)])
+		self.assertEqual(rc, 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=2 -->", "\n".join(calls))
+
+	def test_after_the_cap_the_merge_proceeds_without_another_update(self) -> None:
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(2)])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=overlap action=proceed reason=max_syncs syncs=2 max=2", out)
+		self.assertFalse(any("/update-branch" in c for c in calls))
+		self.assertFalse(any("-X POST" in c for c in calls))
+
+	def test_the_cap_is_configurable_and_validated(self) -> None:
+		rc, out, _ = _sync_gate([_sync_marker(1)], max_syncs="1")
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=max_syncs syncs=1 max=1", out)
+		rc, _out, _calls = _sync_gate([_sync_marker(1)], max_syncs="nine")
+		self.assertEqual(rc, 1, "an invalid cap falls back to 2")
+
+	def test_cap_zero_never_updates_and_reads_nothing(self) -> None:
+		rc, out, calls = _sync_gate(None, max_syncs="0", user_ok=False)
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=max_syncs syncs=0 max=0", out)
+		self.assertFalse(any(c == "user" or "/comments" in c or "/update-branch" in c for c in calls))
+
+	def test_an_unreadable_count_updates_as_before(self) -> None:
+		rc, out, calls = _sync_gate(None, user_ok=False)
+		self.assertEqual(rc, 1)
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
+		self.assertIn("update 1 of at most 2", out)
+
+	def test_a_failed_update_posts_no_marker(self) -> None:
+		body_calls = _run(
+			f'_pr_base_fresh_for_merge 7 {HEAD} main; echo "rc=$?"',
+			compare_json=_compare(1, ["a.py"]), pr_files_json=_pr_files(["a.py"]), update_rc=1,
+		).calls  # type: ignore[attr-defined]
+		self.assertFalse(any("-X POST" in c for c in body_calls))
+
+	def test_a_short_head_sha_gets_no_marker(self) -> None:
+		res = _run('_pr_base_sync_marker_post 7 abc1234 1 2', env={})
+		self.assertIn("outcome=skipped reason=short_head_sha", res.stdout)
+		self.assertFalse(any("-X POST" in c for c in res.calls))  # type: ignore[attr-defined]
+
+
+class FreshnessSyncWiring(unittest.TestCase):
+	def test_every_merge_path_passes_the_cap(self) -> None:
+		for path in (WORKFLOW, REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"):
+			text = path.read_text(encoding="utf-8")
+			self.assertEqual(
+				text.count("MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}"),
+				text.count("MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}"),
+				path.name,
+			)
+
+	def test_the_gate_routes_a_verified_update_to_deterministic_skip_merge(self) -> None:
+		text = WORKFLOW.read_text(encoding="utf-8")
+		self.assertIn('or ($b | contains("<!-- ai:merge-base-sync:v1 "))', text)
+		self.assertIn("MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}", text)
+		block = text.split("gate_freshness_sync_fast_path()", 1)[1].split("# Size check uses", 1)[0]
+		self.assertIn('bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}"', block)
+		self.assertIn('[ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1', block)
+		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
+		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
+			self.assertIn(line, branch)
+		# force-review still wins over the fast path.
+		self.assertLess(block.index('if [ "${FORCE_REVIEW}" = "true" ]; then'), block.index("elif gate_freshness_sync_fast_path; then"))
+
+
 if __name__ == "__main__":
 	unittest.main()
