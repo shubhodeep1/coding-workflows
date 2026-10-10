@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -304,7 +305,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 
 def test_stable_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
@@ -3097,7 +3098,7 @@ def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:
 
 
 def test_fingerprint_cap_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
 		assert f"- `{prefix}`" in agents_text, prefix
 		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix

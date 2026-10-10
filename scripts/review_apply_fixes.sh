@@ -1515,8 +1515,9 @@ Create a new file only when one of these applies:
 - a reviewer finding you are applying, or the original PR's scope, requires it
 - a repository convention documented in CLAUDE.md / agents.md / AGENTS.md requires it for
   the change being fixed (for example a per-collection contract under
-  db/contracts/, a changelog fragment under changelog.d/, or a regression test
-  for a defect you fixed)
+  db/contracts/, a changelog fragment under changelog.d/, an agents.md fragment
+  under agents.d/ (never edit agents.md directly), or a regression test for a
+  defect you fixed)
 Otherwise do not create new utilities, modules, configuration systems, or
 documentation. Every file you create must be listed by path under
 "Changes made:" and "Files changed / commit status:" so the commit step can

@@ -79,7 +79,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2])
 omit_agent_instructions = sys.argv[3] == "true"
-roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
+roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d", "agents.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
 agent_instruction_names = {"agents.md", "agents.override.md", "claude.md", "claude.local.md"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}

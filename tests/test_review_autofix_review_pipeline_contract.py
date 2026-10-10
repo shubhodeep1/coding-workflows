@@ -27,6 +27,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -2903,7 +2904,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR)' in sandbox
 	assert 'opencode_source_mount+=\',readonly\'' in sandbox
 	assert 'opencode_agent=reviewer' in sandbox
-	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in _agents_text_with_fragments()
 	assert 'opencode_helpers_loaded=false' in consolidate
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
@@ -9511,7 +9512,7 @@ def _make_prepared_review_root(root: Path) -> None:
 
 
 def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
-	assert 'LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert 'LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP' in _agents_text_with_fragments()
 	with tempfile.TemporaryDirectory(prefix="review-cleanup-") as td:
 		runner_temp = Path(td).resolve()
 		stub_bin = runner_temp / "bin"

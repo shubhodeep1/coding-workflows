@@ -10,6 +10,10 @@ import subprocess
 import tempfile
 
 import yaml
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -223,7 +227,7 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 
 
 def test_agents_and_ci_register_phase_gate_contract() -> None:
-	agents_text = _read(AGENTS_MD)
+	agents_text = _agents_text_with_fragments()
 	assert "- `AI_PHASE_GATE_V1`" in agents_text
 
 	ci_text = _read(CI_WF)

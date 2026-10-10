@@ -84,6 +84,21 @@ _static_context_regular_file() {
 	[ -f "$1" ]
 }
 
+# agents.md with pending agents.d/ fragments folded in (CLAUDE.md §30), so a
+# model sees documentation that is still waiting for the release fold. Uses
+# the assembler staged next to this script; any failure falls back to the
+# plain file. The assembler only parses text and never executes fragment content.
+_static_context_cat_agents() {
+	local agents_file="$1" static_context_assembler
+	static_context_assembler="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/assemble_agents.py"
+	if [ -d agents.d ] && [ ! -L agents.d ] && [ -f "${static_context_assembler}" ]; then
+		if PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${static_context_assembler}" render --repo-root . --agents-file "${agents_file}" 2>/dev/null; then
+			return 0
+		fi
+	fi
+	cat "${agents_file}"
+}
+
 emit_agents_md() {
 	# Implement phase: include canonical-from-coding-workflows agents_canonical.md
 	# (staged from .codex-workflow-src) followed by the consumer repo's own
@@ -105,7 +120,7 @@ emit_agents_md() {
 				fi
 				if [ "$local_agents_regular" = true ]; then
 					echo "=== REPO-SPECIFIC AGENTS.MD ==="
-					cat agents.md
+					_static_context_cat_agents agents.md
 					echo
 				fi
 			fi
@@ -113,7 +128,7 @@ emit_agents_md() {
 		*)
 			if _static_context_regular_file agents.md; then
 				echo "=== AGENTS.MD ==="
-				cat agents.md
+				_static_context_cat_agents agents.md
 				echo
 			fi
 			;;

@@ -47,9 +47,9 @@ Restrictions:
 
 Sibling-conflict discipline: if the issue body lists `files_touched:` (machine
 or prose form) or names files in scope/acceptance, stay inside that set.
-Prefer append-only edits in shared docs (`README.md`, `agents.md`) under
-existing `<!-- anchor:NAME -->` HTML anchors rather than reflowing prose. Do
-not delete, rename, or reorder anchors.
+Prefer append-only edits in shared docs (`README.md`) under existing
+`<!-- anchor:NAME -->` HTML anchors rather than reflowing prose. Do not
+delete, rename, or reorder anchors.
 
 Changelog discipline: never edit `CHANGELOG.md` directly — newest-entry-first
 insertion makes every concurrent PR collide on the same hunk at line 1. When
@@ -59,6 +59,18 @@ the issue changes observable behaviour, write exactly one fragment file at
 `deprecated`, `removed`, `fixed`, `security`; default `added`); everything
 after it is the entry body. Automation folds fragments into `CHANGELOG.md`
 and deletes them — do not fold them yourself.
+
+agents.md discipline: never edit `agents.md` directly (or `AGENTS.md` in a
+consumer repo) — concurrent PRs collide on the same few sections. To
+document behaviour there, write one fragment at
+`agents.d/<issue-or-pr>-<slug>.md`. Each block starts with
+`<!-- agents: section="<exact ## heading>" -->` and its text is appended
+to that section; for a new log prefix use
+`<!-- agents: section="Stable log prefixes (contractual)" -->` followed by
+the `` - `PREFIX` `` bullet and the `LOG_PREFIX.name=PREFIX` line. Add ` new`
+inside the marker only to create a section that does not exist yet. A
+scope that lists `agents.md` covers its `agents.d/` fragments. Automation
+folds fragments into the agents file — do not fold them yourself.
 
 Scope-lock discipline: if the implementation context says an `ai:scope:<glob>`
 label is active for this issue, edit only files matching that glob. If the
