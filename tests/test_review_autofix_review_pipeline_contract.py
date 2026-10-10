@@ -7833,6 +7833,7 @@ def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None
 	evidence = _step_block("Assemble failure evidence")
 	files = (
 		'--evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',

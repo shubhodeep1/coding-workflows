@@ -1101,12 +1101,20 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            filter. Each is logged once on stderr
 #            (CLAUDE.md §8):
 #            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
+#            A shifted page is first re-read up to
+#            MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES times per listing (default 2,
+#            0-5; MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP seconds apart,
+#            default 2), each logged as
+#            MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted ... attempt=<n>/<max>
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
+	local __mt_runs_shift_retries=0 __mt_runs_shift_retry_max="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES:-2}" __mt_runs_shift_sleep="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP:-2}"
+	[[ "${__mt_runs_shift_retry_max}" =~ ^[0-5]$ ]] || __mt_runs_shift_retry_max=2
+	[[ "${__mt_runs_shift_sleep}" =~ ^[0-9]{1,2}$ ]] || __mt_runs_shift_sleep=2
 	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting in_progress; do
 		__mt_runs_page=1
 		__mt_runs_total=0
@@ -1150,6 +1158,17 @@ _mt_inflight_review_branches()
 				break
 			fi
 			if [ "${__mt_runs_page_len}" -lt 100 ]; then
+				# Runs changed status between GitHub's count and its listing. One
+				# run starting mid-read used to abort the whole release tick
+				# (run 38003551535); re-read the same query a bounded number of
+				# times (shared by every status of this listing) first. Runs
+				# already read stay in the union, so a re-read only adds runs.
+				if [ "${__mt_runs_shift_retries}" -lt "${__mt_runs_shift_retry_max}" ]; then
+					__mt_runs_shift_retries=$((__mt_runs_shift_retries + 1))
+					echo "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total} attempt=${__mt_runs_shift_retries}/${__mt_runs_shift_retry_max}" >&2
+					sleep "${__mt_runs_shift_sleep}"
+					continue
+				fi
 				__mt_runs_reason="listing_shifted"
 				break 2
 			fi

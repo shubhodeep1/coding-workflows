@@ -421,7 +421,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
-    than `editor_empty_noop`; the identical-failure cap's report lists the
+    than `editor_empty_noop`, and a failed `Install project dependencies`
+    sandbox prepare (`deps_prepare`) is reported the same way as
+    `sandbox_prepare_failed` (`sandbox_prepare_failure_evidence.txt`,
+    `AUTOFIX_SANDBOX_PREPARE_FAILED=true`; the sandbox image build retries
+    Docker Hub and network failures, `REVIEW_SANDBOX_BUILD_ATTEMPTS`,
+    `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` / `_2`); the identical-failure cap's report lists the
     failed runs from the head's `review-autofix-failure:v1` markers
     (`AUTOFIX_FAILURE_MARKER_AUTHOR`) so the intake reads their logs; and a
     support script's self-named error line (`untrusted_process_sandbox: …`)
@@ -1938,9 +1943,12 @@ ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
-(exact id, or same file, category, severity and exploit scenario within
-`SECURITY_AUDIT_WAIVER_LINE_WINDOW`, default 40 lines; legacy waivers with no
-scenario match by id only when any recorded category and severity also match).
+(exact non-empty `finding_id` only, and only when every category, severity
+and exploit scenario the waiver recorded also matches; no proximity match since
+#6987, so a different id at the waived location is a new, blocking finding.
+A field the waiver left empty is not compared, so a legacy row with no exploit
+scenario still matches by exact id plus any recorded category and severity.
+`SECURITY_AUDIT_WAIVER_LINE_WINDOW` is still validated but no longer used).
 `/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
 `<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
@@ -2253,6 +2261,7 @@ and shipped:
 - `RB_JUDGE_ISOLATION`
 - `CONSOLIDATOR_ISOLATION`
 - `REVIEW_SANDBOX_CLEANUP` (`scripts/review_untrusted_sandbox.sh cleanup`, run after `Commit changes`: `reason=root_pattern_mismatch|root_outside_runner_temp|image_marker_missing|baseline_missing|remove_permission_repaired|remove_failed cause=permission_denied|not_empty|busy|other`; path-free, teed into `editor_stage_stderr.txt`)
+- `REVIEW_SANDBOX_BUILD` (`scripts/review_untrusted_sandbox.sh prepare` / `prepare-ephemeral` image build: `attempt=<n> outcome=ok|retry|fail rc=<exit>`; `retry` only for registry or network errors, up to `REVIEW_SANDBOX_BUILD_ATTEMPTS`; kept in `sandbox_prepare_stderr.txt` and quoted in `sandbox_prepare_failure_evidence.txt`)
 - `JUDGE_ISOLATION`
 - `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
@@ -2496,6 +2505,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
 LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP
+LOG_PREFIX.name=REVIEW_SANDBOX_BUILD
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
