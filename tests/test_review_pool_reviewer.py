@@ -72,11 +72,13 @@ def _run(tmp_path: Path, **env: str) -> dict[str, object]:
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("review this\n", encoding="utf-8")
 	calls = tmp_path / "calls.txt"
+	health = tmp_path / "health.txt"
 	script = _pool_functions() + textwrap.dedent("""\
 		prepare_reviewer_prompt_for_model() { printf '%s\\n' "$2"; }
 		reviewer_base_reasoning_effort() { printf '%s\\n' "${1:-xhigh}"; }
 		reviewer_log_slot_state() { printf 'REVIEWER_SLOT_STATE: slot=%s fallback_model_used=%s\\n' "$2" "$7" | tee -a "$1"; }
 		codex_run_budget_remaining_secs() { printf '%s\\n' "${FAKE_BUDGET:-5000}"; }
+		reviewer_record_health_outcome() { printf '%s %s %s\\n' "$1" "$2" "$4" >> "${FAKE_HEALTH}"; }
 		run_pool_reviewer "$SLOT" "$SAFE" review "$PROMPT" xhigh
 		""")
 	proc = subprocess.run(
@@ -93,6 +95,7 @@ def _run(tmp_path: Path, **env: str) -> dict[str, object]:
 			"SAFE": SAFE,
 			"PROMPT": str(prompt),
 			"FAKE_CALLS": str(calls),
+			"FAKE_HEALTH": str(health),
 			"AI_ENGINE_RESOLVED_PANEL_REVIEWER": "claude",
 			**env,
 		},
@@ -109,6 +112,7 @@ def _run(tmp_path: Path, **env: str) -> dict[str, object]:
 		"run_lines": [line for line in call_lines if line.startswith("run ")],
 		"prepares": [line for line in call_lines if line.startswith("prepare-ephemeral")],
 		"cleanups": [line for line in call_lines if line.startswith("cleanup")],
+		"health": health.read_text(encoding="utf-8").splitlines() if health.exists() else [],
 		"stderr": proc.stderr,
 	}
 
@@ -196,6 +200,17 @@ def test_both_models_failing_marks_the_slot_failed(tmp_path: Path) -> None:
 	assert result["status"] == "failed"
 	assert result["runs"] == ["claude-sonnet-5-5", "claude-haiku-5-5"]
 	assert "failed on the Claude account pool after 2 attempt(s)" in result["output"]
+
+
+def test_pool_outcomes_feed_the_circuit_breaker(tmp_path: Path) -> None:
+	for name in ("ok", "failed", "pool", "codex"):
+		(tmp_path / name).mkdir()
+	assert _run(tmp_path / "ok", FAKE_SONNET_OUT=FINDINGS)["health"] == [f"{SLOT} primary_success "]
+	failed = _run(tmp_path / "failed", FAKE_SONNET_RC="1", FAKE_HAIKU_RC="1")
+	assert failed["health"] == [f"{SLOT} retryable_failure pool_exit_1"]
+	# Skips are not slot failures and must not open the circuit.
+	assert _run(tmp_path / "pool", FAKE_SONNET_RC="75", FAKE_SONNET_REASON="no_credential")["health"] == []
+	assert _run(tmp_path / "codex", AI_ENGINE_RESOLVED_PANEL_REVIEWER="codex")["health"] == []
 
 
 def test_low_run_budget_skips_before_any_pool_run(tmp_path: Path) -> None:

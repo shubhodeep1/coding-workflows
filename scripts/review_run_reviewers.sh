@@ -5178,6 +5178,14 @@ run_pool_reviewer() {
       printf '%s\n' "${pool_final_message}" > "${output_file}"
     fi
     echo "${pool_final_status}" > "${status_file}"
+    # Feed the circuit breaker like run_reviewer does. Skips (engine off,
+    # pool outage, budget, PR closed) are not slot failures and record nothing.
+    if command -v reviewer_record_health_outcome >/dev/null 2>&1; then
+      case "${pool_final_status}" in
+        success) reviewer_record_health_outcome "${model}" "primary_success" "" "" "${log_file}" || true ;;
+        failed) reviewer_record_health_outcome "${model}" "retryable_failure" "" "pool_${pool_last_reason:-unknown}" "${log_file}" || true ;;
+      esac
+    fi
     pool_log "REVIEWER_POOL: slot=${model} pass=${output_prefix} status=${pool_final_status} model=${pool_success_model:-${pool_attempt_model:-none}} attempts=${pool_attempt} reason=${pool_skip_reason:-${pool_last_reason:-none}}"
     reviewer_log_slot_state "${log_file}" "${model}" 0 none 0 false \
       "$([ "${pool_success_model:-}" = "${pool_fallback_model}" ] && [ "${pool_fallback_model}" != "${pool_primary_model}" ] && echo true || echo false)" \
