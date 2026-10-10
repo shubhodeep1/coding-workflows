@@ -36,9 +36,11 @@ def request(path, head):
 		client.connect(path)
 		try:
 			client.sendall(head)
-		except BrokenPipeError:
+		except (BrokenPipeError, ConnectionResetError):
 			# The busy path writes its 503 and closes without reading the
 			# request; the reply is already buffered, so read it below.
+			# Closing with our unread bytes queued sets ECONNRESET on this
+			# socket, which send can report instead of EPIPE.
 			pass
 		return client.recv(512)
 
