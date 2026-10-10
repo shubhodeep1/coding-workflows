@@ -5928,7 +5928,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert waived[0]["file"] == "scripts/example.py"
 	assert waived[0]["line"] == 1
 	assert waived[0]["owasp_or_stride_category"] == "A01: Broken Access Control"
-	assert waived[0]["exploit_scenario"] == _security_pass_test_finding()["exploit_scenario"]
+	assert waived[0]["exploit_scenario"] == remaining["exploit_scenario"]
 	assert len(waived[0]["exploit_scenario"]) <= 600
 	assert waived[0]["waived_at_cycle"] == 3
 	created = result.get("created_issues", [])
