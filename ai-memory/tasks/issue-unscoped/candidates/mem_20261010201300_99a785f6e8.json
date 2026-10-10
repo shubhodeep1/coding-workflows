@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:430-432, 448-450, 483-486, 1312-1314 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The README wrapper examples omit `id-token: write`, so consumers using them cannot start clarify, plan, or implement runs after the reusable workflows require that permission.\n  WHY: GitHub rejects the run at startup because the caller grants no `id-token` permission while the nested `heal-report` job requests `id-token: write`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:430-432, 448-450, 483-486, 1312-1314 | severity=MAJOR | confidence=4\n  PROBLEM: The README wrapper examples omit `id-token: write`, so consumers using them cannot start clarify, plan, or implement runs after the reusable workflows require that permission.\n  WHY: A consumer that set up its wrappers from these README examples gets a caller-level id-token of none. GitHub then refuses to start the run, because the nested job heal-report asks for id-token: write and the caller allows only none. This happens on every issue-opened, /answer and /approved event, before any job runs, not only when a heal report is needed. As a result clarify, plan and implement stop working entirely for those consumers.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f19f22b7feccfa1bf4d9a063050a1c0aeb711f1be969e66933b858cc09c6224d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6845,
+    "run_id": "38081637074",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38081637074",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010201300_99a785f6e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6845,
+    "run_id": "38081637074"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T20:13:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
