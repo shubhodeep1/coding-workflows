@@ -1,0 +1,41 @@
+{
+  "name": "flag_off_triage_issue_unchanged",
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n<!-- check-failure-triage:gen=1 -->\n<!-- check-failure-triage:root=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n<!-- check-failure-triage:pr=6564 -->\n\n## Automated CI failure triage (generation 1 of max 3)\n\n- **Repository:** `owner/repo`\n- **Pull request:** https://github.com/owner/repo/pull/6564 (`ai/issue-6564`)\n- **Failing check:** `CI / lint` (conclusion: `failure`)\n\n---\n\nDiagnosis text.\n",
+      "labels": [
+        {
+          "name": "ai:check-triage"
+        }
+      ],
+      "author_association": "OWNER",
+      "user": {
+        "login": "owner"
+      }
+    }
+  },
+  "pulls": {
+    "6564": {
+      "number": 6564,
+      "state": "open",
+      "merged": false,
+      "head": {
+        "ref": "ai/issue-6564",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      },
+      "base": {
+        "ref": "main",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      }
+    }
+  },
+  "branch_exists": {
+    "ai/issue-6564": true
+  },
+  "expected_stdout": "",
+  "expected_exit_code": 0
+}

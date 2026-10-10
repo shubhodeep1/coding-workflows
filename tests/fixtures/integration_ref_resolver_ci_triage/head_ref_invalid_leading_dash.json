@@ -1,0 +1,43 @@
+{
+  "name": "head_ref_invalid_leading_dash",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n<!-- check-failure-triage:gen=1 -->\n<!-- check-failure-triage:root=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n<!-- check-failure-triage:pr=6564 -->\n\n## Automated CI failure triage (generation 1 of max 3)\n\n- **Repository:** `owner/repo`\n- **Pull request:** https://github.com/owner/repo/pull/6564 (`-x`)\n- **Failing check:** `CI / lint` (conclusion: `failure`)\n\n---\n\nDiagnosis text.\n",
+      "labels": [
+        {
+          "name": "ai:check-triage"
+        }
+      ],
+      "author_association": "OWNER",
+      "user": {
+        "login": "owner"
+      }
+    }
+  },
+  "pulls": {
+    "6564": {
+      "number": 6564,
+      "state": "open",
+      "merged": false,
+      "head": {
+        "ref": "-x",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      },
+      "base": {
+        "ref": "main",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      }
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 3,
+  "expected_error_reason": "head_ref_invalid"
+}
