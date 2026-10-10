@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md:4 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog fragment omits `status=skipped_empty` as a case that requires manual secret setup.\n  WHY: Operators reading the changelog may not know to add a secret by hand when the library secret is unset and the propagation run logs `status=skipped_empty` for it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The user-visible behavior change introduced by this PR (registration + propagation as the normal path, with manual setup only when needed) must be reflected accurately in the user-facing documentation, including the changelog fragment for `CHANGELOG.md`.\n  expected_change_site: changelog.d/6712-propagate-consumer-secrets-schedule.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: README.md (Quickstart \"Interactive shortcut\" block, lines 49-56), `.claude/commands/seed-repo.md` and `workflow-templates/.claude/commands/seed-repo.md` list the `status=skipped_empty` case; `README.md` (line 52), both seed-repo.md copies (steps 6, 8, and checklist item 2) all include it; `changelog.d/6712-propagate-consumer-secrets-schedule.md:4` only names \"a failed run or a `no-register` seed\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Add a secret by hand only if that run fails, logs `status=skipped_empty` for it (the library secret is unset, so the run stays green without copying it), or the repo was seeded with `no-register`.\"\n  Expected change site: changelog.d/6712-propagate-consumer-secrets-schedule.md\n  Evidence of absence: The changelog fragment currently lists manual setup requirements as \"only after a failed run or a `no-register` seed\". It omits the `status=skipped_empty` case required by the task intent and implemented in README.md and seed-repo.md.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The user-visible behavior change introduced by this PR (registration + propagation as the normal path, with manual setup only when needed) must be reflected accurately in the user-facing documentation, including the changelog fragment for `CHANGELOG.md`.\n  Expected change site: `changelog.d/6712-propagate-consumer-secrets-schedule.md`, around the sentence that names the manual-setup cases.\n  Evidence of absence: `README.md` (Quickstart \"Interactive shortcut\" block, lines 49-56), both copies of `seed-repo.md` (step 6, step 8, and checklist item 2 at `.claude/commands/seed-repo.md` and `workflow-templates/.claude/commands/seed-repo.md`) now all list THREE conditions that require a user to add a secret by hand: (a) the propagation run fails, (b) the run logs `status=skipped_empty` for that secret because the library secret is unset, or (c) the repo was seeded with `no-register`. The changelog fragment at `changelog.d/6712-propagate-consumer-secrets-schedule.md:4` only names \"a failed run or a `no-register` seed\" \u2014 it omits the `status=skipped_empty` case that the implementation, README, and both seed-repo copies all treat as a manual-setup trigger.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md: line 4, the sentence ending \"asks for manual setup only after a failed run or a `no-register` seed\"\n  severity=NIT | confidence=5\n  PROBLEM: The changelog fragment omits `status=skipped_empty` as a case that requires manual secret setup, while README.md (line 52), both seed-repo.md copies (steps 6, 8, and checklist item 2) all include it.\n  WHY: Operators reading the changelog entry will not know they need to add a secret by hand when the library secret is unset and the propagation run logs `status=skipped_empty` for it.\n- scripts/propagate_consumer_secrets.sh, line ~166, the presence listing command substitution\n  HARDENING SUGGESTION: `2>/dev/null` discards stderr from `gh_retry gh secret list`, so when the listing fails the workflow log shows only `status=failed reason=presence_list_failed` without the underlying GitHub API error (rate limit, permissions, network). Suggested minimal fix: Remove `2>/dev/null` from the command substitution. `gh_retry` already buffers and replays stderr through its retry logic; letting it reach the workflow log preserves the diagnostic without changing the script's control flow or exit status.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md: line 4 (\"/seed-repo now treats the registration and its propagation run as the normal way consumers get their secrets, and asks for manual setup only after a failed run or a `no-register` seed.\")\n  severity=NIT | confidence=5\n  PROBLEM: The changelog entry names only two of the three cases requiring manual secret setup and omits the `status=skipped_empty` case.\n  WHY: Operators of consumer repos reading the release changelog may conclude a green propagation run with `status=skipped_empty` lines means nothing to do, contradicting the README and `/seed-repo` instructions they also receive.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7e50d0841e8e9af60596865f5a21d2403e24ae1ce5f3682ce0ed3feadc2ca2be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "38086341818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38086341818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010232035_c587698004",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "38086341818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T23:20:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
