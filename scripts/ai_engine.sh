@@ -245,6 +245,10 @@ ai_engine_fallback()
 		echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${role} reason=${reason}" >&2
 		return 0
 	fi
+	# The Claude review-panel slot has no codex path: it retries its pool
+	# fallback model or is skipped (skipped_pool), so say so in the alert.
+	local fallback_action="running codex"
+	[ "${role}" != "PANEL_REVIEWER" ] || fallback_action="the review-panel slot retries its pool fallback model or is skipped, no codex fallback"
 	local marker="${RUNNER_TEMP:-/tmp}/ai-engine-fallback-notified"
 	[ -e "${marker}" ] && return 0
 	: > "${marker}" 2>/dev/null || return 0
@@ -254,7 +258,7 @@ ai_engine_fallback()
 			source "${_AI_ENGINE_DIR}/tg_helpers.sh"
 		fi
 		if type tg_send_msg >/dev/null 2>&1; then
-			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; running codex." "WARNING" >/dev/null
+			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; ${fallback_action}." "WARNING" >/dev/null
 		fi
 	) 2>/dev/null || true
 	return 0

@@ -121,11 +121,16 @@ env:
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m3
-    mistralai/mistral-small-2603
-    deepseek/deepseek-v4-pro
+    anthropic/claude-sonnet-5.5
+    z-ai/glm-5.3-flash
     google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
     openai/gpt-6-luna
+  # The anthropic/claude-* slot above runs on the Claude account pool, not
+  # OpenRouter (scripts/review_run_reviewers.sh run_pool_reviewer). When its
+  # Sonnet run does not succeed it retries once on this pool model; a
+  # pool-wide outage skips the slot (status skipped_pool).
+  REVIEWER_POOL_FALLBACK_MODEL: ${{ vars.REVIEWER_POOL_FALLBACK_MODEL || 'claude-haiku-5-5' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
@@ -3237,6 +3242,7 @@ jobs:
           AI_ENGINE_REVIEW_CONSOLIDATOR: ${{ vars.AI_ENGINE_REVIEW_CONSOLIDATOR || '' }}
           AI_ENGINE_CONFLICT_RESOLVER: ${{ vars.AI_ENGINE_CONFLICT_RESOLVER || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_PANEL_REVIEWER: ${{ vars.AI_ENGINE_PANEL_REVIEWER || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
         run: |
           set -euo pipefail
@@ -3251,6 +3257,20 @@ jobs:
             [ "${engine}" = "codex" ] || any_claude=true
             echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
           done
+          # An anthropic/claude-* REVIEWER_MODELS slot runs on the Claude
+          # account pool (engine role PANEL_REVIEWER, read-only sandbox,
+          # scripts/review_run_reviewers.sh run_pool_reviewer); the slot is
+          # skipped when the role resolves to codex.
+          panel_engine="codex"
+          if printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Eq '^anthropic/claude-'; then
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" ]; then
+              # shellcheck disable=SC1091
+              panel_engine="$(source "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" && ai_engine_for_role PANEL_REVIEWER || echo codex)"
+            fi
+            [ "${panel_engine}" = "claude" ] || panel_engine="codex"
+            [ "${panel_engine}" = "codex" ] || any_claude=true
+          fi
+          echo "AI_ENGINE_RESOLVED_PANEL_REVIEWER=${panel_engine}" >> "$GITHUB_ENV"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI

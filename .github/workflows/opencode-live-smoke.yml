@@ -34,8 +34,8 @@ jobs:
       MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol' }}
       REVIEWER_MODELS: |
         minimax/minimax-m3
-        mistralai/mistral-small-2603
-        deepseek/deepseek-v4-pro
+        anthropic/claude-sonnet-5.5
+        z-ai/glm-5.3-flash
         google/gemini-3.1-flash-lite
         qwen/qwen3.7-plus
         openai/gpt-6-luna
@@ -89,6 +89,16 @@ jobs:
           while IFS= read -r reviewer_slug; do
             [ -n "${reviewer_slug}" ] || continue
             reviewer_index=$((reviewer_index + 1))
+            # anthropic/* panel slots run on the Claude account pool in the
+            # review sandbox (scripts/review_run_reviewers.sh), never through
+            # OpenRouter, so an OpenRouter smoke call would test a route the
+            # review pipeline does not use.
+            case "${reviewer_slug}" in
+              anthropic/*)
+                echo "::notice::Skipping ${reviewer_slug}: served by the Claude account pool, not OpenRouter."
+                continue
+                ;;
+            esac
             printf 'reviewer-%s\treviewer\t%s\n' "${reviewer_index}" "${reviewer_slug}" >> "${entries_file}"
           done <<< "${REVIEWER_MODELS}"
           printf 'editor-primary\twriter\t%s\n' "${MODEL_EDITOR}" >> "${entries_file}"

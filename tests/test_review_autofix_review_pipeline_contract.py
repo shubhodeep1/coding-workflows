@@ -1280,7 +1280,7 @@ def _run_review_tier_harness(
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,qwen/qwen3.7-plus,openai/gpt-6-luna",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -4353,7 +4353,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["review_tier_file"] == "standard"
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
-		"deepseek/deepseek-v4-pro",
+		"z-ai/glm-5.3-flash",
 		"qwen/qwen3.7-plus",
 		"openai/gpt-6-luna",
 	]
@@ -4553,10 +4553,10 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	# A repo that sets the variables keeps exactly those reviewers.
 	pinned_result = _run_review_tier_harness(
 		diff_text=standard_diff,
-		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "mistralai/mistral-small-2603"},
+		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "z-ai/glm-5.3-flash"},
 	)
 	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
-	assert pinned_result["active_models"] == ["mistralai/mistral-small-2603"]
+	assert pinned_result["active_models"] == ["z-ai/glm-5.3-flash"]
 
 
 def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel() -> None:
@@ -4593,7 +4593,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	assert default_standard_picks == set(reviewer_models)
 
 	# A repo that pins the standard list: lite draws from that list only.
-	pinned_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
 	assert set(pinned_standard) < set(reviewer_models)
 	excluded = set(reviewer_models) - set(pinned_standard)
 	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
@@ -4646,10 +4646,10 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	# A pinned lite slug still wins over the standard pool.
 	pinned_lite = _run_review_tier_harness(
 		diff_text=lite_diff,
-		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "mistralai/mistral-small-2603", "PR_NUMBER": "9"},
+		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "anthropic/claude-sonnet-5.5", "PR_NUMBER": "9"},
 	)
 	assert pinned_lite["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_lite"
-	assert pinned_lite["active_models"] == ["mistralai/mistral-small-2603"]
+	assert pinned_lite["active_models"] == ["anthropic/claude-sonnet-5.5"]
 
 
 def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(review_tier: str = "lite") -> None:
@@ -5100,16 +5100,21 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 			)
 
 	assert sorted(mapped) == [
-		"deepseek/deepseek-v4-pro",
 		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
+		"z-ai/glm-5.3-flash",
 	]
-	# The catalog ships no other Mistral slug, so mistral-small has no chain:
-	# a prompt over its 262K window is one failed, non-blocking slot (PR #6438).
-	assert sorted(unmapped) == ["mistralai/mistral-small-2603"]
+	# The Claude review-panel slot never runs on OpenRouter: it retries on
+	# REVIEWER_POOL_FALLBACK_MODEL in the Claude account pool itself, so it has
+	# no chain entry and the catalog ships no other anthropic/ slug.
+	assert sorted(unmapped) == ["anthropic/claude-sonnet-5.5"]
+	assert "anthropic/claude-sonnet-5.5" not in chains
+	assert chains["z-ai/glm-5.3-flash"] == ["z-ai/glm-5.3-flashx"]
+	# Retired from the panel in the 2026-10 refresh; kept for operator overrides.
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert "mistralai/mistral-small-2603" not in chains
 	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
@@ -5795,7 +5800,7 @@ def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	stage_helper = _stage_helper_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
+	assert "review_apply_fixes.sh review_untrusted_sandbox.sh sandbox_image.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
