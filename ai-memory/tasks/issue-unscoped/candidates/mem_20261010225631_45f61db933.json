@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:1933-1939, 2320 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The README describes the old heal-routing behavior and omits `shared_workflow`, contradicting the intake behavior that leaves `Target branch` unset and routes unverified shared-workflow failures to the default branch.\n  WHY: Operators following the README may expect a Target branch header and a fix on the PR head, misdiagnosing where the heal landed.\n- .github/workflows/ci.yml:378-393 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `static-checks` run was cancelled during ShellCheck, leaving the changed poller script's ShellCheck verification incomplete.\n  WHY: The aggregate `lint` check failed, and the cancelled run did not complete verification of the changed script.\n- scripts/orchestrate_poll_process.sh:10462-10465 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `decision`, `reason`, and `retired_paths` jq extractions lack fallback normalization.\n  WHY: Malformed classifier output could leave `decision` unnormalized and cause the downstream branch to misclassify the result.\n- scripts/orchestrate_poll_process.sh:23158-23159 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The managed review-blocked pre-judge path lacks the `_stall_pr_json_may_conflict` prefilter used by the other new rungs.\n  WHY: Clean `ai:review-blocked` PRs trigger an unnecessary local `git merge-tree` probe on each poller tick.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md: lines 1933-1939 | severity=low | confidence=4\n  PROBLEM: The README still describes the old routing, where an unresolvable support ref sends the fix to the PR head, and omits the `shared_workflow` token.\n  WHY: An operator reading the README expects blocked-PR-branch routing, which is exactly the behaviour issue #6680 removed.\n- .github/workflows/ci.yml: `static-checks` job, ShellCheck loop | severity=low | confidence=5\n  PROBLEM: The log ends with \"The runner has received a shutdown signal\" and \"The operation was canceled\" at 22:07:23, partway through the ShellCheck loop.\n  WHY: `shellcheck --severity=error` on the new helpers did not complete, so it is unverified; a re-run is the remedy, and no code change maps to this failure.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md: lines 1933-1939 | severity=low | confidence=4\n  PROBLEM: The README still describes the pre-#6680 routing rule and omits `shared_workflow`.\n  WHY: Operators cannot tell that an unverified shared-workflow failure will ship on the default branch.\n- scripts/orchestrate_poll_process.sh: lines 10462-10465 | severity=low | confidence=3\n  PROBLEM: The `decision`, `reason`, and `retired_paths` jq extractions do not normalize output with `|| echo \"\"`.\n  WHY: Malformed classifier output could leave `decision` unnormalized, and the downstream `if [ \"${decision}\" != \"reissue\" ]` could misclassify it.\n- scripts/orchestrate_poll_process.sh: line 23158-23159 | severity=low | confidence=2\n  PROBLEM: The managed review-blocked pre-judge rung lacks the `_stall_pr_json_may_conflict` prefilter.\n  WHY: Clean PRs trigger one extra local `git merge-tree` per stalled `ai:review-blocked` PR per tick; the classifier still returns 1 for clean PRs and the rest of the rung proceeds.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md: Lines 1933-1939 and 2320 | severity=low | confidence=5\n  PROBLEM: The routing documentation says an unresolved support ref sends a self-repository review failure to the PR head.\n  WHY: Operators are told to expect a PR-head-targeted issue, which can send triage to the wrong branch.\n- .github/workflows/ci.yml: Lines 378-393, \u201cShellCheck static analysis\u201d and \u201cScript-workflow cross-reference\u201d | severity=low | confidence=5\n  PROBLEM: The `static-checks` run was cancelled during ShellCheck before `scripts/orchestrate_poll_process.sh` was checked and before the cross-reference step ran.\n  WHY: This run did not verify the changed poller script with ShellCheck or the workflow-script cross-reference check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md: lines 1933-1939 (heal \"Target branch\" routing paragraph) | severity=low | confidence=5\n  PROBLEM: The README says a failed review/autofix run on a coding-workflows PR targets the PR head when the support ref equals that head or cannot be resolved, and omits `shared_workflow`.\n  WHY: Operators will expect a Target branch header that is no longer written and will not know about the `shared_workflow` routing path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md: lines 1933-1939 (the heal \"Classification and routing\" paragraph, specifically \"it targets the PR head when the support ref equals that head or cannot be resolved\" and the token list at line 1939) | severity=low | confidence=4\n  PROBLEM: The README states the old behavior and omits `shared_workflow`, contradicting the intake's current routing.\n  WHY: Operators following the README would expect a fix PR on the blocked PR's head branch, misdiagnosing where the heal landed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5971e981e37548be087f062f463b88f9ec980d2b434d94175c807f69a41d2660",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6682,
+    "run_id": "38090075645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38090075645",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010225631_45f61db933",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6682,
+    "run_id": "38090075645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T22:56:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
