@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.claude/hooks/gh_api_write_guard.py`:~1500-1508 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The live hook lacks the #6668 bare-help changes, so `gh api --help` is treated as an unreadable call at runtime.\n  WHY: The live-copy parity test fails, and the new bare-help tests exercise the unsynced live copy.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\"\n  expected_change_site: `.claude/hooks/gh_api_write_guard.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff does not include the live hook; it lacks the #6668 hunks, the parity test fails, and the bare-help tests load the live copy and exercise the missing behavior.\n- requirement: Declare intended loosenings wherever the #5174 guard differential check expects them once #5174 is on the base branch, and give the reason there.\n  expected_change_site: the declaration file the #5174 guard differential check reads\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR diff adds no declaration; the changelog fragment states the loosening and reason, and the issue makes the declaration conditional on #5174 being on the base branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- `.claude/hooks/gh_api_write_guard.py`: the whole file | severity=BLOCKER | confidence=5\n  PROBLEM: Claude Code runs the live hook, and it still sends `gh api --help` through `parse_gh_api_args`, which raises an unreadable-call error.\n  WHY: In this repository, `gh api --help` still prompts, so the behaviour CLAUDE.md line 1269 now describes is not what actually happens. The new tests load the live copy through `GUARD_PATH`, so `test_bare_help_is_a_read` and `test_bare_help_piped_to_grep_gets_no_decision` fail. `test_template_parity` fails, and so does `test_live_copies_match_their_templates`, which is the confirmed CI failure in `tests-hooks-and-orchestrator` that then fails `lint`.\n- TASK_GAP\n  Requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\"\n  Expected change site: `.claude/hooks/gh_api_write_guard.py`, through a byte-for-byte `[claude-twin-sync]` copy of the template.\n  Evidence of absence: The live file is not in the PR's changed files and has none of the three #6668 hunks (docstring note, `_BARE_HELP_ARGS` / `_is_bare_gh_api_help`, and the invocation-loop shortcut). CI `tests-hooks-and-orchestrator` fails on the parity test. Listing the file in `.github/ai/claude_template_divergence.json` would not help, because the new tests still load the unsynced live copy. The review editor has been denied write access to this path on every recent run, so another autofix round cannot fix it; someone has to land the `[claude-twin-sync]` commit.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- `.claude/hooks/gh_api_write_guard.py`: Lines ~1500-1508 (invocation loop) | severity=BLOCKER | confidence=5\n  PROBLEM: The live hook lacks the #6668 changes present in the template.\n  WHY: tests/test_gh_api_write_guard.py runs against the live hook, and test_live_copies_match_their_templates fails. The bare-help check logic is effectively missing at runtime.\n- TASK_GAP\n  Requirement: Declare it wherever the #5174 guard differential check expects intended loosenings once that is on the base branch, and give the reason there.\n  Expected change site: Whatever declaration file the #5174 guard differential check reads.\n  Evidence of absence: The diff adds no such declaration; only the changelog fragment states that this is a loosening.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- TASK_GAP\n  Requirement: Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\n  Expected change site: .claude/hooks/gh_api_write_guard.py\n  Evidence of absence: The PR diff does not contain edits to the live hook .claude/hooks/gh_api_write_guard.py. The CI lint job fails due to template mismatch.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR must be mergeable, which requires CI to pass. The parity test `test_live_copies_match_their_templates` requires the live copy `.claude/hooks/gh_api_write_guard.py` to match the template `workflow-templates/.claude/hooks/gh_api_write_guard.py`. The new tests in `tests/test_gh_api_write_guard.py` load the live copy via `GUARD_PATH` and test it, so they will fail if the live copy doesn't have the changes.\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` (the live copy)\n  Evidence of absence: The PR diff does not include `.claude/hooks/gh_api_write_guard.py`. The live copy lacks the three #6668 hunks: the docstring note (lines 26-27), the `_BARE_HELP_ARGS` / `_is_bare_gh_api_help` block (lines 179-189), and the shortcut in the invocation loop (lines 1503-1505). CI is failing: `tests-hooks-and-orchestrator` fails on `test_live_copies_match_their_templates` with \"Live .claude/ copies differ from workflow-templates/.claude/ for: hooks/gh_api_write_guard.py\", and the aggregate `lint` check fails as a result. The new bare-help tests will also fail because they load the live copy via `GUARD_PATH` and assert that bare help is a read, but the live copy still raises `Unreadable(\"unknown gh api flag --help\")`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "de11b74761afafd4fa59a02d71d1bf66e0f724314c1db55ce7be8a12acf6fec2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6674,
+    "run_id": "38074932255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38074932255",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010183828_c4dbcf1891",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6674,
+    "run_id": "38074932255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T18:38:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
