@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:521-525 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: `unblock_escalate_fixup` filters lines before stripping trailing CR characters, so a CR-only line can be selected as the last non-blank line and prevent recognition of an existing escalation marker.\n  WHY: For CRLF-formatted comment bodies ending with a blank CRLF line, the selected line becomes empty after CR stripping instead of matching the marker, causing repeated escalation.\n- scripts/unblock_judge.sh:504 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `unblock_try_regrant` posts the regrant marker before all regrant operations have succeeded, so a later operation failure leaves a marker that prevents retrying.\n  WHY: A subsequent run interprets the marker as proof that regrant succeeded, even if label removal or the resume command failed.\n- scripts/unblock_judge.sh:494-495 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The regrant marker is posted before the resume actions, so a later operation failure leaves a marker that prevents retrying the automatic resume.\n  WHY: The operation runner stops after a failure at 170-174, and on the next judge run the rejection is classified as already re-granted even if the current guard still grants the paths.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The new test exercises the CRLF (CR-only line) edge case independently so a regression that drops only the CR-strip step (not the `first`/`last` change) is caught on its own.\"\n  expected_change_site: tests/test_unblock_judge.py around line 2295\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new test uses body `\"\\n\" + FIXUP_BODY` and the dedup test uses body `\"listed\\n\\n<!-- ... -->\"`; neither constructs a CRLF body that exercises the pre-CR-strip path in isolation, and `unblock_escalate_fixup` has no regression test for the CR-only edge case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:521-525\n  PROBLEM: CR stripping is applied only to the final selected element, whereas `unblock_fixup_origin` strips CR from every line before filtering; a CR-only line that survives the filter could shift which line becomes last and cause an existing escalation marker to be missed.\n  WHY: This could cause the judge to re-escalate.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh: line 504 | severity=high | confidence=[3]\n  PROBLEM: `unblock_try_regrant` posts the regrant marker comment as part of a batch of operations, and if subsequent operations (e.g., label removal) fail, future runs skip retrying the operation due to the marker's presence.\n  WHY: The unblock judge relies on the presence of the regrant marker to deduce that the re-grant operation was already successful (`already_regranted`). If the comment posting succeeds but label removal or the resume command fails, the issue remains blocked, but its history erroneously suggests the re-grant was already successful, permanently preventing any further retry attempts and requiring manual intervention.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh: lines 511 (unblock_fixup_origin, updated this run) vs. lines 521-525 (unblock_escalate_fixup, NOT updated) | severity=high | confidence=[4]\n  PROBLEM: `unblock_fixup_origin` strips CR per line before the non-blank filter, but `unblock_escalate_fixup` filters first and strips CR only on the chosen element.\n  WHY: When a CRLF-formatted comment carrying the escalation marker ends with `\\r\\n\\r\\n`, `unblock_escalate_fixup` can select `\"\\r\"` as the last non-blank element, strip it to `\"\"`, and fail to recognize the existing marker, causing repeated escalation.\n- Requirement: \"The new test exercises the CRLF (CR-only line) edge case independently so a regression that drops only the CR-strip step (not the `first`/`last` change) is caught on its own.\"\n  Expected change site: tests/test_unblock_judge.py around line 2295 (the new `test_judge_escalates_a_blocked_project_fixup_with_a_leading_blank_line` and its sibling `test_judge_escalates_a_fixup_only_once`).\n  Evidence of absence: The new test uses body `\"\\n\" + FIXUP_BODY` (LF leading blank) and the dedup test uses body `\"listed\\n\\n<!-- ... -->\"` (LF trailing blank). Neither constructs a CRLF body (e.g. `\"\\r\" + FIXUP_BODY` or `\"listed\\r\\n\\r\\n<!-- ... -->\"`) that exercises the pre-CR-strip path in isolation. The new `unblock_fixup_origin` change is partially pinned, but `unblock_escalate_fixup` \u2014 which is the function the LAST RUN DIFF left asymmetric \u2014 has no regression test for the CR-only edge case at all. A reviewer cannot tell from the tests that the CRLF asymmetry under CORRECTNESS & LOGIC above is real.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh: 494-495; the regrant operations are executed by unblock_run_ops, which stops subsequent operations after a failure (170-174) | severity=high | confidence=[4]\n  PROBLEM: The regrant marker is posted before the resume actions. If adding the awaiting-approval label or removing ai:scope-blocked fails, the runner skips the remaining actions, but the marker remains.\n  WHY: On the next judge run, that rejection is classified as already re-granted, so the automatic resume is not retried even if the current guard still grants the paths. The issue instead returns to model adjudication, which can recreate the operator-step or fix-up this change is intended to avoid.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "bc9df50f2d7e9ff9abcb41d98cd7f8bb2553ad57757164ebe364637aa4460c21",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7038,
+    "run_id": "38047944628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38047944628",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010114534_4c8b68e257",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7038,
+    "run_id": "38047944628"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T11:45:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
