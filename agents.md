@@ -1031,7 +1031,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   timeout while a listed CI workflow run is still queued or running adds
   `reason=ci_run_pending`: `_pr_head_ci_runs_pending` keeps the wait going
   while any `AUTO_MERGE_WAIT_WORKFLOWS` run, default `CI`, on the head is not
-  completed, because its check-runs do not exist until its jobs start), and a
+  completed, because its check-runs do not exist until its jobs start; a
+  listed workflow whose every run on the head ended `cancelled` or
+  `startup_failure` refuses with `outcome=failed reason=ci_run_cancelled`
+  until a re-run finishes), and a
   missing library fails the wait closed. A head with no check-runs yet
   (`PR_CHECKS_LAST_TOTAL=0`) is polled two more intervals before it counts
   as green. After a wait that actually polled, every caller

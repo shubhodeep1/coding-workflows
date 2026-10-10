@@ -3637,6 +3637,10 @@ def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
 	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 	calls = wf.split("autofix-failure-fingerprint \\\n")[1:]
 	assert calls, "no autofix-failure-fingerprint call sites found"
+	# A single-line call has no continuation to split on; every invocation
+	# must be one of the multi-line calls checked below.
+	invocations = [line for line in wf.splitlines() if '"${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint' in line]
+	assert len(invocations) == len(calls), invocations
 	for call in calls:
 		# The call's continuation lines end at the first line without a trailing backslash.
 		block = call.split(")\"", 1)[0]
