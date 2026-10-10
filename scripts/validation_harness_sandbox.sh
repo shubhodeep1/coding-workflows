@@ -183,6 +183,80 @@ rootless_docker_ready()
 	as_sandbox docker info >/dev/null 2>&1
 }
 
+# Docker's apt repository signing key (https://download.docker.com/linux/<distro>/gpg).
+# The key is checked against this fingerprint before apt trusts it.
+SANDBOX_DOCKER_APT_KEY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+SANDBOX_DOCKER_APT_KEYRING_DIR="${SANDBOX_DOCKER_APT_KEYRING_DIR:-/etc/apt/keyrings}"
+SANDBOX_DOCKER_APT_SOURCES_DIR="${SANDBOX_DOCKER_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+SANDBOX_OS_RELEASE_FILE="${SANDBOX_OS_RELEASE_FILE:-/etc/os-release}"
+
+sandbox_apt()
+{
+	sudo -n env DEBIAN_FRONTEND=noninteractive apt-get "$@" >/dev/null 2>&1
+}
+
+# Install uidmap and docker-ce-rootless-extras. GitHub's Ubuntu runner images
+# install Docker from download.docker.com and then delete that apt source
+# (actions/runner-images install-docker.sh, "Cleanup custom repositories"),
+# so docker-ce-rootless-extras is not installable from the image's sources.
+# When the plain install fails, add Docker's repository for this one install
+# (key fingerprint pinned above), prefer the version of the docker-ce already
+# installed, and remove the source and key again afterwards.
+install_rootless_packages()
+{
+	sandbox_apt install -y -q uidmap docker-ce-rootless-extras && return 0
+	sandbox_apt update -q || true
+	sandbox_apt install -y -q uidmap docker-ce-rootless-extras && return 0
+	sandbox_apt install -y -q uidmap || return 1
+
+	local distro codename arch key_tmp fingerprint keyring source_list docker_version rc=1
+	distro="$(. "${SANDBOX_OS_RELEASE_FILE}" 2>/dev/null && printf '%s' "${ID:-}")"
+	codename="$(. "${SANDBOX_OS_RELEASE_FILE}" 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}")"
+	arch="$(dpkg --print-architecture 2>/dev/null || true)"
+	case "${distro}" in
+		ubuntu|debian) ;;
+		*) sandbox_log provision fail docker_repo_distro_unsupported; return 1 ;;
+	esac
+	[[ "${codename}" =~ ^[a-z]+$ ]] && [[ "${arch}" =~ ^[a-z0-9]+$ ]] || { sandbox_log provision fail docker_repo_platform_unknown; return 1; }
+	key_tmp="$(mktemp)" || { sandbox_log provision fail docker_repo_tmpfile_failed; return 1; }
+	if ! curl -fsSL --retry 3 --max-time 60 -o "${key_tmp}" "https://download.docker.com/linux/${distro}/gpg"; then
+		rm -f -- "${key_tmp}"
+		sandbox_log provision fail docker_repo_key_download_failed
+		return 1
+	fi
+	fingerprint="$(gpg --show-keys --with-colons "${key_tmp}" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')"
+	if [ "${fingerprint}" != "${SANDBOX_DOCKER_APT_KEY_FINGERPRINT}" ]; then
+		rm -f -- "${key_tmp}"
+		sandbox_log provision fail docker_repo_key_fingerprint_mismatch
+		return 1
+	fi
+	keyring="${SANDBOX_DOCKER_APT_KEYRING_DIR}/ai-validation-docker.asc"
+	source_list="${SANDBOX_DOCKER_APT_SOURCES_DIR}/ai-validation-docker.list"
+	if ! { sudo -n install -d -m 0755 "${SANDBOX_DOCKER_APT_KEYRING_DIR}" \
+		&& sudo -n install -m 0644 "${key_tmp}" "${keyring}" \
+		&& printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/%s %s stable\n' "${arch}" "${keyring}" "${distro}" "${codename}" \
+			| sudo -n tee "${source_list}" >/dev/null; }; then
+		sandbox_log provision fail docker_repo_source_write_failed
+	elif ! sandbox_apt update -q; then
+		sandbox_log provision fail docker_repo_update_failed
+	else
+		docker_version="$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null || true)"
+		if [ -n "${docker_version}" ] && sandbox_apt install -y -q "docker-ce-rootless-extras=${docker_version}"; then
+			rc=0
+		elif sandbox_apt install -y -q docker-ce-rootless-extras; then
+			rc=0
+		else
+			sandbox_log provision fail docker_repo_install_failed
+		fi
+	fi
+	rm -f -- "${key_tmp}" || true
+	sudo -n rm -f -- "${source_list}" "${keyring}" >/dev/null 2>&1 || true
+	if [ "${rc}" -eq 0 ]; then
+		sandbox_log provision ok rootless_packages_from_docker_repo
+	fi
+	return "${rc}"
+}
+
 next_subid_start()
 {
 	awk -F: 'BEGIN { max = 524288 } { end = $2 + $3; if (end > max) max = end } END { print max }' /etc/subuid /etc/subgid 2>/dev/null || echo 524288
@@ -217,11 +291,7 @@ cmd_provision()
 	fi
 
 	if ! command -v dockerd-rootless.sh >/dev/null 2>&1 || ! command -v newuidmap >/dev/null 2>&1 || ! command -v rootlesskit >/dev/null 2>&1; then
-		if ! sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap docker-ce-rootless-extras >/dev/null 2>&1; then
-			sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null 2>&1 || true
-			sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap docker-ce-rootless-extras >/dev/null 2>&1 \
-				|| sandbox_fail provision rootless_packages_unavailable
-		fi
+		install_rootless_packages || sandbox_fail provision rootless_packages_unavailable
 		command -v dockerd-rootless.sh >/dev/null 2>&1 || sandbox_fail provision rootless_dockerd_missing
 	fi
 
@@ -591,4 +661,7 @@ main()
 	esac
 }
 
-main "$@"
+# Sourcing (tests) defines the functions without running a subcommand.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

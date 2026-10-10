@@ -6913,8 +6913,25 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 		bin_dir = tmp / "bin"
 		bin_dir.mkdir()
 		fake_gh = bin_dir / "gh"
-		fake_gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n', encoding="utf-8")
+		# Every call is recorded; the required-checks wait reads one green check-run.
+		fake_gh.write_text(
+			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
+			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;; esac\n',
+			encoding="utf-8",
+		)
 		fake_gh.chmod(0o755)
+		# The verified merge-gate helper checkout the step sources
+		# (.codex-freshness-src pinned to REVIEW_SUPPORT_SHA); without it the
+		# required-checks wait fails closed and no auto-merge is enabled.
+		helper = tmp / ".codex-freshness-src"
+		(helper / "scripts").mkdir(parents=True)
+		for name in ("pr_checks_lib.sh", "gh_helpers.sh"):
+			(helper / "scripts" / name).write_text((REPO_ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+		git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+		subprocess.run(["git", "init", "-q", str(helper)], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(helper), "add", "-A"], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(helper), "commit", "-q", "-m", "helper"], check=True, env=git_env)
+		support_sha = subprocess.run(["git", "-C", str(helper), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 		for index, (head_ref, pattern, expected_summary, expected_reason) in enumerate((
 			("orchestrator/project-7", "^orchestrator/project-", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
 			("orchestrator/project-7", "(", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
@@ -6938,10 +6955,14 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 				"ENABLE_AUTO_MERGE": "true",
 				"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
 				"DET_SKIP_REASON": "doc_only",
+				"FRESHNESS_HELPER_CHECKOUT_OUTCOME": "success",
+				"REVIEW_SUPPORT_SHA": support_sha,
+				"AUTO_MERGE_CHECKS_POLL_SECONDS": "1",
+				"AUTO_MERGE_CHECKS_WAIT_MINUTES": "1",
 			})
-			result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True, check=False)
+			result = subprocess.run(["bash", "-c", step["run"]], env=env, cwd=tmp, capture_output=True, text=True, check=False)
 			assert result.returncode == 0, result.stderr
-			assert expected_summary in summary_path.read_text(encoding="utf-8")
+			assert expected_summary in summary_path.read_text(encoding="utf-8"), result.stdout + result.stderr
 			calls = calls_path.read_text(encoding="utf-8").splitlines() if calls_path.exists() else []
 			if expected_reason:
 				assert not calls, calls
@@ -7584,8 +7605,19 @@ def _run_auto_merge_helper_with_fake_gh(
 			        sys.stdout.write("")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
-			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "body": ""}}))
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "base": {{"ref": "main"}}, "body": ""}}))
 			        sys.exit(0)
+			    # Merge-base freshness gate: the base did not move.
+			    if "/compare/" in path:
+			        sys.stdout.write(json.dumps({{"ahead_by": 0, "files": []}}))
+			        sys.exit(0)
+			    # Required-checks wait: the reviewed head's checks are green.
+			    if "/check-runs" in path:
+			        sys.stdout.write(json.dumps([{{"check_runs": [{{"name": "CI", "status": "completed", "conclusion": "success"}}]}}]))
+			        sys.exit(0)
+			    if path.endswith("/protection"):
+			        sys.stderr.write("Branch not protected\\n")
+			        sys.exit(1)
 			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
 			    sys.exit(1)
 			if args[:2] == ["pr", "merge"]:
@@ -7801,6 +7833,7 @@ def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None
 	evidence = _step_block("Assemble failure evidence")
 	files = (
 		'--evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
 		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',
