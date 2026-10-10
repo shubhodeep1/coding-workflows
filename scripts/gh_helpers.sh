@@ -1327,6 +1327,38 @@ gh_issue_timeline_with_cross_refs()
 #   (peer) / fail-closed (budget) semantics. Input and output are arrays of
 #   Actions run records; at most 10 pages per wrapper, no partial output.
 # ---------------------------------------------------------------
+# Per-shell memo of the default branch for _autofix_pr_named_review_runs
+# (issue #6629: read it at most once per run). Both callers below run in the
+# step shell, but they call _autofix_pr_named_review_runs inside $(...), so a
+# variable set there would be lost. They call
+# _autofix_review_default_branch_prime in their own shell first. A failed
+# read is memoized too, so the second caller fails the same way without
+# another call. The memo is never initialised from the environment.
+# Input: none (GITHUB_REPOSITORY). Output: none; always returns 0.
+# API calls: one `GET repos/<repo>` per shell and repository.
+_AUTOFIX_REVIEW_DEFAULT_BRANCH=""
+_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE=""
+_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO=""
+_autofix_review_default_branch_prime()
+{
+	local prime_value=""
+	[ -n "${GITHUB_REPOSITORY:-}" ] || return 0
+	if [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO:-}" = "${GITHUB_REPOSITORY}" ] \
+		&& [ -n "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE:-}" ]; then
+		return 0
+	fi
+	prime_value=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || prime_value=""
+	_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO="${GITHUB_REPOSITORY}"
+	if [[ "${prime_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${prime_value}" != "null" ]; then
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH="${prime_value}"
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE="ok"
+	else
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH=""
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE="failed"
+	fi
+	return 0
+}
+
 _autofix_pr_named_review_runs()
 {
 	local pr_number="${1:-}"
@@ -1351,8 +1383,18 @@ _autofix_pr_named_review_runs()
 
 	# Neither branch-filtered call can provide the repository's default
 	# branch. Read it once here instead of trusting a caller-supplied ref.
+	# The two callers prime a per-shell memo first (issue #6629: at most one
+	# read per run); without a memo for this repository, read it here.
 	local review_default_branch
-	review_default_branch=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || return 1
+	if [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO:-}" = "${GITHUB_REPOSITORY}" ] \
+		&& [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE:-}" = "failed" ]; then
+		return 1
+	elif [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO:-}" = "${GITHUB_REPOSITORY}" ] \
+		&& [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE:-}" = "ok" ]; then
+		review_default_branch="${_AUTOFIX_REVIEW_DEFAULT_BRANCH:-}"
+	else
+		review_default_branch=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || return 1
+	fi
 	[[ "${review_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
 	# A response without .default_branch prints the literal "null", which
 	# passes the regex; fail closed like the poller's resolver (issue #6629).
@@ -1558,6 +1600,7 @@ autofix_retrigger_has_inflight_peer()
 		# Default-branch dispatch runs are invisible to the branch lookup
 		# above (issue #4898); look for one named for this PR. Fail open.
 		local pr_named_runs pr_named_info
+		declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime
 		if pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}") \
 			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" '
 				[
@@ -1770,6 +1813,7 @@ autofix_changes_lost_head_retry_consumed()
 			return 0
 		fi
 		local pr_named_runs
+		declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime
 		if ! pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}" "" "${push_bound}"); then
 			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_api_error" >&2
 			return 0
