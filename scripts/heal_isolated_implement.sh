@@ -82,10 +82,11 @@ run_editor_claude()
 			return 75
 			;;
 		*)
-			# Any other exit fails closed. That includes 76, which claude_run
-			# returns as is when the capacity-only AI_ENGINE_FALLBACK_POLICY
-			# (project #6664) refuses a fallback: never run codex for a
-			# non-capacity reason.
+			# Any other exit (1 = editor failure, 124 = timeout, or anything
+			# unexpected) fails closed without a transfer. claude_run already
+			# maps its internal isolation-unavailable exit 76 to 75, so only
+			# 75 (no Docker/image, no credential, every account exhausted)
+			# runs the isolated codex editor.
 			echo "HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=failed reason=editor_exit_${claude_rc}" >&2
 			return 1
 			;;

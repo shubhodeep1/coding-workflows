@@ -157,8 +157,9 @@ def test_claude_unavailable_runs_the_isolated_codex_editor(tmp_path: Path) -> No
 
 @pytest.mark.parametrize("claude_rc", [1, 76, 124])
 def test_claude_failure_fails_without_transfer_or_codex_rerun(tmp_path: Path, claude_rc: int) -> None:
-	# 76 is a fallback refused by the capacity-only AI_ENGINE_FALLBACK_POLICY
-	# (project #6664): fail closed, never run codex for a non-capacity reason.
+	# The real claude_run returns 0, 1, 75 or 124 (it maps its internal 76 to
+	# 75). 76 is kept as an unexpected status: every exit other than 0 and 75
+	# must fail closed, never rerun codex.
 	result = _run(tmp_path, claude_rc=claude_rc)
 	assert result["rc"] not in (0, 42), result["stderr"]
 	assert result["host_file"] == "old\n"
