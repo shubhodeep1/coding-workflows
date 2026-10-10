@@ -119,7 +119,9 @@ def _log(**fields: object) -> None:
 
 def iter_fragment_paths(fragments_dir: Path) -> list[Path]:
 	"""Fragment files in filename order; dotfiles, scaffolding and non-``.md`` are skipped."""
-	if not fragments_dir.is_dir():
+	# A symlinked agents.d/ would let ``assemble`` fold and then unlink files
+	# that live outside the fragment directory, so it yields no fragments.
+	if fragments_dir.is_symlink() or not fragments_dir.is_dir():
 		return []
 	found = [
 		entry
@@ -136,8 +138,16 @@ def iter_fragment_paths(fragments_dir: Path) -> list[Path]:
 def parse_fragment(text: str) -> list[Block]:
 	"""Split a fragment into marker-headed blocks; raise FragmentError when malformed."""
 	blocks: list[Block] = []
+	fence = ""
 	for raw in text.replace("\r\n", "\n").split("\n"):
 		line = raw.rstrip()
+		if fence:
+			# Inside fenced code: headings and markers are example text, not syntax.
+			blocks[-1].lines.append(line)
+			closing = FENCE.match(line)
+			if closing and closing.group(1)[0] == fence[0] and len(closing.group(1)) >= len(fence) and not line[closing.end():].strip():
+				fence = ""
+			continue
 		match = SECTION_MARKER.match(line)
 		if match:
 			heading = " ".join(match.group(1).split())
@@ -156,7 +166,13 @@ def parse_fragment(text: str) -> list[Block]:
 		if H2.match(line):
 			# A second-level heading inside a block would split the target section.
 			raise FragmentError("heading_in_block")
+		opening = FENCE.match(line)
+		if opening:
+			fence = opening.group(1)
 		blocks[-1].lines.append(line)
+	if fence:
+		# An unclosed fence would hide every later heading of the agents file.
+		raise FragmentError("unclosed_fence")
 	if not blocks:
 		raise FragmentError("no_marker")
 	for block in blocks:

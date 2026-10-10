@@ -223,6 +223,36 @@ def test_headings_inside_code_fences_are_not_sections(tmp_path: Path) -> None:
 	assert _run("check", repo).returncode == 1
 
 
+def test_fenced_examples_in_fragments_are_content(tmp_path: Path) -> None:
+	body = (
+		'<!-- agents: section="Workflow architecture" -->\n'
+		"Example:\n\n```md\n## Not a heading\n<!-- agents: section=\"Elsewhere\" -->\n```\n"
+	)
+	text, result = _assembled(tmp_path, {"1-fence.md": body})
+	assert "folded=1 skipped=0" in result.stdout
+	assert "```md\n## Not a heading\n<!-- agents: section=\"Elsewhere\" -->\n```\n\n---" in text
+
+
+def test_unclosed_fence_in_fragment_is_invalid(tmp_path: Path) -> None:
+	repo = _repo(tmp_path, {"1-open.md": '<!-- agents: section="Workflow architecture" -->\n```\nnever closed\n'})
+	check = _run("check", repo)
+	assert check.returncode == 1
+	assert "reason=unclosed_fence" in check.stderr
+
+
+def test_symlinked_fragments_dir_is_ignored(tmp_path: Path) -> None:
+	(tmp_path / "agents.md").write_text(AGENTS, encoding="utf-8")
+	docs = tmp_path / "docs"
+	docs.mkdir()
+	(docs / "1-a.md").write_text('<!-- agents: section="Workflow architecture" -->\nx\n', encoding="utf-8")
+	(tmp_path / "agents.d").symlink_to(docs, target_is_directory=True)
+	result = _run("assemble", tmp_path)
+	assert result.returncode == 0
+	assert "outcome=noop" in result.stdout
+	assert (docs / "1-a.md").exists(), "files behind a symlinked agents.d/ are never deleted"
+	assert (tmp_path / "agents.md").read_text(encoding="utf-8") == AGENTS
+
+
 def test_github_outputs(tmp_path: Path) -> None:
 	repo = _repo(tmp_path, {"1-a.md": '<!-- agents: section="Workflow architecture" -->\nx\n'})
 	outputs = tmp_path / "out.txt"
