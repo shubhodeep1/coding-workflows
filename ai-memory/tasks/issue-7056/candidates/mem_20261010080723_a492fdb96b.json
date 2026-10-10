@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue's PR include, given the second step targets `ai/issue-6838` and depends on #6856 being routed there first?\nChoices:\nA) Only the change on the default branch: the flag-gated `Target branch:` line for verified same-repo open-PR heads, a narrow exception in the final body validator for that one trusted line, model diagnosis text still neutralized, and routing tests. The four-entry `plan.yml` expectation stays unchanged. The four-to-five test change on `ai/issue-6838` and its CI rerun are left as the operator step for #6856's own run, after a person adds `Target branch: ai/issue-6838` to #6856 (and turns the flag on for future issues). (RECOMMENDED)\nB) Option A, plus this PR also commits the four-to-five expectation change directly to `ai/issue-6838`. **Note:** this needs a second branch push outside this issue's PR, which the implement phase does not do.\nC) Option A, plus a one-off change that rewrites #6856's existing body to add the `Target branch:` line. **Note:** this widens scope to editing an existing issue's metadata, and the unblock judge left that to a person as the operator step.",
+  "fingerprint": "6b1358b90f04090a6d1e5a15e67e79be758ce2d5642d89dc2151cab6c5dde40e",
+  "lineage": {
+    "issue_number": 7056,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38036444769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38036444769",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010080723_a492fdb96b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7056,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38036444769"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7056 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T08:07:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
