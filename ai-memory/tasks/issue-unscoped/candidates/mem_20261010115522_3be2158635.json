@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:line 6924 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The code relies on `needs.gate.outputs.fingerprint_cap_marker_author_login`, but the provided diff does not establish that the gate job outputs this variable.\n  WHY: If the output is undefined, the reporter receives an empty value and falls back to an API call, bypassing the intended performance optimization.\n- scripts/workflow_failure_heal_autofix_report.sh:header comment lines 15-21 (updated by LAST RUN DIFF); implementation site line 187 `STREAK_AUTHOR_LOGIN=\"$(gh_retry gh api user --jq '.login // \"\"' 2>/dev/null || echo \"\")\"` | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The header says the reporter makes \"one `gh api user` read\" but does not mention that the call uses `gh_retry`.\n  WHY: There is no runtime defect, but the header may mislead readers into thinking transient errors or rate limits leave the login empty instead of being retried.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:line 6924 | severity=NIT | confidence=3\n  PROBLEM: The code relies on `needs.gate.outputs.fingerprint_cap_marker_author_login`, but the provided diff does not establish that the gate job is configured to output this variable.\n  WHY: If the output is not defined in the gate job, the reporter receives an empty value, causing it to fall back to an API call. While safe (the system fails closed), this bypasses the intended performance optimization and indicates a potential gap in the workflow contract.\n- scripts/workflow_failure_heal_autofix_report.sh: Step-2 header comment\n  PROBLEM: The header documentation claims the reporter \"makes no API reads for the count\" but fails to mention that the necessary fallback read (`gh api user`) is wrapped in `gh_retry` for retries.\n  WHY: Append \"via gh_retry\" to the header description of the API read.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_autofix_report.sh:header comment lines 15-21 (updated by LAST RUN DIFF); implementation site line 187 `STREAK_AUTHOR_LOGIN=\"$(gh_retry gh api user --jq '.login // \"\"' 2>/dev/null || echo \"\")\"` | severity=NIT | confidence=3\n  PROBLEM: The LAST RUN header update says the reporter makes \"one `gh api user` read\" for the pipeline login when the caller passes none. The implementation site uses `gh_retry gh api user`, so the header still misrepresents the API surface.\n  WHY: No runtime defect \u2014 `gh_retry` is in place and the call is retried on transient errors. The gap is documentation accuracy: a future reader of the header sees \"one `gh api user` read\" and may believe the call is unguarded, leading them to think a temporary API blip or rate limit leaves the login empty (which would force the fail-closed path) when in fact it retries.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d43ca56bb2114d2183a0f331f6090c87e719cab346f3e0c4e8141819d1d6bd3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7051,
+    "run_id": "38048791219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38048791219",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010115522_3be2158635",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7051,
+    "run_id": "38048791219"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T11:55:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
