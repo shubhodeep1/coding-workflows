@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Recovery-related changes in merged work touched `scripts/workflow_failure_heal.py` alongside orchestration polling logic and tests. When modifying recovery decisions or limits, check how the poller invokes or interprets the healer and test both the focused healing behavior and relevant polling outcomes.",
+  "fingerprint": "dbc954fe86c19b3564526ef6adb66b16c967826a6ab2b02ddb1dea8daaa05a7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38011728017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38011728017",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6630",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6632",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6981",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6988",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6645",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6646",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6991",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6993",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6994"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261010010910_e62e248f9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow recovery behavior crosses the healing scripts and orchestration polling, so changes may need coverage at both layers.",
+  "timestamps": {
+    "created_at": "2026-10-10T01:09:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
