@@ -2220,6 +2220,13 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   rm -rf "${_hb_tmpdir}"
   _hb_tmpdir=""
   _hb_fifo=""
+  # The editor's stderr goes to tmp_err through the heartbeat FIFO and is
+  # printed only on failure, so on a successful attempt the Claude engine's
+  # account-pool telemetry never reached the job log. Replay those lines on
+  # every attempt with a stage=editor prefix (the consolidator's
+  # stage=consolidator convention) so they stay distinct from the raw
+  # failure dump and each run is counted once.
+  { grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" 2>/dev/null || true; } | sed 's/^/stage=editor /' >&2 || true
 
   # The watchdog subshell exits on its own (143/142/144) after it kills the
   # editor, so by the time the editor process is reaped the watchdog may
