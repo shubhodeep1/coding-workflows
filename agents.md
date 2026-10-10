@@ -460,7 +460,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     checks referenced runs' repository, failure status and workflow path
     (a `ci.yml` run only as a `push` run on the default branch, which comes
     from `WORKFLOW_HEAL_DEFAULT_BRANCH` or the intake event's
-    `repository.default_branch`, else `ci_not_default_branch_push`);
+    `repository.default_branch`, else `ci_not_default_branch_push`; a
+    `nightly-validation-selftest.yml` run only on the default branch, else
+    `scheduled_check_not_default_branch`);
     phase and autofix runs must also be linked to the issue or PR. Self-repo
     phase failure comments must come from the intake token's account; consumer
     phase comments require a trusted GitHub-reported author association or

@@ -165,9 +165,15 @@ jobs:
           docker info --format 'server={{.ServerVersion}} rootless={{json .SecurityOptions}}' > validation/logs/harness_sandbox_probe.log
           echo "probe=ok" >> validation/logs/harness_sandbox_probe.log
           PROBE
-          bash scripts/validation_harness_sandbox.sh provision
-          VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}" \
-            bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"
+          if ! bash scripts/validation_harness_sandbox.sh provision; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=provision_failed"
+            exit 1
+          fi
+          if ! VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}" \
+            bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=checked_run_failed"
+            exit 1
+          fi
           if ! grep -qx 'probe=ok' "${logs}/harness_sandbox_probe.log" 2>/dev/null; then
             echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing"
             exit 1

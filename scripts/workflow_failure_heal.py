@@ -155,6 +155,10 @@ RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promot
 # runs on the repository's default branch (checked against the run GitHub
 # returns, not the payload), matching the intake job's `if:` predicate.
 CI_WORKFLOW_FILES = ("ci.yml",)
+# Scheduled self-check workflow files (SCHEDULED_CHECK_WORKFLOW_NAMES) a
+# `workflow_run` report may cite. Accepted only for runs GitHub reports on the
+# default branch, matching the intake job's `if:` predicate.
+SCHEDULED_CHECK_WORKFLOW_FILES = ("nightly-validation-selftest.yml",)
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
@@ -2418,7 +2422,9 @@ def verify_run_provenance(
 
 	A ``workflow_run`` report may cite a CI run (``CI_WORKFLOW_FILES``) only
 	when GitHub reports it as a ``push`` run on ``default_branch``; an empty or
-	invalid ``default_branch`` rejects every CI run (fail closed).
+	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
+	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
+	GitHub reports it on ``default_branch``, under the same fail-closed rule.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
@@ -2441,7 +2447,7 @@ def verify_run_provenance(
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
 	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
 		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
-		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES)
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -2472,6 +2478,11 @@ def verify_run_provenance(
 			and str(run.get("head_branch") or "") == default_branch
 		):
 			reason = "ci_not_default_branch_push"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in SCHEDULED_CHECK_WORKFLOW_FILES and not (
+			is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "scheduled_check_not_default_branch"
 		if not reason and kind == "phase_failure":
 			linked = any(
 				isinstance(comment, dict) and bool(_comment_author(comment))

@@ -508,12 +508,13 @@ def test_nightly_sandbox_check_passes_when_rootless_docker_answers() -> None:
 		assert calls[0] == "provision" and calls[1].startswith("checked-run ") and calls[1].endswith("/harness_sandbox_probe.sh")
 
 
-@pytest.mark.parametrize("docker_body,provision_rc", (("exit 1", 0), ("echo ok", 3)))
-def test_nightly_sandbox_check_fails_when_docker_or_provision_fails(docker_body, provision_rc) -> None:
+@pytest.mark.parametrize("docker_body,provision_rc,reason", (("exit 1", 0, "checked_run_failed"), ("echo ok", 3, "provision_failed")))
+def test_nightly_sandbox_check_fails_when_docker_or_provision_fails(docker_body, provision_rc, reason) -> None:
 	with tempfile.TemporaryDirectory() as td:
 		result = _run_nightly_check(Path(td), docker_body=docker_body, provision_rc=provision_rc)
 		assert result.returncode != 0
 		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok" not in result.stdout
+		assert f"VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason={reason}" in result.stdout
 
 
 def test_nightly_sandbox_check_fails_when_no_log_copies_back() -> None:
