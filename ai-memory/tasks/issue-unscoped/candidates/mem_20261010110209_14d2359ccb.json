@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/publish-sandbox-images.yml:18-68 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: An unrestricted `workflow_dispatch` can run a modified feature-branch workflow with `packages: write`, allowing a repository writer to replace GHCR sandbox image tags or use the token in added workflow steps.\n  WHY: The repository-only job condition does not restrict the dispatched ref, and the matrix checkout ref does not restrict which workflow definition or steps run.\n- .github/workflows/publish-sandbox-images.yml:32-38, 50, 57 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The claimed workflow_dispatch feature-branch execution vulnerability is not present because dispatch runs the default-branch workflow definition and the matrix resolves to main and stable.\n  WHY: GitHub requires the workflow file to be on the default branch for workflow_dispatch to be dispatchable, so modified feature-branch workflow or publish scripts are not executed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/publish-sandbox-images.yml:lines 32-38, 50, 57 | severity=low | confidence=[5]\n  PROBLEM: The consensus finding claims workflow_dispatch lets a feature branch's modified workflow run with packages: write. This is not a real defect: GitHub Actions requires the workflow file to be on the default branch for workflow_dispatch to be dispatchable, and the workflow definition that executes is the default branch's copy.\n  WHY: Does not fail. The consensus finding is based on a misunderstanding of GitHub Actions dispatch semantics.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/publish-sandbox-images.yml:18-36 | severity=critical | confidence=[5]\n  PROBLEM: The workflow_dispatch trigger is not restricted to the default branch, allowing any branch with this workflow file to execute it with packages: write access.\n  WHY: A user with write access to the repository can trigger a workflow_dispatch on a feature branch containing a modified version of this workflow, allowing them to publish or replace sandbox image tags on GHCR using the workflow's elevated permissions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/publish-sandbox-images.yml:lines 32, 40-42, 50, 64-68 (and the matrix `ref` at line 57) | severity=critical | confidence=[4]\n  PROBLEM: The `workflow_dispatch:` trigger (line 32) has no `branches:` filter, so any user with write access to the repository can push a branch containing a modified `publish-sandbox-images.yml` and dispatch it.\n  WHY: A write-access user can dispatch the modified workflow, which runs with `packages: write`, logs in to GHCR with the job's `GITHUB_TOKEN`, and can replace sandbox image tags with attacker-controlled content consumed by jobs in this repo and consumer repos.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/publish-sandbox-images.yml:Lines 40-50 and 64-68; the job condition at line 50 checks only `github.repository`. | severity=critical | confidence=[5]\n  PROBLEM: The workflow grants `packages: write` without restricting `workflow_dispatch` runs to `main` or `stable`.\n  WHY: A repository writer can dispatch a modified branch workflow and use its package-write token to replace GHCR sandbox image tags; the checkout ref matrix at line 57 does not protect the workflow steps themselves.\n=== END FINDINGS FROM openai_gpt-6-luna===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/publish-sandbox-images.yml:Lines 32-38 (workflow_dispatch trigger), 40-42 (permissions), 50 (job condition) | severity=critical | confidence=[5]\n  PROBLEM: The workflow_dispatch trigger has no ref restriction, and the job condition only checks the repository name.\n  WHY: A repository writer can dispatch the workflow from a feature branch, which runs that branch's workflow YAML with packages: write permission and a GHCR login token; modified workflow steps could push malicious sandbox images or exfiltrate the GITHUB_TOKEN.\n=== END FINDINGS FROM qwen_qwen3_7-plus===",
+  "fingerprint": "48d4b51cba600d7bc835a6004ab18517c61ec00efa49bc9a6fcfa5df8adec7e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7026,
+    "run_id": "38044656454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38044656454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010110209_14d2359ccb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7026,
+    "run_id": "38044656454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T11:02:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
