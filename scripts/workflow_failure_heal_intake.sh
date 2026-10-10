@@ -86,6 +86,9 @@
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
 #   WORKFLOW_HEAL_SOURCE_CHECKOUT         "false" to skip the release-SHA worktree (tests)
+#   WORKFLOW_HEAL_DEFAULT_BRANCH          default branch a CI `workflow_run` report must
+#                                         come from (default: the intake event's
+#                                         repository.default_branch; empty rejects CI runs)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
@@ -423,6 +426,19 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	# repository, workflow path, conclusion or PR association, and no issue/PR
 	# comments were read here before. At most one /user read, three run GETs,
 	# and one paginated comment read; failures reject rather than bypass this gate.
+	# The default branch a CI run must come from is read from the intake's own
+	# event file (always this repository), so it costs no GitHub call; empty
+	# rejects CI runs (fail closed) and leaves release runs unaffected.
+	PROVENANCE_DEFAULT_BRANCH="${WORKFLOW_HEAL_DEFAULT_BRANCH:-}"
+	if [ -z "${PROVENANCE_DEFAULT_BRANCH}" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+		PROVENANCE_DEFAULT_BRANCH="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+	fi
+	PROVENANCE_DEFAULT_BRANCH="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -z "${PROVENANCE_DEFAULT_BRANCH}" ]; then
+		# Lets operators tell "default branch unknown" apart from "run not on the
+		# default branch"; both still reject CI runs as ci_not_default_branch_push.
+		log "provenance_default_branch_unavailable source=${SOURCE_REPO} kind=${SOURCE_KIND} effect=ci_runs_rejected"
+	fi
 	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
 		if [ "${SOURCE_KIND}" != "phase_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
 			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
@@ -444,7 +460,8 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 		fi
 	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
 	if ! python3 "${HEAL_PY}" verify-run-provenance --payload-json "${PAYLOAD_FILE}" --runs-json "${PROVENANCE_RUNS}" \
-		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" > "${PROVENANCE_RESULT}" 2>/dev/null \
+		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" \
+		--default-branch "${PROVENANCE_DEFAULT_BRANCH}" > "${PROVENANCE_RESULT}" 2>/dev/null \
 		|| ! jq -e 'type == "object" and (.status == "ok" or .status == "rejected") and (.run_refs | type == "array") and (.rejections | type == "array")' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
 		printf '{"status":"rejected","reason":"verifier_error","rejections":[]}\n' > "${PROVENANCE_RESULT}"
 	fi
@@ -629,6 +646,38 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 			fi
 			;;
 	esac
+fi
+
+# A release / default-branch run of this repository that failed only because
+# the model provider was unavailable (evidence in its logs confirmed by a live
+# probe, scripts/provider_outage.py) is recorded on the repo-wide provider
+# outage tracker instead of filing a heal issue; the scheduled sweep reports
+# or (opt-in, PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED) re-runs it on recovery
+# (issue #6633). Fail-open: without the helper the run is triaged as before.
+PROVIDER_OUTAGE_PY="$(dirname "${HEAL_PY}")/provider_outage.py"
+# Only stable-release / promotion runs (RELEASE_WORKFLOW_NAMES) go to the
+# tracker; CI and scheduled-check runs keep the normal triage path.
+OUTAGE_RELEASE_RUN="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import workflow_failure_heal as h; print("true" if sys.argv[2] in h.RELEASE_WORKFLOW_NAMES else "false")' "$(dirname "${HEAL_PY}")" "${PAYLOAD_WORKFLOW_NAME:-}" 2>/dev/null || echo false)"
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ "${OUTAGE_RELEASE_RUN}" = "true" ] && [ "${#LOG_FILES[@]}" -gt 0 ] && [ -f "${PROVIDER_OUTAGE_PY}" ]; then
+	OUTAGE_ARGS=()
+	for f in "${LOG_FILES[@]}"; do
+		OUTAGE_ARGS+=(--log-file "${f}")
+	done
+	OUTAGE_CLASS="$(PYTHONDONTWRITEBYTECODE=1 python3 "${PROVIDER_OUTAGE_PY}" classify "${OUTAGE_ARGS[@]}" 2>/dev/null | head -n 1 || true)"
+	if [[ "${OUTAGE_CLASS}" == reason=provider_unavailable* ]]; then
+		OUTAGE_STATUS="$(printf '%s\n' "${OUTAGE_CLASS}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p')"
+		OUTAGE_RUN_ID="$(jq -r '.run_refs[0].run_id // ""' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+		OUTAGE_WORKFLOW="$(printf '%s' "${PAYLOAD_WORKFLOW_NAME:-unknown}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-80)"
+		OUTAGE_ALERT_FILE="$(mktemp)"
+		OUTAGE_OPEN="$(PYTHONDONTWRITEBYTECODE=1 python3 "${PROVIDER_OUTAGE_PY}" open --repo "${SELF_REPO}" --kind outage --provider openrouter \
+			--status "${OUTAGE_STATUS:-unknown}" --release-run "${OUTAGE_RUN_ID}" --release-workflow "${OUTAGE_WORKFLOW}" --alert-out "${OUTAGE_ALERT_FILE}" 2>/dev/null | tail -n 1 || true)"
+		if [ -s "${OUTAGE_ALERT_FILE}" ]; then
+			tg_send_msg "$(cat "${OUTAGE_ALERT_FILE}")" "CRITICAL" >/dev/null 2>&1 || true
+		fi
+		rm -f -- "${OUTAGE_ALERT_FILE}"
+		log "skip reason=provider_unavailable workflow=${OUTAGE_WORKFLOW} run=${OUTAGE_RUN_ID:-none} status=${OUTAGE_STATUS:-unknown} ${OUTAGE_OPEN}"
+		exit 0
+	fi
 fi
 
 # --- Fingerprint -------------------------------------------------------------
@@ -1002,12 +1051,19 @@ fi
 # and the ownership facts computed above. _open_issue reads this snapshot,
 # never the diagnosis, so neither evidence nor a model verdict can widen it.
 SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
+# Failing tests reported by the verified runs' own job logs (Q37: A): the
+# render step resolves them to test files and the subjects they cover at the
+# scope commit, so a CI heal may fix the code a test exercises instead of
+# being confined to tests/**. Logs are run metadata, not diagnosis output.
+FAILING_TESTS_JSON="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt 2>/dev/null || echo '{"names":[],"files":[]}')"
+jq -e 'type == "object" and (.names | type == "array") and (.files | type == "array")' <<< "${FAILING_TESTS_JSON}" >/dev/null 2>&1 || FAILING_TESTS_JSON='{"names":[],"files":[]}'
 jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
+	--argjson failing_tests "${FAILING_TESTS_JSON}" \
 	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
 	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
 	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
 	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed}' > "${SCOPE_INPUTS_FROZEN}" \
+	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 
@@ -1293,7 +1349,7 @@ _open_issue()
 	fi
 	# A missing pre-diagnosis snapshot leaves the scope unresolved (fail closed).
 	if [ -n "${scope_ref}" ] && [ -s "${SCOPE_INPUTS_FROZEN:-}" ] && git -C "${scope_checkout}" rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
-		jq --arg key "${scope_workflows_key}" '{crash_file: .crash_file, runs: .runs, workflow_paths: .[$key], changed_files: .changed_files}' \
+		jq --arg key "${scope_workflows_key}" '{crash_file: .crash_file, runs: .runs, workflow_paths: .[$key], changed_files: .changed_files, failing_tests: (.failing_tests // {names: [], files: []})}' \
 			"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"
 		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
 	fi

@@ -159,7 +159,8 @@ def test_gate_fetches_mergeability_from_the_existing_pr_call() -> None:
 	"""§15: no new API call — the existing /pulls/{n} --jq is extended."""
 	workflow = _read(REVIEW_AUTOFIX)
 	assert "mergeable_state: (.mergeable_state" in workflow
-	assert workflow.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \\') == 1
+	# The fetch goes through the classified retry helper (issue #6634).
+	assert workflow.count('gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \\') == 1
 
 
 def test_gate_suppresses_the_skip_on_a_conflicted_pr() -> None:
@@ -260,6 +261,7 @@ def test_consumer_sync_notification_predicate_matches_commit_predicate() -> None
 		"steps.claude_md_sync.outputs.claude_md_changed == 'true'",
 		"steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'",
 		"steps.changelog_assemble.outputs.changelog_assembled == 'true'",
+		"steps.agents_assemble.outputs.agents_assembled == 'true'",
 	)
 
 

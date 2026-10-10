@@ -195,7 +195,7 @@ jobs:
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
           MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
-          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}
+          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
           MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
@@ -296,7 +296,7 @@ jobs:
       - name: Install OpenCode CLI for isolated review-blocked judge
         if: steps.find_tracking.outputs.has_work == 'true'
         continue-on-error: true
-        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:
           opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
 
@@ -407,7 +407,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py workflow_failure_heal.py; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py workflow_failure_heal.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -649,6 +649,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
+          # Unrouted-reply detection on blocked issues (issue #6630); the
+          # poller script carries the same defaults.
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          RECLARIFY_UNROUTED_DETECT_ENABLED: ${{ vars.RECLARIFY_UNROUTED_DETECT_ENABLED || 'true' }}
+          RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
+          RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
@@ -751,6 +759,10 @@ jobs:
       # and the account pool are fetched only when a tick has work and at
       # least one judge role resolves to Claude, or an active project label
       # selects Claude. The per-project judge still resolves its own labels.
+      # A standalone stall judge (run_standalone_stall_recovery) resolves
+      # STALL_JUDGE from its own issue's labels, not the tracking labels, so
+      # when no tracking issue selected Claude the step also checks the
+      # STALL_JUDGE default and open non-tracking `ai:engine-claude` issues.
       - name: Resolve AI engine
         id: ai_engine
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -764,6 +776,9 @@ jobs:
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
+          ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
         run: |
           set -euo pipefail
           any_claude=false
@@ -782,6 +797,65 @@ jobs:
               echo "::warning::Failed to source scripts/ai_engine.sh; continuing with codex defaults." >&2
             fi
           fi
+          decided_by=none
+          if [ "${any_claude}" = "true" ]; then
+            decided_by=tracking
+          fi
+          # Standalone stall judges (same truthy test as is_truthy in
+          # scripts/orchestrate_poll_process.sh) pick their engine from the
+          # standalone issue's own labels.
+          standalone_flag_truthy() {
+            case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if [ "${any_claude}" != "true" ] \
+            && standalone_flag_truthy "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" \
+            && standalone_flag_truthy "${ENABLE_STALL_JUDGE:-true}"; then
+            if ! declare -F ai_engine_for_role >/dev/null 2>&1 && [ -f scripts/ai_engine.sh ]; then
+              # shellcheck source=/dev/null
+              source scripts/ai_engine.sh || echo "::warning::Failed to source scripts/ai_engine.sh for the standalone stall judge check." >&2
+            fi
+            if declare -F ai_engine_for_role >/dev/null 2>&1 \
+              && [ "$(AI_ENGINE_LABELS='[]' ai_engine_for_role STALL_JUDGE || echo codex)" = "claude" ]; then
+              any_claude=true
+              decided_by=standalone_default
+            else
+              # §14 audit: find_tracking's listing is AND-scoped to
+              # ai:orchestrator-tracking, and the poller's batched
+              # _fetch_candidate_issue_details_graphql / _candidate_details_json
+              # cache is built later inside "Process each tracking issue",
+              # after the pool must already exist. This read runs only when
+              # neither the tracking labels nor the STALL_JUDGE default chose
+              # Claude, so the default configuration makes no extra call.
+              # Fail open: a failed read keeps any_claude=false and the
+              # judge falls back to the sandboxed OpenCode path.
+              # --limit 1000 matches run_standalone_stall_recovery's
+              # per-label scan. A listing that fills the cap may omit an
+              # eligible issue that recovery still selects, so it fetches
+              # the pool rather than risk a judge without credentials.
+              source scripts/gh_helpers.sh 2>/dev/null || true
+              type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+              standalone_claude_issues=""
+              if standalone_claude_issues="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --label "ai:engine-claude" --state open --json number,labels --limit 1000 2>/dev/null)"; then
+                if printf '%s' "${standalone_claude_issues}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                  if printf '%s' "${standalone_claude_issues}" | jq -e 'length >= 1000' >/dev/null 2>&1; then
+                    any_claude=true
+                    decided_by=standalone_listing_capped
+                  elif printf '%s' "${standalone_claude_issues}" | jq -e 'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not) and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))' >/dev/null 2>&1; then
+                    any_claude=true
+                    decided_by=standalone_label
+                  fi
+                else
+                  echo "::warning::Standalone ai:engine-claude issue listing was not a JSON array; skipping the Claude credential fetch for standalone stall judges." >&2
+                fi
+              else
+                echo "::warning::Could not list open ai:engine-claude issues; skipping the Claude credential fetch for standalone stall judges." >&2
+              fi
+            fi
+          fi
+          echo "Claude credential preflight: any_claude=${any_claude} decided_by=${decided_by}"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
@@ -798,6 +872,22 @@ jobs:
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      # Hourly Telegram WARNING naming every pool account at or above the usage
+      # gate (and every rejected token), from the probes the step above already
+      # ran; silent while every account is below the gate (#6951).
+      - name: Alert on Claude pool accounts at the usage gate
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CLAUDE_POOL_HEALTH_ALERT_ENABLED || 'true' }}
+          CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
+          CLAUDE_ENGINE_CONFIG: .codex-workflow-src/.github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
 
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -866,6 +956,8 @@ jobs:
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Merge-base freshness gate (scripts/pr_checks_lib.sh, Q35: A).
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),
           # which can legitimately run past the generic stall threshold (up to

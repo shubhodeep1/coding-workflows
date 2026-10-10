@@ -47,8 +47,8 @@
 #   MERGE_TRAIN_HEAD_REF_PREFIX            default ai/issue-
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 #   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
-#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 24; 0 disables the age bypass;
-#                                          a non-integer warns and falls back to 24
+#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 6; 0 disables the age bypass;
+#                                          a non-integer warns and falls back to 6
 #   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
 #                                          (comma-separated); empty, none or off
 #                                          disables the priority lane
@@ -171,10 +171,10 @@ case "$(printf '%s' "${MERGE_TRAIN_CONFLICT_CHECK_ENABLED:-true}" | tr '[:upper:
 	true|1|yes|on) MT_CONFLICT_CHECK="true" ;;
 	*) MT_CONFLICT_CHECK="false" ;;
 esac
-MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-24}"
+MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-6}"
 if ! [[ "${MT_HEAD_MAX_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
-	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 24."
-	MT_HEAD_MAX_AGE_HOURS=24
+	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 6."
+	MT_HEAD_MAX_AGE_HOURS=6
 fi
 MT_HEAD_MAX_AGE_HOURS=$((10#${MT_HEAD_MAX_AGE_HOURS}))
 # Unset means the default; an explicitly empty value disables the lane. A repo
@@ -433,7 +433,7 @@ _mt_blockers_for_into() {
 			_mt_conflict_probe "${own_sha}" "${__mt_cand_sha[$idx]}"
 			conflict_state="${_MT_PROBE_RESULT}"
 			case "${conflict_state}" in
-				none)
+				none|ignored)
 					action="skip"
 					skipped_clean=$((skipped_clean + 1))
 					;;
@@ -610,16 +610,91 @@ _mt_blocker_is_stale()
 
 # Conflict probe (issue #6570). `_mt_conflict_probe <own_sha> <blocker_sha>`
 # sets _MT_PROBE_RESULT to none (the heads merge cleanly), conflict (git
-# reports a content conflict; _MT_PROBE_PATHS lists the paths) or unknown (any
-# other outcome). Runs in the caller's shell so its caches persist.
+# reports a content conflict; _MT_PROBE_PATHS lists the paths), ignored (every
+# conflicted path is in MERGE_TRAIN_IGNORE_PATHS; does not block) or unknown
+# (any other outcome). Runs in the caller's shell so its caches persist.
 # Missing heads are fetched by SHA with --no-write-fetch-head (FETCH_HEAD for
 # later steps is untouched) and --depth=200 only in an already-shallow clone,
 # so a full clone is never made shallow. merge-tree writes only objects; it
 # runs no hooks and no PR-supplied merge driver. No API calls.
+#
+# Outside a git checkout (the `release` callers in orchestrate_poll.yml and
+# cancel_on_pr_close.yml run before or without one), the probe uses a private
+# bare repository under RUNNER_TEMP (or TMPDIR) whose origin is
+# ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git, fetches the two heads by SHA
+# with --depth=200, and removes the repository when the script exits. GH_TOKEN
+# (or GITHUB_TOKEN) authenticates the fetch through GIT_CONFIG_* environment
+# entries, never argv or a config file. Without that fallback every probe in
+# those callers returned `unknown` and kept the blocker. Logs
+# MERGE_TRAIN_PROBE_REPO outcome=created|unavailable once per run.
 declare -A _MT_FETCHED_SHA=()
 _MT_GIT_PROBE_OK=""
 _MT_PROBE_RESULT="unknown"
 _MT_PROBE_PATHS=""
+_MT_PROBE_GIT_DIR=""
+
+# git in the probe repository when one was created, else in the cwd checkout.
+_mt_git()
+{
+	if [ -n "${_MT_PROBE_GIT_DIR}" ]; then
+		git --git-dir="${_MT_PROBE_GIT_DIR}" "$@"
+	else
+		git "$@"
+	fi
+}
+
+# `_mt_git_fetch <seconds> <fetch args...>`: git fetch under `timeout`, in the
+# probe repository when one exists. For an https origin the token rides as an
+# HTTP extraheader through GIT_CONFIG_* variables exported in a subshell, so it
+# never reaches argv (ps) or a config file.
+_mt_git_fetch()
+{
+	local fetch_timeout="$1"
+	shift
+	(
+		local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}" server="${GITHUB_SERVER_URL:-https://github.com}" basic
+		local -a git_dir_args=()
+		if [ -n "${_MT_PROBE_GIT_DIR}" ]; then
+			git_dir_args=(--git-dir="${_MT_PROBE_GIT_DIR}")
+			if [ -n "${token}" ] && [[ "${server}" =~ ^https:// ]]; then
+				basic="$(printf 'x-access-token:%s' "${token}" | base64 | tr -d '\n')"
+				export GIT_CONFIG_COUNT=1
+				export GIT_CONFIG_KEY_0="http.${server%/}/.extraheader"
+				export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+			fi
+		fi
+		GIT_TERMINAL_PROMPT=0 timeout "${fetch_timeout}" git ${git_dir_args[@]+"${git_dir_args[@]}"} fetch "$@"
+	)
+}
+
+_mt_probe_repo_cleanup()
+{
+	if [ -n "${_MT_PROBE_GIT_DIR}" ] && [[ "${_MT_PROBE_GIT_DIR}" == */merge-train-probe.* ]]; then
+		rm -rf -- "${_MT_PROBE_GIT_DIR}"
+	fi
+}
+
+# Create the private probe repository; returns 1 (probe stays unknown) when
+# the repository slug is unusable or git cannot create it.
+_mt_probe_repo_init()
+{
+	local server="${GITHUB_SERVER_URL:-https://github.com}" probe_dir
+	if ! [[ "${MT_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		_mt_log "MERGE_TRAIN_PROBE_REPO outcome=unavailable reason=invalid_repository"
+		return 1
+	fi
+	if ! probe_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/merge-train-probe.XXXXXX" 2>/dev/null)" \
+		|| ! git init -q --bare "${probe_dir}" >/dev/null 2>&1 \
+		|| ! git --git-dir="${probe_dir}" remote add origin "${server%/}/${MT_REPO}.git" >/dev/null 2>&1; then
+		[ -n "${probe_dir:-}" ] && rm -rf -- "${probe_dir}"
+		_mt_log "MERGE_TRAIN_PROBE_REPO outcome=unavailable reason=init_failed"
+		return 1
+	fi
+	_MT_PROBE_GIT_DIR="${probe_dir}"
+	trap _mt_probe_repo_cleanup EXIT
+	_mt_log "MERGE_TRAIN_PROBE_REPO outcome=created origin=${server%/}/${MT_REPO}.git"
+	return 0
+}
 _mt_conflict_probe()
 {
 	local own_sha="$1" other_sha="$2" probe_sha probe_out="" probe_rc=0
@@ -632,22 +707,26 @@ _mt_conflict_probe()
 	if [ -z "${_MT_GIT_PROBE_OK}" ]; then
 		if git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
 			_MT_GIT_PROBE_OK="yes"
+		elif ! git rev-parse --git-dir >/dev/null 2>&1 && _mt_probe_repo_init; then
+			# No checkout here: probe in the private repository instead.
+			_MT_GIT_PROBE_OK="yes"
 		else
 			_MT_GIT_PROBE_OK="no"
 		fi
 	fi
 	[ "${_MT_GIT_PROBE_OK}" = "yes" ] || return 0
 	for probe_sha in "${own_sha}" "${other_sha}"; do
-		if ! git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+		if ! _mt_git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
 			[ "${_MT_FETCHED_SHA[${probe_sha}]:-}" = "failed" ] && return 0
 			probe_missing+=("${probe_sha}")
 		fi
 	done
 	if [ "${#probe_missing[@]}" -gt 0 ]; then
-		if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+		# The private probe repository starts empty: fetch shallow there too.
+		if [ -n "${_MT_PROBE_GIT_DIR}" ] || [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
 			probe_depth=(--depth=200)
 		fi
-		if ! GIT_TERMINAL_PROMPT=0 timeout 120 git fetch --no-tags --quiet --no-write-fetch-head \
+		if ! _mt_git_fetch 120 --no-tags --quiet --no-write-fetch-head \
 			${probe_depth[@]+"${probe_depth[@]}"} origin "${probe_missing[@]}" >/dev/null 2>&1; then
 			for probe_sha in "${probe_missing[@]}"; do
 				_MT_FETCHED_SHA[${probe_sha}]="failed"
@@ -655,7 +734,7 @@ _mt_conflict_probe()
 			return 0
 		fi
 		for probe_sha in "${probe_missing[@]}"; do
-			if git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+			if _mt_git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
 				_MT_FETCHED_SHA[${probe_sha}]="ok"
 			else
 				_MT_FETCHED_SHA[${probe_sha}]="failed"
@@ -663,12 +742,19 @@ _mt_conflict_probe()
 			fi
 		done
 	fi
-	probe_out="$(git merge-tree --write-tree --name-only --no-messages "${own_sha}" "${other_sha}" 2>/dev/null)" || probe_rc=$?
+	probe_out="$(_mt_git merge-tree --write-tree --name-only --no-messages "${own_sha}" "${other_sha}" 2>/dev/null)" || probe_rc=$?
 	case "${probe_rc}" in
 		0) _MT_PROBE_RESULT="none" ;;
 		1)
 			_MT_PROBE_RESULT="conflict"
 			_MT_PROBE_PATHS="$(printf '%s\n' "${probe_out}" | sed '1d' | sed '/^$/d' | sort -u)"
+			# Conflicts only in MERGE_TRAIN_IGNORE_PATHS (the generated
+			# workspace manifest by default) do not block: the path-overlap
+			# rule already ignores those files, and the later merge
+			# regenerates them.
+			if [ -n "${_MT_PROBE_PATHS}" ] && [ -z "$(_mt_drop_ignored "${_MT_PROBE_PATHS}" | sed '/^$/d')" ]; then
+				_MT_PROBE_RESULT="ignored"
+			fi
 			;;
 		*) _MT_PROBE_RESULT="unknown" ;;
 	esac
@@ -897,7 +983,7 @@ _mt_gate() {
 	queue_label_persisted="true"
 	if ! _mt_has_label "${own_labels}"; then
 		queue_label_persisted="false"
-		if gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
 			queue_label_persisted="true"
 		else
 			_mt_warn "merge-train gate: could not add ${MT_LABEL} to PR #${pr}; the run still soft-exits and no bypass marker will be armed."
@@ -944,16 +1030,33 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # outside the repository's own workflow directory); the suffix is stripped
 # before the workflow-file match.
 #
+# Provenance (issue #6629, re-issue of #5152): a workflow_dispatch run's
+# title comes from the dispatched ref's workflow file, so anyone who can push
+# a branch copy of a wrapper can dispatch a same-named run from that branch.
+# A workflow_dispatch review run is therefore keyed "pr:<N>" only when it is
+# trusted: head_branch is the default branch (read once by
+# _mt_resolve_default_branch, no fallback) or null, and the title is paired
+# with its own wrapper path (".github/workflows/internal-review.yml" with
+# "Internal: AI Review & Autofix [pr:<N>]", ".github/workflows/ai-review.yml"
+# with "AI Review [pr:<N>]", after stripping "@<ref>" and a leading
+# "<this repo>/" prefix). A dispatch run on any other non-empty branch, or a
+# PR-named one whose title and path do not pair, is dropped: it is not a
+# trusted review run, and counting it as unattributed would let a spoof hold
+# every release (Q3). An untitled dispatch on the default branch (or null)
+# is still unattributed (review_autofix.yml self-dispatches).
+#
 # Input:     none (MT_REPO).
 # Output:    one key per line on stdout, sorted and unique: the head branch
 #            of each active review run that is not a workflow_dispatch run,
-#            and "pr:<N>" for a workflow_dispatch run named for PR <N>.
+#            and "pr:<N>" for a trusted workflow_dispatch run named for PR <N>.
 #            Every run an active-status query returned counts as active,
 #            whatever its own status field says.
 # Returns:   0 = the listing is complete: a PR with no key has no active run.
 #            1 = the listing is incomplete. Stdout carries nothing; the caller
 #            must not release on it, and the next invocation retries.
-# API calls: one `GET actions/runs?status=<s>&per_page=100&page=1` for each
+# API calls: one `GET repos/<repo>` for the default branch, before any
+#            listing call (_mt_resolve_default_branch), then
+#            one `GET actions/runs?status=<s>&per_page=100&page=1` for each
 #            non-terminal status, requested, pending, queued, waiting,
 #            in_progress (PR #5451 review round 3: `requested` is a new run's
 #            state before it is queued; `waiting` is only reached through a
@@ -1014,13 +1117,49 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            review of head fd3ad67 and review round 2), or a failed key
 #            filter. Each is logged once on stderr
 #            (CLAUDE.md §8):
-#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
+#            An unresolvable default branch is incomplete too
+#            (reason=default_branch_unavailable status=none), reported before
+#            any actions/runs call.
+#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<default_branch_unavailable|page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
+#            A shifted page is first re-read up to
+#            MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES times per listing (default 2,
+#            0-5; MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP seconds apart,
+#            default 2), each logged as
+#            MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted ... attempt=<n>/<max>
+# The repository's default branch for review-run provenance (issue #6629).
+# One `GET repos/<repo>` per process; no fallback, so a failed read is never
+# mistaken for "main". Output-variable API: `_mt_resolve_default_branch
+# <varname>` assigns the branch and returns 0, or returns 1. Runs in the
+# caller's shell (not $(...)) so MT_DEFAULT_BRANCH memoizes the result.
+MT_DEFAULT_BRANCH=""
+_mt_resolve_default_branch()
+{
+	local __mt_db_dest="$1" __mt_db_value=""
+	if [ -z "${MT_DEFAULT_BRANCH}" ]; then
+		__mt_db_value="$(gh_retry gh api -X GET "repos/${MT_REPO}" --jq '.default_branch' 2>/dev/null)" || return 1
+		if ! [[ "${__mt_db_value}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${__mt_db_value}" = "null" ]; then
+			return 1
+		fi
+		MT_DEFAULT_BRANCH="${__mt_db_value}"
+	fi
+	printf -v "${__mt_db_dest}" '%s' "${MT_DEFAULT_BRANCH}"
+}
+
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
+	local __mt_runs_default_branch=""
+	if ! _mt_resolve_default_branch __mt_runs_default_branch; then
+		_mt_warn "merge-train release: could not resolve the default branch; review dispatch runs cannot be verified." >&2
+		echo "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=default_branch_unavailable status=none page=0 read=0 total=0" >&2
+		return 1
+	fi
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
+	local __mt_runs_shift_retries=0 __mt_runs_shift_retry_max="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES:-2}" __mt_runs_shift_sleep="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP:-2}"
+	[[ "${__mt_runs_shift_retry_max}" =~ ^[0-5]$ ]] || __mt_runs_shift_retry_max=2
+	[[ "${__mt_runs_shift_sleep}" =~ ^[0-9]{1,2}$ ]] || __mt_runs_shift_sleep=2
 	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting in_progress; do
 		__mt_runs_page=1
 		__mt_runs_total=0
@@ -1064,6 +1203,17 @@ _mt_inflight_review_branches()
 				break
 			fi
 			if [ "${__mt_runs_page_len}" -lt 100 ]; then
+				# Runs changed status between GitHub's count and its listing. One
+				# run starting mid-read used to abort the whole release tick
+				# (run 38003551535); re-read the same query a bounded number of
+				# times (shared by every status of this listing) first. Runs
+				# already read stay in the union, so a re-read only adds runs.
+				if [ "${__mt_runs_shift_retries}" -lt "${__mt_runs_shift_retry_max}" ]; then
+					__mt_runs_shift_retries=$((__mt_runs_shift_retries + 1))
+					echo "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total} attempt=${__mt_runs_shift_retries}/${__mt_runs_shift_retry_max}" >&2
+					sleep "${__mt_runs_shift_sleep}"
+					continue
+				fi
 				__mt_runs_reason="listing_shifted"
 				break 2
 			fi
@@ -1100,7 +1250,29 @@ _mt_inflight_review_branches()
 		# issue #4701), never the PR it reviews, so a dispatch without a
 		# PR-named title (review_autofix.yml has no run-name and re-dispatches
 		# itself) is unattributed (PR #5451 review round 2, AD-16).
-		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c '[.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | if (.event // "") == "workflow_dispatch" then [(.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)"] else [.head_branch | select(type == "string" and length > 0)] end]' 2>/dev/null)"; then
+		# Issue #6629: only a trusted dispatch run (see the header) gets its
+		# "pr:<N>" key; a dispatch on another non-empty branch, or a PR-named
+		# one whose title and path do not pair, is dropped (no key, not counted).
+		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c --arg db "${__mt_runs_default_branch}" --arg repo "${MT_REPO}" '
+			def mt_review_path:
+				((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
+				| if $repo != "" and ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
+					then $p[(($repo | length) + 1):]
+					else $p
+					end;
+			[.[]?
+			| select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| if (.event // "") == "workflow_dispatch" then
+				((.display_title // "") | if type == "string" then . else "" end) as $t
+				| [$t | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | .pr] as $prs
+				| if ((.head_branch | type) == "string" and .head_branch != "" and .head_branch != $db) then empty
+					elif ($prs | length) == 0 then []
+					elif (mt_review_path == ".github/workflows/internal-review.yml" and $t == ("Internal: AI Review & Autofix [pr:" + $prs[0] + "]"))
+						or (mt_review_path == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $prs[0] + "]")) then ["pr:" + $prs[0]]
+					else empty
+					end
+				else [.head_branch | select(type == "string" and length > 0)]
+				end]' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
 			__mt_runs_reason="unattributed_run"
@@ -1226,7 +1398,7 @@ _mt_release() {
 			_mt_log "MERGE_TRAIN_RELEASED pr=${num} source=release"
 		else
 			release_label_restored="false"
-			if gh_retry gh api -X POST "repos/${MT_REPO}/issues/${num}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
+			if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${MT_REPO}/issues/${num}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
 				release_label_restored="true"
 			else
 				_mt_warn "merge-train release: dispatch and ${MT_LABEL} restoration both failed for PR #${num}; a later PR event must re-evaluate it."
