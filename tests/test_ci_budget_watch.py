@@ -67,11 +67,11 @@ def _fake_gh(tmp_path: Path, issues: list[dict], jobs: list[dict]) -> dict[str, 
 	log = tmp_path / "gh.log"
 	gh = bin_dir / "gh"
 	gh.write_text(f"""#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 args = sys.argv[1:]
 stdin = sys.stdin.read() if "--input" in args else ""
 with open({str(log)!r}, "a") as fh:
-    fh.write(json.dumps({{"args": args, "stdin": stdin}}) + "\\n")
+    fh.write(json.dumps({{"args": args, "stdin": stdin, "token": os.environ.get("GH_TOKEN", "")}}) + "\\n")
 path = args[1]
 if path.endswith("/jobs?per_page=100"):
     print(json.dumps({{"jobs": {json.dumps(jobs)}}}))
@@ -97,11 +97,14 @@ def test_opens_one_issue_per_new_finding_and_skips_existing(tmp_path: Path) -> N
 	root = _tree(tmp_path, {"big.yml": 450_000}, CI)
 	existing = [{"number": 5, "body": cbw.marker("workflow_size", ".github/workflows/big.yml")}]
 	env = _fake_gh(tmp_path, existing, [_job("tests-a", 19 * 60)])
+	env.update({"GH_TOKEN": "job-token", "CI_BUDGET_ISSUE_TOKEN": "issue-pat"})
 	result = _run(root, env)
 	assert result.returncode == 0, result.stderr
 	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
 	created = [c for c in calls if c["args"][1].endswith("/issues")]
 	assert len(created) == 1
+	assert created[0]["token"] == "issue-pat"
+	assert all(c["token"] == "job-token" for c in calls if c not in created)
 	payload = json.loads(created[0]["stdin"])
 	assert payload["labels"] == ["ai:ci-budget"]
 	assert payload["title"].startswith("CI budget: CI job tests-a took 19m00s")

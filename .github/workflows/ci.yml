@@ -1765,6 +1765,10 @@ jobs:
       - name: Check workflow sizes and CI job durations against their budgets
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issues opened with github.token start no workflow, so the issue
+          # would never reach clarify. The issue-only PAT (Issues: write) is
+          # used for the create call alone; unset, the job token is used.
+          CI_BUDGET_ISSUE_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
           CI_BUDGET_WORKFLOW_WARN_BYTES: ${{ vars.CI_BUDGET_WORKFLOW_WARN_BYTES || '440000' }}
           CI_BUDGET_JOB_WARN_RATIO: ${{ vars.CI_BUDGET_JOB_WARN_RATIO || '0.75' }}
         run: |

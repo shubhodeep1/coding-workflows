@@ -14,8 +14,10 @@ default branch, after the test jobs. It checks:
 For every finding it prints a `::warning::` and makes sure exactly one open
 issue labelled `ai:ci-budget` exists for it (deduplicated by a hidden marker
 `<!-- ai:ci-budget:v1 kind=<kind> subject=<subject> -->`). The issue is opened
-with the job token, so the clarify -> plan -> implement pipeline picks it up
-and does the split or rebalance before the hard limit breaks CI.
+with CI_BUDGET_ISSUE_TOKEN (a user PAT; default empty falls back to the job
+token, which starts no `issues: opened` workflow), so the clarify -> plan ->
+implement pipeline picks it up and does the split or rebalance before the
+hard limit breaks CI.
 
 API calls (CLAUDE.md §15): one `actions/runs/{run_id}/jobs` read (skipped when
 no run id), one open-issue listing for the label, and one create per new
@@ -129,11 +131,12 @@ def issue_body(finding: dict[str, Any], run_url: str) -> str:
 	)
 
 
-def _gh(args: list[str], *, data: dict[str, Any] | None = None) -> Any:
+def _gh(args: list[str], *, data: dict[str, Any] | None = None, token: str = "") -> Any:
 	cmd = ["gh", "api", *args]
 	if data is not None:
 		cmd += ["--input", "-"]
-	res = subprocess.run(cmd, input=json.dumps(data) if data is not None else None, capture_output=True, text=True, timeout=60)
+	env = {**os.environ, "GH_TOKEN": token} if token else None
+	res = subprocess.run(cmd, input=json.dumps(data) if data is not None else None, capture_output=True, text=True, timeout=60, env=env)
 	if res.returncode != 0:
 		raise RuntimeError(res.stderr.strip()[:300])
 	return json.loads(res.stdout or "null")
@@ -184,7 +187,14 @@ def main(argv: list[str] | None = None) -> int:
 			print(f"CI_BUDGET_ISSUE kind={f['kind']} subject={f['subject']} action=exists")
 			continue
 		try:
-			created = _gh([f"repos/{args.repo}/issues", "-X", "POST"], data={"title": issue_title(f), "body": issue_body(f, run_url), "labels": [LABEL]})
+			# GitHub starts no workflow for an issue opened with the job token,
+			# so the create uses CI_BUDGET_ISSUE_TOKEN (a user PAT) when set,
+			# which lets `issues: opened` route the issue into clarify.
+			created = _gh(
+				[f"repos/{args.repo}/issues", "-X", "POST"],
+				data={"title": issue_title(f), "body": issue_body(f, run_url), "labels": [LABEL]},
+				token=os.environ.get("CI_BUDGET_ISSUE_TOKEN", ""),
+			)
 			print(f"CI_BUDGET_ISSUE kind={f['kind']} subject={f['subject']} action=opened number={created.get('number')}")
 		except Exception as exc:  # noqa: BLE001
 			print(f"::warning::ci_budget_watch: could not open the {f['kind']} issue for {f['subject']} ({exc}).")

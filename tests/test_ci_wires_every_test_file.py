@@ -26,7 +26,13 @@ UNWIRED_ALLOWLIST: dict[str, str] = {}
 
 
 def _workflow_text() -> str:
-	return "\n".join(path.read_text(encoding="utf-8") for path in sorted(WORKFLOWS_DIR.glob("*.yml")))
+	"""All workflow text minus full-line YAML comments, so a path named only in a comment does not count as wired."""
+	return "\n".join(
+		line
+		for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
+		for line in path.read_text(encoding="utf-8").splitlines()
+		if not line.lstrip().startswith("#")
+	)
 
 
 def _test_files() -> list[str]:

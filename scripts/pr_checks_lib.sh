@@ -397,6 +397,9 @@ _pr_wait_for_required_checks()
 			ok|allow_all)
 				# A listed CI workflow run on this head is still queued or
 				# running: its check-runs may not exist yet, so keep waiting.
+				# Not under allow_all: that sentinel ignores every check-run's
+				# outcome (branch protection decides), so CI's result would be
+				# ignored after the wait too.
 				if [ "${PR_CHECKS_LAST_REASON}" = "ok" ]; then
 					_pr_head_ci_runs_pending "${head_sha}"
 					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
