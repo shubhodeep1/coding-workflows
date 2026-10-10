@@ -236,3 +236,9 @@ def test_run_summary_names_a_failed_prepare_after_the_reviewers():
 	sandbox = body.index('if bool_env("AUTOFIX_SANDBOX_PREPARE_FAILED"):\n        return "sandbox_prepare_failed"')
 	empty = body.index('if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):')
 	assert reviewers < sandbox < empty
+
+
+def test_build_log_prefix_is_registered_as_a_stable_prefix():
+	agents = (ROOT / "agents.md").read_text(encoding="utf-8")
+	assert "LOG_PREFIX.name=REVIEW_SANDBOX_BUILD\n" in agents
+	assert "\n- `REVIEW_SANDBOX_BUILD` (" in agents
