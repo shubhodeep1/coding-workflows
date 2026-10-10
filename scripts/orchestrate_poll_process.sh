@@ -1409,13 +1409,20 @@ assemble_judge_static_context() {
     echo "=== AI PIPELINE ==="
     cat ai_pipeline.md
     echo
+    local judge_agents_file="" judge_agents_render=""
     if [ -f AGENTS.md ]; then
-      echo "=== AGENTS.MD ==="
-      cat AGENTS.md
-      echo
+      judge_agents_file="AGENTS.md"
     elif [ -f agents.md ]; then
+      judge_agents_file="agents.md"
+    fi
+    if [ -n "${judge_agents_file}" ]; then
       echo "=== AGENTS.MD ==="
-      cat agents.md
+      # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+      if [ -d agents.d ] && [ ! -L agents.d ] && judge_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${judge_agents_file}" 2>/dev/null)"; then
+        printf '%s\n' "${judge_agents_render}"
+      else
+        cat "${judge_agents_file}"
+      fi
       echo
     fi
     cat "${judge_readme_context}"
@@ -17390,7 +17397,7 @@ unblock_handover_merge_deferral() {
   [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
   ensure_label_exists "ai:needs-human"
   if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
-    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
       || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
   fi
   if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then

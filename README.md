@@ -1189,6 +1189,32 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reflowed). If upstream's `@stable` ref predates the script, both steps log
 > and no-op.
 
+> **agents.md fragment contract (`CLAUDE.md` §30):** PRs document behaviour in
+> `agents.d/<issue-or-pr>-<slug>.md` instead of editing `agents.md` (consumers:
+> `AGENTS.md`). Each block starts with
+> `<!-- agents: section="<exact ## heading>" -->`; its text is appended to the
+> end of that section, a table row or list item continues its table or list,
+> and in `## Stable log prefixes (contractual)` the `` - `PREFIX` `` bullets
+> and `LOG_PREFIX.name=` lines land at the end of their registries. A heading
+> that does not exist needs ` new` in the marker. `scripts/assemble_agents.py`
+> folds the fragments in filename order and deletes them: upstream in the
+> release job's `Assemble changelog fragments` step (same commit as the
+> changelog fold; the tag step's `RELEASE_UNTESTED_HEAD` guard accepts that
+> commit touching only `CHANGELOG.md`, `changelog.d/`, `agents.md` and
+> `agents.d/`), and in consumers in the sync's `Assemble agents.md fragments`
+> step, which runs upstream's copy from the `@stable` support checkout and
+> reports `agents_assembled`. Both fail open: a fragment that cannot fold
+> stays for the next run with an `AGENTS_ASSEMBLE_V1: skipped=<file>
+> reason=<r>` warning. CI's `agents.d fragment check and tests` step runs
+> `assemble_agents.py check`, which fails on any such fragment. Readers see
+> pending fragments: `scripts/build_static_context.sh` and the orchestrate,
+> clarify-respond, poller-judge and validate static-context assemblers render
+> them into the model's agents context (falling back to the plain file), the AGENTS.md
+> materiality check and the review gate count an `agents.d/*.md` change as
+> an `agents.md` change, a `files_touched` or `ai:scope:` scope that covers
+> `agents.md` covers its top-level fragments, the review editor keeps the
+> fragments it creates, and tests read the file through `tests/agents_doc.py`.
+
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
 > their `settings.json` wiring, each documented in the root `CLAUDE.md` that
@@ -2200,10 +2226,12 @@ through `clarify → plan → implement → review`.
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | How long a `queued` review run keeps suppressing a duplicate dispatch from `review_autofix_sweep.yml`. Past this age the run is treated as wedged, logged as `AUTOFIX_SWEEP_STALE_QUEUED`, and no longer blocks the sweep. `in_progress` runs are never discounted. Set `0` to restore the previous no-cutoff behaviour. |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `true` | Size-based `lite \| standard \| full` review tiers: `lite` runs 1 reviewer, `standard` 4, `full` the whole `REVIEWER_MODELS` panel. Set to `false` to turn the size tiers off: the full panel then runs unless `REVIEWER_RISK_TIER_ENABLED` is also on, in which case that resolver's selection (which can be smaller) stands. `AUTOFIX_SKIP_*` fast paths remain authoritative, `[force-review]` / `force-review` still force `full`, and so does a full panel the `REVIEWER_RISK_TIER_*` resolver already forced. The `REVIEW_TIER: tier=… reason=… models_source=… protected=…` log line records each decision. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` (one-reviewer) tier. Any file type qualifies, but a diff touching a protected path (the same list as the deterministic skip gate: `agents.md` / `CLAUDE.md` / `unattended_system_instructions.md`, `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`, and build, dependency, config and script files; both sides of a rename count) goes to `standard` instead. `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
-| `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the whole `REVIEWER_MODELS` panel (from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list instead when a repo sets it and every slug in it is on the panel; a slug not on the panel falls back to the whole panel with a warning), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. If the sole active reviewer is `mistralai/mistral-small-2603` and is skipped (`skipped_open` or `skipped_unmapped`) or reports a context overflow, review retries once with `openai/gpt-6-luna` when that model is in the live roster and its circuit breaker has not marked it `skip_open`. If GPT cannot start before the soft deadline after a skipped Mistral or context overflow, the run requests partial finalize; otherwise an unsuccessful single-reviewer run fails rather than passing with zero successful reviewers. This includes risk-tier-only single-reviewer runs when size tiers are disabled. Other failed reviewer errors do not trigger this retry. Multi-reviewer runs retain their skip-only fail-open behavior. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the whole `REVIEWER_MODELS` panel (from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list instead when a repo sets it and every slug in it is on the panel; a slug not on the panel falls back to the whole panel with a warning), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. If the sole active reviewer is any slot other than `openai/gpt-6-luna` and is skipped (`skipped_open`, `skipped_unmapped`, or `skipped_pool` for the Claude account-pool slot) or reports a context overflow, review retries once with `openai/gpt-6-luna` when that model is in the live roster and its circuit breaker has not marked it `skip_open` (this rescue was Mistral-only until the 2026-10 panel refresh). If GPT cannot start before the soft deadline after a skipped sole reviewer or context overflow, the run requests partial finalize; otherwise an unsuccessful single-reviewer run fails rather than passing with zero successful reviewers. This includes risk-tier-only single-reviewer runs when size tiers are disabled. Other failed reviewer errors do not trigger this retry. Multi-reviewer runs retain their skip-only fail-open behavior. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` (four-reviewer) tier, in any folder. Larger diffs run the full panel. |
 | `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | empty | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. Empty (the default) draws four reviewers at random from the whole `REVIEWER_MODELS` panel, seeded by the PR number the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG`, so every panel model can run on any tier (`models_source=random_standard`). A set value pins those reviewers (`models_source=configured_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt. The reviewer watchdog kills an attempt that starts more OpenCode turns, and the slot fails without a retry or failback. Real reviewer passes peaked at 101 turns. |
+| `REVIEWER_POOL_FALLBACK_MODEL` | `claude-haiku-5-5` | Claude account-pool model the `anthropic/claude-sonnet-5.5` review-panel slot retries on, once, when its Sonnet run does not succeed (crash, timeout, refusal, malformed output, or a usage limit on every account). A pool-wide outage skips the slot (`skipped_pool`) instead; the slot never falls back to OpenRouter. Must match `^claude-[a-z0-9-]{1,60}$`. |
+| `AI_ENGINE_PANEL_REVIEWER` | empty | Engine of the Claude review-panel slot (role `PANEL_REVIEWER`, default `claude` in `.github/ai/claude_engine.json`). `codex` (or the PR's `ai:codex` label, or `AI_ENGINE=codex`) skips the slot, because it only runs on the Claude account pool. The "Resolve AI engine" step installs the Claude CLI and fetches the pool credential whenever `REVIEWER_MODELS` has an `anthropic/claude-*` slot and the role resolves to `claude`. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then the reviewer's failback model). Minimum `2`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
@@ -2541,8 +2569,16 @@ ignored with a warning. Role names: `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`,
 `RB_JUDGE`, `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`,
 `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `ACTIVATION_VERIFY`,
 `LOG_ANALYSIS`, `LOG_AUDIT`, `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
-`SUMMARISER`, `BEHAVIOURAL_SMOKE`. The six reviewer slots have no engine
-switch.
+`SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER`. Five of the six reviewer
+slots run on OpenRouter through OpenCode and have no engine switch. The
+`anthropic/claude-sonnet-5.5` slot is `PANEL_REVIEWER`: it runs
+`claude-sonnet-5-5` on the Claude account pool in a read-only
+`prepare-ephemeral claude` review sandbox, retries once on
+`REVIEWER_POOL_FALLBACK_MODEL` (default `claude-haiku-5-5`) in the pool when
+the Sonnet run does not succeed, and is skipped (status `skipped_pool`, no
+OpenRouter call) when the role resolves to codex or the pool is unavailable.
+Set `AI_ENGINE_PANEL_REVIEWER=codex` (or the PR's `ai:codex` label) to turn
+the slot off.
 
 **How the label spreads.** `ai-orchestrate.yml` takes an optional `engine`
 input (`claude` or `codex`; empty leaves the project unlabelled), and the
@@ -3188,6 +3224,18 @@ Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.
 **Interaction with `ALERT_MSG_LEVEL`:** the rate-limit alert is emitted at `WARNING` level and honours the global `ALERT_MSG_LEVEL` threshold the same way `scripts/tg_helpers.sh::tg_send_msg` does. If an operator configures `ALERT_MSG_LEVEL=ERROR` or `ALERT_MSG_LEVEL=CRITICAL`, the rate-limit alert is suppressed entirely (no send, no pin update, no cooldown advance). The cooldown state is only touched when the alert would actually fire, so tightening `ALERT_MSG_LEVEL` does not strand a stale pinned marker.
 
 **Disabling:** unset `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID` — the helper no-ops silently. You can also set `ALERT_MSG_LEVEL=ERROR` (or higher) to suppress the rate-limit alert while keeping other ERROR/CRITICAL Telegram notifications. There is no way to disable the feature per-caller; if you need to skip alerting for a specific bootstrap probe (e.g. a `gh api /labels/<name>` existence check where 404 is the expected normal case), call `gh` directly instead of via `gh_retry`. See `ensure_label_exists` in `scripts/orchestrate_poll_process.sh` for an example.
+
+### Classified GitHub API retry (`gh_api_retry`)
+
+`gh_api_retry [--idempotent] [--optional] <gh api args>` in `scripts/gh_helpers.sh` (Python twin: `scripts/gh_api_retry.py`) retries a GitHub API call by failure class and prints only a successful body. A primary rate limit waits for the reset of the limited bucket, a secondary limit waits `retry-after` (60 s when absent), 5xx and network errors back off, and other 4xx responses are not retried. Exit codes: `0` ok, `1` transient failure, `2` permanent failure, `75` rate-limited (gave up) or an `--optional` call skipped while the breaker is active. A POST create makes one attempt in every retry helper unless it is marked `--idempotent` or prefixed `GH_RETRY_IDEMPOTENT=true`. Log prefix: `GH_API_RETRY`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GH_RETRY_IDEMPOTENT` | `false` | `true` lets a POST create through `gh_retry`, `gh_retry_to_file`, `gh_api_json_to_file` or `gh_api_retry` retry. |
+| `GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS` | `600` | A rate-limit wait longer than this gives up at once with exit 75. |
+| `GH_RETRY_BACKOFF_CAP_SECS` | `120` | Cap on the exponential backoff for 5xx and network errors. |
+| `GH_API_RETRY_LOW_BUDGET_REMAINING` | `100` | A successful call reporting fewer remaining requests records a `low` breaker line until the reset. |
+| `GH_API_RETRY_HELPERS` | set by the `Bootstrap GitHub API retry helper` step | Path of the trusted `gh_helpers.sh` copy; empty means the steps call plain `gh api`. |
 
 ### GitHub API rate-limit circuit breaker
 
