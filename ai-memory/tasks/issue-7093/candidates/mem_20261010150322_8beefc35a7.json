@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What form should the main-branch-triggered follow-up take?\nChoices:\n- A. Extend the existing check-failure triage. Add an optional \"historical run\" mode to `check_failure_triage.yml` / `scripts/check_failure_triage.sh` that takes `run_id` / `job_id` (and an optional head SHA) and, only in that mode, accepts a closed or merged same-repo PR. A small trigger then invokes it for run 37922279826 / job 113792812346 once, on the merge of this change to `main`. That trigger gets an entry in `docs/scripts-pending-removal.md`. (RECOMMENDED)\n- B. A new single-use workflow (push to `main` plus `workflow_dispatch`) with the run and job IDs hard-coded, separate from check-failure triage, plus an entry in `docs/scripts-pending-removal.md`.\n- C. A general \"re-triage any historical CI failure\" feature with no built-in trigger for this run. **Note:** this does not close the gap by itself, because something still has to start it for run 37922279826.\nQ2: Once the log or a full reproduction finds the failure, where do the findings and any fix go?\nChoices:\n- A. Follow the existing triage contract. The follow-up files one `ai:check-triage` issue targeting `main` with the redacted first shard failure (or a complete non-reproduction report covering every group and shard, with `jq` and PyYAML present and no tests omitted). The normal clarify \u2192 plan \u2192 implement \u2192 review pipeline then makes the demonstrated fix and must pass the affected test and `CI / lint`. The follow-up never pushes code. (RECOMMENDED)\n- B. The follow-up also updates `docs/triage/pr-6611-ci-shard-1.md` with the result through its own PR, and files an `ai:check-triage` issue only if a failure is found.\n- C. The follow-up applies the fix and opens the PR itself. **Note:** this breaks the documented rule that check-failure triage \"never pushes code itself\", and it needs a write-capable step next to PR-head test execution.\nQ3: How should the fallback reproduction get the failing head `bef70791b7c6` and run its tests?\nChoices:\n- A. Fetch `bef70791b7c6` (falling back to `refs/pull/6611/head`). If it can't be fetched, record that and use the `main` commit that #6611's merge produced. Run the \"Derive orchestrate poll test subsets\" and \"Orchestrate poll process unit tests\" step bodies from `ci.yml` for `CI_POLL_TEST_GROUP_INDEX=0..3`. Use a separate job with `permissions: {}` and no secrets, with `jq` and PyYAML installed. Only redacted results go to the isolated diagnosis step. (RECOMMENDED)\n- B. Same as A, but always use the current `main` tip instead of the original PR head.\n- C. Re-run the failed jobs of run 37922279826 through the Actions rerun API, with no separate reproduction job.",
+  "fingerprint": "9b806946a8d6591a082c1e1040af3524d699416188eabaee2de255a61c9b365a",
+  "lineage": {
+    "issue_number": 7093,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38061692225",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38061692225",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010150322_8beefc35a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7093,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38061692225"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7093 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T15:03:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
