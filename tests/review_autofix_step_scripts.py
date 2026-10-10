@@ -29,8 +29,8 @@ REVIEW_AUTOFIX_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "review_aut
 REVIEW_AUTOFIX_STEP_SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 # Step name -> script under scripts/, and whether a missing script fails the
-# step ("error") or skips it ("warning"). The always() and failure-path steps
-# fail open because they also run after support staging itself failed.
+# step ("error") or skips it ("warning"). The always() steps fail open
+# because they also run after support staging itself failed.
 REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Pre-review deterministic merge-topology gate": ("review_autofix_step_merge_topology_gate.sh", "error"),
 	"Detect editor-claimed-but-uncommitted changes": ("review_autofix_step_editor_uncommitted_changes.sh", "error"),
@@ -42,8 +42,8 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Count autofix iterations": ("review_autofix_step_count_iterations.sh", "error"),
 	"Assemble failure evidence": ("review_autofix_step_assemble_failure_evidence.sh", "warning"),
 	"Record model-provider outage": ("review_autofix_step_provider_outage_record.sh", "warning"),
-	"Mark linked issues review-blocked (workflow failure)": ("review_autofix_step_mark_review_blocked_workflow_failure.sh", "warning"),
-	"Post review-blocked comment on PR (workflow failure)": ("review_autofix_step_failure_comment.sh", "warning"),
+	"Mark linked issues review-blocked (workflow failure)": ("review_autofix_step_mark_review_blocked_workflow_failure.sh", "error"),
+	"Post review-blocked comment on PR (workflow failure)": ("review_autofix_step_failure_comment.sh", "error"),
 	"Record Claude pool capacity": ("review_autofix_step_claude_pool_capacity.sh", "warning"),
 	"Apply fixes with editor model": ("review_autofix_step_apply_fixes_editor.sh", "error"),
 	"Restore same-head partial resume state": ("review_autofix_step_restore_partial_resume.sh", "error"),

@@ -22,7 +22,7 @@ if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
     local target_label="$2"
     local repo="$3"
     ensure_label_exists "${target_label}" "${repo}" || true
-    gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
       -f "labels[]=${target_label}" >/dev/null 2>&1 \
       || echo "::warning::Fallback label add failed for #${issue_number}."
   }

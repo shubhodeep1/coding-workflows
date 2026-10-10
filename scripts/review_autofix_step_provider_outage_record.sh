@@ -4,7 +4,7 @@
 # outage opens (or reuses) the one repo-wide ai:provider-outage tracker; only
 # the run that opens it sends the CRITICAL alert, which names the provider, the
 # status and the secret name OPENROUTER_API_KEY, never its value. Fail-open.
-set -uo pipefail
+set -euo pipefail
 provider_outage_helper="${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py"
 if [ ! -f "${provider_outage_helper}" ]; then
   echo "PROVIDER_OUTAGE op=record outcome=skip reason=helper_missing"

@@ -2,7 +2,7 @@
 # Body of the review_autofix.yml "Assemble failure evidence" step (sourced by
 # the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
 # Issue #6633 adds the model-provider outage classification.
-set -uo pipefail
+set -euo pipefail
 # Name the failure for the PR comment (fail-open): the job's first
 # failed step, from one jobs-API call (CLAUDE.md §15), and the first
 # specific ::error:: line of the captured stage stderr, redacted.

@@ -5757,9 +5757,13 @@ jobs:
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
             # Issue #6633: a failed judge during a provider outage still gets
             # the label below, marked so the outage resume can remove it.
-            if [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] && [ -f "${rb_judge_log}" ] \
-              && PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" --log-file "${rb_judge_log}" 2>/dev/null | grep -q '^reason=provider_unavailable'; then
-              echo "rb_judge_provider_unavailable=true" >> "$GITHUB_OUTPUT"
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] && [ -f "${rb_judge_log}" ]; then
+              rb_judge_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" --log-file "${rb_judge_log}" 2>/dev/null | head -n 1 || true)"
+              if [[ "${rb_judge_outage_class}" == reason=provider_unavailable* ]]; then
+                # The status reaches the tracker alert (issue #6633).
+                rb_judge_outage_status="$(printf '%s\n' "${rb_judge_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
+                { echo "rb_judge_provider_unavailable=true"; echo "rb_judge_provider_status=${rb_judge_outage_status:-unknown}"; } >> "$GITHUB_OUTPUT"
+              fi
             fi
           else
             echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
@@ -5860,10 +5864,13 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          RB_JUDGE_PROVIDER_STATUS: ${{ steps.rb_judge.outputs.rb_judge_provider_status }}
         run: |
           set -uo pipefail
           helper="${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py"
           [ -f "${helper}" ] || { echo "PROVIDER_OUTAGE op=mark_label outcome=skip reason=helper_missing"; exit 0; }
+          outage_status="${RB_JUDGE_PROVIDER_STATUS:-unknown}"
+          [[ "${outage_status}" =~ ^[a-z0-9_]{1,20}$ ]] || outage_status="unknown"
           items="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
           [ -n "${items}" ] || items="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
           [ -n "${items}" ] || items="${PR_NUMBER}"
@@ -5872,7 +5879,7 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" mark-label --repo "${REPOSITORY}" --item "${item}" --pr "${PR_NUMBER}" --head "${AUTOFIX_FAILURE_HEAD_SHA:-}" --run "${GITHUB_RUN_ID:-}" || true
           done <<< "${items}"
           alert_file="$(mktemp)"
-          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" open --repo "${REPOSITORY}" --kind outage --provider openrouter --status unknown --alert-out "${alert_file}" || true
+          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" open --repo "${REPOSITORY}" --kind outage --provider openrouter --status "${outage_status}" --alert-out "${alert_file}" || true
           if [ -s "${alert_file}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
             source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
             tg_send_msg "$(cat "${alert_file}")" "CRITICAL" >/dev/null || true
@@ -5883,7 +5890,7 @@ jobs:
         # turn the AI Review check red — this is a notification/recovery hook,
         # not a gate. (orchestrate_force_tick.sh runs under set -euo pipefail.)
         continue-on-error: true
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && steps.rb_judge.outputs.rb_judge_provider_unavailable != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -6740,8 +6747,8 @@ jobs:
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_review_blocked_workflow_failure.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::warning::review_autofix_step_mark_review_blocked_workflow_failure.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Mark linked issues review-blocked (workflow failure)' (fail open)."
-            exit 0
+            echo "::error::review_autofix_step_mark_review_blocked_workflow_failure.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues review-blocked (workflow failure)'."
+            exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
@@ -6785,8 +6792,8 @@ jobs:
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_failure_comment.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_failure_comment.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::warning::review_autofix_step_failure_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Post review-blocked comment on PR (workflow failure)' (fail open)."
-            exit 0
+            echo "::error::review_autofix_step_failure_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post review-blocked comment on PR (workflow failure)'."
+            exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 

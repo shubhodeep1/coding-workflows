@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Body of the review_autofix.yml "Record Claude pool capacity" step (sourced by
 # the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
-set -uo pipefail
+set -euo pipefail
 helper="${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py"
 if [ ! -f "${helper}" ]; then
   echo "PROVIDER_OUTAGE op=capacity outcome=skip reason=helper_missing"
