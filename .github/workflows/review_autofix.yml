@@ -5752,21 +5752,28 @@ jobs:
             echo "::error::Security-pass extension marker was not published; refusing the deferred push of the judge fix."
             exit 1
           fi
+          # The judge also reports a failed model call as exit 0 with
+          # judge_skip_reason=llm_failed / json_parse_failed (issue #6633).
+          rb_judge_skip_reason=""
+          if [ "${_judge_exit}" -eq 0 ] && [ -f "${GITHUB_OUTPUT:-}" ]; then
+            rb_judge_skip_reason="$(grep -E '^judge_skip_reason=' "${GITHUB_OUTPUT}" | tail -n 1 | cut -d= -f2- || true)"
+          fi
           if [ "${_judge_exit}" -ne 0 ]; then
             echo "::warning::review_rb_judge.sh exited ${_judge_exit} — degrading to ai:review-blocked recovery path"
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
-            # Issue #6633: a failed judge during a provider outage still gets
-            # the label below, marked so the outage resume can remove it.
-            if [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] && [ -f "${rb_judge_log}" ]; then
-              rb_judge_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" --log-file "${rb_judge_log}" 2>/dev/null | head -n 1 || true)"
-              if [[ "${rb_judge_outage_class}" == reason=provider_unavailable* ]]; then
-                # The status reaches the tracker alert (issue #6633).
-                rb_judge_outage_status="$(printf '%s\n' "${rb_judge_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
-                { echo "rb_judge_provider_unavailable=true"; echo "rb_judge_provider_status=${rb_judge_outage_status:-unknown}"; } >> "$GITHUB_OUTPUT"
-              fi
-            fi
           else
             echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
+          fi
+          # Issue #6633: a failed judge during a provider outage still gets
+          # the label below, marked so the outage resume can remove it.
+          if { [ "${_judge_exit}" -ne 0 ] || [ "${rb_judge_skip_reason}" = "llm_failed" ] || [ "${rb_judge_skip_reason}" = "json_parse_failed" ]; } \
+            && [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] && [ -f "${rb_judge_log}" ]; then
+            rb_judge_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" --log-file "${rb_judge_log}" 2>/dev/null | head -n 1 || true)"
+            if [[ "${rb_judge_outage_class}" == reason=provider_unavailable* ]]; then
+              # The status reaches the tracker alert (issue #6633).
+              rb_judge_outage_status="$(printf '%s\n' "${rb_judge_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
+              { echo "rb_judge_provider_unavailable=true"; echo "rb_judge_provider_status=${rb_judge_outage_status:-unknown}"; } >> "$GITHUB_OUTPUT"
+            fi
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
         if: "(success() || steps.rb_judge.outputs.rb_judge_status == 'failed') && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
@@ -6583,7 +6590,7 @@ jobs:
           fi
 
       - name: Telegram review-blocked judge decision
-        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && steps.rb_judge.outputs.rb_judge_provider_unavailable != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

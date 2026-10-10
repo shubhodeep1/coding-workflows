@@ -165,6 +165,9 @@ jobs:
           PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
           PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
           PROVIDER_OUTAGE_REVIEW_WORKFLOW: internal-review.yml
+          # dry_run: report the tracker state only (no probe, dispatch,
+          # label, tracker or alert writes).
+          DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -177,8 +180,10 @@ jobs:
             echo "paused=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          sweep_mode_args=()
+          [ "${DRY_RUN:-false}" = "true" ] && sweep_mode_args=(--status-only)
           alert_file="$(mktemp)"
-          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" sweep --repo "${REPOSITORY}" --alert-out "${alert_file}" || true
+          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" sweep --repo "${REPOSITORY}" "${sweep_mode_args[@]}" --alert-out "${alert_file}" || true
           if [ -s "${alert_file}" ] && [ -f .ci-rerun-support/scripts/tg_helpers.sh ]; then
             source .ci-rerun-support/scripts/tg_helpers.sh
             tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null || true

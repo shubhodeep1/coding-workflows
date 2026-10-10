@@ -119,3 +119,19 @@ def test_label_contract_and_reporter_skip() -> None:
 	assert 'log "skip reason=provider_unavailable pr=${PR}"' in reporter
 	intake = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
 	assert intake.index("skip reason=provider_unavailable") < intake.index("# --- Fingerprint")
+
+
+def test_judge_exit_zero_provider_skip_is_classified() -> None:
+	judge = _step(REVIEW, "Review-blocked judge decision")
+	assert "grep -E '^judge_skip_reason=' \"${GITHUB_OUTPUT}\"" in judge
+	assert '[ "${rb_judge_skip_reason}" = "llm_failed" ]' in judge
+	assert '[ "${rb_judge_skip_reason}" = "json_parse_failed" ]' in judge
+	assert judge.index('if [ "${_judge_exit}" -eq 42 ]; then') < judge.index('echo "rb_judge_status=failed"')
+	telegram = _step(REVIEW, "Telegram review-blocked judge decision")
+	assert "steps.rb_judge.outputs.rb_judge_provider_unavailable != 'true'" in _if(telegram)
+
+
+def test_sweep_probe_honours_dry_run() -> None:
+	step = _step(SWEEP, "Provider outage probe and resume")
+	assert "DRY_RUN: ${{ inputs.dry_run }}" in step
+	assert 'sweep_mode_args=(--status-only)' in step
