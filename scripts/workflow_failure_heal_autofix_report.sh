@@ -15,8 +15,10 @@
 #   2. Counts how many review runs in a row failed on this pull request from
 #      the PR comments the run fetched at its start. Editor summaries paired
 #      with a later failure comment from the same run do not end the streak.
-#      The reporter adds one for this run and makes zero API reads (CLAUDE.md
-#      §15). A streak of at least WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK
+#      The reporter adds one for this run and makes no API reads for the count
+#      (CLAUDE.md §15), except one `gh api user` read for the pipeline login
+#      when the caller passes none (AUTOFIX_STREAK_AUTHOR_LOGIN below) and
+#      there are PR comments to count. A streak of at least WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK
 #      (default 1, so every failed run) is reported.
 #   3. Builds the `autofix_failure` payload (scripts/workflow_failure_heal.py
 #      build-autofix-payload) with the run summary line and the tail of the
@@ -65,6 +67,12 @@
 #                                          marker, sent as failure_fingerprint when 64 hex
 #   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
 #                                          already wrote; sent as changed_files (absent is fine)
+#   AUTOFIX_STREAK_AUTHOR_LOGIN            login the workflow posts failure comments as, used only
+#                                          to filter the streak count (default empty; the workflow
+#                                          passes the gate's resolved login). When neither this nor
+#                                          AUTOFIX_FAILURE_MARKER_AUTHOR is set, the reporter reads
+#                                          the token's login (one `gh api user`); without a login
+#                                          the streak counts only this run (fail closed)
 #   AUTOFIX_FAILURE_MARKER_AUTHOR          login the workflow posts failure comments as (default
 #                                          empty). When set, the runs named by that author's
 #                                          review-autofix-failure:v1 markers for the PR head in
@@ -167,20 +175,55 @@ fi
 
 COMMENTS_FILE="${PR_ISSUE_COMMENTS_FILE:-}"
 PRIOR_FAILURES=0
-# Count only the pipeline identity's comments when the caller names it and the
-# staged helper supports the filter (an older copy would reject the flag and
-# the streak would read 0): another commenter's failure / summary text must
-# neither inflate nor end the streak.
+# Security-pass finding autofix-streak-counts-untrusted-comments: only the
+# pipeline identity's comments may count toward or end the streak, because any
+# PR commenter can post text that starts like a failure comment or an editor
+# summary. The login comes from the caller (the cap path's
+# AUTOFIX_FAILURE_MARKER_AUTHOR, else the gate's resolved login in
+# AUTOFIX_STREAK_AUTHOR_LOGIN), else from the token itself. Without a valid
+# login, or with a staged helper that predates the filter, the streak counts
+# only this run (fail closed): an unfiltered count could be inflated by
+# forged comments to force heal dispatches.
+# Prints the sanitized login when it is a valid GitHub login, else nothing.
+# Each source is validated before the next is tried, so a malformed caller
+# value still falls through to the token's own login.
+streak_valid_login()
+{
+	local candidate
+	candidate="$(printf '%s' "${1:-}" | head -1 | tr -d '[:space:]')"
+	if [[ "${candidate}" =~ ^[A-Za-z0-9-]{1,39}(\[bot\])?$ ]]; then
+		printf '%s' "${candidate}"
+	fi
+	return 0
+}
+STREAK_AUTHOR_LOGIN="${AUTOFIX_FAILURE_MARKER_AUTHOR:-}"
+STREAK_AUTHOR_LOGIN="$(streak_valid_login "${STREAK_AUTHOR_LOGIN}")"
+if [ -z "${STREAK_AUTHOR_LOGIN}" ]; then
+	STREAK_AUTHOR_LOGIN="$(streak_valid_login "${AUTOFIX_STREAK_AUTHOR_LOGIN:-}")"
+fi
+if [ -z "${STREAK_AUTHOR_LOGIN}" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
+	# CLAUDE.md §15 / unattended §14: no call this reporter already makes
+	# returns the identity authenticated by GH_TOKEN (the PR and comments
+	# reads come from the run's start), and the gate resolves it only when its
+	# cap scan runs. One read, only on a failed run with PR comments to count.
+	STREAK_AUTHOR_LOGIN="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || echo "")"
+	STREAK_AUTHOR_LOGIN="$(streak_valid_login "${STREAK_AUTHOR_LOGIN}")"
+fi
 STREAK_ARGS=(--comments-json "${COMMENTS_FILE}")
 STREAK_AUTHOR_FILTER="off"
-if [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ] && grep -q 'autofix-failure-streak-author-login:v1' "${HEAL_PY}" 2>/dev/null; then
-	STREAK_ARGS+=(--author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}")
+STREAK_COUNT_PRIOR="false"
+if [ -n "${STREAK_AUTHOR_LOGIN}" ] && grep -q 'autofix-failure-streak-author-login:v1' "${HEAL_PY}" 2>/dev/null; then
+	STREAK_ARGS+=(--author-login "${STREAK_AUTHOR_LOGIN}")
 	STREAK_AUTHOR_FILTER="on"
-elif [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ]; then
-	# Keep the legacy count, but make the reporter/helper drift observable.
-	log "warn reason=streak_author_filter_unavailable pr=${PR}; staged helper predates the author filter, counting every author"
+	STREAK_COUNT_PRIOR="true"
+elif [ -n "${STREAK_AUTHOR_LOGIN}" ]; then
+	log "warn reason=streak_author_filter_unavailable pr=${PR}; staged helper predates the author filter, counting this run only"
+else
+	log "warn reason=streak_author_login_unavailable pr=${PR}; counting this run only"
 fi
-if [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
+if [ "${STREAK_COUNT_PRIOR}" != "true" ]; then
+	:
+elif [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ]; then
 	PRIOR_FAILURES="$(python3 "${HEAL_PY}" autofix-failure-streak "${STREAK_ARGS[@]}" 2>/dev/null || echo 0)"
 	[[ "${PRIOR_FAILURES}" =~ ^[0-9]+$ ]] || PRIOR_FAILURES=0
 else

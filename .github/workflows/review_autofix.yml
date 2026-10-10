@@ -6977,6 +6977,10 @@ jobs:
           REPORT_SUMMARY_LINE_FILE: ${{ env.RUNTIME_DIR }}/review_autofix_run_summary_line.txt
           # Ownership facts for the heal intake's self-inflicted routing.
           PR_CHANGED_FILES_FILE: ${{ env.PR_CHANGED_FILES_FILE }}
+          # The pipeline login the gate resolved (empty when its cap scan did
+          # not run); the reporter counts only that author's comments toward
+          # the failure streak and reads the login itself when this is empty.
+          AUTOFIX_STREAK_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
         run: |
           set -uo pipefail
           if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
