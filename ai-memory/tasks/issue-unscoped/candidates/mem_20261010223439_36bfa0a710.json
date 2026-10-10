@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1209-1220 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: Stale runs in the union can make `__mt_runs_read >= __mt_runs_total` pass even though a currently matching run was never listed, allowing a duplicate review dispatch for its queued PR.\n  WHY: This is a timing-dependent gap in the completeness guarantee; the second status pass and `pr-autofix` concurrency group limit the impact to a redundant queued review run, but do not guarantee the active run was seen.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the new `union_covers_total` outcome in the README row for `MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES` so the release-row description reflects the changed listing flow.\n  expected_change_site: README.md line 2911, the `release` row of the merge-train table.\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff does not touch README line 2911; that row still describes a short first page as eventually incomplete without mentioning the new `outcome=accepted reason=union_covers_total` acceptance, while only the row at line 160 was updated.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_merge_train.sh | lines 1209-1220, the `[ \"${__mt_runs_page}\" -eq 1 ] && [ \"${__mt_runs_read}\" -ge \"${__mt_runs_total}\" ]` acceptance branch in `_mt_inflight_review_branches` | severity=NIT | confidence=3\n  PROBLEM: Stale runs that have since left the status can inflate the union count and make the listing appear covered while a currently matching run was never returned, potentially causing a duplicate review dispatch for its queued PR.\n  WHY: The code comment claims every matching run has been seen, but a count comparison does not guarantee that; the PR description accepts this trade-off, and the second status pass narrows the window.\n- Requirement: The PR documents the new `union_covers_total` outcome in the header comment and in the README row for `MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES`.\n  Expected change site: README.md line 2911, the `release` row of the merge-train table.\n  Evidence of absence: The PR diff does not touch README line 2911. The row stays literally true when the union does not cover the count, so it is only partly stale. This is an advisory docs-coverage point, not a stated requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_merge_train.sh | 1209-1220 (the union-count acceptance block) | severity=NIT | confidence=3\n  PROBLEM: The union count can include stale runs that left the status and mask a currently active run that was never returned by any read.\n  WHY: The release pass can dispatch a redundant review for a PR whose review run was missed; the concurrency group queues the duplicate, and the timing coincidence plus retry budget limit the impact.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_merge_train.sh | 1209-1220 (union acceptance in `_mt_inflight_review_branches`) | severity=NIT | confidence=4\n  PROBLEM: Stale entries can pad the union and mask a live matching run that was never seen, causing a queued PR whose review is in flight to be released for a redundant re-dispatch.\n  WHY: The second full status pass and the review workflow's concurrency group bound the harm to one redundant queued review run, but the acceptance does not guarantee that every live matching run was seen.\n- Requirement: The PR description states \"The header comment and the README row for `MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES` document the new outcome\" \u2014 the release-row description of the same listing flow should not contradict the change.\n  Expected change site: README.md line 2911, the `release` row of the merge-train table.\n  Evidence of absence: That row still reads \"A status query whose page comes back short of its own `total_count` is re-read up to `MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES` times per listing first. When that listing is incomplete (a failed, malformed, shifted, or truncated page, ...) every queued PR stays queued\" with no mention of the new `outcome=accepted reason=union_covers_total` acceptance; only the row at line 160 was updated. The two rows now describe the same re-read flow differently, and a reader of the release row concludes any short first page eventually yields incomplete rather than union-acceptance.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d73fa25a3a1c251b62d5ac17166ac3dca9d63b9890a59562f680ec184b7b5923",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7107,
+    "run_id": "38090271854",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38090271854",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010223439_36bfa0a710",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7107,
+    "run_id": "38090271854"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T22:34:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
