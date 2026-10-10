@@ -49,7 +49,8 @@ Get AI-powered issue-to-PR automation running in your repository in a few minute
 > variable (after asking), and registers the repo in `.github/ai/consumer_repos.json` (CLAUDE.md §14).
 > Secrets (step 1 below) are copied into the new repo by the `Propagate consumer secrets` workflow once
 > its registration merges (see [Consumer secrets propagation](#consumer-secrets-propagation)); add them
-> by hand only if that run fails or the repo is not registered.
+> by hand only if that run fails, logs `status=skipped_empty` for a secret (the library secret is
+> unset, so the run stays green without copying it), or the repo is not registered.
 
 ### 1. Add secrets and variables
 
@@ -3765,6 +3766,16 @@ makes that unattended:
   entries that push added; `workflow_dispatch` takes a space-separated
   `targets` input (registered entries only) or, left empty, every registry
   entry (the backfill for consumers registered before this workflow existed).
+  A weekly schedule (`23 5 * * 1`, Monday 05:23 UTC) targets every registry
+  entry with `PROPAGATE_ONLY_MISSING=true`: each consumer's secret names are
+  listed once before any write, a secret the consumer already has is left
+  untouched (`status=skipped_present`), and only missing ones are set. A
+  failed listing writes nothing to that consumer
+  (`status=failed reason=presence_list_failed`) and turns the run red; it
+  never falls back to overwriting. Push and dispatch runs keep overwriting,
+  so a rotated library secret is pushed out with an empty-`targets` dispatch.
+  `PROPAGATE_ONLY_MISSING` defaults to `false` in the script and accepts only
+  `true` or `false`.
 - **What is copied:** `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`,
   `OPENROUTER_API_KEY` and `TG_BOT_SECRET`, each from this repository's
   secret of the same name, through `gh secret set --repo <consumer>` with the
@@ -3787,9 +3798,11 @@ makes that unattended:
   entry when that commit is outside the shallow checkout; repeated writes of
   the same value are harmless.
 - **Log keys:** `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> secret=<NAME>
-  status=<set|skipped_empty|failed|verify_missing>` per secret,
+  status=<set|skipped_empty|skipped_present|failed|verify_missing>` per secret,
   `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> status=verify_list_failed`
-  when the post-write listing fails, and
+  when the post-write listing fails,
+  `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> status=failed reason=presence_list_failed`
+  when the only-missing pre-write listing fails, and
   `CONSUMER_SECRETS_PROPAGATE summary targets=N set=N skipped=N failed=N`.
 
 ## Repository Structure
