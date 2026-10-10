@@ -18240,7 +18240,10 @@ def _retrigger_review_spoof_run(pr_number: int, **overrides) -> dict:
 	return run
 
 
-@pytest.mark.parametrize("overrides", [
+# CI runs this module through main(), which calls every test as func(), so
+# the spoof cases loop inside one argument-free test instead of using
+# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+_RETRIGGER_REVIEW_SPOOF_OVERRIDES = (
 	# (a) the same title on a branch copy of internal-review.yml.
 	{"head_branch": "attacker/branch"},
 	# (b) the title on the wrong wrapper path.
@@ -18248,24 +18251,27 @@ def _retrigger_review_spoof_run(pr_number: int, **overrides) -> dict:
 	{"path": "other/repo/.github/workflows/internal-review.yml"},
 	# (c) the right title and path from another event.
 	{"event": "push", "head_branch": "main"},
-])
-def test_retrigger_review_pushes_past_spoofed_pr_named_run(overrides):
+)
+
+
+def test_retrigger_review_pushes_past_spoofed_pr_named_run():
 	# Issue #6629: a run that fails the provenance rule must not hold the
 	# empty-commit push (an availability stall with nothing to show why).
-	state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-spoof")
-	result = _run_poller(
-		state=state,
-		enable_validation="false",
-		max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]},
-		issue_linked_prs={10: 93},
-		prs=prs,
-		actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
-		mock_git_push_success=True,
-	)
-	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 1, issue_entry
-	assert result.get("git_push_calls", []), "expected the empty-commit push to proceed"
+	for overrides in _RETRIGGER_REVIEW_SPOOF_OVERRIDES:
+		state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-spoof")
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			issue_labels={10: ["ai:done"]},
+			issue_linked_prs={10: 93},
+			prs=prs,
+			actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
+			mock_git_push_success=True,
+		)
+		issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+		assert issue_entry["stall_recovery_count"] == 1, (overrides, issue_entry)
+		assert result.get("git_push_calls", []), f"expected the empty-commit push to proceed for {overrides}"
 
 
 def test_retrigger_review_null_head_branch_pr_named_run_still_blocks_push():
