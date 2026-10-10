@@ -49,7 +49,8 @@ Get AI-powered issue-to-PR automation running in your repository in a few minute
 > variable (after asking), and registers the repo in `.github/ai/consumer_repos.json` (CLAUDE.md §14).
 > Secrets (step 1 below) are copied into the new repo by the `Propagate consumer secrets` workflow once
 > its registration merges (see [Consumer secrets propagation](#consumer-secrets-propagation)); add them
-> by hand only if that run fails or the repo is not registered.
+> by hand only if that run fails, logs `status=skipped_empty` for a secret (the library secret is
+> unset, so the run stays green without copying it), or the repo is not registered.
 
 ### 1. Add secrets and variables
 
