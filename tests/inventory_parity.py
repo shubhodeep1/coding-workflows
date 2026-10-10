@@ -136,9 +136,21 @@ def iter_non_example_line_paths(line: str) -> list[str]:
 	return paths
 
 
+def _secondary_document_text(document_path: Path) -> str:
+	"""agents.md is read with pending agents.d/ fragments folded in (CLAUDE.md §30)."""
+	if document_path == AGENTS_PATH:
+		import sys
+
+		sys.path.insert(0, str(Path(__file__).resolve().parent))
+		from agents_doc import agents_text
+
+		return agents_text(REPO_ROOT)
+	return document_path.read_text(encoding="utf-8")
+
+
 def parse_secondary_document(document_path: Path) -> dict[str, int]:
 	references: dict[str, int] = {}
-	for line_number, line in enumerate(document_path.read_text(encoding="utf-8").splitlines(), 1):
+	for line_number, line in enumerate(_secondary_document_text(document_path).splitlines(), 1):
 		for match in PATH_ASSIGNMENT_RE.finditer(line):
 			candidate = normalize_reference(match.group(1))
 			if classify_surface_path(candidate) is None:

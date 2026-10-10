@@ -2692,7 +2692,8 @@ def test_security_audit_target_ref_routes_through_the_integration_ref_resolver()
 			bin_dir / "gh",
 			"#!/usr/bin/env python3\n"
 			"import json, sys\n"
-			"path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
+			"args = [a for a in sys.argv[1:] if a != '-i']\n"
+			"path = args[1] if len(args) > 1 else ''\n"
 			"if path == 'repos/owner/repo/issues/101':\n"
 			f"\tprint({body!r})\n"
 			"\tsys.exit(0)\n"

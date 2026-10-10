@@ -161,7 +161,8 @@ Section numbers in this file are also covered by §6 — they are referenced fro
 In every final response:
 - List all files changed with line ranges of major logic changes (skip
   formatting-only).
-- If behavior changes: update `README.md` / `agents.md` with env vars,
+- If behavior changes: update `README.md` / `agents.md` (additions through an
+  `agents.d/` fragment, CLAUDE.md §30) with env vars,
   DB behavior, indexes, operational steps, failure modes.
 
 ---

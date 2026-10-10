@@ -19,6 +19,10 @@ import re
 from pathlib import Path
 
 import pytest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
@@ -342,7 +346,7 @@ def test_poller_judges_stay_on_the_review_sandbox():
 	]
 	assert isolated_exec_uses == [], POLLER_JUDGE_DECISION
 
-	agents = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents = _agents_text_with_fragments()
 	section = agents[agents.index("## Isolated Codex agents"):]
 	section = section[: section.index("\n## ")]
 	assert "review_untrusted_sandbox.sh" in section

@@ -52,6 +52,10 @@
 #                            the head (self-run excluded). Read by
 #                            _pr_wait_for_required_checks to tell a
 #                            settled failure from a pending one.
+#   AUTO_MERGE_WAIT_WORKFLOWS — workflow names (comma-separated, default
+#                            "CI"; none/off disables) whose not-yet-completed
+#                            runs on the head keep _pr_wait_for_required_checks
+#                            waiting (_pr_head_ci_runs_pending).
 #   PR_CHECKS_LAST_TOTAL   — set by _pr_checks_completed when it reads the
 #                            check-runs: total non-self check-runs on the
 #                            head (0 = none registered yet).
@@ -339,6 +343,56 @@ _pr_checks_completed()
 # Env: AUTO_MERGE_CHECKS_WAIT_MINUTES (default 45; 0 = one check, no wait),
 # AUTO_MERGE_CHECKS_POLL_SECONDS (default 60). One check-runs listing (plus
 # the branch-protection read) per poll.
+# `_pr_head_ci_runs_pending <head_sha>` sets PR_CHECKS_RUNS_PENDING to the
+# number of workflow runs on <head_sha> whose workflow name is listed in
+# AUTO_MERGE_WAIT_WORKFLOWS (comma-separated, default "CI"; "none" disables)
+# (matched case-insensitively, as the "none"/"off" check is) and whose
+# status is not completed, the caller's own run excluded.
+# Why: a workflow run exists (queued) as soon as the push event fires, but
+# its jobs' check-runs appear only when they start. A fast check that
+# already passed (the PR-body lint) made the head look green while CI was
+# still queued, so the required-checks wait could return before CI ran.
+# It also sets PR_CHECKS_RUNS_UNRUN to the number of listed workflows whose
+# every run on <head_sha> completed as cancelled or startup_failure: such a
+# run (for example cancelled while still queued) leaves no check-runs, so
+# the check-run gate alone would read the head as green although CI never
+# produced a result. The wait refuses with reason=ci_run_cancelled; a
+# later re-run returns the workflow to pending.
+# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
+# (integers), return 0.
+# API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
+# when disabled or the SHA/repository is unusable. Fail-open: a failed or
+# malformed read counts as 0 pending (the check-run gate still applies).
+_pr_head_ci_runs_pending()
+{
+	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
+	PR_CHECKS_RUNS_PENDING=0
+	PR_CHECKS_RUNS_UNRUN=0
+	names_csv="${AUTO_MERGE_WAIT_WORKFLOWS-CI}"
+	case "$(printf '%s' "${names_csv}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		""|none|off) return 0 ;;
+	esac
+	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+	self_run="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}"
+	runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?head_sha=${head_sha}&per_page=100" 2>/dev/null || echo "")"
+	local counts
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
+		| [(.workflow_runs // [])[]
+			| select((.id | tostring) != $self_run)
+			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+		| ($runs | map(select(.status != "completed")) | length) as $pending
+		| ($runs | group_by(.name // "" | ascii_downcase)
+			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
+			| length) as $unrun
+		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
+	PR_CHECKS_RUNS_PENDING="${counts%% *}"
+	PR_CHECKS_RUNS_UNRUN="${counts##* }"
+	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
+	[[ "${PR_CHECKS_RUNS_UNRUN}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_UNRUN=0
+	return 0
+}
+
 _pr_wait_for_required_checks()
 {
 	local pr_number="$1"
@@ -357,6 +411,31 @@ _pr_wait_for_required_checks()
 			_pr_checks_completed "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null || rc=$?
 		case "${PR_CHECKS_LAST_REASON}" in
 			ok|allow_all)
+				# A listed CI workflow run on this head is still queued or
+				# running: its check-runs may not exist yet, so keep waiting.
+				# Not under allow_all: that sentinel ignores every check-run's
+				# outcome (branch protection decides), so CI's result would be
+				# ignored after the wait too.
+				if [ "${PR_CHECKS_LAST_REASON}" = "ok" ]; then
+					_pr_head_ci_runs_pending "${head_sha}"
+					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
+						echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_RUNS_PENDING} CI workflow run(s) on ${head_sha:0:7} not completed yet; waiting ${poll_seconds}s."
+						sleep "${poll_seconds}"
+						waited=$((waited + poll_seconds))
+						PR_CHECKS_WAIT_WAITED_S="${waited}"
+						continue
+					fi
+					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ]; then
+						PR_CHECKS_WAIT_OUTCOME="timeout"
+						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_RUNS_PENDING} reason=ci_run_pending"
+						return 1
+					fi
+					if [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; then
+						PR_CHECKS_WAIT_OUTCOME="failed"
+						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=failed waited_s=${waited} pending=0 reason=ci_run_cancelled"
+						return 1
+					fi
+				fi
 				# No check-run registered yet (fresh push, CI not queued): poll up
 				# to two more intervals before reading "none" as green. A repo
 				# with no CI at all still proceeds once that grace is spent.

@@ -3508,13 +3508,20 @@ fi
     cat ai_pipeline.md
     echo
   fi
+  VALIDATE_AGENTS_FILE=""
   if [ -f AGENTS.md ]; then
-    echo "=== AGENTS.MD ==="
-    cat AGENTS.md
-    echo
+    VALIDATE_AGENTS_FILE="AGENTS.md"
   elif [ -f agents.md ]; then
+    VALIDATE_AGENTS_FILE="agents.md"
+  fi
+  if [ -n "${VALIDATE_AGENTS_FILE}" ]; then
     echo "=== AGENTS.MD ==="
-    cat agents.md
+    # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+    if [ -d agents.d ] && [ ! -L agents.d ] && VALIDATE_AGENTS_RENDER="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${VALIDATE_AGENTS_FILE}" 2>/dev/null)"; then
+      printf '%s\n' "${VALIDATE_AGENTS_RENDER}"
+    else
+      cat "${VALIDATE_AGENTS_FILE}"
+    fi
     echo
   fi
   cat "${VALIDATE_README_CONTEXT}"
