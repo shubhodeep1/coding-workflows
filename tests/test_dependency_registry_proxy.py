@@ -34,7 +34,12 @@ def request(path, head):
 	with socket.socket(socket.AF_UNIX) as client:
 		client.settimeout(2)
 		client.connect(path)
-		client.sendall(head)
+		try:
+			client.sendall(head)
+		except BrokenPipeError:
+			# The busy path writes its 503 and closes without reading the
+			# request; the reply is already buffered, so read it below.
+			pass
 		return client.recv(512)
 
 
