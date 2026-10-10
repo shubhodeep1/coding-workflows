@@ -2096,7 +2096,6 @@ and shipped:
 - `EAGER_DRAFT_PR_CREATED`
 - `APPLY_ANALYSIS_SKIPPED`
 - `APPLY_ANALYSIS_DISPATCHED`
-- `VALIDATE_CHANGED_FILES_SYNTAX`
 - `APPLY_ANALYSIS_CANDIDATES`
 - `PROMOTE_CYCLE_SKIPPED`
 - `PROMOTE_CYCLE_FAILED`
@@ -2249,6 +2248,7 @@ and shipped:
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
+- `VALIDATE_CHANGED_FILES_SYNTAX`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2341,7 +2341,6 @@ LOG_PREFIX.name=FINAL_MERGE_INELIGIBILITY_ALERT_SENT
 LOG_PREFIX.name=EAGER_DRAFT_PR_CREATED
 LOG_PREFIX.name=APPLY_ANALYSIS_SKIPPED
 LOG_PREFIX.name=APPLY_ANALYSIS_DISPATCHED
-LOG_PREFIX.name=VALIDATE_CHANGED_FILES_SYNTAX
 LOG_PREFIX.name=APPLY_ANALYSIS_CANDIDATES
 LOG_PREFIX.name=PROMOTE_CYCLE_SKIPPED
 LOG_PREFIX.name=PROMOTE_CYCLE_FAILED
@@ -2493,6 +2492,7 @@ LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
+LOG_PREFIX.name=VALIDATE_CHANGED_FILES_SYNTAX
 
 ---
 
