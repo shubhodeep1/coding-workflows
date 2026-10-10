@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow recovery behavior crosses the healing scripts and orchestration polling, so changes may need coverage at both layers.",
   "timestamps": {
     "created_at": "2026-10-10T01:09:10Z",
