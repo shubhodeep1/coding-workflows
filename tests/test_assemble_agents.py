@@ -277,16 +277,24 @@ def test_real_agents_md_and_pending_fragments_fold_cleanly(tmp_path: Path) -> No
 	assert result.returncode == 0, result.stdout + result.stderr
 	repo = tmp_path / "copy"
 	repo.mkdir()
-	(repo / "agents.md").write_text((REPO_ROOT / "agents.md").read_text(encoding="utf-8"), encoding="utf-8")
+	original = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	(repo / "agents.md").write_text(original, encoding="utf-8")
 	(repo / "agents.d").mkdir()
 	(repo / "agents.d" / "1-p.md").write_text(
 		'<!-- agents: section="Stable log prefixes (contractual)" -->\n- `ZZ_TEST_PREFIX`\nLOG_PREFIX.name=ZZ_TEST_PREFIX\n',
 		encoding="utf-8",
 	)
 	assert _run("assemble", repo).returncode == 0
-	text = (repo / "agents.md").read_text(encoding="utf-8")
-	assert "- `VALIDATION_HARNESS_SANDBOX`\n- `ZZ_TEST_PREFIX`\n\nWhen `EVENTS_JSONL_ENABLED=true`" in text
-	assert "LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX\nLOG_PREFIX.name=ZZ_TEST_PREFIX\n\n---" in text
+	# Locate the insertion points from the live file, not from named entries:
+	# agents.md gains registry entries with every merged PR.
+	lines = original.split("\n")
+	start = lines.index("## Stable log prefixes (contractual)")
+	end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+	first_name = next(i for i in range(start, end) if lines[i].startswith("LOG_PREFIX.name="))
+	last_bullet = max(i for i in range(start, first_name) if lines[i].startswith("- `"))
+	last_name = max(i for i in range(start, end) if lines[i].startswith("LOG_PREFIX.name="))
+	expected = lines[: last_bullet + 1] + ["- `ZZ_TEST_PREFIX`"] + lines[last_bullet + 1 : last_name + 1] + ["LOG_PREFIX.name=ZZ_TEST_PREFIX"] + lines[last_name + 1 :]
+	assert (repo / "agents.md").read_text(encoding="utf-8") == "\n".join(expected)
 
 
 def test_two_prs_with_fragments_merge_without_conflict(tmp_path: Path) -> None:
