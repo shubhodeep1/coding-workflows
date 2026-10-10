@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:730-746 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_gh_graphql_doc_is_mutation` truncates each line at the first `#` without checking whether it is inside a quoted GraphQL string, which can hide a later mutation and classify it as a read.\n  WHY: If a transient 5xx occurs after the mutation has been applied, the retry can apply it again; severity was BLOCKER for one reviewer and MAJOR for the others, so the highest severity is used.\n- scripts/gh_api_retry.py:117-127 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `graphql_doc_is_mutation` truncates each line at the first `#` without checking whether it is inside a quoted GraphQL string, which can hide a later mutation and classify it as a read.\n  WHY: If a transient 5xx occurs after the mutation has been applied, the retry can apply it again; severity was BLOCKER for one reviewer and MAJOR for the others, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:730-740 | severity=BLOCKER | confidence=5\n  PROBLEM: The mutation detector strips text after every `#` without accounting for quoted GraphQL strings, allowing a quoted `#` to hide subsequent `mutation` operations.\n  WHY: A GraphQL query containing `\"#\"` (e.g., `query { f(arg: \"#\") } mutation { ... }`) results in `mutation` being stripped, causing it to be incorrectly classified as a read (retryable) operation. If the query fails transiently *after the mutation part has been applied by the server*, the retry helper will re-send the mutation, leading to duplicate execution.\n- scripts/gh_api_retry.py:117-127 | severity=BLOCKER | confidence=5\n  PROBLEM: The Python mutation detector shares the same flaw as the bash version, failing to account for quoted `#` characters.\n  WHY: Same as above; Python-based callers (e.g., orchestrator label readers, audit scripts) will incorrectly retry non-idempotent GraphQL mutations.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh line 730-740 (bash `${_line%%#*}`); scripts/gh_api_retry.py line 117-127 (Python `line.split(\"#\", 1)[0]`) | severity=MAJOR | confidence=4\n  PROBLEM: Both implementations strip everything after the first `#` on every line as if it were a GraphQL comment, so a `#` inside a string literal can hide a subsequent mutation operation.\n  WHY: A GraphQL document containing `#` inside a string on the same line as a later mutation operation is misclassified as a read; if `gh api` returns a transient 5xx after GitHub has applied the mutation, the helper retries and applies it a second time.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh; scripts/gh_api_retry.py | severity=MAJOR | confidence=5\n  PROBLEM: Both classifiers truncate each line at the first `#` without checking whether it is inside a quoted GraphQL string, so a later mutation can be classified as a read.\n  WHY: With `operationName=B`, `gh_api_retry` can retry this mutation after a transient failure, such as a 5xx returned after the mutation was applied. The retry can apply the mutation again, defeating the helper\u2019s single-attempt safeguard for creates.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_api_retry.py:117-122 and scripts/gh_helpers.sh:742-746 | severity=MAJOR | confidence=4\n  PROBLEM: Both mutation detectors strip text after every `#` character to remove GraphQL comments, but neither accounts for `#` inside quoted string literals, so the truncation can hide a later mutation.\n  WHY: With `operationName=B` selecting the mutation, `gh_api_retry` classifies the request as a read, retries it after a transient 5xx, and if GitHub applied mutation B before returning the error, the retry applies it again.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "60483026c673a02d9330d9aeccdb5e072e2a9a760558a7b2e68d75c7e80adc1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6654,
+    "run_id": "38041525544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38041525544",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010101949_65d1435d63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6654,
+    "run_id": "38041525544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T10:19:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
