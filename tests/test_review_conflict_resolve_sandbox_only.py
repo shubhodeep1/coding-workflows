@@ -452,3 +452,93 @@ def test_no_host_model_launch_or_private_host_index_in_launch():
 	assert "GIT_INDEX_FILE=" not in _launch()
 	assert "GIT_INDEX_FILE=" not in _helper()
 	assert 'codex CONFLICT_RESOLVER write)' in _helper()
+
+
+def _paired_and_path_guard() -> str:
+	src = _source()
+	paired = src[src.index("# Paired live/template copies (issue #6595)."):src.index("# Copy each resolved template over its live copy after a model attempt.")]
+	return paired + _guard()
+
+
+def _real_conflict(tmp_path, name):
+	git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}}
+
+	def git(*args, check=True):
+		return subprocess.run(["git", *args], cwd=tmp_path, env=git_env, check=check, capture_output=True, text=True)
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+	git("config", "commit.gpgsign", "false")
+	target = tmp_path / name
+	target.parent.mkdir(parents=True, exist_ok=True)
+	target.write_text('{"a": 1}\n', encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-qm", "base")
+	git("checkout", "-q", "-b", "pr")
+	target.write_text('{"a": 2}\n', encoding="utf-8")
+	git("commit", "-qam", "pr")
+	git("checkout", "-q", "main")
+	target.write_text('{"a": 3}\n', encoding="utf-8")
+	git("commit", "-qam", "main")
+	git("checkout", "-q", "pr")
+	assert git("merge", "--no-edit", "main", check=False).returncode != 0
+	return git("diff", "--name-only", "--diff-filter=U").stdout.splitlines(), git_env
+
+
+def _run_consumer_guard(tmp_path, conflicted, git_env, source_repo="false"):
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	allowlist = runtime / "resolver_unmerged_allowlist.txt"
+	allowlist.write_text("".join(name + "\n" for name in conflicted), encoding="utf-8")
+	github_env = runtime / "github_env"
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(runtime)!r}
+SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
+CONFLICTED_PATHS_FILE="${{RUNTIME_DIR}}/conflicted_paths.txt"
+RESOLVER_ALLOWLIST_FILE={str(allowlist)!r}
+GITHUB_ENV={str(github_env)!r}
+IS_WORKFLOW_SOURCE_REPO={source_repo}
+IS_INTEGRATION_SYNC=false
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
+{_failure_helper()}
+{_path_failure_helper()}
+{_report_helper()}
+{_paired_and_path_guard()}
+echo guard-passed
+'''], cwd=tmp_path, env={**git_env, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+	return result, runtime
+
+
+def test_consumer_conflict_reaches_the_model_without_the_source_repo_conflict_set(tmp_path):
+	"""drhyg_ecommerce_automation PR #66 (run 38035623653): review_conflict_prepare.sh
+	writes conflicted_paths.txt only on the workflow source repo, so every consumer
+	conflict failed closed with sandbox_path_unsupported before any model ran."""
+	conflicted, git_env = _real_conflict(tmp_path, "src/config.json")
+	assert conflicted == ["src/config.json"]
+	result, runtime = _run_consumer_guard(tmp_path, conflicted, git_env)
+	assert result.returncode == 0, result.stderr
+	assert "guard-passed" in result.stdout
+	assert "sandbox_path_unsupported" not in result.stderr
+	assert not (runtime / "conflicted_paths.txt").exists()
+	assert (runtime / "resolver_model_paths.txt").read_text(encoding="utf-8") == "src/config.json\n"
+
+
+def test_consumer_host_only_conflict_names_the_path(tmp_path):
+	"""The PR #66 conflict itself: .claude/settings.json is host-only, so it needs a
+	human merge and the failure must say so instead of the nameless reason."""
+	conflicted, git_env = _real_conflict(tmp_path, ".claude/settings.json")
+	result, runtime = _run_consumer_guard(tmp_path, conflicted, git_env)
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/settings.json" in result.stderr
+	assert "reason=sandbox_path_host_only" in result.stderr and "sandbox_path_unsupported" not in result.stderr
+	assert (runtime / "persisted_reason").read_text().strip() == "sandbox_path_host_only"
+
+
+def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
+	conflicted, git_env = _real_conflict(tmp_path, "src/config.json")
+	result, runtime = _run_consumer_guard(tmp_path, conflicted, git_env, source_repo="true")
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "Conflict resolver paired live copy check failed" in result.stderr
+	assert "reason=sandbox_path_unsupported" in result.stderr

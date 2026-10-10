@@ -633,13 +633,70 @@ _gh_url() {
   printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
 }
 
+# tracking_issue_is_smoke_fixture <title> [<labels_json>]
+#
+# True for the projects the stable-release smoke gate creates
+# (.github/workflows/test-and-mark-stable.yml): every fixture title carries an
+# `[E2E ` marker (`[E2E Smoke Test] Review-Blocked Simulation (run N)`,
+# `[E2E Smoke Test alt-model] ...`, `[E2E Clarify Negative Test] ...`, and the
+# decomposed `[Orchestrator] [E2E Orchestrate Smoke N] ...`), and fixtures may
+# carry the `e2e-smoke-test` label. Reads only the tracking-issue list the
+# poller already fetched (no API call, CLAUDE.md §15).
+# tests/test_smoke_alert_silencing_contract.py derives the fixture titles from
+# the gate and fails when one of them is not detected.
+tracking_issue_is_smoke_fixture() {
+  local title="${1:-}"
+  local labels_json="${2:-[]}"
+  # Anchored like the workflows' issue-title detector (`^\[E2E `). A bare
+  # `[E2E ` prefix only occurs on issues the gate creates itself, because
+  # orchestrate.yml prefixes every decomposed tracking title with
+  # `[Orchestrator] `. After that prefix the title is model-written from the
+  # project description, so only the decompose fixture's own marker
+  # (`E2E Orchestrate Smoke`, bracketed or not, any case) counts: a real
+  # project such as `[Orchestrator] E2E tests for checkout` or
+  # `[Orchestrator] [E2E tests] for payments` keeps its alerts.
+  local title_lc="${title,,}"
+  case "${title}" in
+    "[E2E "*) return 0 ;;
+  esac
+  case "${title_lc}" in
+    "[orchestrator] [e2e orchestrate smoke "*|"[orchestrator] e2e orchestrate smoke "*) return 0 ;;
+  esac
+  printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "e2e-smoke-test")' >/dev/null 2>&1
+}
+
+# _smoke_fixture_alert_silenced <level>: true (and logged) when TRACKING_NUM
+# names a smoke-gate fixture project of this tick (SMOKE_FIXTURE_TRACKING_NUMS).
+# tg_notify and the project-scoped direct tg_send_msg alerts check it.
+_smoke_fixture_alert_silenced() {
+  local level="${1:-CRITICAL}"
+  [ -n "${TRACKING_NUM:-}" ] || return 1
+  case " ${SMOKE_FIXTURE_TRACKING_NUMS:-} " in
+    *" ${TRACKING_NUM} "*)
+      echo "TG_NOTIFY_SMOKE_SILENCED tracking_issue=${TRACKING_NUM} level=${level}"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
 # Automatically appends tracking issue link and Actions run link.
+# Smoke-gate fixture projects never page (operator decision Q42: A): the gate
+# closes its fixture PRs and issues while a poll it dispatched may still be
+# processing the project, which raised a CRITICAL "wave PR(s) closed without
+# merge" alert for project #7017 (release run 38010697715). The release
+# workflows silence their own sends through ALERT_MSG_LEVEL=SILENT, which the
+# scheduled poller does not inherit.
 tg_notify() {
   local msg="$1"
   local level="${2:-CRITICAL}"
   local tracking_url run_url
+
+  if _smoke_fixture_alert_silenced "${level}"; then
+    return 0
+  fi
 
   if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
     tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
@@ -11654,6 +11711,51 @@ Runbook: [Rebuild integration branch](${runbook_url})"
   return 0
 }
 
+# security_pass_sync_final_pr_if_unmergeable <integration_branch> <default_branch>
+#
+# The tick-level main -> integration sync skips security-pass and
+# security-pass-fixing: the pass is bound to the integration head
+# (security_pass_current_head_is_valid), so merging main on every tick would
+# move that head whenever main moves and the pass might never settle. The
+# finalizer heals an unmergeable final PR, but only after the pass ends, so a
+# conflict that main introduces during the pass sat for hours: project #6664's
+# final PR #6667 stayed dirty from 23:12 on 2026-10-09 through its whole
+# security pass (operator decision Q41: A). This helper syncs during the pass
+# only when the recorded final PR is open and GitHub reports it unmergeable;
+# sync_default_into_integration_branch then merges main or hands a real
+# conflict to heal_integration_branch_conflict, and the next audit re-checks
+# the moved head with the existing delta scope. A mergeable or still-computing
+# PR, a missing final PR, or an unreadable PR does nothing (fail open).
+#
+# API budget (CLAUDE.md §15): one REST read of the final PR per project in a
+# security-pass state per tick; the security-pass path reads no other PR data
+# to extend. The sync itself adds its usual calls only when it runs.
+# Logs: SECURITY_PASS_FINAL_PR_SYNC tracking_issue=<n> pr=<n> outcome=sync|skip reason=<token>
+security_pass_sync_final_pr_if_unmergeable() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr pr_json pr_state pr_mergeable
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=none outcome=skip reason=no_final_pr"
+    return 0
+  fi
+  pr_json="$(_fetch_pr_json "${final_pr}")"
+  pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed')"
+  pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+  if [ "${pr_state}" != "open" ]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=skip reason=pr_${pr_state:-unreadable}"
+    return 0
+  fi
+  if [ "${pr_mergeable}" != "false" ]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=skip reason=mergeable_${pr_mergeable:-unknown}"
+    return 0
+  fi
+  echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
+  return 0
+}
+
 finalize_integration_merge_if_needed() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -11955,7 +12057,9 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     _final_merge_alert_msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
     # Discard only stdout (the echoed message_id); keep stderr so
     # tg_send_msg's "Telegram send failed" warning stays in the logs.
-    tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
+    if ! _smoke_fixture_alert_silenced "CRITICAL"; then
+      tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
+    fi
     return 0
   fi
 
@@ -13358,7 +13462,9 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
-  tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  if ! _smoke_fixture_alert_silenced "DEBUG"; then
+    tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  fi
 }
 
 extract_fix_issues_from_comment() {
@@ -20005,6 +20111,17 @@ fi
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
+# Smoke-gate fixture projects in this tick; tg_notify stays silent for them
+# whatever TRACKING_NUM currently names (Q42: A).
+SMOKE_FIXTURE_TRACKING_NUMS=""
+for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
+  smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
+  [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
+  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+    SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
+    echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+  fi
+done
 prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 write_state_snapshot_actions_runs_export || true
 
@@ -20209,6 +20326,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
 		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+		# The tick-level sync below skips both states; heal a final PR that
+		# main made unmergeable now instead of after the pass (Q41: A).
+		if [ -n "${INTEGRATION_BRANCH_TRACKING}" ]; then
+			if ! security_pass_sync_final_pr_if_unmergeable "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+				continue
+			fi
+			PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+			if [ "${PROJECT_STATUS}" = "failed" ]; then
+				continue
+			fi
+		fi
 	fi
 
   # ---------------------------------------------------------------
@@ -20693,7 +20821,9 @@ The orchestrator detected that the integration PR was squash-merged outside the 
           if [ -n "${GITHUB_RUN_ID:-}" ]; then
             MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
           fi
-          tg_send_msg "${MSG}" >/dev/null
+          if ! _smoke_fixture_alert_silenced "DEBUG"; then
+            tg_send_msg "${MSG}" >/dev/null
+          fi
           PROJECT_STATUS="complete"
           continue
         fi
@@ -20790,7 +20920,9 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     if [ -n "${GITHUB_RUN_ID:-}" ]; then
       MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
     fi
-    tg_send_msg "${MSG}" >/dev/null
+    if ! _smoke_fixture_alert_silenced "DEBUG"; then
+      tg_send_msg "${MSG}" >/dev/null
+    fi
     continue
   fi
 
@@ -25541,7 +25673,9 @@ PRs to revert: ${REVERT_COUNT}"
         if [ -n "${GITHUB_RUN_ID:-}" ]; then
           MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
         fi
-        tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        if ! _smoke_fixture_alert_silenced "DEBUG"; then
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        fi
         continue
       fi
 

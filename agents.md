@@ -1739,7 +1739,10 @@ V1 and V2 state comments are read only when every selected comment is authored b
 When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
 enters `security-pass` before validation or finalization. A pass is valid only
 when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
-matches the current integration head. Findings enter `security-pass-fixing`
+matches the current integration head (so the periodic `main` sync skips both
+security-pass states; a final PR that `main` makes unmergeable is synced and
+healed during the pass by `security_pass_sync_final_pr_if_unmergeable`, see
+README 12d). Findings enter `security-pass-fixing`
 through one consolidated `ai:orchestrator-managed` issue (whose body asks the
 implementer to clear every instance of each finding's defect class, not only
 the cited line); a merged fix advances `security_pass_cycle`, clears the
@@ -2092,7 +2095,7 @@ and shipped:
 - `RECLARIFY_UNROUTED` (`detect_unrouted_blocked_comments` in `scripts/orchestrate_poll_process.sh`: `issue= comment= reason=command_unrouted|no_command age_minutes= outcome=flagged|post_failed`, `outcome=skip reason=budget_low|issue_list_unavailable|graphql_unavailable|classifier_failed`)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `UNBLOCK_SCAN` (`run_unblock_scan` in `scripts/orchestrate_poll_process.sh`: `candidates= dispatched= skipped= outcome=idle|done|skip reason=`, and `item= kind= outcome=dispatched|dispatch_failed`)
-- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation)
+- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation; `op=regrant run= paths= outcome=regranted`, `op=regrant [run=] outcome=skip reason=still_denied|already_regranted|not_automation_path|missing|truncated|malformed|grant_unavailable|rejection_unreadable|disabled`, `op=regrant run= outcome=failed reason=actuation_failed`; `origin= outcome=escalated reason=fixup_blocked`, `origin= outcome=skip reason=fixup_escalated`, `origin= outcome=failed reason=fixup_escalation_failed`)
 - `UNBLOCK_PROJECT` (`handle_unblock_judge_project_hooks`: `tracking_issue= action=abandoned|fixup id= item= issue= outcome=`)
 - `UNBLOCK_HANDOVER` (poller and `review_autofix.yml`: `tracking_issue=|pr= stop=judge_output|rb_judge reason= failures= outcome=counted|failed|labelled`)
 - `UNBLOCK_BULK_DELETE_OVERRIDE` (`implement.yml` "Unblock judge bulk-delete override" and the destructive guard: `outcome=enabled|skip reason= marker=`, `applied deletions=`)
@@ -2194,6 +2197,9 @@ and shipped:
 - `DRIFT_SCAN_OK`
 - `DRIFT_SCAN_ERROR`
 - `SECURITY_PASS_STARTED`
+- `SECURITY_PASS_FINAL_PR_SYNC`
+- `SMOKE_FIXTURE_PROJECT`
+- `TG_NOTIFY_SMOKE_SILENCED`
 - `ORCHESTRATOR_STATE_AUTHOR_FILTER` (`tracking_issue= outcome=identity_unavailable|filtered ignored=<count>` when filtered)
 - `SECURITY_PASS_SCOPE`
 - `SECURITY_PASS_CLEAN`
@@ -2446,6 +2452,9 @@ LOG_PREFIX.name=DRIFT_SCAN_DIFF
 LOG_PREFIX.name=DRIFT_SCAN_OK
 LOG_PREFIX.name=DRIFT_SCAN_ERROR
 LOG_PREFIX.name=SECURITY_PASS_STARTED
+LOG_PREFIX.name=SECURITY_PASS_FINAL_PR_SYNC
+LOG_PREFIX.name=SMOKE_FIXTURE_PROJECT
+LOG_PREFIX.name=TG_NOTIFY_SMOKE_SILENCED
 LOG_PREFIX.name=ORCHESTRATOR_STATE_AUTHOR_FILTER
 LOG_PREFIX.name=SECURITY_PASS_SCOPE
 LOG_PREFIX.name=SECURITY_PASS_CLEAN
