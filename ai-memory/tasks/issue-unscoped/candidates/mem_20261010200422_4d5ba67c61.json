@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md:line 4 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The changelog omits `status=skipped_empty` as a case when manual secret setup is needed.\n  WHY: Propagation can skip an unset library secret without failing the run, so operators following the changelog may leave that secret unconfigured.\n- README.md:lines 50-52 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The README quickstart omits `status=skipped_empty` as a reason to add a secret by hand.\n  WHY: A green propagation run can leave a secret uncopied, but readers of the README alone would not know manual setup may still be needed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog entry should include `status=skipped_empty` as a scenario where manual secret setup might be required, to align with the updated `seed-repo.md` instructions and checklist.\n  expected_change_site: changelog.d/6712-propagate-consumer-secrets-schedule.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog entry lists only \"a failed run or a `no-register` seed\" as the reasons to request manual setup, omitting `status=skipped_empty`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md: line 4, \"asks for manual setup only after a failed run or a `no-register` seed\" | severity=low | confidence=4\n  PROBLEM: The changelog omits the `status=skipped_empty` case for manual secret setup.\n  WHY: `scripts/propagate_consumer_secrets.sh` counts an empty library secret as `skipped`, not `failed`, so the run stays green. An operator who follows the changelog would not set the missing secret by hand.\n- README.md: lines 50-52, \"add them by hand only if that run fails or the repo is not registered\" | severity=low | confidence=3\n  PROBLEM: The README quickstart is missing the `status=skipped_empty` case that `seed-repo.md` now lists as a reason to add a secret by hand.\n  WHY: This is documentation drift, not a code failure. A reader of the README alone would not know a green run can leave a secret uncopied.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: The changelog entry should include `status=skipped_empty` as a scenario where manual secret setup might be required, to align with the updated `seed-repo.md` instructions and checklist.\n  Expected change site: changelog.d/6712-propagate-consumer-secrets-schedule.md\n  Evidence of absence: The changelog entry lists only \"a failed run or a `no-register` seed\" as the reasons to request manual setup, omitting `status=skipped_empty`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md: Line 4, the sentence saying `/seed-repo` asks for manual setup only after a failed run or a `no-register` seed. | severity=low | confidence=4\n  PROBLEM: This omits `status=skipped_empty`, which the updated seed instructions at `.claude/commands/seed-repo.md:22,49` identify as another reason manual setup is needed.\n  WHY: When a library secret is unset, propagation skips it without failing the run. An operator relying on the changelog would not know that secret still needs to be added.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md: line 4 | severity=low | confidence=4\n  PROBLEM: The changelog fragment says `/seed-repo` \"asks for manual setup only after a failed run or a `no-register` seed,\" but both copies of `.claude/commands/seed-repo.md` (steps 6, 8, and the Output Format checklist \u2014 the last of which the LAST RUN DIFF just updated) also list `status=skipped_empty` as a case requiring manual setup. The three seed-repo sites and the changelog are internally inconsistent within this same PR.\n  WHY: When a library secret (for example `TG_BOT_SECRET`) is unset, the script logs `status=skipped_empty` and the run stays green \u2014 the consumer never receives that secret. Operators who read the changelog instead of the seed-repo checklist would not know to set it up by hand, leaving the consumer incompletely configured. The third autofix editor identified this as valid but could not fix it because the changelog path was sandbox-excluded.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7f1464dc8b00935e90bd9107b95f2c6b713fc95badcb40e0e9734beeca05244c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "38081581964",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38081581964",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010200422_4d5ba67c61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "38081581964"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T20:04:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
