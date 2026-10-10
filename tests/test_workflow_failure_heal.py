@@ -2403,11 +2403,15 @@ def test_intake_cap_report_fingerprints_by_its_failure_fingerprint() -> None:
 	assert len(set(printed)) == 3
 
 
-def _self_repo_autofix_payload() -> dict:
+def _self_repo_autofix_payload(**overrides) -> dict:
+	# script_ref == head_sha (SHA_B): the run staged the PR head's own scripts.
+	fields = {"script_ref": SHA_B}
+	fields.update(overrides)
 	return _autofix_payload(
 		source_repo=SELF_REPO,
 		issue_url=f"https://github.com/{SELF_REPO}/pull/4174",
 		run_refs=[{"repo": SELF_REPO, "run_id": "500", "url": f"https://github.com/{SELF_REPO}/actions/runs/500"}],
+		**fields,
 	)
 
 
@@ -2501,6 +2505,43 @@ def test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is
 	assert "target_branch=stable" in result.stdout and "target_branch_source=default" in result.stdout
 	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
 	assert outcome and "as a hotfix on `stable`" in outcome[0]["body"]
+
+
+def _assert_shared_workflow_route(result, state_after) -> None:
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	assert created["repo"] == SELF_REPO
+	assert TARGET_BRANCH_RE.search(created["body"]) is None
+	assert "target_branch=default" in result.stdout and "target_branch_source=shared_workflow" in result.stdout
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert outcome and "on the default branch" in outcome[0]["body"]
+	assert "own branch" not in outcome[0]["body"] and "ai/issue-4173" not in outcome[0]["body"]
+	# No Target branch is chosen, so no branch lookup is made.
+	assert not [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
+
+
+def test_intake_self_repo_autofix_failure_on_shared_workflow_targets_default_branch() -> None:
+	# Issue #6680: review runs the verified main support SHA, not the PR head's
+	# scripts. A run whose script_ref differs from the PR head hit shared
+	# workflow code, so its fix must not be routed to the blocked PR's head
+	# branch (#6623 was filed against ai/issue-5152 and could not be planned).
+	payload = _self_repo_autofix_payload(script_ref=SHA_A)
+	result, state_after, _prompt = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	_assert_shared_workflow_route(result, state_after)
+
+
+def test_intake_self_repo_autofix_failure_without_script_ref_targets_default_branch() -> None:
+	payload = _self_repo_autofix_payload()
+	payload.pop("script_ref", None)
+	result, state_after, _prompt = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	_assert_shared_workflow_route(result, state_after)
+
+
+def test_intake_self_repo_autofix_failure_with_branch_name_script_ref_targets_default_branch() -> None:
+	# A branch-name script_ref is not proof the PR's own scripts ran.
+	payload = _self_repo_autofix_payload(script_ref="main")
+	result, state_after, _prompt = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	_assert_shared_workflow_route(result, state_after)
 
 
 def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, str], summary_line: str | None = RUN_SUMMARY_LINE) -> tuple[Path, Path, dict[str, str]]:

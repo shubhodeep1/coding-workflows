@@ -1,0 +1,15 @@
+<!-- changelog: fixed -->
+- **Stall recovery now re-issues a PR whose only unmergeable conflict is a retired file the base has deleted, and heal issues for shared workflow code now target the default branch.** Before, such a PR failed the conflict resolver on every stall tick, and its heal issue was sent to the PR's own head branch, where it could not be planned.
+
+A PR could conflict with its base on a file that `workflow-templates/retired_files.txt` lists and the base had already deleted, for example `.claude/scripts/permission_prompts.py`. The resolver sandbox keeps such host-only files out, so `scripts/review_conflict_resolve.sh` failed closed with `sandbox_path_host_only` every time. The fingerprint cap then labelled the issue `ai:review-blocked`, and both stall-recovery paths (orchestrator-managed and standalone) kept dispatching the resolver or the review-blocked judge, neither of which can merge it. Before either dispatch, they now check the conflict locally with `git merge-tree`; the managed review-blocked pre-judge step also stops dispatching the resolver for such a PR. When every host-only conflicted path is retired and absent from the base, they close the PR and re-issue its issue against the current base. The replacement issue names the retired files and lists the files the closed PR changed, so the edits are not dropped silently. The PR branch is kept. A conflict on a live host-only file, such as `.claude/hooks/pr_merge_status_guard.py`, still goes to the resolver and still fails closed. So does any case the check cannot verify: the head moved, the PR comes from a fork, or the trusted manifest is missing.
+
+The workflow failure heal intake also stops sending a fix for shared workflow code to the blocked PR's head branch. Review runs the verified workflow-support commit, not the PR's own scripts. A review/autofix failure from a PR in this repository now targets that PR's head branch only when the run staged the PR head's scripts, meaning the payload's `script_ref` equals the head SHA. Otherwise the heal issue carries no `Target branch` header, so its fix ships on the default branch. Issue #6623 was filed against `ai/issue-5152` that way and could not be planned.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New GitHub API calls on the stall path | 0 (one PR read only when the cached payload lacks the head and base fields) |
+| New repository variable | `STALL_RETIRED_CONFLICT_REISSUE_ENABLED` (default `true`; `false` restores the previous behaviour) |
+| New log prefix | `STALL_RETIRED_CONFLICT_REISSUE issue= pr= outcome=reissue\|skip reason= retired_paths=` |
+| New heal `target_branch_source` value | `shared_workflow` |
+
+What this means for operators: a PR stuck only on a retired file is now closed with a comment that names the file, and a fresh issue rebuilds its work against the current base. Check the closed PR's edits to the retired file. The replacement issue asks the implementer to move any intent that still matters into the file that replaced it.
