@@ -89,6 +89,9 @@ jobs:
       WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
       WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
       WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
+      # Heal issue creation gate (#6798 / #6871): 'false' (default) files no heal
+      # issue; 'true' files one only after its scope marker verifies.
+      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}
       # Report authentication (issue #6559): 'true' skips repository_dispatch
       # reports that carry no OIDC identity; 'false' (transition default)
       # accepts them after the binding checks. An identity is always verified.
