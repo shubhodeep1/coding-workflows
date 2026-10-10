@@ -421,7 +421,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
-    than `editor_empty_noop`; the identical-failure cap's report lists the
+    than `editor_empty_noop`, and a failed `Install project dependencies`
+    sandbox prepare (`deps_prepare`) is reported the same way as
+    `sandbox_prepare_failed` (`sandbox_prepare_failure_evidence.txt`,
+    `AUTOFIX_SANDBOX_PREPARE_FAILED=true`; the sandbox image build retries
+    Docker Hub and network failures, `REVIEW_SANDBOX_BUILD_ATTEMPTS`,
+    `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` / `_2`); the identical-failure cap's report lists the
     failed runs from the head's `review-autofix-failure:v1` markers
     (`AUTOFIX_FAILURE_MARKER_AUTHOR`) so the intake reads their logs; and a
     support script's self-named error line (`untrusted_process_sandbox: …`)
@@ -2242,6 +2247,7 @@ and shipped:
 - `RB_JUDGE_ISOLATION`
 - `CONSOLIDATOR_ISOLATION`
 - `REVIEW_SANDBOX_CLEANUP` (`scripts/review_untrusted_sandbox.sh cleanup`, run after `Commit changes`: `reason=root_pattern_mismatch|root_outside_runner_temp|image_marker_missing|baseline_missing|remove_permission_repaired|remove_failed cause=permission_denied|not_empty|busy|other`; path-free, teed into `editor_stage_stderr.txt`)
+- `REVIEW_SANDBOX_BUILD` (`scripts/review_untrusted_sandbox.sh prepare` / `prepare-ephemeral` image build: `attempt=<n> outcome=ok|retry|fail rc=<exit>`; `retry` only for registry or network errors, up to `REVIEW_SANDBOX_BUILD_ATTEMPTS`; kept in `sandbox_prepare_stderr.txt` and quoted in `sandbox_prepare_failure_evidence.txt`)
 - `JUDGE_ISOLATION`
 - `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
@@ -2485,6 +2491,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
 LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP
+LOG_PREFIX.name=REVIEW_SANDBOX_BUILD
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
