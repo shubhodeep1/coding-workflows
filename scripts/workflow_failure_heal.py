@@ -119,6 +119,7 @@ FAILURE_EVIDENCE_LIMIT = 4000  # same bound as ISSUE_EXCERPT_LIMIT (defined belo
 # them newest first. An editor summary ends the streak unless the next newer
 # failure marker shows that the same run failed after posting its summary.
 AUTOFIX_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
+	"AI review/autofix paused — model provider unavailable",
 	"AI review/autofix produced no output",
 	"AI review/autofix failed",
 	"AI review/autofix encountered a post-editor failure",
@@ -133,6 +134,13 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"Editor changes lost",
 	"Editor no-op suspicious",
 )
+
+# A model-provider outage (OpenRouter 402/401/429/5xx confirmed by a live
+# probe, scripts/provider_outage.py) is a repo-wide event, not a PR defect:
+# its failure markers count toward neither the identical-failure cap nor the
+# autofix failure streak (issue #6633, the 2026-09-30 credit outage).
+PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
+PROVIDER_UNAVAILABLE_COMMENT_MARKER = "AI review/autofix paused — model provider unavailable"
 
 # Pipeline phases whose failed runs report themselves (the `heal-report` job of
 # clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
@@ -748,6 +756,9 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 		if not isinstance(comment, dict):
 			continue
 		body = sanitize_text(comment.get("body"))
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_FAILURE_MARKER_RE.search(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			# A provider outage neither adds to nor ends the streak.
+			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			streak += 1
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
@@ -2626,8 +2637,14 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				continue
 			if support and fields.get("support", "").lower() != support:
 				continue
-			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			run = fields.get("run", "")
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				# Outage markers never count and never end the scan; the
+				# run is remembered so its other comments are skipped too.
+				if run:
+					seen_runs.add(run)
+				continue
+			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			if run and run in seen_runs:
 				continue
 			if not result["fp"]:
@@ -2638,6 +2655,8 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			result["count"] += 1
 			if run:
 				seen_runs.add(run)
+			continue
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body:
 			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			break

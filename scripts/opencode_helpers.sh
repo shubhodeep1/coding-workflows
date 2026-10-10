@@ -118,6 +118,49 @@ opencode_emit_failure_alert()
 	payload="opencode_agent_failure phase=${phase} role=${role} model=${model_slug} rc=${alert_rc} failure_class=${failure_class}"
 	printf '%s\n' "${payload}" >&2
 
+	# Model-provider outage (issue #6633): one repo-wide tracker alert replaces
+	# the per-call ERROR. Runtime failures only; the live probe is cached in
+	# RUNTIME_DIR for a few minutes and anything but "down" alerts. The tracker
+	# is opened (deduplicated) here, because fail-open callers can let the job
+	# succeed without reaching the failure-path tracker step; if it cannot be
+	# confirmed, the per-call alert is sent as before.
+	case "${failure_class}" in
+		config_*|binary_missing|version_mismatch|invalid_expected_version|isolation_unavailable) ;;
+		*)
+			local outage_probe="" outage_status="" outage_open="" outage_alert_file=""
+			if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ "${PROVIDER_OUTAGE_CLASSIFY_ENABLED:-true}" != "false" ] \
+				&& [ -f "${_opencode_helpers_dir}/provider_outage.py" ]; then
+				outage_probe="$(PYTHONDONTWRITEBYTECODE=1 python3 "${_opencode_helpers_dir}/provider_outage.py" probe \
+					--probe-cache "${RUNTIME_DIR}/provider_outage_alert_probe.json" 2>/dev/null | head -n 1 || true)"
+			fi
+			if [[ "${outage_probe}" == "outcome=down "* ]]; then
+				outage_status="$(printf '%s\n' "${outage_probe}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
+				outage_alert_file="$(mktemp 2>/dev/null || true)"
+				outage_open="$(PYTHONDONTWRITEBYTECODE=1 python3 "${_opencode_helpers_dir}/provider_outage.py" open --kind outage \
+					--provider openrouter --status "${outage_status:-unknown}" ${outage_alert_file:+--alert-out "${outage_alert_file}"} 2>/dev/null | tail -n 1 || true)"
+				case " ${outage_open} " in
+					*" outcome=opened "*|*" outcome=already_open "*|*" outcome=duplicate_closed "*)
+						if [ -n "${outage_alert_file}" ] && [ -s "${outage_alert_file}" ]; then
+							if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${_opencode_helpers_dir}/tg_helpers.sh" ]; then
+								# shellcheck source=tg_helpers.sh
+								# shellcheck disable=SC1091
+								source "${_opencode_helpers_dir}/tg_helpers.sh" 2>/dev/null || true
+							fi
+							if type tg_send_msg >/dev/null 2>&1; then
+								tg_send_msg "$(cat "${outage_alert_file}")" "CRITICAL" >/dev/null || true
+							fi
+						fi
+						[ -z "${outage_alert_file}" ] || rm -f -- "${outage_alert_file}"
+						printf 'PROVIDER_OUTAGE op=alert phase=%s outcome=suppressed reason=provider_down\n' "${phase}" >&2
+						return "${alert_rc}"
+						;;
+				esac
+				[ -z "${outage_alert_file}" ] || rm -f -- "${outage_alert_file}"
+				printf 'PROVIDER_OUTAGE op=alert phase=%s outcome=sent reason=tracker_unconfirmed\n' "${phase}" >&2
+			fi
+			;;
+	esac
+
 	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${_opencode_helpers_dir}/tg_helpers.sh" ]; then
 		# shellcheck source=tg_helpers.sh
 		# shellcheck disable=SC1091
