@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix PR target?\nChoices:\nA. PR #7076's head branch `ai/issue-7072`, where `pr6576-shard-followup.yml` exists. PR #7076's CI then goes green when the fix merges, and the entry reaches `main` with #7076. (RECOMMENDED)\nB. The default branch `main`. **Note:** with the workflow missing on `main`, line 79 fails, so the fix would only work if it lands after #7076 merges. Until then it would turn `main` CI red.\nC. Don't file a separate fix PR. Close this issue and let PR #7076's own review/autofix loop add the allow-list entry, since the failure is caused by that PR.",
+  "fingerprint": "955166b21671f45068e49e73057f2318e8f6f8384d4770b03493f3c75dc1bafd",
+  "lineage": {
+    "issue_number": 7077,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38047897409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38047897409",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010112537_50d6935bc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7077,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38047897409"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7077 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T11:25:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
