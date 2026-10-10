@@ -5,10 +5,10 @@
 > **PR under investigation:** #6650, merged into `main`
 > **Failing run:** 37935105340, job `orchestrate-poll (3)`. `lint` failed
 > because the aggregate requires every job to succeed.
-> **Outcome:** **Pending: verified by this PR's own CI.** No failure
-> reproduced in the runnable part of the selection. Most of the selection
-> could not run in the sandbox (see "Coverage gap"), and code reading found
-> no defect. No code was changed.
+> **Outcome:** **Superseded on current `main`: no failure reproduced in the
+> same shard.** The evidence is PR #7085 (head `ai/issue-7083`), which ran
+> this group-3 selection on a real runner with `jq` and merged into `main`
+> at 2026-10-10T14:00:08Z. No code was changed; see "Resolution" (#7088).
 
 This is the evidence-only deliverable from the approved plan for #7083
 (decision D1: change nothing unless a defect is demonstrated). It follows the
@@ -133,6 +133,33 @@ below against current `main` on a real runner with `jq`.
   the named test or poller defect, add
   `changelog.d/7083-orchestrate-poll-group3-fix.md`, and rerun. Do not weaken
   the shard or aggregate checks. Do not merge while a required check is red.
+
+## Resolution
+
+Recorded by #7088, the activation-verification follow-up of PR #7085.
+
+- PR #7085 merged into `main` at 2026-10-10T14:00:08Z.
+- **UNVERIFIED:** the CI run ID and per-shard results of PR #7085's
+  `orchestrate-poll (3)` and `lint` checks. The unattended pipeline that
+  wrote this section has no network and no GitHub credential, so they are
+  not recorded here.
+- **UNVERIFIED:** the job log of run 37935105340 was not available, so the
+  original failing test name and traceback remain unknown.
+- No test or poller defect was demonstrated, so no code or test was changed
+  and no changelog fragment was added (decision D1 of #7083).
+- How a merge into `main` is gated, which describes the gate and is **not**
+  an observed result for PR #7085, whose merge path was not verified:
+  review auto-merge calls `_pr_wait_for_required_checks` in
+  `scripts/pr_checks_lib.sh`, which refuses on a settled failure of a
+  required check-run. The default required set
+  (`ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` in the same file) includes
+  `lint`, and branch protection's own required contexts replace that
+  default when they are set. The `lint` aggregate in `.github/workflows/ci.yml`
+  needs every `orchestrate-poll` group.
+- **Reopen condition:** if a red `orchestrate-poll (3)` run turns up on
+  PR #7085 or on later `main`, reopen under the "If they fail" branch above:
+  fix only the named test or poller defect, add the changelog fragment, and
+  rerun.
 
 ## Group 3, local shard 1 test names (34 tests, at `f9a85b1`)
 
