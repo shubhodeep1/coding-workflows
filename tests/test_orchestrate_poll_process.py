@@ -5928,6 +5928,8 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert waived[0]["file"] == "scripts/example.py"
 	assert waived[0]["line"] == 1
 	assert waived[0]["owasp_or_stride_category"] == "A01: Broken Access Control"
+	assert waived[0]["exploit_scenario"] == remaining["exploit_scenario"]
+	assert len(waived[0]["exploit_scenario"]) <= 600
 	assert waived[0]["waived_at_cycle"] == 3
 	created = result.get("created_issues", [])
 	assert len(created) == 1
@@ -6902,8 +6904,10 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	"""A waiver reaches the engine as accepted and is enforced poller-side too.
 
 	The mock engine ignores SECURITY_AUDIT_WAIVED_FINDINGS (an older staged
-	engine would), so the re-reports below prove the poller's own suppression:
-	exact id, and same file + category within the line window under a new id.
+	engine would), so the results below prove the poller's own suppression:
+	only an exact finding_id whose recorded category, severity and exploit
+	scenario also match is dropped.  A new id near a waived location, and the
+	waived id with a different severity, stay blocking (#6987).
 	"""
 	state = _security_pass_exhausted_state(
 		security_pass_cycle=0,
@@ -6914,6 +6918,7 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 				"line": 1,
 				"owasp_or_stride_category": "A01: Broken Access Control",
 				"severity": "high",
+				"exploit_scenario": _security_pass_test_finding()["exploit_scenario"],
 				"source": "judge",
 			},
 			{
@@ -6929,6 +6934,9 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	)
 	renamed_dos = _security_pass_second_test_finding()
 	renamed_dos["finding_id"] = "NEW-DOS-ID"
+	old_dos_new_severity = _security_pass_second_test_finding()
+	old_dos_new_severity["finding_id"] = "OLD-DOS"
+	old_dos_new_severity["severity"] = "high"
 	survivor = _security_pass_second_test_finding()
 	survivor["finding_id"] = "SURVIVOR"
 	survivor["owasp_or_stride_category"] = "A07: Identification and Authentication Failures"
@@ -6937,7 +6945,9 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), renamed_dos, survivor]),
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), renamed_dos, old_dos_new_severity, survivor]
+		),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
@@ -6946,18 +6956,41 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-TEST-1", "OLD-DOS"]
 	latest_state = result["latest_state"]
 	assert latest_state["status"] == "security-pass-fixing"
-	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SURVIVOR"]
+	assert sorted(row["finding_id"] for row in latest_state["security_pass_reported_findings"]) == [
+		"NEW-DOS-ID",
+		"OLD-DOS",
+		"SURVIVOR",
+	]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "waived_findings=2" in combined_log
-	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=2 ids=SEC-TEST-1,NEW-DOS-ID" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=1 ids=SEC-TEST-1" in combined_log
+	assert "::notice::SECURITY_AUDIT_WAIVER_LINE_WINDOW=40 no longer controls waiver suppression (exact finding_id match only)" in combined_log
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192" in combined_log
-	assert "findings=1 cycle=0" in combined_log
+	assert "findings=3 cycle=0" in combined_log
 	created = result.get("created_issues", [])
 	assert len(created) == 1
 	fix_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "| SURVIVOR |" in fix_body
+	assert "| NEW-DOS-ID |" in fix_body
+	assert "| OLD-DOS |" in fix_body
 	assert "| SEC-TEST-1 |" not in fix_body
-	assert "| NEW-DOS-ID |" not in fix_body
+
+
+def test_security_pass_invalid_waiver_line_window_warns_and_keeps_running() -> None:
+	state = _security_pass_exhausted_state(security_pass_cycle=0, security_pass_waived_findings=[{
+		"finding_id": "SEC-TEST-1", "file": "scripts/example.py", "line": 1,
+		"owasp_or_stride_category": "A01: Broken Access Control", "severity": "high",
+	}])
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_AUDIT_WAIVER_LINE_WINDOW": "abc"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "::warning::SECURITY_AUDIT_WAIVER_LINE_WINDOW=abc is invalid; it no longer controls waiver suppression" in combined_log
+	assert "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=192 count=1 ids=SEC-TEST-1" in combined_log
+	assert result["latest_state"]["security_pass_reported_findings"] == []
 
 
 def test_security_pass_waiver_does_not_suppress_a_nearby_new_exploit() -> None:
@@ -7039,7 +7072,9 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert waived["SEC-OLD"]["waived_by"] == "octocat"
 	assert waived["SEC-OLD"]["file"] == "scripts/example.py"
 	assert waived["SEC-OLD"]["line"] == 1
+	assert waived["SEC-OLD"]["exploit_scenario"] == "Ledger growth by an authenticated caller."
 	assert waived["unknown.id-1"]["file"] == ""
+	assert waived["unknown.id-1"]["exploit_scenario"] == ""
 	# Operator waivers defer their advisory follow-up the same way the judge
 	# does: the known finding keeps its payload and pending flag, an id that
 	# matched nothing gets no follow-up at all, and no issue is filed until
