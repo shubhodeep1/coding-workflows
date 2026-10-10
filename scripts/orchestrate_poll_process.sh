@@ -647,8 +647,14 @@ _gh_url() {
 tracking_issue_is_smoke_fixture() {
   local title="${1:-}"
   local labels_json="${2:-[]}"
+  # Anchored like the workflows' issue-title detector (`^\[E2E `): only a
+  # title that starts with the marker, directly or after the orchestrator's
+  # `[Orchestrator] ` prefix, is a fixture, so a real project such as
+  # `[Orchestrator] Add [E2E tests] for payments` keeps its alerts. The
+  # `[Orchestrator] E2E ` form matches the parent-title signal plan.yml and
+  # orchestrate_clarify_respond.yml already use for decomposed fixtures.
   case "${title}" in
-    *"[E2E "*) return 0 ;;
+    "[E2E "*|"[Orchestrator] [E2E "*|"[Orchestrator] E2E "*) return 0 ;;
   esac
   printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "e2e-smoke-test")' >/dev/null 2>&1
 }
@@ -11715,7 +11721,8 @@ security_pass_sync_final_pr_if_unmergeable() {
     return 0
   fi
   echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
-  sync_default_into_integration_branch "${integration_branch}" "${default_branch}"
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
+  return 0
 }
 
 finalize_integration_merge_if_needed() {

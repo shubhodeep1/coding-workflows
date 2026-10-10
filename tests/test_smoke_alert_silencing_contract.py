@@ -408,7 +408,7 @@ def test_poller_detects_every_gate_fixture_project() -> None:
 
 
 def test_poller_does_not_treat_real_projects_as_smoke() -> None:
-	for title in ("[Orchestrator] Unattended Claude pipeline completion", "E2E tests for the checkout flow", "[Orchestrator] Add [E2E] docs"):
+	for title in ("[Orchestrator] Unattended Claude pipeline completion", "E2E tests for the checkout flow", "[Orchestrator] Add [E2E] docs", "[Orchestrator] Add [E2E tests] for payments", "Fix [E2E Smoke Test] flake"):
 		assert not _is_smoke(title, '[{"name":"ai:orchestrator-tracking"}]'), title
 	assert _is_smoke("[Orchestrator] anything", '[{"name":"ai:orchestrator-tracking"},{"name":"e2e-smoke-test"}]')
 	assert not _is_smoke("[Orchestrator] anything", "not json")
