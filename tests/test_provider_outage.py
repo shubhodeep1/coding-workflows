@@ -329,3 +329,41 @@ def test_label_marker_from_before_outage_is_ignored() -> None:
 	assert po.label_marker_still_valid(comments, login=LOGIN, not_before=opened - po.LABEL_MARKER_LEAD) is None
 	forged = [_comment("<!-- ai:provider-outage-label:v1 item=1 pr=1 head=none run=none -->", login="outsider")]
 	assert po.label_marker_still_valid(forged, login=LOGIN, not_before=None) is None
+
+
+def test_failed_tracker_close_does_not_report_recovery(tmp_path: Path) -> None:
+	gh, _ = _replay_fixture()
+	tracker = po.find_trackers(gh, "outage")[0]["number"]
+	gh.close_issue = lambda number: False  # type: ignore[method-assign]
+	alert = tmp_path / "alert"
+	values = po.sweep(gh, probe=lambda: {"outcome": "up", "status": "200"}, output_path=None, alert_out=str(alert))
+	assert values["recovered"] == "false"
+	assert not alert.exists()
+	assert gh.issues[tracker]["state"] == "open"
+
+
+def test_label_marker_resume_dispatches_judge_failed_pr() -> None:
+	gh, _ = _replay_fixture()
+	gh.issues[703] = {"body": "", "labels": {po.REVIEW_BLOCKED_LABEL}, "state": "open", "author": "h", "comments": [], "created_at": ""}
+	po.mark_label(gh, item=703, pr=703, head="", run="")
+	po.sweep(gh, probe=lambda: {"outcome": "up", "status": "200"}, output_path=None, alert_out=None)
+	assert 703 in gh.dispatched
+	assert po.REVIEW_BLOCKED_LABEL not in gh.issues[703]["labels"]
+
+
+def test_tracker_lookup_failure_pauses_only_on_down_probe() -> None:
+	gh = FakeGitHub()
+	gh.list_issues = lambda label: None  # type: ignore[method-assign]
+	assert po.sweep(gh, probe=lambda: {"outcome": "down", "status": "402"}, output_path=None, alert_out=None)["paused"] == "true"
+	assert po.sweep(gh, probe=lambda: {"outcome": "up", "status": "200"}, output_path=None, alert_out=None)["paused"] == "false"
+
+
+def test_dispatch_honours_allow_workflow_edits(monkeypatch: pytest.MonkeyPatch) -> None:
+	calls: list[list[str]] = []
+	gh = po.GitHub(REPO)
+	gh._run = lambda arguments: (calls.append(arguments), subprocess.CompletedProcess(arguments, 0, "", ""))[1]  # type: ignore[method-assign]
+	monkeypatch.delenv("ALLOW_WORKFLOW_EDITS", raising=False)
+	gh.dispatch("internal-review.yml", "main", 1)
+	monkeypatch.setenv("ALLOW_WORKFLOW_EDITS", "true")
+	gh.dispatch("internal-review.yml", "main", 2)
+	assert "allow_workflow_edits=false" in calls[0] and "allow_workflow_edits=true" in calls[1]

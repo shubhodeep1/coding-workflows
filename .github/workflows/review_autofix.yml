@@ -2894,6 +2894,10 @@ jobs:
       VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+      # Model-provider outage classifier switch and probe model (issue #6633),
+      # read by scripts/provider_outage.py in the failure paths.
+      PROVIDER_OUTAGE_CLASSIFY_ENABLED: ${{ vars.PROVIDER_OUTAGE_CLASSIFY_ENABLED || 'true' }}
+      PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without
@@ -4908,7 +4912,7 @@ jobs:
             # count, no label, one repo-wide tracker). Fail-open.
             if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py" ]; then
               provider_outage_log_args=()
-              for provider_outage_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log "${RUNTIME_DIR}/editor_stage_stderr.txt"; do
+              for provider_outage_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log "${RUNTIME_DIR}/reviewers_failure_evidence.txt" "${RUNTIME_DIR}/editor_stage_stderr.txt" "${RUNTIME_DIR}/collect_metadata_stderr.txt" "${RUNTIME_DIR}/resolver_stage_stderr.txt"; do
                 [ -f "${provider_outage_log}" ] && provider_outage_log_args+=(--log-file "${provider_outage_log}")
               done
               if [ "${#provider_outage_log_args[@]}" -gt 0 ]; then
@@ -5682,12 +5686,15 @@ jobs:
           #            poller's dispatch_rb_judge rung can recover from
           #            on a later cycle).
           _judge_exit=0
-          bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
+          # Judge output is also kept so a failure is named an outage only
+          # on provider-error evidence plus a failing probe (issue #6633).
+          rb_judge_log="${RUNTIME_DIR:-/tmp}/rb_judge_output.log"
+          { bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" 2>&1 | { tee -a "${rb_judge_log}" || true; }; } || _judge_exit=$?
           if [ "${_judge_exit}" -eq 2 ]; then
             echo "::warning::review_rb_judge.sh exited 2 (syntax error) — retrying once after 5 s"
             sleep 5
             _judge_exit=0
-            bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
+            { bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" 2>&1 | { tee -a "${rb_judge_log}" || true; }; } || _judge_exit=$?
           fi
           if [ "${_judge_exit}" -eq 42 ]; then
             echo "::error::Security-pass extension marker was not published; refusing the deferred push of the judge fix."
@@ -5698,8 +5705,8 @@ jobs:
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
             # Issue #6633: a failed judge during a provider outage still gets
             # the label below, marked so the outage resume can remove it.
-            if [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] \
-              && PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" probe --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" 2>/dev/null | grep -q '^outcome=down'; then
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] && [ -f "${rb_judge_log}" ] \
+              && PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" --log-file "${rb_judge_log}" 2>/dev/null | grep -q '^reason=provider_unavailable'; then
               echo "rb_judge_provider_unavailable=true" >> "$GITHUB_OUTPUT"
             fi
           else

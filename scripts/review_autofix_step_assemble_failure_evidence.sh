@@ -14,6 +14,7 @@ if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ];
     --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
     --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
     --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+    --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
     --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
   echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"
 fi
@@ -44,7 +45,9 @@ elif [ -f "${provider_outage_helper}" ]; then
     if [[ "${provider_outage_class}" == reason=provider_unavailable* ]]; then
       provider_outage_status="$(printf '%s\n' "${provider_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
       export AUTOFIX_FAILURE_REASON=provider_unavailable
-      echo "AUTOFIX_PROVIDER_STATUS=${provider_outage_status:-unknown}" >> "$GITHUB_ENV"
+      # Persist now: the fingerprint helper's failure path exits before the
+      # final GITHUB_ENV append, and later steps key on this reason.
+      { echo "AUTOFIX_FAILURE_REASON=provider_unavailable"; echo "AUTOFIX_PROVIDER_STATUS=${provider_outage_status:-unknown}"; } >> "$GITHUB_ENV"
       provider_outage_reason_args=(--failure-reason provider_unavailable)
     fi
   fi
@@ -56,12 +59,14 @@ fi
 fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
   --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
   --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+  --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
   --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
   --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
   --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
   --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
   --evidence-out "${evidence_out}" \
   --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+  --support-sha "${REVIEW_SUPPORT_SHA:-}" \
   "${provider_outage_reason_args[@]}" \
   --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
 failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"

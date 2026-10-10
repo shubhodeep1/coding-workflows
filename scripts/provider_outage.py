@@ -70,24 +70,16 @@ import json
 import os
 import re
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-try:  # sibling import; the review job stages both into SUPPORT_SCRIPTS_DIR
-	import workflow_failure_heal as _wfh  # type: ignore
-except Exception:  # pragma: no cover - fail open when the sibling is absent
-	_wfh = None  # type: ignore
-
 SOURCE_REPO = "shubhodeep1/coding-workflows"
 TRACKER_LABEL = "ai:provider-outage"
 REVIEW_BLOCKED_LABEL = "ai:review-blocked"
 PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
-OUTAGE_COMMENT_HEADLINE = "AI review/autofix paused — model provider unavailable"
 KIND_TITLES = {"outage": "AI Provider Outage", "capacity": "AI Claude Pool Capacity"}
 PROBE_TIMEOUT_SECS = 15
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
@@ -345,7 +337,10 @@ class GitHub:
 		return repo if isinstance(repo, dict) else None
 
 	def dispatch(self, workflow: str, ref: str, pr_number: int) -> bool:
-		return self._run(["workflow", "run", workflow, "--repo", self.repository, "--ref", ref, "-f", f"pr_number={pr_number}", "-f", "allow_workflow_edits=false"]).returncode == 0
+		# Same normalisation as the sweep's own dispatch (unset keeps the
+		# previous fail-safe `false`).
+		allow_edits = "true" if _bool_env("ALLOW_WORKFLOW_EDITS", False) else "false"
+		return self._run(["workflow", "run", workflow, "--repo", self.repository, "--ref", ref, "-f", f"pr_number={pr_number}", "-f", f"allow_workflow_edits={allow_edits}"]).returncode == 0
 
 	def remove_label(self, number: int, label: str) -> bool:
 		return self._run(["api", "-X", "DELETE", f"repos/{self.repository}/issues/{number}/labels/{label}"]).returncode == 0
@@ -439,7 +434,7 @@ def open_tracker(gh: Any, *, kind: str, provider: str, status: str, release_run:
 	trackers = find_trackers(gh, kind)
 	if trackers is None:
 		_log(f"op=open kind={kind} provider={provider} status={status} outcome=failed reason=tracker_lookup_failed")
-		return {"outcome": "failed", "alert": False}
+		return {"outcome": "failed", "alert": False, "provider": provider, "status": status}
 	number: int | None = trackers[0]["number"] if trackers else None
 	outcome = "already_open"
 	if number is None:
@@ -447,7 +442,7 @@ def open_tracker(gh: Any, *, kind: str, provider: str, status: str, release_run:
 		created = gh.create_issue(KIND_TITLES.get(kind, KIND_TITLES["outage"]), tracker_body(kind, provider, status, now or _utc_now()))
 		if created is None:
 			_log(f"op=open kind={kind} provider={provider} status={status} outcome=failed reason=create_failed")
-			return {"outcome": "failed", "alert": False}
+			return {"outcome": "failed", "alert": False, "provider": provider, "status": status}
 		if settle_secs > 0:
 			time.sleep(settle_secs)
 		again = find_trackers(gh, kind) or []
@@ -459,7 +454,8 @@ def open_tracker(gh: Any, *, kind: str, provider: str, status: str, release_run:
 			number, outcome = created, "opened"
 	if release_run.isdigit() and number is not None:
 		workflow = re.sub(r"[^A-Za-z0-9_.-]", "_", release_workflow or "unknown")[:80]
-		gh.comment(number, f"Release run {release_run} failed while the model provider was unavailable.\n\n<!-- ai:provider-outage-release-run:v1 run={release_run} workflow={workflow} -->")
+		if not gh.comment(number, f"Release run {release_run} failed while the model provider was unavailable.\n\n<!-- ai:provider-outage-release-run:v1 run={release_run} workflow={workflow} -->"):
+			_log(f"op=open tracker={number} release_run={release_run} outcome=release_run_record_failed")
 	_log(f"op=open kind={kind} provider={provider} status={status} tracker={number} outcome={outcome}")
 	return {"outcome": outcome, "alert": outcome == "opened", "number": number, "provider": provider, "status": status}
 
@@ -647,7 +643,9 @@ def resume(gh: Any, tracker: dict[str, Any], *, workflow: str, max_dispatch: int
 			break
 	if dispatched:
 		body = render_resume(body, state)
-		gh.patch_body(tracker["number"], body)
+		if not gh.patch_body(tracker["number"], body):
+			complete = False
+			_log(f"op=resume tracker={tracker['number']} outcome=resume_marker_write_failed")
 
 	# Marker-backed outage labels only; never guess.
 	removed: list[str] = []
@@ -678,6 +676,17 @@ def resume(gh: Any, tracker: dict[str, Any], *, workflow: str, max_dispatch: int
 					continue
 				if superseded_after(pr_comments, login=login, since=_parse_utc(marker.get("created"))):
 					continue
+			# A failed judge during the outage writes no provider_unavailable
+			# failure marker, so the PR scan above cannot find it: dispatch
+			# its review here before removing the label.
+			if str(pr) not in state["prs"]:
+				if len(dispatched) >= max_dispatch or not default_branch or not gh.dispatch(workflow, default_branch, pr):
+					complete = False
+					_log(f"op=resume item={item['number']} pr={pr} outcome=dispatch_failed")
+					continue
+				dispatched.append(pr)
+				state["prs"].add(str(pr))
+				_log(f"op=resume pr={pr} outcome=dispatched source=label_marker")
 			if not gh.remove_label(item["number"], REVIEW_BLOCKED_LABEL):
 				complete = False
 				_log(f"op=resume item={item['number']} outcome=label_remove_failed")
@@ -687,7 +696,9 @@ def resume(gh: Any, tracker: dict[str, Any], *, workflow: str, max_dispatch: int
 			_log(f"op=resume item={item['number']} pr={pr} outcome=label_removed")
 	if removed:
 		body = render_resume(body, state)
-		gh.patch_body(tracker["number"], body)
+		if not gh.patch_body(tracker["number"], body):
+			complete = False
+			_log(f"op=resume tracker={tracker['number']} outcome=resume_marker_write_failed")
 
 	# Release runs recorded by the heal intake.
 	release_report: list[str] = []
@@ -728,7 +739,12 @@ def sweep(gh: Any, *, probe: Callable[[], dict[str, str]], output_path: str | No
 		return values
 	trackers = find_trackers(gh)
 	if trackers is None:
-		_log("op=sweep outcome=skip reason=tracker_lookup_failed")
+		# Cannot see the tracker: pause only when the probe confirms the
+		# provider is down, so a GitHub read error neither hides a real
+		# outage nor stops reviews while the provider is healthy.
+		if not status_only and probe().get("outcome") == "down":
+			values["paused"] = "true"
+		_log(f"op=sweep outcome=skip reason=tracker_lookup_failed paused={values['paused']}")
 		_write_output(output_path, values)
 		return values
 	outage = next((item for item in trackers if item["kind"] == "outage"), None)
@@ -765,8 +781,12 @@ def sweep(gh: Any, *, probe: Callable[[], dict[str, str]], output_path: str | No
 		f"- Removed outage `{REVIEW_BLOCKED_LABEL}` labels (item:pr): {', '.join(sorted(state['labels'])) or 'none'}",
 		f"- Release runs: {'; '.join(summary['release_report']) or 'none recorded'}",
 	]
+	if not gh.close_issue(outage["number"]):
+		# Retry on the next tick; no summary or alert until the close lands.
+		_log(f"op=sweep tracker={outage['number']} outcome=close_failed")
+		_write_output(output_path, values)
+		return values
 	gh.comment(outage["number"], "\n".join(lines))
-	gh.close_issue(outage["number"])
 	values["recovered"] = "true"
 	_write_alert(alert_out, f"Model provider recovered in {repository}: tracker #{outage['number']} closed; re-dispatched {len(state['prs'])} PR(s), removed {len(state['labels'])} outage label(s).")
 	_log(f"op=sweep tracker={outage['number']} outcome=recovered dispatched={len(state['prs'])} labels_removed={len(state['labels'])} release_runs={len(state['release_runs'])}")
@@ -784,7 +804,9 @@ def close_tracker(gh: Any, *, kind: str, alert_out: str | None) -> str:
 		return "none_open"
 	for tracker in trackers:
 		gh.comment(tracker["number"], "Recovered: a run obtained capacity again." if kind == "capacity" else "Recovered.")
-		gh.close_issue(tracker["number"])
+		if not gh.close_issue(tracker["number"]):
+			_log(f"op=close kind={kind} tracker={tracker['number']} outcome=failed reason=close_failed")
+			return "failed"
 	_write_alert(alert_out, f"{KIND_TITLES.get(kind, kind)} recovered in {gh.repository}: tracker #{trackers[0]['number']} closed.")
 	_log(f"op=close kind={kind} tracker={trackers[0]['number']} outcome=closed")
 	return "closed"
@@ -863,6 +885,10 @@ def main(argv: list[str] | None = None) -> int:
 			result = open_tracker(gh, kind=args.kind, provider=args.provider, status=args.status, release_run=str(args.release_run or ""), release_workflow=args.release_workflow)
 			if result.get("alert"):
 				_write_alert(args.alert_out or None, open_alert_text(args.kind, result["provider"], result["status"], gh.repository, result.get("number")))
+			elif result.get("outcome") == "failed":
+				# No tracker could be read or created: alert anyway so the
+				# outage is never silent (per-PR alerts are suppressed for it).
+				_write_alert(args.alert_out or None, open_alert_text(args.kind, result["provider"], result["status"], gh.repository, "unavailable (tracker lookup or create failed)"))
 			print(f"alert={1 if result.get('alert') else 0} outcome={result['outcome']} tracker={result.get('number') or ''}")
 			return 0
 		if args.command == "close":
