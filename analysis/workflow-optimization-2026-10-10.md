@@ -127,3 +127,82 @@ The dominant measured work is **compute and internal reviewer retry**, not GitHu
 | Serena—no target observed | 0 | 0 | 0 | Disabled in recent run `38010448435`; absence is not a failed probe |
 
 **Other MCP servers observed:** none in emitted deep-dive telemetry. **GH API summary:** endpoint call counts, retries, and rate-limit events are not collected here; sampled review budget logs show `remaining=5000` and `used_in_job=unknown`. The merge-train helper’s normally ten status-list calls are a **documented conditional code path**, not a measured run total.
+
+## Deep Audit — Workflows & Scripts (2026-10-10)
+
+### Section 1: Bug & Correctness Sweep
+
+Scope: 54 workflow files and 195 top-level scripts. Read-only `bash -n` passed for all 120 shell scripts. Local Python 3.11 could not parse `scripts/workflow_retro.py:793-794`; its CI and workflow entry points pin Python 3.12, so this is not classified as a workflow defect. Actionlint and a YAML parser were unavailable locally. The existing report already covers the cost-collector error, no-edit implementation runs, and two CI regressions; they are not repeated here.
+
+- **BUG-001** — **High · `bug`** — `scripts/implement_diagnose_post_codex_failure.sh:801-841`. **Description:** Each fix-up issue is created through `gh_retry gh issue create`. A create is non-idempotent: if GitHub accepts a request but the CLI reports failure, the retry can create another issue while the local map records only the eventual returned URL. The repository explicitly avoids this pattern for security follow-ups at `scripts/security_audit.sh:2197-2206`. Duplicate creation is an inferred failure mode, not an observed event. [NEEDS VERIFICATION] **Recommended fix:** Create once with a stable local-ID marker in the body; on an ambiguous result, reconcile that marker against existing issues before any new attempt, following the security-audit one-shot pattern.
+
+- **SEC-001** — **High · `security`** — `scripts/gh_helpers.sh:575-605`; caller `scripts/implement_diagnose_post_codex_failure.sh:802-826`. **Description:** On permanent or exhausted failures, `gh_retry` prints `$*`, including arguments such as the generated issue’s `--title` and `--body`; its final path also prints raw stderr. Failure logs can therefore expose supplied text and permit newline-bearing arguments to shape log output. **Recommended fix:** Log a bounded command class, endpoint template, attempt and response class—not argv or raw stderr. Apply `_gh_actions_escape` to any retained diagnostic text.
+
+- **SEC-002** — **Medium · `security`** — `scripts/gh_helpers.sh:739-749`. **Description:** When a successful API command returns invalid JSON, `gh_api_json_to_file` prints the first 50 raw response lines. Callers use it for issue and run payloads, so a malformed response containing sensitive or untrusted text would enter Actions logs. That content-dependent exposure is an inference. [NEEDS VERIFICATION] **Recommended fix:** Retain the response in the temporary file for diagnosis but log only byte count, parse-error class and a non-sensitive endpoint template; do not print its body.
+
+- **BUG-002** — **Medium · `bug`** — `.github/workflows/review_autofix.yml:5422-5441,5632-5652`; `scripts/label_helpers.sh:189-235`. **Description:** When the staged label helper is absent, the inline `set_issue_phase_label_resilient` fallbacks only POST the new label. The canonical helper first calculates a replacement set that removes other phase labels. Thus the fallback can leave contradictory phase labels on an issue. **Recommended fix:** Stage and verify `label_helpers.sh` before phase mutation; if it is unavailable, preserve existing labels and report the unavailable transition rather than substituting a POST-only implementation.
+
+- **BUG-003** — **Medium · `bug`** — `scripts/orchestrate_poll_process.sh:121-131,16179-16235`. **Description:** These aliased GraphQL readers check command success or `.data.repository` shape but do not reject a nonempty top-level `.errors` array. A partial response can consequently be converted into a missing or empty cache entry and skip an issue-dependent decision. This requires a partial-success response from GitHub. [NEEDS VERIFICATION] **Recommended fix:** Validate `.errors` and required alias shapes before accepting a batch; fall back per missing issue or skip the affected decision explicitly, as `gh_pr_with_all_comments` does for GraphQL errors in `scripts/gh_helpers.sh:988-999`.
+
+- **BUG-004** — **Low · `bug`** — `scripts/review_autofix_step_merge_topology_gate.sh:7-7,140-145`. **Description:** Under `set -euo pipefail`, the diagnostic `printf ... | head -20` is unguarded. With sufficiently large untracked-file output, `head` can close the pipe before `printf` finishes, turning a display limit into a pre-review gate failure. Whether current workloads reach that size is unverified. [NEEDS VERIFICATION] **Recommended fix:** Limit the displayed lines without an early-closing pipe, or explicitly handle the expected SIGPIPE status.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below describe code paths, not measured run totals. The existing report already identifies the merge-train status sweeps and conditional branch-protection lookup; those are not duplicated.
+
+- **API-001** — **Medium · `api-redundancy`** — `scripts/workflow_failure_heal_intake.sh:442-445,718-724`. **Description:** For a self-repository phase report with numeric `SOURCE_GEN` and no `PHASE_COMMENT_AUTHOR`, both paths read `GET /user`. **Current → proposed:** 2 → 1 identity reads on that path. **Recommended fix:** Reuse validated `PROVENANCE_LOGIN` for `HEAL_TRUSTED_AUTHOR`, retaining the existing read on a missing value. This extends the poller’s cycle-local cache pattern; no GraphQL batch is needed.
+
+- **API-002** — **Medium · `api-redundancy`** — `scripts/label_helpers.sh:153-185`; caller `scripts/orchestrate_poll_process.sh:4829-4833`. **Description:** `ensure_label_exists` attempts `gh label create` on every invocation, including repeated uses of an already-known label during a cycle. The frequency of repeats in production is unmeasured. [NEEDS VERIFICATION] **Current → proposed:** *k* create requests → 1 per distinct repository/label per cycle, with a fresh attempt after an uncertain result. **Recommended fix:** Add a success-or-already-exists memo to `label_helpers.sh`, scoped like the poller’s other cycle-local caches; preserve a safe retry when a later mutation reports the label missing.
+
+- **API-003** — **Medium · `api-redundancy`** — `scripts/gh_helpers.sh:727-779,795-844`. **Description:** Unlike `gh_retry`, `gh_api_json_to_file` and `curl_gh_api` have no permanent-error branch; they retry a deterministic 404 or 422 up to the default five attempts, including sleeps. **Current → proposed:** up to 5 → 1 calls per permanent failure. **Recommended fix:** Reuse `_is_gh_permanent_failure` from `scripts/gh_helpers.sh:165-185`, classify HTTP status in the curl path, and reserve backoff for transient failures. No batching pattern applies.
+
+- **API-004** — **Low · `api-redundancy`** — `scripts/orchestrate_poll_process.sh:33-35,142-153,200-203`. **Description:** The sweep-only entry point calls both functions sequentially, and each independently reads `gh api rate_limit` to enforce the same 500-remaining threshold. **Current → proposed:** 2 → 1 snapshot reads per enabled sweep. **Recommended fix:** Obtain one bounded, cycle-local budget value before both functions, with the existing skip behavior if it is unavailable. No GraphQL batching applies.
+
+- **BATCH-001** — **Medium · `api-batching`** — `scripts/orchestrate_poll_process.sh:33-51,93-129`. **Description:** Reclarify replay reads the issue and all comment pages inside its queued-issue loop, although the neighboring blocked-comment detector already demonstrates 25-issue GraphQL aliases. A replacement must preserve *complete* comment history for authorization. [NEEDS VERIFICATION] **Current → proposed:** at least `3 + 2N` reads for *N* queued issues—budget, queue, identity and two per issue—→ `3 + ceil(N/25)` on complete batched pages, plus per-issue REST fallbacks for incomplete histories. **Recommended fix:** Extend the pre-sweep `_fetch_blocked_issue_routing_graphql` pattern with replay-specific state, labels and comment fields; check comment pagination and retain the current REST authorization path on a miss.
+
+- **BATCH-002** — **Medium · `api-batching`** — `scripts/orchestrate_poll_process.sh:4575-4587,4624-4675`. **Description:** The close-merged sweep fetches a timeline per issue and PR metadata per merged cross-reference. The issue list cannot establish whether a cross-reference is the issue’s implementation PR, but an aliased issue query could include the source PR’s body, head and merge fields. Field and pagination parity need verification. [NEEDS VERIFICATION] **Current → proposed:** ordinarily `2 + N + K` reads for *N* inspected issues and *K* candidate-PR reads → `2 + ceil(N/25)` batched reads, plus incomplete-page or failed-alias fallbacks; close writes remain unchanged. **Recommended fix:** Extend the `_fetch_candidate_issue_details_graphql` alias-building pattern with a purpose-specific complete cross-reference query. Preserve `_pr_json_is_issue_implementation_pr` semantics—do not substitute `willCloseTarget`—and retain the existing per-issue path on uncertain results.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **Medium · `duplication`** — `.github/workflows/clarify.yml:75-143`, `.github/workflows/plan.yml:124-195`, `.github/workflows/implement.yml:454-535`, `.github/workflows/orchestrate_clarify_respond.yml:161-229`, `.github/workflows/validate.yml:109-177`. **Description:** Five pre-checkout steps repeat the integration-resolver clone, authenticated fetch, main fallback and output handling; implement adds a retarget operation. **Recommended fix:** Put the common operation in a trusted, pre-checkout-stageable `scripts/resolve_integration_ref_stage.sh` with interface `resolve_integration_ref_stage.sh <issue> <repo> <support-ref> [default-branch]`, emitting `ref=...`; update all five callers while retaining implement’s optional retarget output and existing fallback behavior.
+
+- **DUP-002** — **Low · `duplication`** — `scripts/watchdog_helpers.sh:186-201`, `scripts/review_run_reviewers.sh:406-420`, `scripts/review_rb_judge.sh:329-343`, `scripts/review_conflict_resolve.sh:286-300`, `scripts/self_heal_validation.sh:143-158`. **Description:** Four callers reproduce the same `read_codex_stall_guard_state` body already owned by `watchdog_helpers.sh`; the reviewer even sources that helper before redefining it at `scripts/review_run_reviewers.sh:67-74`. **Recommended fix:** Keep `read_codex_stall_guard_state <status-file>` in `watchdog_helpers.sh`, ensure its trusted copy is staged for the other three callers, and replace local definitions with guarded sourcing.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Measurement uses the YAML-dedented `run:` script text before runtime interpolation. Expanded values are unavailable, so stated headroom is **static headroom**, not a guaranteed runtime margin. Of 867 scanned `run:` blocks, 232 contain `${{ }}`; only these two exceed 18,000 decoded characters.
+
+- **EXPR-001** — **High · `expression-limit`** — `.github/workflows/implement.yml:3552-3944`. **Description:** The interpolated destructive-commit preflight is approximately **19,826 characters**, leaving approximately **1,174** before the specified 21,000-character limit. **Recommended fix:** Extract the preflight body to `scripts/implement_preflight_destructive_guard.sh`; pass `github.repository` through the step’s `env:` and retain its current step ID and outputs.
+
+- **EXPR-002** — **High · `expression-limit`** — `.github/workflows/implement.yml:1007-1397`. **Description:** The interpolated support-staging step is approximately **19,305 characters**, leaving approximately **1,695** static characters. **Recommended fix:** Extract its body to a staged support script, passing `github.repository` and the two repository-variable values through `env:`; keep the existing support-source fallback.
+
+No interpolated decoded block falls between 15,000 and 18,000 characters. The largest scanned `if:` line is 712 characters, and no workflow exceeds 800 KB. The largest, `review_autofix.yml`, is 429,229 bytes—below this repository’s stricter 480,000-byte CI guard.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001** — **Low · `dead-code`** — `scripts/orchestrate_poll_process.sh:14115-14137`. **Description:** `issue_nums` and the purported fallback `branch_nums` use equivalent branch-selection and number-capture patterns on the same `fresh_runs`; their results are then deduplicated. The second extraction adds no distinct branch class. **Recommended fix:** Remove the second jq pass and emit the first result; add examples for each documented branch form to its extractor test.
+
+- **SHELL-001** — **Low · `shellcheck`** — `.github/workflows/test-and-mark-stable.yml:899-899,1191-1191,1491-1491,2464-2464,3804-3804`. **Description:** Five timeout tests use unquoted `$IDLE` and `$INACTIVITY_LIMIT` in `[ ]`, an SC2086-style splitting hazard. They are arithmetic-derived on the inspected paths, so this is presently a low-risk consistency issue, not a demonstrated timeout failure. **Recommended fix:** Quote both operands and keep numeric validation at their input boundaries.
+
+- **DEBT-001** — **Low · `tech-debt`** — `scripts/orchestrate_poll_process.sh:4738-4754,4823-4839`. **Description:** Label reconciliation plans and applies edits without runtime gates for `ENABLE_LABEL_REPAIR_SWEEP`, `LABEL_REPAIR_DRY_RUN` or `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE`. `README.md:2093-2095` explicitly calls these controls *reserved*, so this is unfinished operator control rather than a regression. **Recommended fix:** Before advertising them as operational switches, wire enablement, dry-run logging and a per-cycle mutation cap around the existing repair path, with contract tests for each mode. No TODO/FIXME/HACK markers were found in the audited workflows or scripts.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | BUG-001, SEC-001, EXPR-001, EXPR-002 |
+| Medium | 9 | SEC-002, BUG-002, BUG-003, API-001, API-002, API-003, BATCH-001, BATCH-002, DUP-001 |
+| Low | 6 | BUG-004, API-004, DUP-002, DEAD-001, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 2 existing scripts: `gh_helpers.sh`, `implement_diagnose_post_codex_failure.sh` | Medium |
+| API call optimization | 4 existing scripts: `gh_helpers.sh`, `label_helpers.sh`, `orchestrate_poll_process.sh`, `workflow_failure_heal_intake.sh` | Large |
+| Code modularization | 5 workflows, 5 existing stall-guard scripts, and 1 new resolver-staging script | Large |
+| Expression size reduction | `implement.yml` and approximately 2 extracted scripts | Medium |
+| Medium/Low fixes | Approximately 5 additional workflow/script files; overlaps with rows above | Medium |
