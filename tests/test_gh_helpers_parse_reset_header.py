@@ -141,3 +141,70 @@ def test_sleep_until_reset_log_uses_source_neutral_epoch_label() -> None:
 	)
 	assert f"computed reset epoch: {PRIMARY_RESET_EPOCH}" in result.stderr
 	assert "X-RateLimit-Reset:" not in result.stderr
+
+
+# Issue #6634: curl_gh_api records the parsed reset, keyed by the
+# x-ratelimit-resource bucket, as a breaker line that gh_api_retry --optional
+# reads (gh_rate_limit_breaker_active).
+FAKE_CURL = r"""#!/usr/bin/env bash
+body="" hdr=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-o) body="$2"; shift 2 ;;
+		-D) hdr="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+printf '%b' "${FAKE_CURL_HEADERS}" > "${hdr}"
+printf '%s' '{"message":"API rate limit exceeded"}' > "${body}"
+printf 403
+"""
+
+
+def _curl_breaker(tmp_path: Path, headers: str) -> list[str]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	curl = bin_dir / "curl"
+	curl.write_text(FAKE_CURL, encoding="utf-8")
+	curl.chmod(0o755)
+	breaker = tmp_path / "breaker"
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("TG_", "GH_RETRY"))}
+	env.update({
+		"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+		"FAKE_CURL_HEADERS": headers,
+		"GH_RATE_LIMIT_BREAKER_FILE": str(breaker),
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+		"TMPDIR": str(tmp_path),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	})
+	script = (
+		"set -uo pipefail\n"
+		f"source '{GH_HELPERS}'\n"
+		"sleep() { :; }\n"
+		"curl_gh_api https://api.github.com/graphql >/dev/null; echo rc=$?\n"
+	)
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert "rc=1" in result.stdout, result.stderr
+	return breaker.read_text(encoding="utf-8").splitlines() if breaker.exists() else []
+
+
+def test_curl_rate_limit_records_bucket_reset_in_breaker(tmp_path: Path) -> None:
+	lines = _curl_breaker(
+		tmp_path,
+		"HTTP/2 403\\r\\nx-ratelimit-remaining: 0\\r\\n"
+		f"x-ratelimit-reset: {PRIMARY_RESET_EPOCH}\\r\\nx-ratelimit-resource: graphql\\r\\n\\r\\n",
+	)
+	assert f"graphql {PRIMARY_RESET_EPOCH}" in lines
+
+
+def test_curl_retry_after_reset_is_recorded_in_breaker(tmp_path: Path) -> None:
+	before = int(time.time())
+	lines = _curl_breaker(
+		tmp_path,
+		"HTTP/2 403\\r\\nretry-after: 45\\r\\n"
+		f"x-ratelimit-reset: {PRIMARY_RESET_EPOCH}\\r\\nx-ratelimit-resource: core\\r\\n\\r\\n",
+	)
+	after = int(time.time())
+	core = [line.split() for line in lines if line.startswith("core ")]
+	assert len(core) == 1, lines
+	assert before + 45 <= int(core[0][1]) <= after + 45, (core, before, after)
