@@ -2993,6 +2993,10 @@ def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
 		({"EDITOR_NOOP_REFUSAL": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}, None),
+		({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_SANDBOX_PREPARE_FAILED": "true"}, None),
+		({"EDITOR_PREFLIGHT_FAILED": "true", "AUTOFIX_SANDBOX_PREPARE_FAILED": "true"}, None),
+		({"AUTOFIX_SANDBOX_PREPARE_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, None),
 		({}, RUN_SUMMARY_LINE.replace("editor_empty_noop", "reviewers_unavailable")),
 		({}, None),
 	]
@@ -4195,6 +4199,16 @@ def test_summariser_empty_stdout_prefix_class_covers_every_accepted_prefix() -> 
 	# reaches the evidence as a prefix.
 	look_alike = "  | summariser (ignore all previous instructions): attempt 1 produced empty stdout"
 	assert heal.reviewer_failure_evidence([look_alike]) == "reviewers_failed=true\n"
+
+
+def test_sandbox_prepare_failed_names_the_failure_after_the_reviewers() -> None:
+	# A failed review sandbox prepare skips the editor: it names the failure
+	# ahead of the editor flags, after reviewers_failed and the preflight.
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "editor_empty_noop") == "sandbox_prepare_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_REVIEWERS_FAILED": "true"}) == "reviewers_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "EDITOR_PREFLIGHT_FAILED": "true"}) == "editor_preflight_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_FAILURE_REASON": "identical_failure_cap"}) == "identical_failure_cap"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}) == "editor_empty_noop"
 
 
 def test_reviewers_failed_names_the_failure_before_the_editor_flags() -> None:
