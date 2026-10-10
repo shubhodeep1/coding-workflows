@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\"\n  expected_change_site: scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The map omits tests/test_ci_inventory_parity_order_contract.py and tests/test_ci_shared_shell_block_guard.py, both of which inspect .github/workflows/ci.yml; neither test stem resolves to ci.yml through the normal stem mapping, so when either guard fails, the frozen heal scope lacks the workflow it checks and cannot edit it. The existing tests verify mapped entries but do not catch these omissions.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\" (PR description item 11: \"Heal scopes for guard tests include the files the fix edits\")\nExpected change site: scripts/workflow_failure_heal.py:2158 HEAL_SCOPE_GUARD_TEST_SUBJECTS\nEvidence of absence: The dict at lines 2158-2163 maps test_ci_job_split_contract.py and test_ci_poll_test_sharding.py but omits tests/test_ci_inventory_parity_order_contract.py and tests/test_ci_shared_shell_block_guard.py. Both guard tests read .github/workflows/ci.yml (test_ci_inventory_parity_order_contract.py:15 `CI_WF = REPO_ROOT / \".github\" / \"workflows\" / \"ci.yml\"`, test_ci_shared_shell_block_guard.py:17 `CI_WORKFLOW = REPO_ROOT / \".github\" / \"workflows\" / \"ci.yml\"`) and neither filename resolves to ci.yml through the normal stem mapping. When either guard fails, the frozen heal scope lacks ci.yml, confining the heal to tests/** where the guard cannot be fixed.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\nExpected change site: scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS\nEvidence of absence: The map omits tests/test_ci_inventory_parity_order_contract.py and tests/test_ci_shared_shell_block_guard.py, which both inspect .github/workflows/ci.yml. When either guard test fails, the frozen heal scope lacks ci.yml, preventing the heal from editing the workflow it checks.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\" (PR DESCRIPTION, item 11; agents.md says \"Guard tests check other files, so their own name maps to no subject; HEAL_SCOPE_GUARD_TEST_SUBJECTS maps them to the files their fix edits\".)\nExpected change site: scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS (lines 2158\u20132163)\nEvidence of absence: The map covers tests/test_ci_job_split_contract.py and tests/test_ci_poll_test_sharding.py (the latter added in the LAST RUN DIFF) but omits tests/test_ci_inventory_parity_order_contract.py and tests/test_ci_shared_shell_block_guard.py. Both files exist, both load CI_WF = REPO_ROOT / \".github\" / \"workflows\" / \"ci.yml\" as their primary subject (test_ci_inventory_parity_order_contract.py:16 and test_ci_shared_shell_block_guard.py:17), and neither stem (`ci_inventory_parity_order_contract`, `ci_shared_shell_block_guard`) resolves to ci.yml through heal_scope_test_subjects's standard `scripts/<stem>.{sh,py}` / `.github/workflows/<stem>.yml` / `.github/workflows/<stem-with-dashes>.yml` candidates (none of those files exist in the repo). The test added by the LAST RUN DIFF (test_ci_poll_sharding_guard_scopes_ci_and_both_release_gates) and the existing test_size_guard_threshold_matches_the_guard_test both verify entries that *are* in the map; no test catches the missing ones. When either guard test fails, heal-scope render returns a marker that lists only workflow_paths + tests/** + changelog.d/*.md (the guard test's own file is covered by tests/** but ci.yml is not), so the heal cannot edit ci.yml \u2014 the same confined-to-tests failure mode item 11 was introduced to fix.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cHEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\u201d\nExpected change site: scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS\nEvidence of absence: The map omits tests/test_ci_inventory_parity_order_contract.py and tests/test_ci_shared_shell_block_guard.py. Both inspect .github/workflows/ci.yml; CI runs them at .github/workflows/ci.yml:1421 and :208, respectively. The normal test-stem mapping does not resolve either test to ci.yml, so a heal for either failure lacks the workflow it checks and cannot edit it.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\"\nExpected change site: scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS\nEvidence of absence: The map at lines 2158-2163 covers test_ci_job_split_contract.py and test_ci_poll_test_sharding.py but omits tests/test_ci_inventory_parity_order_contract.py (which reads ci.yml at line 15 as CI_WF) and tests/test_ci_shared_shell_block_guard.py (which reads ci.yml at line 17 as CI_WORKFLOW). Both are CI contract guards whose test stems (test_ci_inventory_parity_order_contract, test_ci_shared_shell_block_guard) do not resolve to ci.yml through the normal stem-to-subject mapping in heal_scope_test_subjects. When either guard test fails, the frozen heal scope therefore lacks .github/workflows/ci.yml, preventing the heal from editing the workflow it checks. The existing test test_size_guard_threshold_matches_the_guard_test verifies that every key in the map is a real test file, but does not verify that every CI contract guard is in the map.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d56eba110ac9dc6f8a55ecc138d99d4b594027d48ba8eea1bc6e1769bc6b75a3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7016,
+    "run_id": "38031862478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38031862478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010073050_10ad156d06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7016,
+    "run_id": "38031862478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T07:30:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
