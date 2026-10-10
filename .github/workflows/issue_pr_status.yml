@@ -194,7 +194,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_REPO_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
@@ -203,14 +203,31 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
+          # The default branch comes from the event payload (consumer repos
+          # do not all use `main`); fall back to `main` only when the payload
+          # lacks the field, which keeps the previous behaviour (#5776).
+          REPO_DEFAULT_BRANCH="${PR_DEFAULT_BRANCH:-}"
+          if [ -z "${REPO_DEFAULT_BRANCH}" ]; then
+            echo "::warning::Event payload has no repository.default_branch; assuming main."
+            REPO_DEFAULT_BRANCH="main"
+          fi
+
           TRACKING_ISSUES=""
           MANAGED_ISSUES=""
           ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
+          # Issues this PR close actually completes (closed unmerged, merged
+          # into the default branch, or merged into the issue's declared
+          # integration branch / a managed child's orchestrator/project-*
+          # branch). Only these get lineage finalized.
+          LINEAGE_FINALIZE_ISSUE_NUMBERS=""
+          # "<issue> <branch>" lines: the `Integration branch:` each linked
+          # issue declares in its body (absent when the body has none).
+          MANAGED_INTEGRATION_BRANCHES=""
+          JQ_INTEGRATION_BRANCH_DEF='def integration_branch: [ (.body // "") | split("\n")[] | capture("^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*(?<b>[^`\\s]+)\\s*`?\\s*$")? | .b ] | first // "";'
           # Issue #6631: issue bodies already returned by the GraphQL/REST
           # lookups below, keyed by issue number (no extra API call). Used to
           # read each issue's declared integration branch.
           ISSUE_BODIES_JSON='{}'
-          REPO_DEFAULT_BRANCH="${PR_REPO_DEFAULT_BRANCH:-main}"
 
           add_issue_bodies_from_json() {
             local entries_json="$1"
@@ -255,6 +272,9 @@ jobs:
             printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
+            echo "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
           }
 
           classify_orchestrator_issues_from_payload() {
@@ -281,6 +301,10 @@ jobs:
                 or ((.body // "") | contains("Managed by: AI Orchestrator"))
               ) |
               .number
+            ' 2>/dev/null || echo '')"
+            MANAGED_INTEGRATION_BRANCHES="$(printf '%s' "${payload}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF}"'
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              (integration_branch) as $b | select($b != "") | "\(.number) \($b)"
             ' 2>/dev/null || echo '')"
           }
 
@@ -378,8 +402,6 @@ jobs:
                 || echo "::warning::Fallback label add failed for #${issue_number}."
             }
           fi
-          ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
-
           # Classify each linked issue into one of three buckets so the
           # label/close path applies the right policy:
           #
@@ -448,6 +470,11 @@ jobs:
                   ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ) | .number
               ' 2>/dev/null || echo '')"
+              _managed_branches="$(printf '%s' "${ORCH_RESP}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF}"'
+                .data.repository | to_entries[] | .value | select(. != null) |
+                (integration_branch) as $b | select($b != "") | "\(.number) \($b)"
+              ' 2>/dev/null || echo '')"
+              MANAGED_INTEGRATION_BRANCHES="$(printf '%s\n%s\n' "${MANAGED_INTEGRATION_BRANCHES}" "${_managed_branches}" | awk 'NF')"
               TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
               MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
               add_issue_bodies_from_json "$(printf '%s' "${ORCH_RESP}" | jq -c '[.data.repository | to_entries[] | .value | select(. != null) | {number, body}]' 2>/dev/null || echo '[]')"
@@ -481,6 +508,10 @@ jobs:
                   or ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ' >/dev/null 2>&1; then
                   MANAGED_ISSUES+="${_orch_num}"$'\n'
+                  _orch_branch="$(printf '%s' "${_orch_meta}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF} integration_branch" 2>/dev/null || echo '')"
+                  if [ -n "${_orch_branch}" ]; then
+                    MANAGED_INTEGRATION_BRANCHES+=$'\n'"${_orch_num} ${_orch_branch}"
+                  fi
                 fi
               done <<< "${LOOKUP_ISSUE_NUMBERS}"
             fi
@@ -489,35 +520,67 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
 
-            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
-              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
-              continue
-            fi
-
             is_managed_child=false
             if [ -n "${MANAGED_ISSUES}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then
               is_managed_child=true
             fi
 
+            # Tracking issues are skipped before the completion check so they
+            # never enter LINEAGE_FINALIZE_ISSUE_NUMBERS: their label, close and
+            # lineage are owned by orchestrate_poll_process.sh (#5619).
+            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
+              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label, close and lineage are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
+              continue
+            fi
+
+            # A real completion is a close without merge (ai:closed), a merge
+            # into the default branch, a merge into the issue's own declared
+            # integration branch, or an orchestrator-managed child that
+            # declares none merged into an `orchestrator/project-*` branch. A
+            # merge into any other branch must not mark the issue ai:merged or
+            # finalize its lineage (#5776: PR #5649 merged into a claude/*
+            # project branch relabelled #4867; #6631: incident #4688 / PR
+            # #4748). A declared branch is authoritative: a merge into another
+            # project's orchestrator/project-* branch is not this child's
+            # completion. The poller's reconcile/close sweeps remain the
+            # backstop for managed children.
+            # The declared branch comes from the shared orchestrate_lib.py
+            # parser (`Integration branch:` / `Target branch:`), else the
+            # `Integration branch:` captured during classification.
+            declared_branch="$(declared_branch_for_issue "${issue_number}")"
+            if [ -z "${declared_branch}" ]; then
+              declared_branch="$(printf '%s\n' "${MANAGED_INTEGRATION_BRANCHES}" | awk -v n="${issue_number}" '$1 == n { print $2; exit }')"
+            fi
             target_merge_reason=""
-            if [ "${PR_MERGED}" = "true" ]; then
-              declared_branch="$(declared_branch_for_issue "${issue_number}")"
-              if [ -n "${PR_BASE_REF}" ] && [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ]; then
-                target_merge_reason="default_branch"
-              elif [ -n "${declared_branch}" ] && [ "${PR_BASE_REF}" = "${declared_branch}" ]; then
-                target_merge_reason="declared_integration_branch"
-              elif [ "${is_managed_child}" = "true" ] && [ -z "${declared_branch}" ]; then
+            if [ "${PR_MERGED}" != "true" ]; then
+              target_merge_reason="closed_unmerged"
+            elif [ -n "${PR_BASE_REF}" ] && [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ]; then
+              target_merge_reason="default_branch"
+            elif [ -n "${declared_branch}" ] && [ "${PR_BASE_REF}" = "${declared_branch}" ]; then
+              target_merge_reason="declared_integration_branch"
+            elif [ "${is_managed_child}" = "true" ] && [ -z "${declared_branch}" ]; then
+              if [[ "${PR_BASE_REF}" == orchestrator/project-* ]]; then
                 target_merge_reason="managed_no_child_metadata"
-              else
-                echo "PR merged into $(sanitize_ref_for_log "${PR_BASE_REF}"); issue #${issue_number} not a target merge — labels unchanged (declared=$(sanitize_ref_for_log "${declared_branch}"))."
-                continue
               fi
+            fi
+
+            if [ -z "${target_merge_reason}" ]; then
+              echo "PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (default branch: $(sanitize_ref_for_log "${REPO_DEFAULT_BRANCH}")); issue #${issue_number} labels, state and lineage left unchanged (not a target merge; declared=$(sanitize_ref_for_log "${declared_branch}"))."
+              continue
+            fi
+            LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
+
+            if [ "${FINAL_LABEL_ENSURED:-false}" != "true" ]; then
+              ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
+              FINAL_LABEL_ENSURED=true
             fi
 
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
-            if [ "${PR_MERGED}" = "true" ]; then
+            if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${REPO_DEFAULT_BRANCH}" ]; then
+              echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (integration branch, reason=${target_merge_reason})."
+            elif [ "${PR_MERGED}" = "true" ]; then
               echo "Closing issue #${issue_number} after PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (reason=${target_merge_reason})."
             else
               echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
@@ -571,6 +634,12 @@ jobs:
             exit 0
           fi
 
+          if [ -z "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" ]; then
+            echo "No linked issue completed by this PR; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"non_completion_merge\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
           if [ "${MEMORY_HELPERS_READY:-0}" != "1" ]; then
             echo "Missing required memory helper scripts; cannot finalize lineage." >&2
             exit 1
@@ -604,7 +673,7 @@ jobs:
               --actor "${ACTOR}" \
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
-          done <<< "${LINKED_ISSUE_NUMBERS}"
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS}"
 
       - name: Send PR merged Telegram alert
         if: github.event.pull_request.merged == true
