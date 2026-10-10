@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:6403-6409; scripts/orchestrate_poll_process.sh:7065-7070 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: At the keep-fixing round cap, the poller converts low/medium `keep_fixing` decisions to `fail`, while the test expects an advisory follow-up and project completion.\n  WHY: The conversion terminalizes the security pass and makes the test fail; deepseek_deepseek-v4-pro says this is a pre-existing defect outside this PR's scope, while these reviewers report it as a finding.\n- .github/workflows/ci.yml:1445-1447, 1472-1473; .github/workflows/mark-stable.yml:400-402, 427-428; .github/workflows/test-and-mark-stable.yml:4868-4870, 4895-4896 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The per-shard `head -n 20` cap truncates failure matches before aggregation, so a single shard with more than 20 failures produces no overflow line and multiple such shards undercount omitted failures.\n  WHY: The final overflow check only sees collected matches, not failures truncated within each shard; severity ranges from NIT to MAJOR across reviewers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml | confidence=5\n  PROBLEM: The truncation logic for failing tests is flawed. Each shard is individually limited to 20 failures using `head -n 20` before aggregation. If a single shard contains more than 20 failures, these are silently truncated, and the final overflow tally (\"and X more\") does not account for these extra failures from that shard.\n  WHY: An incomplete count of failing tests is reported in the step log annotations if any individual shard has >20 failures, hiding potentially critical test failures from the `::error::` summary.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1445, 1447, 1472-1473 (identical pattern at mark-stable.yml:400, 402, 427-428 and test-and-mark-stable.yml:4868, 4870, 4895-4896) | severity=high | confidence=4\n  PROBLEM: The per-shard `head -n 20` collection cap is applied before the final overflow check, but the overflow indicator only triggers on `${#shard_failure_lines[@]} -gt 20`.\n  WHY: When exactly one shard has >20 failures, only 20 lines are appended, the overflow check sees 20 and is false, and no \"and N more\" line is emitted.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:6403-6409; scripts/orchestrate_poll_process.sh:7065-7070 | severity=critical | confidence=5\n  PROBLEM: The test expects a capped low-severity `keep_fixing` decision to complete the project and record a waiver, but the poller converts that decision to `fail` at the cap.\n  WHY: At round 3 with the default cap of 2, the poller rewrites the decision to `fail`; the failed-count path terminalizes the security pass, contradicting the test's assertions and failing the orchestrate-poll shard and aggregate CI check.\n- .github/workflows/ci.yml; .github/workflows/mark-stable.yml; .github/workflows/test-and-mark-stable.yml | severity=low | confidence=5\n  PROBLEM: Failure matches are truncated to 20 per shard before the final overflow check.\n  WHY: If only one shard has more than 20 failures, the summary emits no \u201cand more\u201d line; if multiple shards fail, the overflow count reflects only the already-truncated matches, not the actual omitted failures.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:7065-7070; tests/test_orchestrate_poll_process.py:6407-6408 | severity=critical | confidence=5\n  PROBLEM: The keep-fixing round cap rewrites low/medium `keep_fixing` decisions to `fail`, but the test expects them to become `accept_with_followup` (advisory follow-ups).\n  WHY: The test runner exits nonzero on this test, failing orchestrate-poll shard 1 and the aggregate `lint` check; the PR's diagnostics identified this pre-existing defect, which this PR does not touch.\n- .github/workflows/ci.yml:1445 (and identical logic in mark-stable.yml:400, test-and-mark-stable.yml:4868) | severity=low | confidence=4\n  PROBLEM: The per-shard `head -n 20` truncates FAIL matches before they enter the `shard_failure_lines` array.\n  WHY: A single shard with 25 failures produces 20 array entries, so the `> 20` check is false and no \"... and N more\" line is emitted; the omitted failures remain visible only by expanding the shard's `::group::` log.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4a86ecf0ff0ba0dcb1400b75b0cfac3e304655beb490aa0d03c74a42be549957",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6898,
+    "run_id": "38035426778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035426778",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010081940_5c1c435146",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6898,
+    "run_id": "38035426778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T08:19:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
