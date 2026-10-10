@@ -134,6 +134,62 @@ jobs:
             echo 'GH_PAT_BUDGET phase=start workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
           fi
 
+      # Use the 30-minute sweep rather than the hourly Claude catch-all: it
+      # already snapshots every open non-draft PR, including non-Claude PRs.
+      # The sweep itself needs no checkout. Fetch only the default-branch
+      # helper: a PR head must never supply code for an Actions write.
+      - name: Check out trusted CI recovery helper
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          path: .ci-rerun-support
+          persist-credentials: false
+
+      # Model-provider outage (issue #6633): while the repo-wide
+      # ai:provider-outage tracker is open and the provider probe does not
+      # answer, skip review dispatches instead of spending runs that fail the
+      # same way. On recovery the helper re-dispatches the PRs whose newest
+      # current-head failure was provider_unavailable, removes only the
+      # marker-backed outage labels, reports (or, opt-in, re-runs) recorded
+      # release runs, closes the tracker and returns one "recovered" alert.
+      - name: Provider outage probe and resume
+        id: provider_outage
+        if: vars.PROVIDER_OUTAGE_RESUME_ENABLED != 'false'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROVIDER_OUTAGE_RESUME_ENABLED: ${{ vars.PROVIDER_OUTAGE_RESUME_ENABLED || 'true' }}
+          PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED: ${{ vars.PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED || 'false' }}
+          PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
+          PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
+          PROVIDER_OUTAGE_REVIEW_WORKFLOW: internal-review.yml
+          # dry_run: report the tracker state only (no probe, dispatch,
+          # label, tracker or alert writes).
+          DRY_RUN: ${{ inputs.dry_run }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: |
+          set -uo pipefail
+          helper=".ci-rerun-support/scripts/provider_outage.py"
+          if [ ! -f "${helper}" ]; then
+            echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=helper_missing"
+            echo "paused=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sweep_mode_args=()
+          [ "${DRY_RUN:-false}" = "true" ] && sweep_mode_args=(--status-only)
+          alert_file="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" sweep --repo "${REPOSITORY}" "${sweep_mode_args[@]}" --alert-out "${alert_file}" || true
+          if [ -s "${alert_file}" ] && [ -f .ci-rerun-support/scripts/tg_helpers.sh ]; then
+            source .ci-rerun-support/scripts/tg_helpers.sh
+            tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null || true
+          fi
+          rm -f -- "${alert_file}"
+
       - name: Enumerate open PRs and dispatch internal-review.yml
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -143,6 +199,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
+          PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
         run: |
           set -euo pipefail
@@ -172,6 +229,13 @@ jobs:
             })')"
 
           printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
+
+          # Provider outage (issue #6633): the CI-cancelled snapshot above is
+          # still written; review dispatches wait for the provider to recover.
+          if [ "${PROVIDER_OUTAGE_PAUSED:-false}" = "true" ]; then
+            echo "AUTOFIX_SWEEP_SKIP reason=provider_outage candidates=$(printf '%s' "${prs_json}" | jq 'length')"
+            exit 0
+          fi
 
           total="$(printf '%s' "${prs_json}" | jq 'length')"
           echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"
@@ -484,17 +548,6 @@ jobs:
             echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
           fi
 
-      # Use the 30-minute sweep rather than the hourly Claude catch-all: it
-      # already snapshots every open non-draft PR, including non-Claude PRs.
-      # The sweep itself needs no checkout. Fetch only the default-branch
-      # helper: a PR head must never supply code for an Actions write.
-      - name: Check out trusted CI recovery helper
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.repository.default_branch || github.ref_name }}
-          path: .ci-rerun-support
-          persist-credentials: false
-
       - name: Re-run cancelled CI failed jobs once
         env:
           GH_TOKEN: ${{ github.token }}
@@ -506,7 +559,7 @@ jobs:
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
 
       - name: Re-dispatch stale security holds
-        if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true'
+        if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && steps.provider_outage.outputs.paused != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPOSITORY: ${{ github.repository }}

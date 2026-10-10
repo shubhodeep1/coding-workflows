@@ -2692,6 +2692,7 @@ def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot(
 	assert workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"].split() == [
 		"workflow_failure_heal.py",
 		"workflow_failure_heal_autofix_report.sh",
+		"provider_outage.py",
 	]
 	steps = workflow["jobs"]["codex-agent"]["steps"]
 	names = [step.get("name") for step in steps]
@@ -3107,7 +3108,7 @@ def test_fingerprint_cap_log_prefixes_are_registered() -> None:
 	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
 		assert f"- `{prefix}`" in agents_text, prefix
 		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
-	workflow_text = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	workflow_text = expanded_review_autofix_text()
 	for prefix in ("AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=", "AUTOFIX_FINGERPRINT pr="):
 		assert prefix in workflow_text, prefix
 
@@ -3635,7 +3636,7 @@ def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
 	marker site or consumer then has to follow the rule instead of breaking
 	an occurrence count.
 	"""
-	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	wf = expanded_review_autofix_text()
 	calls = wf.split("autofix-failure-fingerprint \\\n")[1:]
 	assert calls, "no autofix-failure-fingerprint call sites found"
 	# A single-line call has no continuation to split on; every invocation
@@ -4370,7 +4371,7 @@ def test_heal_prompt_rule_for_deterministic_failures() -> None:
 
 
 def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() -> None:
-	wf = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	wf = expanded_review_autofix_text()
 	assert 'bash "${RESOLVER_SCRIPT}" 2> >(tee -a "${RUNTIME_DIR}/resolver_stage_stderr.txt" >&2)' in wf
 	assert '--evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt"' in wf
 	assert "select(.runner_name == env.RUNNER_NAME) | .steps[] | select(.conclusion == \"failure\") | .name" in wf
