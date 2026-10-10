@@ -249,6 +249,31 @@ for _orch_fp_candidate in \
   fi
 done
 unset _orch_fp_candidate
+# Default-off automation-path gate for plan auto-approval (#6838); see
+# _automation_path_plan_auto_approval_gate. The grant guard is taken only from
+# the verified support checkout, never the PR or integration checkout.
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"
+ORCH_AUTOMATION_PATH_GUARD=""
+for _orch_apg_candidate in \
+  "$(pwd)/.codex-workflow-src/scripts/files_touched_scope_guard.py" \
+  "$(pwd)/.codex-workflow-src-main/scripts/files_touched_scope_guard.py"; do
+  if [ -f "${_orch_apg_candidate}" ]; then
+    ORCH_AUTOMATION_PATH_GUARD="${_orch_apg_candidate}"
+    break
+  fi
+done
+unset _orch_apg_candidate
+_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS='
+  def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
+  def event_key: [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
+  def is_plan: ((.body // "") | test("(^|\n)\\s*implementation\\s+plan\\b"; "i"));
+  def hold_marker: ((.body // "") | (capture("<!-- ai:automation-path-plan-hold:v1 issue=(?<issue>[0-9]+) reason=(?<reason>[a-z_]+) source=(?<source>[a-z]+) paths=(?<paths>[A-Za-z0-9+/=]*) -->") // null));
+  def latest_plan: (map(select(trusted and is_plan)) | max_by(event_key));
+  def hold_markers: latest_plan as $plan
+    | [.[] | select(trusted) | . as $c | hold_marker as $m
+        | select($m != null and $m.issue == $issue and ($plan == null or (($c | event_key) > ($plan | event_key))))
+        | $m];
+'
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -14937,6 +14962,277 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
+# ---------------------------------------------------------------
+# Default-off automation-path gate for stall-recovery auto-approval (#6838)
+# ---------------------------------------------------------------
+# plan.yml withholds its automatic /approved when
+# AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is on and the plan's
+# "Files ... change" section lists automation paths that the issue body does
+# not grant with a trusted exact files_touched entry. It then posts an
+# ai:automation-path-plan-hold:v1 marker. The stall-recovery auto_approve
+# branches below apply the same check when the env flag is on OR when a
+# trusted hold marker is newer than the latest trusted plan comment:
+# orchestrate_poll.yml does not forward the repo variable yet, and without
+# the marker activation this poller would post /approved 60 minutes after
+# plan.yml held the issue. With the flag off and no marker the gate returns
+# before any API call, so behaviour is unchanged. The grant decision is the
+# unchanged scripts/files_touched_scope_guard.py from the verified support
+# checkout; a hold withholds the automatic /approved only (a human /approved
+# and the implement commit-time automation-path guard are unchanged).
+_automation_path_plan_extract()
+{
+  python3 -I -B - "$1" "$2" <<'AUTOMATION_PATH_PLAN_EXTRACTOR_PY'
+# BEGIN automation-path-plan-extractor v1
+# Reads an implementation plan (argv[1]) and writes the automation paths its
+# "Files ... change" section lists to argv[2], sorted, one per line. Exit 0
+# when a Files section exists (even with no paths); exit 3 when none exists
+# or the section lists more than 200 path tokens. This block is kept
+# byte-identical in .github/workflows/plan.yml and
+# scripts/orchestrate_poll_process.sh (#6838); a parity test pins it.
+import re
+import sys
+
+MAX_TOKENS = 200
+FILES_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchang", re.IGNORECASE)
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+NEXT_LABEL_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?`?\s*"
+    r"(?:Functions|Data structures|API|Decisions|Security considerations|Data flow|"
+    r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit|"
+    r"Implementation-time|Diagrams)\b",
+    re.IGNORECASE,
+)
+LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+NEGATIVE_RE = re.compile(r"^(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
+NEGATIVE_VERB_RE = re.compile(r"chang|modif|edit|touch|affect|updat", re.IGNORECASE)
+TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:\./)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`,;:()\"'<>]*)",
+    re.IGNORECASE,
+)
+
+
+def line_tokens(line):
+    found = []
+    for match in TOKEN_RE.finditer(line):
+        # A bare directory such as `scripts/` is kept: it names an automation
+        # path no exact grant can cover, so the gate holds (fail closed).
+        found.append(match.group(1).rstrip(".!?}]"))
+    return found
+
+
+def main(argv):
+    if len(argv) != 3:
+        return 2
+    with open(argv[1], encoding="utf-8", errors="replace") as handle:
+        lines = handle.read().splitlines()
+    found_section = False
+    in_section = False
+    suppress = None
+    tokens = []
+    for line in lines:
+        if FILES_RE.match(line):
+            found_section = True
+            in_section = True
+            suppress = None
+            tokens.extend(line_tokens(line))
+            continue
+        if not in_section:
+            continue
+        # A numbered file entry does not end the section; only a heading or
+        # the next known plan label does (fail closed on unknown layouts).
+        if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line):
+            in_section = False
+            suppress = None
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        list_match = LIST_RE.match(line)
+        text = line[list_match.end():].strip() if list_match else stripped
+        text = text.lstrip("*_` ")
+        if NEGATIVE_RE.match(text) and NEGATIVE_VERB_RE.search(text):
+            suppress = ("item" if list_match else "leadin", indent)
+            continue
+        if suppress is not None:
+            mode, base = suppress
+            if indent > base or (mode == "leadin" and list_match):
+                continue
+            suppress = None
+        tokens.extend(line_tokens(line))
+    if not found_section or len(tokens) > MAX_TOKENS:
+        return 3
+    with open(argv[2], "w", encoding="utf-8") as handle:
+        for token in sorted(set(tokens)):
+            handle.write(token + "\n")
+    return 0
+
+
+sys.exit(main(sys.argv))
+# END automation-path-plan-extractor v1
+AUTOMATION_PATH_PLAN_EXTRACTOR_PY
+}
+
+# Sets AUTOMATION_PATH_GATE_REASON / _DETAIL / _PATHS_FILE. Returns 0 when the
+# latest trusted plan lists no automation path or every listed path is
+# granted, 1 for a hold.
+_automation_path_plan_gate_check()
+{
+  local gate_dir="$1"
+  local issue_num="$2"
+  local comments_json="$3"
+  local plan_body="" issue_json="" check_rc=0 allow_edits="false"
+
+  AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
+  AUTOMATION_PATH_GATE_DETAIL="no_plan_comment"
+  AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/plan_paths.txt"
+  : > "${AUTOMATION_PATH_GATE_PATHS_FILE}" || return 1
+  plan_body="$(printf '%s' "${comments_json}" | jq -r --arg issue "${issue_num}" \
+    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' latest_plan | if . == null then empty else (.body // "") end' 2>/dev/null)" || plan_body=""
+  [ -n "${plan_body}" ] || return 1
+  printf '%s\n' "${plan_body}" > "${gate_dir}/plan.txt" || return 1
+  AUTOMATION_PATH_GATE_DETAIL="extractor"
+  if ! _automation_path_plan_extract "${gate_dir}/plan.txt" "${AUTOMATION_PATH_GATE_PATHS_FILE}" >/dev/null 2>&1; then
+    : > "${AUTOMATION_PATH_GATE_PATHS_FILE}"
+    return 1
+  fi
+  if [ ! -s "${AUTOMATION_PATH_GATE_PATHS_FILE}" ]; then
+    return 0
+  fi
+  AUTOMATION_PATH_GATE_DETAIL="guard_unavailable"
+  [ -n "${ORCH_AUTOMATION_PATH_GUARD}" ] && [ -f "${ORCH_AUTOMATION_PATH_GUARD}" ] || return 1
+  # GitHub API audit (§14): the comment history is the caller's already
+  # fetched copy (_staged_support_comments_for_guard / _candidate_details_json)
+  # and the login comes from the tick-cached unblock_trusted_login. This one
+  # issue read is new: no existing call in this path returns the live issue
+  # author, author_association and body the grant check needs. It runs only
+  # while the gate is active and the plan lists automation paths.
+  AUTOMATION_PATH_GATE_DETAIL="issue_lookup_failed"
+  issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null)" || issue_json=""
+  [ -n "${issue_json}" ] || return 1
+  printf '%s' "${issue_json}" > "${gate_dir}/issue.json" || return 1
+  unblock_trusted_login >/dev/null 2>&1 || true
+  AUTOMATION_PATH_GATE_DETAIL="grant_error"
+  python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --emit-automation-grant "${gate_dir}/grant.json" \
+    --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${UNBLOCK_TRUSTED_LOGIN:-}" >/dev/null 2>&1 || return 1
+  if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
+    allow_edits="true"
+  fi
+  python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --check-automation-paths \
+    --automation-grant-file "${gate_dir}/grant.json" \
+    --staged-file "${AUTOMATION_PATH_GATE_PATHS_FILE}" \
+    --allow-workflow-edits "${allow_edits}" --issue-number "${issue_num}" \
+    > "${gate_dir}/denied.txt" 2> "${gate_dir}/check.err" || check_rc=$?
+  if [ "${check_rc}" -eq 0 ]; then
+    return 0
+  fi
+  AUTOMATION_PATH_GATE_DETAIL="$(sed -n 's/^reason=\([a-z_]*\)$/\1/p' "${gate_dir}/check.err" 2>/dev/null | head -n 1)"
+  if [ "${check_rc}" -eq 30 ]; then
+    case "${AUTOMATION_PATH_GATE_DETAIL}" in
+      path_not_granted|no_allowlist|malformed_allowlist|untrusted_author|workflow_edits_disabled)
+        AUTOMATION_PATH_GATE_REASON="automation_path_ungranted"
+        if [ -s "${gate_dir}/denied.txt" ]; then
+          AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/denied.txt"
+        fi
+        ;;
+    esac
+  fi
+  [ -n "${AUTOMATION_PATH_GATE_DETAIL}" ] || AUTOMATION_PATH_GATE_DETAIL="guard_exit_${check_rc}"
+  return 1
+}
+
+# Logs STALL_SKIP for a hold and posts one deduplicated marker comment plus
+# one WARNING. Comment/alert failures only warn; the hold stands either way.
+_automation_path_plan_hold_report()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local phase="$3"
+  local mode="$4"
+  local paths_json="[]" paths_b64="" path_count=0 duplicate="false" hold_body=""
+
+  paths_json="$(jq -R -s -c 'split("\n") | map(select(length > 0)) | sort | unique' "${AUTOMATION_PATH_GATE_PATHS_FILE:-/dev/null}" 2>/dev/null)" || paths_json="[]"
+  [ -n "${paths_json}" ] || paths_json="[]"
+  path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
+  paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
+  echo "STALL_SKIP issue=${issue_num} reason=${AUTOMATION_PATH_GATE_REASON} phase=${phase} action=none detail=${AUTOMATION_PATH_GATE_DETAIL} paths=${path_count}"
+  duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${issue_num}" \
+    --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" \
+    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | any(.reason == $reason and .paths == $paths)' 2>/dev/null)" || duplicate="false"
+  if [ "${duplicate}" = "true" ]; then
+    return 0
+  fi
+  if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${issue_num}" \
+    --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg detail "${AUTOMATION_PATH_GATE_DETAIL}" \
+    --arg source "poller" --arg b64 "${paths_b64}" '
+      ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
+      | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
+      | [
+          (if $reason == "automation_path_ungranted"
+            then "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**"
+            else "**Automatic approval withheld: the automation-path grant check could not run.**" end),
+          "",
+          "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
+          "",
+          (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+          (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
+          (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
+          (if any($paths[]; endswith("/")) then "_(A directory entry ending in `/` cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
+          "",
+          "To proceed, a trusted OWNER/MEMBER/COLLABORATOR adds these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant), or replies `/approved`. The implement commit-time automation-path guard still applies either way.",
+          "",
+          "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=\($source) paths=\($b64) -->"
+        ] | join("\n")
+    ' 2>/dev/null)"; then
+    echo "::warning::Could not render the automation-path hold comment for issue #${issue_num}."
+    return 0
+  fi
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    echo "::warning::Could not post the automation-path hold comment for issue #${issue_num}."
+  fi
+  if [ "${mode}" = "standalone" ]; then
+    tg_notify_issue "${issue_num}" "Stall recovery: plan auto-approval withheld (${AUTOMATION_PATH_GATE_REASON}, ${path_count} path(s))." "WARNING" || true
+  else
+    tg_notify "Stall recovery: plan auto-approval withheld for issue #${issue_num} (${AUTOMATION_PATH_GATE_REASON}, ${path_count} path(s))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING" || true
+  fi
+  return 0
+}
+
+# Returns 0 to proceed with the automatic /approved, 1 for a hold (after
+# logging STALL_SKIP). Callers must not count a hold as a recovery attempt.
+_automation_path_plan_auto_approval_gate()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local phase="$3"
+  local mode="$4"
+  local active="false" gate_dir="" gate_rc=0
+
+  if is_truthy "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"; then
+    active="true"
+  elif printf '%s' "${comments_json}" | jq -e --arg issue "${issue_num}" \
+    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | length > 0' >/dev/null 2>&1; then
+    active="true"
+  fi
+  if [ "${active}" != "true" ]; then
+    return 0
+  fi
+  gate_dir="$(mktemp -d "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_gate.XXXXXX" 2>/dev/null)" || gate_dir=""
+  if [ -z "${gate_dir}" ]; then
+    AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
+    AUTOMATION_PATH_GATE_DETAIL="tempdir"
+    AUTOMATION_PATH_GATE_PATHS_FILE="/dev/null"
+    _automation_path_plan_hold_report "${issue_num}" "${comments_json}" "${phase}" "${mode}" || true
+    return 1
+  fi
+  _automation_path_plan_gate_check "${gate_dir}" "${issue_num}" "${comments_json}" || gate_rc=$?
+  if [ "${gate_rc}" -ne 0 ]; then
+    _automation_path_plan_hold_report "${issue_num}" "${comments_json}" "${phase}" "${mode}" || true
+  fi
+  rm -rf "${gate_dir}"
+  [ "${gate_rc}" -eq 0 ]
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -15063,6 +15359,11 @@ STALL_EOF
           return 1
           ;;
       esac
+      # A held plan (#6838) is not a recovery attempt; like the staged-support
+      # skip above, return before STALL_RECOVERY_SHOULD_INCREMENT is set.
+      if ! _automation_path_plan_auto_approval_gate "${issue_num}" "${_managed_staged_support_comments}" "${phase}" "managed"; then
+        return 1
+      fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -18512,19 +18813,23 @@ STALL_EOF
         took_action="true"
         ;;
       auto_approve)
-        local _std_auto_approve_rc=0
-        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
+        # A held plan (#6838) is not a recovery attempt: took_action and
+        # STALL_RECOVERY_SHOULD_INCREMENT stay false, like the staged-support skip.
+        if _automation_path_plan_auto_approval_gate "${issue_num}" "${comments_json}" "${phase}" "standalone"; then
+          local _std_auto_approve_rc=0
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
 _Standalone stall recovery: plan approval stalled. Auto-approving to proceed._
 STALL_EOF
 )" >/dev/null 2>&1 || _std_auto_approve_rc=$?
-        if [ "${_std_auto_approve_rc}" -eq 0 ]; then
-          phase_cap_note_dispatch "ai:implementing"
+          if [ "${_std_auto_approve_rc}" -eq 0 ]; then
+            phase_cap_note_dispatch "ai:implementing"
+          fi
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-approved plan (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
         fi
-        tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-approved plan (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
-        STALL_RECOVERY_SHOULD_INCREMENT="true"
-        took_action="true"
         ;;
       retrigger_implement)
         # Same precheck gate as the managed arm in execute_stall_recovery_action:

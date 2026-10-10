@@ -58,6 +58,9 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
+      # Default off (#6838): when true, a clear plan that lists automation paths
+      # is auto-approved only with a trusted exact files_touched grant for each.
+      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -2083,6 +2086,10 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2128,9 +2135,255 @@ jobs:
             exit 0
           fi
 
+          # Default-off automation-path gate (#6838). Unless
+          # AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is truthy these functions are
+          # never called, so the step behaves and calls the API exactly as before.
+          # When on, a plan whose "Files ... change" section lists automation paths
+          # (.github/, .claude/, scripts/, prompts/, workflow-templates/) is
+          # auto-approved only when the issue body carries a trusted exact
+          # files_touched grant for every one of them. The unchanged
+          # scripts/files_touched_scope_guard.py from the verified support checkout
+          # decides the grant; the PR/integration checkout copy is never used. Any
+          # failure withholds the automatic /approved only: a human /approved and the
+          # implement commit-time automation-path guard are unchanged.
+          AUTOMATION_PATH_GATE_REASON=""
+          AUTOMATION_PATH_GATE_DETAIL=""
+          AUTOMATION_PATH_GATE_PATHS_FILE=""
+          automation_path_plan_gate() {
+            local gate_dir="$1" guard="" login="" check_rc=0 allow_edits="false"
+            AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
+            AUTOMATION_PATH_GATE_DETAIL="extractor"
+            AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/plan_paths.txt"
+            : > "${AUTOMATION_PATH_GATE_PATHS_FILE}" || return 1
+            if [ -z "${CODEX_OUTPUT_FILE:-}" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
+              return 1
+            fi
+            if ! python3 -I -B - "${CODEX_OUTPUT_FILE}" "${AUTOMATION_PATH_GATE_PATHS_FILE}" <<'AUTOMATION_PATH_PLAN_EXTRACTOR_PY'
+          # BEGIN automation-path-plan-extractor v1
+          # Reads an implementation plan (argv[1]) and writes the automation paths its
+          # "Files ... change" section lists to argv[2], sorted, one per line. Exit 0
+          # when a Files section exists (even with no paths); exit 3 when none exists
+          # or the section lists more than 200 path tokens. This block is kept
+          # byte-identical in .github/workflows/plan.yml and
+          # scripts/orchestrate_poll_process.sh (#6838); a parity test pins it.
+          import re
+          import sys
+
+          MAX_TOKENS = 200
+          FILES_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchang", re.IGNORECASE)
+          HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+          NEXT_LABEL_RE = re.compile(
+              r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?`?\s*"
+              r"(?:Functions|Data structures|API|Decisions|Security considerations|Data flow|"
+              r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit|"
+              r"Implementation-time|Diagrams)\b",
+              re.IGNORECASE,
+          )
+          LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+          NEGATIVE_RE = re.compile(r"^(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
+          NEGATIVE_VERB_RE = re.compile(r"chang|modif|edit|touch|affect|updat", re.IGNORECASE)
+          TOKEN_RE = re.compile(
+              r"(?<![A-Za-z0-9_./-])(?:\./)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`,;:()\"'<>]*)",
+              re.IGNORECASE,
+          )
+
+
+          def line_tokens(line):
+              found = []
+              for match in TOKEN_RE.finditer(line):
+                  # A bare directory such as `scripts/` is kept: it names an automation
+                  # path no exact grant can cover, so the gate holds (fail closed).
+                  found.append(match.group(1).rstrip(".!?}]"))
+              return found
+
+
+          def main(argv):
+              if len(argv) != 3:
+                  return 2
+              with open(argv[1], encoding="utf-8", errors="replace") as handle:
+                  lines = handle.read().splitlines()
+              found_section = False
+              in_section = False
+              suppress = None
+              tokens = []
+              for line in lines:
+                  if FILES_RE.match(line):
+                      found_section = True
+                      in_section = True
+                      suppress = None
+                      tokens.extend(line_tokens(line))
+                      continue
+                  if not in_section:
+                      continue
+                  # A numbered file entry does not end the section; only a heading or
+                  # the next known plan label does (fail closed on unknown layouts).
+                  if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line):
+                      in_section = False
+                      suppress = None
+                      continue
+                  stripped = line.strip()
+                  if not stripped:
+                      continue
+                  indent = len(line) - len(line.lstrip())
+                  list_match = LIST_RE.match(line)
+                  text = line[list_match.end():].strip() if list_match else stripped
+                  text = text.lstrip("*_` ")
+                  if NEGATIVE_RE.match(text) and NEGATIVE_VERB_RE.search(text):
+                      suppress = ("item" if list_match else "leadin", indent)
+                      continue
+                  if suppress is not None:
+                      mode, base = suppress
+                      if indent > base or (mode == "leadin" and list_match):
+                          continue
+                      suppress = None
+                  tokens.extend(line_tokens(line))
+              if not found_section or len(tokens) > MAX_TOKENS:
+                  return 3
+              with open(argv[2], "w", encoding="utf-8") as handle:
+                  for token in sorted(set(tokens)):
+                      handle.write(token + "\n")
+              return 0
+
+
+          sys.exit(main(sys.argv))
+          # END automation-path-plan-extractor v1
+          AUTOMATION_PATH_PLAN_EXTRACTOR_PY
+            then
+              : > "${AUTOMATION_PATH_GATE_PATHS_FILE}"
+              return 1
+            fi
+            if [ ! -s "${AUTOMATION_PATH_GATE_PATHS_FILE}" ]; then
+              return 0
+            fi
+            AUTOMATION_PATH_GATE_DETAIL="guard_unavailable"
+            for guard in "$(pwd)/.codex-workflow-src/scripts/files_touched_scope_guard.py" \
+              "$(pwd)/.codex-workflow-src-main/scripts/files_touched_scope_guard.py"; do
+              if [ -f "${guard}" ]; then
+                break
+              fi
+              guard=""
+            done
+            [ -n "${guard}" ] || return 1
+            printf '%s' "${CURRENT_ISSUE_JSON}" > "${gate_dir}/issue.json" || return 1
+            login="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+            if ! python3 -I -B "${guard}" --emit-automation-grant "${gate_dir}/grant.json" \
+              --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${login}" >/dev/null 2>&1; then
+              AUTOMATION_PATH_GATE_DETAIL="grant_error"
+              return 1
+            fi
+            case "$(printf '%s' "${ALLOW_WORKFLOW_EDITS:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+              1|true|yes|on) allow_edits="true" ;;
+            esac
+            python3 -I -B "${guard}" --check-automation-paths \
+              --automation-grant-file "${gate_dir}/grant.json" \
+              --staged-file "${AUTOMATION_PATH_GATE_PATHS_FILE}" \
+              --allow-workflow-edits "${allow_edits}" --issue-number "${ISSUE_NUMBER}" \
+              > "${gate_dir}/denied.txt" 2> "${gate_dir}/check.err" || check_rc=$?
+            if [ "${check_rc}" -eq 0 ]; then
+              return 0
+            fi
+            AUTOMATION_PATH_GATE_DETAIL="$(sed -n 's/^reason=\([a-z_]*\)$/\1/p' "${gate_dir}/check.err" 2>/dev/null | head -n 1)"
+            if [ "${check_rc}" -eq 30 ]; then
+              case "${AUTOMATION_PATH_GATE_DETAIL}" in
+                path_not_granted|no_allowlist|malformed_allowlist|untrusted_author|workflow_edits_disabled)
+                  AUTOMATION_PATH_GATE_REASON="automation_path_ungranted"
+                  if [ -s "${gate_dir}/denied.txt" ]; then
+                    AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/denied.txt"
+                  fi
+                  ;;
+              esac
+            fi
+            [ -n "${AUTOMATION_PATH_GATE_DETAIL}" ] || AUTOMATION_PATH_GATE_DETAIL="guard_exit_${check_rc}"
+            return 1
+          }
+          # Records a hold: step output, gate log line, then one deduplicated marker
+          # comment and one WARNING. Comment/alert failures only warn; a hold never
+          # turns into an approval.
+          automation_path_plan_hold() {
+            local paths_json="[]" paths_b64="" path_count=0 comments_json="" duplicate="false" hold_body=""
+            paths_json="$(jq -R -s -c 'split("\n") | map(select(length > 0)) | sort | unique' "${AUTOMATION_PATH_GATE_PATHS_FILE}" 2>/dev/null)" || paths_json="[]"
+            [ -n "${paths_json}" ] || paths_json="[]"
+            path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
+            paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
+            echo "automation_path_hold=true" >> "$GITHUB_OUTPUT"
+            echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=${AUTOMATION_PATH_GATE_REASON} outcome=defer issue=${ISSUE_NUMBER} paths=${path_count} detail=${AUTOMATION_PATH_GATE_DETAIL}"
+            if comments_json="$(gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
+              duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${ISSUE_NUMBER}" --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" '
+                def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
+                def event_key: [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
+                def is_plan: ((.body // "") | test("(^|\n)\\s*implementation\\s+plan\\b"; "i"));
+                def hold_marker: ((.body // "") | (capture("<!-- ai:automation-path-plan-hold:v1 issue=(?<issue>[0-9]+) reason=(?<reason>[a-z_]+) source=(?<source>[a-z]+) paths=(?<paths>[A-Za-z0-9+/=]*) -->") // null));
+                (map(select(trusted and is_plan)) | max_by(event_key)) as $plan
+                | [.[] | select(trusted) | . as $c | hold_marker as $m
+                    | select($m != null and $m.issue == $issue and ($plan == null or (($c | event_key) > ($plan | event_key))))
+                    | $m]
+                | any(.reason == $reason and .paths == $paths)
+              ' 2>/dev/null)" || duplicate="false"
+            fi
+            if [ "${duplicate}" = "true" ]; then
+              echo "Automation-path hold already reported for issue #${ISSUE_NUMBER}; not posting another comment."
+              return 0
+            fi
+            if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${ISSUE_NUMBER}" \
+              --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg detail "${AUTOMATION_PATH_GATE_DETAIL}" \
+              --arg source "plan" --arg b64 "${paths_b64}" '
+                ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
+                | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
+                | [
+                    (if $reason == "automation_path_ungranted"
+                      then "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**"
+                      else "**Automatic approval withheld: the automation-path grant check could not run.**" end),
+                    "",
+                    "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
+                    "",
+                    (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+                    (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
+                    (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
+                    (if any($paths[]; endswith("/")) then "_(A directory entry ending in `/` cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
+                    "",
+                    "To proceed, a trusted OWNER/MEMBER/COLLABORATOR adds these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant), or replies `/approved`. The implement commit-time automation-path guard still applies either way.",
+                    "",
+                    "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=\($source) paths=\($b64) -->"
+                  ] | join("\n")
+              ' 2>/dev/null)"; then
+              echo "::warning::Could not render the automation-path hold comment for issue #${ISSUE_NUMBER}."
+              return 0
+            fi
+            if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+              echo "::warning::Could not post the automation-path hold comment for issue #${ISSUE_NUMBER}."
+            fi
+            if [ -f scripts/tg_helpers.sh ]; then
+              # shellcheck disable=SC1091
+              source scripts/tg_helpers.sh >/dev/null 2>&1 || true
+            fi
+            if type tg_send_msg >/dev/null 2>&1; then
+              tg_send_msg "Plan auto-approval withheld for issue #${ISSUE_NUMBER}: ${AUTOMATION_PATH_GATE_REASON} (${path_count} path(s))."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
+            fi
+            return 0
+          }
+
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
+              automation_path_gate_flag="$(printf '%s' "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
+              case "${automation_path_gate_flag}" in
+                1|true|yes|on)
+                  automation_path_gate_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/automation_path_gate.XXXXXX" 2>/dev/null)" || automation_path_gate_dir=""
+                  if [ -z "${automation_path_gate_dir}" ]; then
+                    AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
+                    AUTOMATION_PATH_GATE_DETAIL="tempdir"
+                    AUTOMATION_PATH_GATE_PATHS_FILE="/dev/null"
+                    automation_path_plan_hold || true
+                    exit 0
+                  fi
+                  if ! automation_path_plan_gate "${automation_path_gate_dir}"; then
+                    automation_path_plan_hold || true
+                    rm -rf "${automation_path_gate_dir}"
+                    exit 0
+                  fi
+                  rm -rf "${automation_path_gate_dir}"
+                  ;;
+              esac
               # Brief pause so the plan comment is fully indexed by GitHub before
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.
