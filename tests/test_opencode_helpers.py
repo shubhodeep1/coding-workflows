@@ -252,6 +252,39 @@ def test_bootstrap_validates_writer_and_generated_json() -> None:
 		assert valid.returncode == 0, valid.stderr.decode()
 
 
+def _alert_with_probe(probe_outcome: str, failure_class: str) -> tuple[subprocess.CompletedProcess[bytes], Path]:
+	directory = tempfile.mkdtemp()
+	root = Path(directory)
+	helper_copy = root / "opencode_helpers.sh"
+	helper_copy.write_text(HELPERS.read_text(encoding="utf-8"), encoding="utf-8")
+	(root / "provider_outage.py").write_text(f"print('outcome={probe_outcome} status=402')\n", encoding="utf-8")
+	runtime = root / "runtime"
+	runtime.mkdir()
+	capture = root / "telegram"
+	result = _bash(
+		f"source {helper_copy}; "
+		"tg_send_msg() { printf '%s\\n' \"$2\" > \"$TG_CAPTURE\"; }; "
+		f"opencode_emit_failure_alert phase reviewer vendor/model 17 {failure_class}",
+		{"TG_CAPTURE": str(capture), "RUNTIME_DIR": str(runtime)},
+	)
+	return result, capture
+
+
+def test_alert_is_suppressed_while_provider_probe_is_down() -> None:
+	# Issue #6633: the outage tracker sends the single alert.
+	result, capture = _alert_with_probe("down", "invocation_failed")
+	assert result.returncode == 17
+	assert b"PROVIDER_OUTAGE op=alert phase=phase outcome=suppressed reason=provider_down" in result.stderr
+	assert not capture.exists()
+
+
+def test_alert_is_sent_when_provider_probe_is_up_or_failure_is_setup() -> None:
+	result, capture = _alert_with_probe("up", "invocation_failed")
+	assert result.returncode == 17 and capture.read_text(encoding="utf-8").strip() == "ERROR"
+	result, capture = _alert_with_probe("down", "config_generation")
+	assert result.returncode == 17 and capture.read_text(encoding="utf-8").strip() == "ERROR"
+
+
 def main() -> int:
 	tests = [value for key, value in sorted(globals().items()) if key.startswith("test_") and callable(value)]
 	for test in tests:

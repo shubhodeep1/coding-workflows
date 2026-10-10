@@ -118,6 +118,22 @@ opencode_emit_failure_alert()
 	payload="opencode_agent_failure phase=${phase} role=${role} model=${model_slug} rc=${alert_rc} failure_class=${failure_class}"
 	printf '%s\n' "${payload}" >&2
 
+	# Model-provider outage (issue #6633): one repo-wide tracker alert replaces
+	# the per-call ERROR. Runtime failures only; the live probe runs at most
+	# once per job (cached in RUNTIME_DIR) and anything but "down" alerts.
+	case "${failure_class}" in
+		config_*|binary_missing|version_mismatch|invalid_expected_version|isolation_unavailable) ;;
+		*)
+			if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ "${PROVIDER_OUTAGE_CLASSIFY_ENABLED:-true}" != "false" ] \
+				&& [ -f "${_opencode_helpers_dir}/provider_outage.py" ] \
+				&& PYTHONDONTWRITEBYTECODE=1 python3 "${_opencode_helpers_dir}/provider_outage.py" probe \
+					--probe-cache "${RUNTIME_DIR}/provider_outage_alert_probe.json" 2>/dev/null | grep -q '^outcome=down '; then
+				printf 'PROVIDER_OUTAGE op=alert phase=%s outcome=suppressed reason=provider_down\n' "${phase}" >&2
+				return "${alert_rc}"
+			fi
+			;;
+	esac
+
 	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${_opencode_helpers_dir}/tg_helpers.sh" ]; then
 		# shellcheck source=tg_helpers.sh
 		# shellcheck disable=SC1091
