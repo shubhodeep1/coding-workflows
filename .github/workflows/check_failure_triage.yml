@@ -195,6 +195,7 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
+      CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       # Job-level override of the workflow-level default: a PR carrying the
@@ -279,7 +280,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -355,6 +356,7 @@ jobs:
           install -m 0755 .codex-workflow-src/scripts/check_failure_triage.sh "${trusted_dir}/scripts/check_failure_triage.sh"
           install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
           install -m 0755 .codex-workflow-src/scripts/clarify_isolated_run.sh "${trusted_dir}/scripts/clarify_isolated_run.sh"
+          install -m 0755 .codex-workflow-src/scripts/sandbox_image.sh "${trusted_dir}/scripts/sandbox_image.sh"
           install -m 0755 .codex-workflow-src/scripts/clarify_openrouter_broker.py "${trusted_dir}/scripts/clarify_openrouter_broker.py"
           install -m 0755 .codex-workflow-src/scripts/write_codex_config.sh "${trusted_dir}/scripts/write_codex_config.sh"
           install -m 0644 "${catalog_src}" "${trusted_dir}/scripts/codex_model_catalog.json"

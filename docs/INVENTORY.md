@@ -81,6 +81,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
+- `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
@@ -136,6 +137,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
 - `scripts/claude_engine.py` — Claude engine decisions: role resolution, the P5 settings, transcript extraction and classification, probe parsing, account order.
 - `scripts/claude_pool_token.sh` — Fetch the Claude account pool from claude-pool-broker with the job's OIDC token, probe each account, and write the ordered pool (run by `.github/actions/claude-pool-token`).
+- `scripts/claude_pool_health_alert.sh` — Send the hourly Telegram WARNING naming every Claude pool account at or above the usage gate, from the pool action's `probes` output (run by `orchestrate_poll.yml`).
 - `scripts/claude_settings.json.tmpl` — P5 permission policy template rendered into the Claude engine's `--settings` file.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
@@ -211,6 +213,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
+- `scripts/release_ci_gate.sh` — Stable-release CI gate: require a successful github-actions `lint` check-run from `ci.yml` on the exact released SHA before tagging (log prefix `RELEASE_CI_GATE`, issue #6797).
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
@@ -228,6 +231,13 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_merge_topology_gate.sh` — body of the review_autofix.yml "Pre-review deterministic merge-topology gate" step (sourced by the step).
 - `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_post_commit_retrigger.sh` — body of the review_autofix.yml "Re-trigger review via workflow_dispatch" step (sourced by the step): after an autofix or merge-resolve push, dispatches the next review run from the default branch, PR-named wrappers first (issue #4898).
+- `scripts/review_autofix_step_apply_fixes_editor.sh` — body of the review_autofix.yml "Apply fixes with editor model" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_restore_partial_resume.sh` — body of the review_autofix.yml "Restore same-head partial resume state" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_generate_diff_context.sh` — body of the review_autofix.yml "Generate diff context" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_preflight_required_files.sh` — body of the review_autofix.yml "Preflight: Verify required files before reviewer invocation" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_editor_noop_disposition.sh` — body of the review_autofix.yml "Validate editor no-op disposition" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_stage_codex_logs.sh` — body of the review_autofix.yml "Stage codex logs for upload (failure or empty-editor)" step (sourced by the step; skips with a warning when the script is missing, since the step also runs after support staging failed; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
@@ -255,6 +265,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
+- `scripts/sandbox_image.sh` — Pull a prebuilt sandbox image from GHCR by input hash, or build it locally when the pull fails (`SANDBOX_IMAGE` log prefix).
+- `scripts/sandbox_images_publish.sh` — Build and push every sandbox image variant the build sites resolve (run by publish-sandbox-images.yml).
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.

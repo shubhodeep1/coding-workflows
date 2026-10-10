@@ -106,6 +106,27 @@ def test_each_agent_site_uses_the_helper(relative, needle):
 	assert needle in (REPO_ROOT / relative).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+	"relative, expected_launches",
+	[
+		(".github/workflows/workflow-log-analysis.yml", 4),
+		("scripts/workflow_retro_fanout.sh", 1),
+	],
+)
+def test_every_log_analysis_agent_launch_is_read_only_isolated(relative, expected_launches):
+	# Issue #6637: these agents read collected CI logs (untrusted text). Every
+	# launch must run in the credential-free, network-isolated read-only
+	# container; a workspace-mode or host launch would give injected log text
+	# write access or credentials.
+	text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+	launches = [line for line in logical_lines(text) if "exec --skip-git-repo-check" in line]
+	assert len(launches) == expected_launches, launches
+	for line in launches:
+		assert "codex_isolated_exec.sh" in line, line
+		assert re.search(r'''codex_isolated_exec\.sh"?\s+run\s+--mode\s+read-only\b''', line), line
+	assert "--mode workspace" not in text
+
+
 def test_helper_container_has_no_credentials_network_or_host_checkout():
 	text = HELPER.read_text(encoding="utf-8")
 	run_block = text[text.index('env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm -i --init'):]
@@ -206,6 +227,20 @@ def test_workflows_stage_the_isolation_support_files(workflow):
 		assert name in text, f"{workflow} must stage {name}"
 
 
+def test_orchestrate_stages_the_claude_relay_beside_the_isolation_helper():
+	# codex_isolated_exec.sh requires claude_anthropic_relay.py in its own
+	# directory for engine=claude; without it a consumer decomposer run is
+	# "unavailable" and silently falls back to Codex (#6908). The relay must be
+	# in the required (fail-closed) loop, not an optional one, so it is always
+	# copied from trusted support over any checkout copy.
+	text = (WORKFLOWS / "orchestrate.yml").read_text(encoding="utf-8")
+	stage = step_block(text, "Stage workflow support files")
+	required = stage.split("for f in ", 1)[1].split("; do", 1)[0].split()
+	for name in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "claude_anthropic_relay.py"):
+		assert name in required, f"orchestrate.yml must stage {name} in the required loop"
+	assert "::error::Missing required support script" in stage
+
+
 @pytest.mark.parametrize(
 	"workflow",
 	[
@@ -266,7 +301,64 @@ def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
 	assert "opencode_run_cmd" not in fix_block
 
 
+POLLER_JUDGE_ROLES = {"WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"}
+POLLER_JUDGE_DECISION = (
+	"The poller judges intentionally stay on review_untrusted_sandbox.sh via "
+	"poller_claude_judge -> poller_judge_isolated (#6607); see agents.md "
+	"'Isolated Codex agents' -> 'Poller judges' before changing this."
+)
+
+
+def test_poller_judges_stay_on_the_review_sandbox():
+	text = (SCRIPTS / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	called_roles = set(re.findall(r"\bpoller_claude_judge ([A-Za-z_][A-Za-z0-9_]*)", text))
+	assert called_roles == POLLER_JUDGE_ROLES, POLLER_JUDGE_DECISION
+
+	wrapper = text[text.index("poller_claude_judge()\n"):]
+	wrapper = wrapper[: wrapper.index("\n}\n")]
+	assert "poller_judge_isolated " in wrapper, POLLER_JUDGE_DECISION
+	for launcher in ("codex_isolated_exec", "ORCH_CODEX_ISOLATED_EXEC", "claude_run", "opencode run", "codex exec"):
+		assert launcher not in wrapper, POLLER_JUDGE_DECISION
+
+	attempt = text[text.index("_poller_rb_judge_sandbox_attempt()\n"):text.index("\npoller_judge_engine_labels_json()\n")]
+	assert 'review_untrusted_sandbox.sh" prepare-ephemeral' in attempt, POLLER_JUDGE_DECISION
+	assert 'review_untrusted_sandbox.sh" run' in attempt, POLLER_JUDGE_DECISION
+	assert "write_opencode_config.sh" in attempt, POLLER_JUDGE_DECISION
+	assert "codex_isolated_exec" not in attempt, POLLER_JUDGE_DECISION
+	assert "ORCH_CODEX_ISOLATED_EXEC" not in attempt, POLLER_JUDGE_DECISION
+
+	isolated = text[text.index("poller_judge_isolated()\n"):text.index("\npoller_rb_judge_isolated()\n")]
+	assert "_poller_rb_judge_sandbox_attempt codex " in isolated, POLLER_JUDGE_DECISION
+	assert "return 77" in isolated, POLLER_JUDGE_DECISION
+	assert "codex_isolated_exec" not in isolated, POLLER_JUDGE_DECISION
+
+	# Only real expansions count: comments or log prose that merely name the
+	# variable must not fail this contract.
+	isolated_exec_uses = [
+		line
+		for line in text.splitlines()
+		if not line.lstrip().startswith("#")
+		and re.search(r"\$\{?ORCH_CODEX_ISOLATED_EXEC\b", line)
+	]
+	assert isolated_exec_uses == [], POLLER_JUDGE_DECISION
+
+	agents = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	section = agents[agents.index("## Isolated Codex agents"):]
+	section = section[: section.index("\n## ")]
+	assert "review_untrusted_sandbox.sh" in section
+	assert "poller_judge_isolated" in section
+	assert "**Poller judges.**" in section
+	sites = section[section.index("- **Sites.**"):]
+	sites = sites[: sites.index("\n- **")]
+	assert "wave / stall" not in sites
+
+
 def test_review_sandbox_admits_the_merge_guard_for_ci_repairs():
+	"""Despite its historical name, this now asserts the merge guard is EXCLUDED.
+
+	#6208 reversed #6187's admission: the hook runs on the host, so CI failures
+	in it go to an interactive session (agents.md, README "Isolated Codex agents").
+	"""
 	import importlib.util
 
 	spec = importlib.util.spec_from_file_location("review_untrusted_workspace", SCRIPTS / "review_untrusted_workspace.py")
@@ -329,3 +421,175 @@ def test_helper_claude_branch_keeps_the_token_on_the_host():
 		if "--mount" in line:
 			assert "claude_token_file" not in line, line
 	assert 'export CODEX_ISOLATED_HIDE="CLAUDE.md"' in text
+
+
+# --- the orchestrate decomposer on Claude (issue #6642) ---------------------------------
+
+AI_ENGINE = SCRIPTS / "ai_engine.sh"
+
+
+def _decomposer_engine_branches() -> tuple[str, str]:
+	"""The decomposer step's Claude branch and codex-fallback branch (logical lines)."""
+	run = step_block((WORKFLOWS / "orchestrate.yml").read_text(encoding="utf-8"), "Run Codex (decomposer)")
+	start = run.index('if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then')
+	fallback = run.index('if [ "${decomposer_rc}" -eq 75 ]; then\n              decomposer_rc=0', start)
+	end = run.index("\n            fi\n", fallback)
+	return "\n".join(logical_lines(run[start:fallback])), "\n".join(logical_lines(run[fallback:end]))
+
+
+def test_decomposer_claude_branch_runs_only_claude_run_read_only_and_credential_free():
+	claude_branch, _ = _decomposer_engine_branches()
+	assert not RAW_CLAUDE.search(claude_branch), "the decomposer must not start the Claude CLI directly"
+	launches = [line for line in claude_branch.splitlines() if "claude_run" in line]
+	assert len(launches) == 1, launches
+	launch = launches[0]
+	assert "claude_run ORCHESTRATE " in launch
+	# Read profile (Read/Grep/Glob, read-only snapshot) and no inherited mounts.
+	assert re.search(r"(?:^|\s)AI_ENGINE_READ_ONLY=true\s", launch)
+	assert re.search(r"(?:^|\s)AI_ENGINE_INCLUDE_PATHS=\s", launch)
+	# Runner credentials are removed before the engine helper runs.
+	strip = "env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u OPENROUTER_API_KEY"
+	assert strip in launch
+	assert launch.index(strip) < launch.index("bash -c 'source scripts/ai_engine.sh && claude_run ORCHESTRATE")
+	# The workdir is the checkout, never the account pool.
+	assert re.search(r'_ "\$\{CODEX_PROMPT_FILE\}" "\$\{CODEX_OUTPUT_FILE\}" "\$\{PWD\}"\s+2>', launch), launch
+	assert "claude-pool" not in claude_branch and "CLAUDE_ENGINE_POOL_DIR" not in claude_branch
+
+
+def test_decomposer_never_sets_a_nonempty_include_list():
+	text = (WORKFLOWS / "orchestrate.yml").read_text(encoding="utf-8")
+	assignments = re.findall(r"AI_ENGINE_INCLUDE_PATHS[=:]\s*(\S*)", text)
+	assert assignments and all(value in ("", "\\", "\\\\") for value in assignments), assignments
+
+
+def test_decomposer_codex_fallback_stays_read_only_isolated():
+	_, fallback = _decomposer_engine_branches()
+	assert "bash scripts/codex_isolated_exec.sh run --mode read-only --" in fallback
+	assert "--mode workspace" not in fallback
+
+
+def test_claude_run_read_only_flag_selects_the_read_profile():
+	body = AI_ENGINE.read_text(encoding="utf-8")
+	body = body[body.index("claude_run()"):]
+	assert 'if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then\n\t\tprofile="read"' in body
+	assert 'read) tools="Read,Grep,Glob"; mode="dontAsk"; isolation_mode="read-only" ;;' in body
+
+
+def test_claude_run_passes_the_token_file_only_to_the_host_relay_flag():
+	body = AI_ENGINE.read_text(encoding="utf-8")
+	body = body[body.index("claude_run()"):]
+	uses = [m.start() for m in re.finditer(r"\$\{token_file\}", body)]
+	assert uses, "claude_run must hand each account's token file to the helper"
+	for position in uses:
+		before = body[max(0, position - 40):position]
+		assert before.endswith('--claude-token-file "'), body[position - 60:position + 20]
+	assert body.count('token_file="${pool_dir}/tokens/${name}"') == 1
+	# The pool overlap guard runs before the run directory and any container launch.
+	assert body.index('_ai_engine_pool_isolated "${pool_dir}" "${workdir}"') < body.index('run_dir="$(mktemp -d')
+
+
+def _pool_isolated(pool: Path, workdir: Path, includes: str = "", runner_temp: Path | None = None) -> int:
+	import os
+	import subprocess
+
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV")}
+	env["AI_ENGINE_INCLUDE_PATHS"] = includes
+	env["RUNNER_TEMP"] = str(runner_temp if runner_temp is not None else workdir.parent / "rt")
+	result = subprocess.run(
+		["bash", "-c", 'source "$1"; _ai_engine_pool_isolated "$2" "$3"', "_", str(AI_ENGINE), str(pool), str(workdir)],
+		env=env, capture_output=True, text=True, timeout=30, check=False,
+	)
+	return result.returncode
+
+
+def test_pool_overlap_guard_rejects_pool_inside_workdir_including_symlink_aliases(tmp_path: Path):
+	work = tmp_path / "work"
+	inside = work / "pool"
+	(inside / "tokens").mkdir(parents=True)
+	outside = tmp_path / "pool"
+	(outside / "tokens").mkdir(parents=True)
+	assert _pool_isolated(outside, work) == 0
+	assert _pool_isolated(inside, work) != 0
+	assert _pool_isolated(work, work) != 0
+	# The workdir inside the pool would also copy the token directory's siblings.
+	assert _pool_isolated(outside, outside / "tokens") != 0
+	# A symlink alias of a pool inside the workdir is still inside it.
+	alias = tmp_path / "alias"
+	alias.symlink_to(inside, target_is_directory=True)
+	assert _pool_isolated(alias, work) != 0
+	# A workdir reached through a symlink still contains the pool.
+	work_alias = tmp_path / "work-alias"
+	work_alias.symlink_to(work, target_is_directory=True)
+	assert _pool_isolated(inside, work_alias) != 0
+	# Include mounts may not reach the pool either.
+	assert _pool_isolated(outside, work, includes=f"{tmp_path}\n") != 0
+	assert _pool_isolated(outside, work, includes=f"{outside / 'tokens' / 'A'}\n") != 0
+	assert _pool_isolated(outside, work, includes=f"{work / 'big.txt'}\n") == 0
+	# An include path that is a symlink into the pool is resolved and rejected.
+	include_alias = tmp_path / "include-alias"
+	include_alias.symlink_to(outside / "tokens", target_is_directory=True)
+	assert _pool_isolated(outside, work, includes=f"{include_alias}\n") != 0
+	# The session store (RUNNER_TEMP/claude-isolated-home) is mounted as ~/.claude.
+	runner_temp = tmp_path / "rt"
+	home_pool = runner_temp / "claude-isolated-home" / "pool"
+	(home_pool / "tokens").mkdir(parents=True)
+	assert _pool_isolated(home_pool, work, runner_temp=runner_temp) != 0
+	assert _pool_isolated(runner_temp, work, runner_temp=runner_temp) != 0
+	assert _pool_isolated(outside, work, runner_temp=runner_temp) == 0
+	# An unresolvable pool fails closed.
+	assert _pool_isolated(tmp_path / "missing", work) != 0
+
+
+def test_claude_run_refuses_a_pool_inside_the_workdir_before_launch(tmp_path: Path):
+	import os
+	import shutil
+	import subprocess
+
+	scripts = tmp_path / "support" / "scripts"
+	scripts.mkdir(parents=True)
+	for name in ("ai_engine.sh", "claude_engine.py", "claude_settings.json.tmpl"):
+		shutil.copyfile(SCRIPTS / name, scripts / name)
+	hooks = tmp_path / "support" / ".claude" / "hooks"
+	hooks.mkdir(parents=True)
+	shutil.copyfile(REPO_ROOT / ".claude" / "hooks" / "gh_api_write_guard.py", hooks / "gh_api_write_guard.py")
+	marker = tmp_path / "launched"
+	(scripts / "codex_isolated_exec.sh").write_text(f'#!/usr/bin/env bash\ntouch "{marker}"\nexit 0\n', encoding="utf-8")
+	work = tmp_path / "work"
+	work.mkdir()
+	prompt = tmp_path / "prompt.txt"
+	prompt.write_text("decompose\n", encoding="utf-8")
+	runner_temp = tmp_path / "rt"
+	runner_temp.mkdir()
+
+	def run(pool: Path) -> subprocess.CompletedProcess:
+		(pool / "tokens").mkdir(parents=True, exist_ok=True)
+		(pool / "order").write_text("A\n", encoding="utf-8")
+		token = pool / "tokens" / "A"
+		token.write_text("not-a-real-token\n", encoding="utf-8")
+		token.chmod(0o600)
+		env = {
+			key: value for key, value in os.environ.items()
+			if not key.startswith(("AI_ENGINE", "CLAUDE_", "SUPPORT_", "TG_")) and key not in ("BASH_ENV", "ENV", "GITHUB_WORKSPACE")
+		}
+		env.update({
+			"RUNNER_TEMP": str(runner_temp),
+			"CLAUDE_ENGINE_POOL_DIR": str(pool),
+			"SUPPORT_INSTRUCTIONS_FILE": str(REPO_ROOT / "unattended_system_instructions.md"),
+			"AI_ENGINE_READ_ONLY": "true",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		return subprocess.run(
+			["bash", "-c", 'source "$1"; rc=0; claude_run ORCHESTRATE "$2" "$3" "$4" || rc=$?; echo "RC=${rc}"',
+				"_", str(scripts / "ai_engine.sh"), str(prompt), str(tmp_path / "out.txt"), str(work)],
+			env=env, capture_output=True, text=True, timeout=60, check=False,
+		)
+
+	refused = run(work / ".pool")
+	assert "RC=1" in refused.stdout, refused.stdout + refused.stderr
+	assert "reason=pool_overlap" in refused.stderr
+	assert "not-a-real-token" not in refused.stdout + refused.stderr
+	assert not marker.exists(), "the isolated helper must not start when the pool is inside the workdir"
+
+	allowed = run(tmp_path / "pool")
+	assert "reason=pool_overlap" not in allowed.stderr, allowed.stderr
+	assert marker.exists(), allowed.stdout + allowed.stderr
