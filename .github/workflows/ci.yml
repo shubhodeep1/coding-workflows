@@ -838,6 +838,7 @@ jobs:
             tests/test_review_sandbox_install_timeout.py \
             tests/test_review_static_context_readme.py \
             tests/test_semble_helpers.py \
+            tests/test_validate_driver_credential_scrub.py \
             tests/test_validate_lint_graceful_shutdown_hooks.py \
             tests/test_validate_lint_init_true.py \
             tests/test_validate_preflight_canary_tools_scope.py \
