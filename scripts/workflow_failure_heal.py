@@ -2081,7 +2081,7 @@ _FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
 	# A test file CI runs as a script (``python3 tests/x.py``) fails with a
 	# traceback whose frame names the file and the test function, or with
 	# unittest's ``FAIL: test_x (module.Class.test_x)`` / ``ERROR:`` header.
-	re.compile(r'^\s*File "(?:[^"\n]{0,400}/)?(tests/test_[A-Za-z0-9_]{1,160}\.py)", line [0-9]+, in (test_[A-Za-z0-9_]{1,160})\s*$', re.MULTILINE),
+	re.compile(r'^\s*File "(?:[^"\n]{0,400}/)?(tests/(?:[A-Za-z0-9_-]{1,80}/){0,4}test_[A-Za-z0-9_]{1,160}\.py)", line [0-9]+, in (test_[A-Za-z0-9_]{1,160})\s*$', re.MULTILINE),
 	re.compile(r"^\s*(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,160}) \([A-Za-z0-9_.]{1,300}\)\s*$", re.MULTILINE),
 )
 FAILING_TEST_LIMIT = 20

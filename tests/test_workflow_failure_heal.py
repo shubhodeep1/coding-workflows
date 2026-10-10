@@ -1281,6 +1281,8 @@ def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
 		 "A release / promotion workflow run failed."),
 		("Mark Stable Release", "A release / promotion workflow run failed.",
 		 "A CI run on the default branch failed."),
+		("Nightly Validation Self-Test", "A scheduled self-check workflow run on the default branch failed.",
+		 "A release / promotion workflow run failed."),
 	):
 		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 			repo=SELF_REPO,

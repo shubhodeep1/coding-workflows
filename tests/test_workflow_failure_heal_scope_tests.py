@@ -332,6 +332,8 @@ def test_extract_failing_tests_reads_script_run_tracebacks_and_unittest_headers(
 	assert found["names"] == ["test_alpha", "test_beta", "test_gamma"]
 	assert found["files"] == ["tests/test_ut.py", "tests/test_script.py"]
 	assert found["pairs"] == ["tests/test_ut.py::test_alpha", "tests/test_script.py::test_beta"]
+	# Nested test directories are read too, like pytest's FAILED lines.
+	assert heal.extract_failing_tests('  File "/w/repo/tests/integration/test_n.py", line 2, in test_nested\n')["pairs"] == ["tests/integration/test_n.py::test_nested"]
 	# A helper frame or a quoted file name in prose is not a failing test.
 	assert heal.extract_failing_tests('  File "/x/tests/test_a.py", line 3, in helper\nsee File "tests/test_b.py", line 1, in test_c here\n')["names"] == []
 
