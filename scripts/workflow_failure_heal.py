@@ -267,7 +267,6 @@ _HEAL_COMMIT_REF_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
-_FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
@@ -2528,7 +2527,7 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 		match = _canonical_failure_marker(body)
 		if match is not None:
 			fields = _marker_fields(match)
-			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 				continue
 			if support and fields.get("support", "").lower() != support:
 				continue
