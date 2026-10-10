@@ -5399,6 +5399,10 @@ jobs:
           # and restrict matches to issues opened by THIS orchestrate run
           # rather than scanning the whole open-issue list.
           DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # tracking_labels=e2e-smoke-test: the tracking title is model-written
+          # and may drop the smoke marker, so the label is what lets the
+          # scheduled poller (tracking_issue_is_smoke_fixture) keep this
+          # fixture project's Telegram alerts silent.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -5408,7 +5412,8 @@ jobs:
             --completion-timeout-secs 3000 \
             --completion-poll-interval-secs 20 \
             --status-log-prefix "orchestrate-bootstrap" \
-            --field "project_description=${PROJECT_DESC}"
+            --field "project_description=${PROJECT_DESC}" \
+            --field "tracking_labels=e2e-smoke-test"
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
