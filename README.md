@@ -1579,6 +1579,16 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **Routing to the PR branch (opt-in):** with
+  `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true`, the collect step checks the PR
+  it already fetched (open, head and base in this repository, head not the
+  default branch, branch name passes a strict check including
+  `git check-ref-format`) and the diagnose step checks the flag and the name
+  again. The issue then carries one `Target branch: <head ref>` line before the
+  diagnosis (`CHECK_TRIAGE routing outcome=emit target_branch=<ref>`), so
+  clarify, plan and implement route the fix to that branch. The final body check
+  accepts only that exact line, once, above the first `---`; diagnosis text is
+  still neutralized. Off by default, so issues are unchanged until it is set.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2189,6 +2199,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED` | `false` | Set to `true` to give a new triage issue a `Target branch: <head ref>` line, so its fix PR targets the failing PR's own branch instead of the default branch. Only an open PR whose head and base are this repository, whose head is not the default branch and whose branch name passes a strict check gets the line; anything else is filed without it (`CHECK_TRIAGE routing outcome=skip reason=…`). Model and log text cannot supply routing lines. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
