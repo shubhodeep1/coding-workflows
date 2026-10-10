@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_engine.sh:150 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The shared Claude fallback alert says \u201crunning codex\u201d for `PANEL_REVIEWER`, although that slot has no Codex fallback and may end as `skipped_pool`.\n  WHY: Operators are told a reviewer is running when it is not.\n- scripts/review_untrusted_sandbox.sh:line not specified | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The shared fallback notification incorrectly reports \u201crunning codex\u201d when the `PANEL_REVIEWER` pool reviewer fails.\n  WHY: Operators with Telegram configured receive an inaccurate alert about whether the review ran, complicating triage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add tests for: Sonnet success; fallback to Haiku on crash, timeout, malformed output, and all-accounts usage limit; configurable fallback model; pool-wide outage skips; sandbox prepare failure; codex engine skip; both models failing; every account exhausted; circuit breaker results; fallback success counting as a slot failure; budget/PR closed skips; low run budget; slot contract in scripts/workflow.\"\n  expected_change_site: tests/test_review_pool_reviewer.py\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The parametrized `test_failed_sonnet_run_retries_on_haiku_in_the_pool` covers crash, timeout, malformed output, and all-accounts usage limit; `test_every_account_exhausted_on_both_models_skips_the_slot` is present in the LAST RUN DIFF. The review reports all listed test scenarios are present, so this is a false gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:5297-5298, 5332-5335 | severity=NIT | confidence=5\n  PROBLEM: The alleged stale or uninitialized `pool_last_reason` and `pool_skip_reason` state is unfounded; both variables are initialized and their scope and loop control prevent stale values from leaking.\n  WHY: `pool_last_reason` is set on every failed loop iteration, and setting `pool_skip_reason` triggers an immediate break; the final classification uses the last attempt's value.\n- scripts/ai_engine.sh:150 | severity=NIT | confidence=5\n  PROBLEM: `ai_engine_fallback` hardcodes \u201crunning codex\u201d in its Telegram alert even when `PANEL_REVIEWER` exhausts its Claude accounts and ends as `skipped_pool` without a Codex fallback.\n  WHY: An operator receiving the WARNING sees \u201crunning codex\u201d for a slot that ends skipped_pool; this is a pre-existing issue in the shared helper exposed by the PR's PANEL_REVIEWER role.\n- TASK_GAP\n  Requirement: \"Add tests for: Sonnet success; fallback to Haiku on crash, timeout, malformed output, and all-accounts usage limit; configurable fallback model; pool-wide outage skips; sandbox prepare failure; codex engine skip; both models failing; every account exhausted; circuit breaker results; fallback success counting as a slot failure; budget/PR closed skips; low run budget; slot contract in scripts/workflow.\"\n  Expected change site: tests/test_review_pool_reviewer.py\n  Evidence of absence: The parametrized test test_failed_sonnet_run_retries_on_haiku_in_the_pool already covers crash (RC=1), timeout (RC=124), malformed output (RC=0 empty body), and all-accounts usage limit (RC=75 reason=all_accounts_failed) as separate params. The every-account-exhausted test (test_every_account_exhausted_on_both_models_skips_the_slot) was added by this PR's LAST RUN DIFF. All listed test scenarios are present in the file. This is a false gap \u2014 the tests exist as parametrized cases rather than standalone functions.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_sandbox.sh:scripts/review_untrusted_sandbox.sh | severity=NIT | confidence=5\n  PROBLEM: The shared fallback notification incorrectly reports \u201crunning codex\u201d when the Claude pool reviewer (`PANEL_REVIEWER`) fails.\n  WHY: Operators with Telegram configured receive an inaccurate alert about whether the review ran, complicating triage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_sandbox.sh:492, scripts/ai_engine.sh:150 | severity=NIT | confidence=5\n  PROBLEM: Pool exhaustion for `PANEL_REVIEWER` sends a Telegram message claiming \u201crunning codex,\u201d although this slot has no Codex fallback.\n  WHY: When every Claude account is exhausted, the shared fallback helper sends the inaccurate message. The reviewer instead tries its configured pool model or ends as `skipped_pool`; it never starts Codex. Operators are told a reviewer is running when it is not.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "17e575becaefd8b5dc41932a26d51f3ac069d4d1b04d9fdd57715acd31f927c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7024,
+    "run_id": "38044721846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38044721846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010110644_0b7a3c2b7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7024,
+    "run_id": "38044721846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T11:06:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
