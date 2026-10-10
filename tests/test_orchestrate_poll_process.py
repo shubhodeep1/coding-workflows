@@ -76,6 +76,21 @@ def _test_runner_failure_annotation(name: str, failure: object) -> str | None:
 	)
 
 
+def _test_runner_neutralize_workflow_commands(text: str) -> str:
+	"""Prefix lines of a FAIL line that GitHub would read as workflow commands.
+
+	Only on GitHub Actions (`GITHUB_ACTIONS` exactly `true`); local output is
+	unchanged. Multi-line failure text stays readable, but a continuation line
+	starting with `::` gets a `| ` prefix so it cannot start a workflow command.
+	"""
+	if os.environ.get("GITHUB_ACTIONS") != "true":
+		return text
+	return "".join(
+		"| " + line if line.lstrip().startswith("::") else line
+		for line in text.splitlines(keepends=True)
+	)
+
+
 # Directories and top-level files that the poller script under test needs
 # to resolve at runtime via relative paths (helper scripts, prompt files,
 # schema JSON, canonical instruction markdown). Each sandbox run gets an
@@ -23375,7 +23390,11 @@ def _run_selected_tests(
 			print(f"  PASS  {name}", file=runner_output, flush=True)
 			passed += 1
 		else:
-			print(f"  FAIL  {name}: {failure}", file=runner_output, flush=True)
+			print(
+				_test_runner_neutralize_workflow_commands(f"  FAIL  {name}: {failure}"),
+				file=runner_output,
+				flush=True,
+			)
 			failure_annotation = _test_runner_failure_annotation(name, failure)
 			if failure_annotation is not None:
 				print(failure_annotation, file=runner_output, flush=True)
@@ -23569,6 +23588,27 @@ def test_custom_runner_emits_github_failure_annotation_only_on_actions():
 		assert injection_annotations == [
 			f"{annotation_prefix}synthetic_injection_fail: boom%0D%0A::error::fake"
 		]
+		# The raw FAIL line must not start a forged command either.
+		assert [
+			line for line in injection_output.getvalue().splitlines()
+			if line.lstrip().startswith("::")
+		] == injection_annotations
+		assert "| ::error::fake" in injection_output.getvalue().splitlines()
+
+		saved_argv = sys.argv
+		try:
+			sys.argv = ["test_orchestrate_poll_process.py", "test_no_such_name\n::warning::forged"]
+			main_output = io.StringIO()
+			with contextlib.redirect_stdout(main_output):
+				assert main() == 1
+		finally:
+			sys.argv = saved_argv
+		main_lines = main_output.getvalue().splitlines()
+		assert main_lines == [
+			"  FAIL  test_no_such_name",
+			"| ::warning::forged: unknown test name",
+			f"{annotation_prefix}test_no_such_name%0A::warning::forged: unknown test name",
+		]
 
 		assert _test_runner_failure_annotation("bad\r\nname%", "x\ry") == (
 			f"{annotation_prefix}bad%0D%0Aname%25: x%0Dy"
@@ -23743,7 +23783,10 @@ def main() -> int:
 	if selected_names:
 		missing = [name for name in selected_names if name not in tests_by_name]
 		for name in missing:
-			print(f"  FAIL  {name}: unknown test name", flush=True)
+			print(
+				_test_runner_neutralize_workflow_commands(f"  FAIL  {name}: unknown test name"),
+				flush=True,
+			)
 			missing_annotation = _test_runner_failure_annotation(name, "unknown test name")
 			if missing_annotation is not None:
 				print(missing_annotation, flush=True)
