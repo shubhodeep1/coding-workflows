@@ -5,13 +5,28 @@
   "entry_id": "processed_command_7095_6099658275_approved",
   "issue_number": 7095,
   "metadata": {
+    "branch": "ai/issue-7095",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/clarify.yml",
+      "README.md",
+      "agents.d/7095-check-triage-already-resolved.md",
+      "changelog.d/7095-check-triage-already-resolved.md",
+      "scripts/check_triage_resolution.py",
+      "tests/test_check_triage_resolution.py"
+    ],
+    "issue_number": 7095,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7095",
+    "pr_number": 7097,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7097",
+    "run_attempt": "1",
+    "run_id": "38067563581",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38067563581"
   },
   "run_attempt": 1,
   "run_id": "38067563581",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-10T16:26:55Z",
+  "status": "completed",
+  "timestamp": "2026-10-10T16:45:14Z",
   "workflow": "implement"
 }
