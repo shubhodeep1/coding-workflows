@@ -61,8 +61,10 @@ def test_failure_evidence_classifies_and_comment_mentions_outage() -> None:
 
 
 def test_editor_empty_noop_classifies_provider_outage() -> None:
-	assert 'autofix_empty_failure_reason="provider_unavailable"' in REVIEW
-	assert 'NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"' in REVIEW
+	# "Post editor summary comment" now sources a step script; read it inlined.
+	expanded = expanded_review_autofix_text()
+	assert 'autofix_empty_failure_reason="provider_unavailable"' in expanded
+	assert 'NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"' in expanded
 
 
 def test_claude_pool_capacity_step() -> None:
