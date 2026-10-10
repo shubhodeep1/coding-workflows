@@ -79,6 +79,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/pr6576-shard-followup.yml` — GitHub Actions workflow: PR 6576 orchestrate-poll shard follow-up.
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
@@ -209,6 +210,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
+- `scripts/pr6576_shard_followup.py` — One-time follow-up for PR #6576's failed orchestrate-poll shard: fetch the log or rerun the partition, confirm on main, report once on #7072 (single-use, issue #7072).
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
