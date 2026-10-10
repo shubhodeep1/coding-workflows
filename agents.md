@@ -1625,8 +1625,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `verified=true` release it records `auto_merge=pending_verify`. PR calls use
   `GH_PAT`; no job requests a `pull-requests` permission because a reusable
   job cannot raise the caller's grant. Log prefix `UPDATER_PR_DELIVERY`.
-- The separate `verify` job (#7004; job id, status context and log prefix are
-  provisional because the plan could not be read) runs after a PR was opened
+- The separate `verify` job (#7004; job id `verify`, status context
+  `ai-update-workflows/verify` and log prefix `UPDATER_PR_VERIFY` as shipped in
+  `update_workflows.yml`) runs after a PR was opened
   or refreshed. It checks the PR head out without credentials and never runs
   code from it, re-attests the release manifest, hash-checks every release
   module it runs, checks that the PR adds one commit with the
