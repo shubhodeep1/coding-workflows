@@ -5,13 +5,32 @@
   "entry_id": "processed_command_7100_6100754675_approved",
   "issue_number": 7100,
   "metadata": {
+    "branch": "ai/issue-7100",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "docs/INVENTORY.md",
+      "scripts/review_autofix_step_editor_summary_comment.sh",
+      "scripts/review_autofix_step_exhaustion_review_blocked_comment.sh",
+      "scripts/review_autofix_step_mark_ready_to_merge.sh",
+      "scripts/review_autofix_step_mark_review_blocked_exhaustion.sh",
+      "scripts/stage_workflow_support.sh",
+      "tests/review_autofix_step_scripts.py",
+      "tests/test_review_autofix_claude_fixer_mode.py",
+      "tests/test_review_autofix_provider_outage_contract.py",
+      "tests/test_review_rb_judge_self_run_exclusion.py"
+    ],
+    "issue_number": 7100,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7100",
+    "pr_number": 7102,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7102",
+    "run_attempt": "1",
+    "run_id": "38075618631",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38075618631"
   },
   "run_attempt": 1,
   "run_id": "38075618631",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-10T18:26:03Z",
+  "status": "completed",
+  "timestamp": "2026-10-10T18:52:22Z",
   "workflow": "implement"
 }
