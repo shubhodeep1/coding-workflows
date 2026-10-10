@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:1576 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: `sha_ok=true` is written to `GITHUB_OUTPUT` before the pending status post succeeds, so a failed pending post still causes the \u201cMark verify failure\u201d step to run.\n  WHY: During a token or permissions outage, the failure-status post may fail as well, leaving the PR without a verify status from this run; both reviewers rate this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  expected_change_site: This implementation PR\u2019s description\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description (\"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7004\") does not disclose that the plan could not be read or that the identifiers are provisional; the provided PR description only says \u201cAutomated implementation.\u201d and references the issue and tracking issue; This implementation PR's description (the GitHub PR body), which currently reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7004 / Refs #6902\"; the provisional-name assumption is recorded in code comments at `.github/workflows/update_workflows.yml` (verify job block), `scripts/verify_release; The PR description provided here only says \u201cAutomated implementation,\u201d references issue #7004, and refs #6902. It does not state that the plan could not be read or that the identifiers are provisional.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/update_workflows.yml, line 1576 (`echo \"sha_ok=true\"` before the pending status post at lines 1578-1585) | severity=low | confidence=3\n  PROBLEM: `sha_ok=true` is written to GITHUB_OUTPUT before the pending status POST, so if that POST fails, `verify_inputs` exits via `reject` while `sha_ok` is already `true`.\n  WHY: If the same token/permissions issue prevents the pending POST and failure POST, the PR gets no verify status from this run; the job log still shows the rejection, and the PR cannot auto-merge because the verify job is the sole auto-merge enabler. The impact is a missing status indicator, not a correctness breach.\n- TASK_GAP\n  Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\" (Linked issue #7004, Plan reference section)\n  Expected change site: This pull request's description\n  Evidence of absence: The code comments in `update_workflows.yml` (lines 1526-1531), `test_update_workflows_template_gate.py` (lines 78-82), `agents.md` (line 1591), and `changelog.d/7004-updater-pr-verify-job.md` (last paragraph) all record the assumption. The PR description (\"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7004\") does not disclose that the plan could not be read or that the identifiers are provisional.\n  confidence=[5]\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml, Step \"Validate verify inputs and mark pending\" | severity=low | confidence=4\n  PROBLEM: The output `sha_ok=true` is written to `GITHUB_OUTPUT` before the pending status post succeeds.\n  WHY: If the pending status post fails, `sha_ok` is already `true`, causing the \u201cMark verify failure\u201d step to run even if the failure status cannot be posted. The suggested minimal fix is to move `echo \"sha_ok=true\" >> \"${VERIFY_OUT}\"` after the `gh api` status post succeeds.\n- TASK_GAP\n  Requirement: If the plan cannot be read, use the provisional names and behavior from the issue and \u201crecord that assumption in a code comment and the PR body.\u201d\n  Expected change site: The pull request description.\n  Evidence of absence: The code comments in update_workflows.yml and test_update_workflows_template_gate.py record the assumption about provisional naming, but the provided PR description only says \u201cAutomated implementation.\u201d and references the issue and tracking issue; it does not disclose that the plan could not be read or that the identifiers are provisional as required by the prompt instructions.\n  confidence=[5]\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: This implementation PR's description (the GitHub PR body), which currently reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7004 / Refs #6902\".\n  Evidence of absence: The provisional-name assumption is recorded in code comments at `.github/workflows/update_workflows.yml` (verify job block), `scripts/verify_release\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: If the plan cannot be read, \u201crecord that assumption in a code comment and the PR body.\u201d\n  Expected change site: This implementation PR\u2019s description.\n  Evidence of absence: The code records the provisional-name assumption in comments, but the PR description provided here only says \u201cAutomated implementation,\u201d references issue #7004, and refs #6902. It does not state that the plan could not be read or that the identifiers are provisional.\n  confidence=[5]\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "18f82780824d30597e7e82c2f3fada22113302b8100247bc9d3af1c17b02a363",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7011,
+    "run_id": "38018760557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38018760557",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010033751_ed88796812",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7011,
+    "run_id": "38018760557"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T03:37:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
