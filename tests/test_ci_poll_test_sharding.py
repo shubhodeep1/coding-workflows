@@ -262,6 +262,14 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertIn('|| echo 1', self.run)
 		self.assertIn("''|*[!0-9]*) shard_rc=1 ;;", self.run)
 
+	def test_failing_test_summary_precedes_the_tally_and_exit(self) -> None:
+		"""#6888: the failing tests are named after the loop, then the gate fails."""
+		summary = self.run.index("orchestrate-poll failing test:")
+		tally = self.run.index("orchestrate-poll shard(s) failed.")
+		self.assertLess(self.run.index('wait "${shard_pid}"'), summary)
+		self.assertLess(summary, tally)
+		self.assertLess(tally, self.run.index("exit 1", tally))
+
 	def test_every_shard_is_reaped_before_any_is_judged(self) -> None:
 		reap = self.run.index('wait "${shard_pid}"')
 		judge = self.run.index("shard_failures=0")
@@ -474,6 +482,144 @@ class ShardJudgeTest(unittest.TestCase):
 				self.assertIn("orchestrate-poll shard 1 failed (exit 1)", result.stdout)
 
 
+class ShardFailureSummaryTest(unittest.TestCase):
+	"""A failed shard's failing tests are named after the loop (#6888).
+
+	In run 37907017153 the failing shard's log sat inside a collapsed
+	`::group::`, so the job tail showed only the last shard's "33 passed"
+	and the failing test could not be identified. The judgment loop now
+	repeats each failed shard's FAIL lines as `::error::` lines just
+	before the tally, in all three workflow copies.
+	"""
+
+	FAILING = "::error::orchestrate-poll failing test: "
+
+	def step_runs(self) -> dict[str, str]:
+		return ShardJudgeTest.step_runs(self)
+
+	def judge(self, step_run: str, shard_one: dict[str, str]) -> subprocess.CompletedProcess:
+		shard_files = {n: {"txt": f"test_{n}\n", "log": "  PASS  ok\n", "rc": "0\n"} for n in range(4)}
+		shard_files[1] = shard_one
+		return run_shard_judge(step_run, shard_files)
+
+	def summary_lines(self, stdout: str) -> list[str]:
+		return [line for line in stdout.splitlines() if line.startswith(self.FAILING)]
+
+	def test_fail_line_is_named_after_the_groups_and_before_the_tally(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {
+					"txt": "test_a\ntest_b\n",
+					"log": "  PASS  test_a\n  FAIL  test_b: boom\n",
+					"rc": "1\n",
+				})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				expected = self.FAILING + "shard 1: FAIL  test_b: boom"
+				self.assertEqual(self.summary_lines(result.stdout), [expected])
+				out = result.stdout
+				self.assertLess(out.rindex("::endgroup::"), out.index(expected))
+				self.assertLess(out.index(expected), out.index("1 orchestrate-poll shard(s) failed."))
+
+	def test_complete_fail_event_is_the_fallback(self) -> None:
+		complete = 'TEST_CASE_EVENT: {"elapsed_ms":5,"event":"complete","status":"fail","test_name":"test_c"}'
+		slowest = 'TEST_CASE_EVENT: {"elapsed_ms":5,"event":"slowest","rank":1,"status":"fail","test_name":"test_c"}'
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {
+					"txt": "test_c\n",
+					"log": f"{complete}\n{slowest}\n",
+					"rc": "1\n",
+				})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				summary = self.summary_lines(result.stdout)
+				self.assertEqual(len(summary), 1, summary)
+				self.assertIn('"test_name":"test_c"', summary[0])
+				self.assertIn('"event":"complete"', summary[0])
+
+	def test_failed_shard_without_fail_line_says_so(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {"txt": "test_d\n", "log": "partial\n", "rc": "1\n"})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertEqual(
+					self.summary_lines(result.stdout),
+					[self.FAILING + "shard 1: exit 1, no FAIL line recorded (runner likely died)"],
+				)
+
+	def test_shard_without_log_is_named(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {"txt": "test_e\n"})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertEqual(
+					self.summary_lines(result.stdout),
+					[self.FAILING + "shard 1: no log recorded, its tests did not run"],
+				)
+
+	def test_percent_is_escaped_and_carriage_return_removed(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {
+					"txt": "test_p\n",
+					"log": "  FAIL  test_p: 100% bad\r\n",
+					"rc": "1\n",
+				})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertEqual(
+					self.summary_lines(result.stdout),
+					[self.FAILING + "shard 1: FAIL  test_p: 100%25 bad"],
+				)
+				summary_text = result.stdout[result.stdout.index(self.FAILING):]
+				self.assertNotIn("\r", summary_text)
+
+	def test_long_messages_are_cut(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {
+					"txt": "test_l\n",
+					"log": "  FAIL  test_l: " + "x" * 1000 + "\n",
+					"rc": "1\n",
+				})
+				summary = self.summary_lines(result.stdout)
+				self.assertEqual(len(summary), 1)
+				self.assertEqual(len(summary[0]) - len(self.FAILING), 400)
+
+	def test_summary_is_capped_with_an_overflow_line(self) -> None:
+		log = "".join(f"  FAIL  test_{i:02d}: boom\n" for i in range(30))
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = {n: {"txt": f"test_{n}\n", "log": log, "rc": "1\n"} for n in range(2)}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				summary = self.summary_lines(result.stdout)
+				named = [line for line in summary if line.startswith(self.FAILING + "shard ")]
+				# 30 per shard collected (60), 20 shown, 40 more reported.
+				self.assertEqual(len(named), 20)
+				self.assertEqual(summary[-1], self.FAILING + "... and 40 more (see the shard groups above)")
+				self.assertIn("2 orchestrate-poll shard(s) failed.", result.stdout)
+
+	def test_single_shard_overflow_is_reported(self) -> None:
+		log = "".join(f"  FAIL  test_{i:02d}: boom\n" for i in range(25))
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {"txt": "test_s\n", "log": log, "rc": "1\n"})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				summary = self.summary_lines(result.stdout)
+				self.assertEqual(len(summary), 21, summary)
+				self.assertEqual(summary[-1], self.FAILING + "... and 5 more (see the shard groups above)")
+
+	def test_passing_shards_are_not_scanned(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {
+					"txt": "test_f\n",
+					"log": "  FAIL  not_really: printed by a passing test\n",
+					"rc": "0\n",
+				})
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertNotIn("failing test:", result.stdout)
+
+
 SUMMARY_HEADING = "orchestrate-poll failed-shard summary"
 COUNT_LINE = "orchestrate-poll shard(s) failed."
 
@@ -485,7 +631,7 @@ def green_shards(count: int = 4) -> dict[int, dict[str, str]]:
 	}
 
 
-class ShardFailureSummaryTest(unittest.TestCase):
+class CiFailedShardLogSummaryTest(unittest.TestCase):
 	"""A failed shard's failing tests must reach the end of the step log (#6946).
 
 	Each shard log is printed in a collapsed group, so before this summary a
@@ -562,8 +708,10 @@ class ShardFailureSummaryTest(unittest.TestCase):
 		summary = out[out.index(SUMMARY_HEADING):]
 		for line in summary.splitlines():
 			if line.startswith("::"):
+				# The #6888 per-test annotations are also emitted here, escaped.
 				self.assertTrue(
 					line.startswith("::error::orchestrate-poll shard ")
+					or line.startswith(ShardFailureSummaryTest.FAILING)
 					or line == f"::error::1 {COUNT_LINE}",
 					f"unexpected workflow command in summary: {line!r}",
 				)

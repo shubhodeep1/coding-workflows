@@ -1621,7 +1621,11 @@ jobs:
             wait "${shard_pid}" || true
           done
 
+          # Each failed shard's failing tests are repeated after the loop (#6888).
+          # The shard logs above sit in collapsed groups, so in run 37907017153 the
+          # job tail showed only the last shard's "33 passed", not shard 1's failure.
           shard_failures=0
+          shard_failure_lines=()
           failed_shard_ids=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
@@ -1630,6 +1634,7 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_lines+=("shard ${shard}: no log recorded, its tests did not run")
               failed_shard_ids+=("${shard}")
               continue
             fi
@@ -1645,6 +1650,20 @@ jobs:
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
               shard_failures=$((shard_failures + 1))
+              # Prefer the runner's FAIL line (it carries the exception); fall back
+              # to its "complete" fail events; else say no failure was recorded.
+              # Every match is kept so the "... and <k> more" count below is exact.
+              mapfile -t shard_fail_matches < <(grep -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                mapfile -t shard_fail_matches < <(grep -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -F '"status":"fail"' || true)
+              fi
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")
+              else
+                for shard_fail_match in "${shard_fail_matches[@]}"; do
+                  shard_failure_lines+=("shard ${shard}: ${shard_fail_match#"${shard_fail_match%%[![:space:]]*}"}")
+                done
+              fi
               failed_shard_ids+=("${shard}")
             fi
           done
@@ -1672,6 +1691,22 @@ jobs:
               echo "  shard ${failed_shard}: last 20 log lines:"
               tail -n 20 "${failed_shard_log}" | sed 's/^/    | /'
             done
+            # At most 20 annotations; CR removed, cut to 400 characters, then "%"
+            # escaped so a test message cannot break the annotation syntax.
+            shard_failure_shown=0
+            for shard_failure_line in "${shard_failure_lines[@]}"; do
+              if [ "${shard_failure_shown}" -ge 20 ]; then
+                break
+              fi
+              shard_failure_line="${shard_failure_line//$'\r'/}"
+              shard_failure_line="${shard_failure_line:0:400}"
+              shard_failure_line="${shard_failure_line//\%/%25}"
+              echo "::error::orchestrate-poll failing test: ${shard_failure_line}"
+              shard_failure_shown=$((shard_failure_shown + 1))
+            done
+            if [ "${#shard_failure_lines[@]}" -gt 20 ]; then
+              echo "::error::orchestrate-poll failing test: ... and $(( ${#shard_failure_lines[@]} - 20 )) more (see the shard groups above)"
+            fi
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi
