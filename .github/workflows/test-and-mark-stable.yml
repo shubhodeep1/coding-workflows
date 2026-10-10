@@ -6316,7 +6316,16 @@ jobs:
     # gate_only runs stop here: every test job above ran, nothing is tagged.
     if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
+    # retries still have to fit after it. A job timeout fails closed.
+    timeout-minutes: 50
+    # checks/actions read let the CI gate read check-runs and workflow runs
+    # when GH_PAT is absent; contents: write keeps the tag and release writes.
+    permissions:
+      contents: write
+      checks: read
+      actions: read
     # Serialise the mutating tag pushes across every dispatcher of this
     # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
     # The dispatchers' own locks end at dispatch time, so without this lock
@@ -6346,6 +6355,26 @@ jobs:
             exit 1
           fi
           echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
+
+      # Security finding release-gate-ignores-actions-ci (#6797, Refs #6532):
+      # the jobs above run this workflow's own tests, and the combined commit
+      # status never contains GitHub Actions check-runs, so a commit whose
+      # `CI / lint` aggregate was red, cancelled or never ran could be tagged.
+      # Require the github-actions `lint` check-run from ci.yml on the exact
+      # tested commit to be completed with success. Pending or missing runs
+      # are waited for (bounded); anything else fails closed. It runs before
+      # the changelog push and every tag write, and in dry runs too (read only).
+      # The tag may point at this commit plus a changelog-only commit; the
+      # RELEASE_UNTESTED_HEAD and RELEASE_STALE_TIP guards below bind it.
+      - name: Require CI / lint success on the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${RELEASE_TESTED_SHA}"
 
       - name: Assemble changelog fragments
         id: changelog_assemble

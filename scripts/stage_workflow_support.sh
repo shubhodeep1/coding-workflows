@@ -54,7 +54,7 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh review_head_gate.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh dependency_registry_proxy.py review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_post_commit_retrigger.sh review_autofix_step_changes_lost_redispatch.sh review_single_issue_security_pass.sh security_pass_skip.py review_rb_judge_security_pass.sh review_autofix_step_count_iterations.sh workflow_failure_heal.py"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh review_head_gate.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh dependency_registry_proxy.py review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_post_commit_retrigger.sh review_autofix_step_changes_lost_redispatch.sh review_single_issue_security_pass.sh security_pass_skip.py review_rb_judge_security_pass.sh review_autofix_step_count_iterations.sh workflow_failure_heal.py review_autofix_step_apply_fixes_editor.sh review_autofix_step_restore_partial_resume.sh review_autofix_step_generate_diff_context.sh review_autofix_step_preflight_required_files.sh review_autofix_step_editor_noop_disposition.sh review_autofix_step_stage_codex_logs.sh review_autofix_step_init_runtime_workspace.sh"
 # Keep this registry for compatibility, but all runtime files now come from
 # the same verified workflow commit as the required bootstrap scripts.
 #
@@ -799,6 +799,58 @@ stage_self_repo_validation_template_entry()
 	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=$((SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT + 1))
 }
 
+# The renderer and the templates are one unit: a template is only valid
+# against the renderer that defines its filters. The self-repo path above
+# stages templates from the verified support commit while
+# optional_preserve_scripts_before_templates kept the validation checkout's
+# own scripts/render_validation_templates.py, so an integration branch that
+# had not synced the default branch rendered a template using the
+# `shell_quote` filter (#6569) with a renderer that did not define it: run
+# 37925800341 failed with "No filter named 'shell_quote'", project #6664 was
+# marked ai:harness-broken, and its validation stopped. Under the same
+# condition the templates use, the renderer is staged from the same commit,
+# and a missing trusted copy fails closed exactly like a missing template.
+stage_self_repo_validation_renderer_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local track_path="$3"
+	local trusted_path inspected_renderer_path
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ]; then
+		echo "::error::Required trusted validation renderer ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	# Like the template path above, refuse a symlink at any component
+	# (e.g. a checked-out `scripts` symlink), so mkdir/cp cannot write the
+	# trusted renderer outside the validation workspace.
+	inspected_renderer_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_renderer_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_renderer_path}" == */* ]] || break
+		inspected_renderer_path="${inspected_renderer_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_RENDERER_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	if [ "${executable}" = "true" ]; then
+		chmod +x "${repo_path}"
+	fi
+	record_fetched_script "${track_path}"
+	echo "VALIDATE_TRUSTED_RENDERER path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+}
+
 stage_copy_if_missing_silent_entry()
 {
 	local repo_path="$1"
@@ -941,7 +993,14 @@ stage_validate_support()
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
-		stage_optional_preserve_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
+		# Same condition as the trusted-template path below: the renderer
+		# must come from the commit its templates come from.
+		if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+		   [ "${repo_path}" = "scripts/render_validation_templates.py" ]; then
+			stage_self_repo_validation_renderer_entry "${repo_path}" "true" "${repo_path#scripts/}"
+		else
+			stage_optional_preserve_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
+		fi
 	done < <(json_array_lines "optional_preserve_scripts_before_templates")
 
 	while IFS= read -r repo_path; do

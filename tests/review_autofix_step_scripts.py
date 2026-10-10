@@ -29,7 +29,7 @@ REVIEW_AUTOFIX_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "review_aut
 REVIEW_AUTOFIX_STEP_SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 # Step name -> script under scripts/, and whether a missing script fails the
-# step ("error") or skips it ("warning"). The two always() steps fail open
+# step ("error") or skips it ("warning"). The always() steps fail open
 # because they also run after support staging itself failed.
 REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Pre-review deterministic merge-topology gate": ("review_autofix_step_merge_topology_gate.sh", "error"),
@@ -40,6 +40,13 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Re-trigger review via workflow_dispatch": ("review_autofix_step_post_commit_retrigger.sh", "error"),
 	"Re-dispatch review on editor-changes-lost": ("review_autofix_step_changes_lost_redispatch.sh", "error"),
 	"Count autofix iterations": ("review_autofix_step_count_iterations.sh", "error"),
+	"Apply fixes with editor model": ("review_autofix_step_apply_fixes_editor.sh", "error"),
+	"Restore same-head partial resume state": ("review_autofix_step_restore_partial_resume.sh", "error"),
+	"Generate diff context": ("review_autofix_step_generate_diff_context.sh", "error"),
+	"Preflight: Verify required files before reviewer invocation": ("review_autofix_step_preflight_required_files.sh", "error"),
+	"Validate editor no-op disposition": ("review_autofix_step_editor_noop_disposition.sh", "error"),
+	"Stage codex logs for upload (failure or empty-editor)": ("review_autofix_step_stage_codex_logs.sh", "warning"),
+	"Initialize runtime workspace": ("review_autofix_step_init_runtime_workspace.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(
