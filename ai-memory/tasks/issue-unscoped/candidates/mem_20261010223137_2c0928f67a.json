@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:1431-1437 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: For consumer issue reports, `PROVENANCE_DEFAULT_BRANCH` is not initialized, so the retarget uses the literal `main` fallback instead of the intake repository\u2019s actual default branch.\n  WHY: If the intake repository\u2019s default branch is not `main`, the heal issue can target a nonexistent or incorrect branch; reviewers who assigned severity rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:1431-1437 | confidence=4\n  PROBLEM: For a consumer issue report, the retarget logic uses main instead of resolving the intake repository\u2019s actual default branch.\n  WHY: Consumer issue reports use source_kind=issue and arrive through repository_dispatch, which skips the provenance block where PROVENANCE_DEFAULT_BRANCH is initialized; when retargeting is needed, the script defaults to \"main\", potentially targeting the wrong branch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:1437 | severity=MAJOR | confidence=4\n  PROBLEM: The retarget fallback `${PROVENANCE_DEFAULT_BRANCH:-main}` resolves to the literal string `main` for `issue` and `pull_request` source kinds because they skip the provenance block where `PROVENANCE_DEFAULT_BRANCH` is set.\n  WHY: If this repository's default branch is renamed or the script runs in a fork with a different default branch, a behind/diverged retarget can target a nonexistent branch, leaving the heal issue without a `Target branch:` line.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh: Lines 417, 432-436 and 1431-1437 | severity=MAJOR | confidence=4\n  PROBLEM: For consumer reports (`SOURCE_KIND=issue`), `PROVENANCE_DEFAULT_BRANCH` is not initialized because its assignment and event-file lookup run only for `phase_failure`, `autofix_failure`, and `workflow_run`.\n  WHY: When the compare is `behind` or `diverged`, the retarget uses the literal `main` fallback instead of the event\u2019s default branch, so a non-`main` intake default can result in a heal issue targeting the wrong branch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_intake.sh:1436-1437 | severity=MAJOR | confidence=5\n  PROBLEM: For consumer issue reports (source_kind=issue), PROVENANCE_DEFAULT_BRANCH is never set, so the retarget always uses main regardless of the intake repository's actual default branch.\n  WHY: The provenance block that sets PROVENANCE_DEFAULT_BRANCH is skipped for source_kind=issue, so a non-main default branch can cause the heal issue to target the wrong branch.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8459a915edadc625644ac5c232e0ccf0c6c514f7ff810a9ba30b57486bc50461",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7106,
+    "run_id": "38089736200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38089736200",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010223137_2c0928f67a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7106,
+    "run_id": "38089736200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T22:31:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
