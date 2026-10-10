@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: C\n\nRATIONALE:\nQ1: In `.github/workflows/ci.yml` (lines 1601-1630), group 3 and shard 1 are fixed `NR % total == n` splits of a test list. That means the exact test selection can be rebuilt by reading the code, without the run's logs. The review autofix check-run collector (`CHECK_RUNS_LOG_TAIL_BYTES`, wired in `review_autofix.yml`) passes the real `orchestrate-poll (3)` failure log to the editor. Option B grows into sandbox-image infrastructure that would not apply to this run. Option C asks for data that no one here can supply, so it would loop.\nQ2: The GitHub facts I was given show that PR #6650 merged into `main`. They contain no `main` CI run for `orchestrate-poll (3)` or `lint`, so I cannot pick A without inventing a run ID. B claims a failure on `main` that I have not seen either. With C, the PR's own CI against current `main` settles it, and no speculative edits are made.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - .github/workflows/ci.yml, the `orchestrate-poll` matrix step (lines ~1513-1640): fast-fail subset, group split by `CI_POLL_TEST_GROUP_INDEX` / `CI_POLL_TEST_GROUP_COUNT`, shard split by `CI_POLL_TEST_SHARDS` (default 4)\n    - tests/test_orchestrate_poll_process.py\n    - tests/test_ci_poll_test_sharding.py (the partition contract)\n  steps:\n    - Branch from current `main`, not from `ai/issue-6637`.\n    - Rebuild the list of tests that group index 3, shard 1 runs, using the same test enumeration and `awk 'NR % total == n'` expressions as `ci.yml`. Record that list in the PR body.\n    - Read those tests and the poller code paths they exercise. Change code only when a defect can be shown from code reading. Do not edit the shard or group partition, the \"unrecorded exit code counts as failed\" handling, or the `lint` aggregate's `needs` / `always()` failure behaviour.\n    - If no defect can be shown, make no code change. Let the PR CI's `orchestrate-poll (3)` result and its collected check-run log tail be the reproduction, and let the review/autofix loop fix any failure it reports.\n    - The PR must not merge while `orchestrate-poll (3)` or `lint` is red. The existing required-checks wait (`_pr_wait_for_required_checks`) enforces this.\n  replaces_acceptance_criterion: \"Obtain the full shard-1 log from CI run 37935105340, or reproduce locally with jq\"\n  equivalence_argument: The PR's CI runs the same shard selection against current `main` in the real CI environment, which has jq. The collected failure log then supplies the failing test and traceback. That gives evidence at least as strong as a local reproduction, and it reflects the current head instead of a stale one.\n  reversibility: The rebuilt selection and any fix are one revertable PR. If a human later provides the run 37935105340 traceback, a follow-up issue can target that test directly.\nQ2:\n  strategy: reframe\n  inputs:\n    - The PR's own CI run (`orchestrate-poll (0..3)` and `lint`) on a branch cut from current `main`\n  steps:\n    - Proceed as in Q1.\n    - If the PR's `orchestrate-poll (3)` and `lint` pass and no defect was shown, the PR carries only the recorded evidence: the CI run ID, the shard test list, and the pass result. It also states that the failure in run 37935105340 is superseded on current `main`.\n    - If they fail, fix only the failing test or poller defect that the collected log shows, then rerun until the required checks are green.\n  replaces_acceptance_criterion: \"If current main has a verified passing CI run \u2026 record the run ID \u2026 and close as superseded\"\n  equivalence_argument: A green CI run on a branch that equals `main` plus evidence-only changes is a verified pass of the same shard on current `main`. It provides the run ID the original criterion asks for.\n  reversibility: An evidence-only PR changes no behaviour. If `main` later turns red, a new triage issue is filed through the normal check-failure triage path.",
+  "fingerprint": "42e10e13a84e1df3b645697364f902aa7cf7678bdf7284369a1e87334b78a9ee",
+  "lineage": {
+    "issue_number": 7083,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38054620403",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38054620403",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7083"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010131523_0ab1c1d7d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7083,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38054620403"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7083",
+  "timestamps": {
+    "created_at": "2026-10-10T13:15:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
