@@ -950,13 +950,25 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   failing test names and files from the verified runs' own filtered job
   logs (`heal-scope failing-tests`, shapes: the CI shard runner's
   `TEST_CASE_EVENT ... "status":"fail"` and `FAIL  test_x`, pytest's
-  `FAILED tests/x.py::test_y`), freezes them with the other inputs, and
+  `FAILED tests/x.py::test_y`, and for a test file CI runs as a script the
+  traceback frame `File ".../tests/x.py", line N, in test_y` or unittest's
+  `FAIL: test_y (...)` / `ERROR: test_y (...)`), freezes them with the other inputs, and
   `heal-scope render` resolves each name to the test file that defines it
   (`git grep` at the scope commit) and that file's stem to the subject it
   covers: `scripts/<stem>.sh`, `scripts/<stem>.py`,
   `.github/workflows/<stem>.yml` (also with `-` for `_`), only when the file
   exists at the scope commit and passes the usual path rules (never
-  `.claude/` or `.github/ai/`). The diagnosis still cannot add a path. The
+  `.claude/` or `.github/ai/`). Guard tests check other files, so their own
+  name maps to no subject; `HEAL_SCOPE_GUARD_TEST_SUBJECTS` maps them to the
+  files their fix edits (`tests/test_ci_job_split_contract.py` and
+  `tests/test_ci_wires_every_test_file.py` to `.github/workflows/ci.yml`).
+  A failing `tests/test_workflow_file_size_limit.py` adds every workflow at
+  or above 480,000 bytes at the scope commit, `scripts/stage_workflow_support.sh`,
+  `docs/INVENTORY.md`, and `scripts/<workflow>_step_*.sh` for each oversized
+  workflow (`-` becomes `_`) so the heal can create the step scripts §27
+  asks for. That step-script glob is the only glob a scope accepts besides
+  the trailing `tests/**` and `changelog.d/*.md`, and only as a guard
+  subject. The diagnosis still cannot add a path. The
   heal prompt tells the healer to pick the wrong side from the documented
   behaviour (README, agents.md, changelog fragments, the introducing issues
   and PRs), never from "the test should match what the code does now".
@@ -1646,6 +1658,8 @@ committing the corresponding file:
   It keeps the synthetic `TEST_*` fixtures and masks global/system git config.
 - `scripts/validation_refresh_runner.py` runs each consumer self-test through the same sandbox: `provision` once per runner, then `checked-run <runner pid> scripts/validate_driver.sh`, which runs `selfcheck` against the `GH_TOKEN`-holding runner process before `run`. Logs are copied back to the old out-of-clone directory through `VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST` (default `<workspace>/validation/logs`), so drift detection is unchanged. A sandbox failure is a `self_test` failure (`red`); there is no host fallback.
 - The nightly self-test (`nightly-validation-selftest.yml`) still calls the driver on the host with the per-test scrub; it runs this repository's own `tests/fixtures/selftest` fixtures, not consumer or model-written tests. Its checkout uses `persist-credentials: false`, and the self-test job holds only a read-only `GITHUB_TOKEN` (`contents: read`). Those tests run as the runner user and could rewrite that checkout's `.git` (hooks, config, `HEAD`), so the status commit does not run there: the `commit-selftest-status` job (`contents: write`) runs on a fresh runner and checkout, receives only the summary JSON artifact, and authenticates its pull/push through a one-shot credential helper that reads `github.token` from its commit step's env. Log prefix: `VALIDATION_HARNESS_SANDBOX`.
+- Its `harness-sandbox-check` job is the daily check of this sandbox: on a fresh runner it runs `provision`, then `checked-run` with a probe that asks the sandbox user's rootless Docker for `docker info` and writes a log that must copy back, then `cleanup`, and logs `VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok|fail`. Smoke validations and the fixtures skip the sandbox, so before this a runner-image change that broke provisioning surfaced only when every project validation failed (#6959). A failed run on the default branch reaches the workflow failure heal intake (`SCHEDULED_CHECK_WORKFLOW_NAMES`).
+- Self-repo validation runs without an explicit target stage the harness infrastructure from the verified support commit, not from the validation checkout (an integration branch): `self_repo_trusted_scripts` in `validate.yml`'s staging manifest (`validation_harness_sandbox.sh`, `codex_isolated_workspace.py`, `validate_driver.sh`), staged by `stage_self_repo_trusted_support_entry` in `scripts/stage_workflow_support.sh` after the required scripts. It logs `VALIDATE_TRUSTED_SUPPORT_OVERRIDE` when the checkout's copy differed and `VALIDATE_TRUSTED_SUPPORT` once staged, refuses paths outside `scripts/` and symlinked paths, and fails closed when the trusted copy is missing. This generalises the renderer rule (#6940): project #6664 revalidated with an integration-branch sandbox script that predated #6959 and could not provision. `validate_process.sh` and the project's other scripts still come from the checkout, and consumer and explicit-target runs are unchanged.
 
 ## Workflow scenario traces
 
@@ -2141,6 +2155,9 @@ and shipped:
 - `VALIDATE_TRUSTED_TEMPLATES`
 - `VALIDATE_TRUSTED_RENDERER_OVERRIDE`
 - `VALIDATE_TRUSTED_RENDERER`
+- `VALIDATE_TRUSTED_SUPPORT_OVERRIDE`
+- `VALIDATE_TRUSTED_SUPPORT`
+- `VALIDATION_HARNESS_SANDBOX_DAILY`
 - `REVIEWER_RISK_TIER`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
@@ -2385,6 +2402,9 @@ LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATE_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATES
 LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER
+LOG_PREFIX.name=VALIDATE_TRUSTED_SUPPORT_OVERRIDE
+LOG_PREFIX.name=VALIDATE_TRUSTED_SUPPORT
+LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX_DAILY
 LOG_PREFIX.name=REVIEWER_RISK_TIER
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
