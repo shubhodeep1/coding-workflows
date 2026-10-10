@@ -2,12 +2,14 @@
 """Tests for scripts/verify_release_manifest.py (release manifest verifier, issue #6957).
 
 Each fixture release is built with scripts/release_manifest.py under tmp_path;
-the real-repo test only reads the live checkout. No git command is run.
+the real-repo test only reads the live checkout. Only the verify-pr-tree tests
+(issue #7004) run git, against throwaway repositories under tmp_path.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -46,6 +48,12 @@ DOCUMENTED_REASONS = {
 	"size_mismatch",
 	"hash_mismatch",
 	"internal_error",
+	"content_mismatch",
+	"retired_hash_mismatch",
+	"derived_mismatch",
+	"derived_missing",
+	"too_many_changes",
+	"git_failed",
 }
 ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 
@@ -533,3 +541,207 @@ def test_real_repo_tree(tmp_path: Path) -> None:
 	paths.write_text("\n".join(entry["path"] for entry in _manifest_doc(manifest)["files"]) + "\n", encoding="utf-8")
 	match = _parse(*_verify(manifest, REPO_ROOT, "--paths-file", str(paths)))
 	assert match.group(1) == "ok", match.group(0)
+
+
+# ── verify-pr-tree (issue #7004) ─────────────────────────────────────────
+
+WRAPPER_TEMPLATE = (
+	"name: AI Review\n"
+	"jobs:\n"
+	"  review:\n"
+	"    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable\n"
+)
+RETIRED_OLD = "old hook\n"
+
+
+def _git_env() -> dict:
+	env = {k: v for k, v in ENV.items() if not k.startswith("GIT_")}
+	env["GIT_CONFIG_NOSYSTEM"] = "1"
+	env["GIT_CONFIG_GLOBAL"] = os.devnull
+	return env
+
+
+def _g(cwd: Path, *args: str) -> str:
+	result = subprocess.run(
+		["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", *args],
+		cwd=cwd,
+		capture_output=True,
+		text=True,
+		env=_git_env(),
+		check=True,
+	)
+	return result.stdout.strip()
+
+
+class PrTree:
+	"""A release fixture, a consumer repo with a base commit and a PR commit on top."""
+
+	def __init__(self, tmp_path: Path):
+		self.tmp = tmp_path
+		self.root = _fixture(tmp_path)
+		_write(self.root, "workflow-templates/ai-review.yml", WRAPPER_TEMPLATE)
+		retired_sha = hashlib.sha256(RETIRED_OLD.encode("utf-8")).hexdigest()
+		_write(self.root, "workflow-templates/retired_files.txt", f"# retired\n.claude/old.sh {retired_sha}\n")
+		self.manifest = tmp_path / "manifest.json"
+		_build(self.root, self.manifest)
+		self.repo = tmp_path / "consumer"
+		self.repo.mkdir()
+		_g(self.repo, "init", "-q")
+		_write(self.repo, ".github/workflows/ai-review.yml", "name: old\n")
+		_write(self.repo, ".claude/old.sh", RETIRED_OLD)
+		_write(self.repo, "README.md", "# consumer\n")
+		_write(self.repo, "CHANGELOG.md", "# Changelog\n")
+		_g(self.repo, "add", "-A")
+		_g(self.repo, "commit", "-q", "-m", "base")
+		self.base = _g(self.repo, "rev-parse", "HEAD")
+		self.reproduced = tmp_path / "base-tree"
+		_g(self.repo, "worktree", "add", "-q", "--detach", str(self.reproduced), self.base)
+
+	def rendered_wrapper(self) -> str:
+		return WRAPPER_TEMPLATE.replace("@stable", f"@{GOOD_SHA} # stable")
+
+	def stage_clean_update(self) -> None:
+		_write(self.repo, ".github/workflows/ai-review.yml", self.rendered_wrapper())
+		_write(self.repo, ".claude/settings.json", "{}\n")
+		_write(self.repo, "CLAUDE.md", "# rules\n")
+		(self.repo / ".claude" / "old.sh").unlink()
+
+	def commit(self) -> str:
+		_g(self.repo, "add", "-A")
+		_g(self.repo, "commit", "-q", "-m", "update")
+		return _g(self.repo, "rev-parse", "HEAD")
+
+	def args(self, head: str, base: str | None = None) -> list[str]:
+		return [
+			"verify-pr-tree",
+			"--manifest", str(self.manifest),
+			"--release-root", str(self.root),
+			"--expected-sha", GOOD_SHA,
+			"--git-dir", str(self.repo / ".git"),
+			"--base", base or self.base,
+			"--head", head,
+			"--reproduced-root", str(self.reproduced),
+		]
+
+	def run(self, head: str, base: str | None = None) -> tuple[int, str, str]:
+		result = subprocess.run([sys.executable, str(VERIFIER), *self.args(head, base)], capture_output=True, text=True, env=ENV)
+		return result.returncode, result.stdout, result.stderr
+
+
+@pytest.fixture
+def pr(tmp_path: Path) -> PrTree:
+	return PrTree(tmp_path)
+
+
+def test_pr_tree_clean_update_is_accepted(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	match = _parse(*pr.run(pr.commit()))
+	assert match.group(1) == "ok", match.group(0)
+	assert match.group(3) == "4"
+
+
+def test_pr_tree_extra_file_is_unlisted(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	_write(pr.repo, "evil.txt", "payload\n")
+	match = _assert_rejected(pr.run(pr.commit()), "unlisted_path")
+	assert match.group(5) == "evil.txt"
+
+
+def test_pr_tree_tampered_wrapper_is_rejected(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	_write(pr.repo, ".github/workflows/ai-review.yml", pr.rendered_wrapper().replace(GOOD_SHA, OTHER_SHA))
+	match = _assert_rejected(pr.run(pr.commit()), "content_mismatch")
+	assert match.group(5) == ".github/workflows/ai-review.yml"
+
+
+def test_pr_tree_wrapper_without_template_is_unlisted(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	_write(pr.repo, ".github/workflows/ai-extra.yml", pr.rendered_wrapper())
+	_assert_rejected(pr.run(pr.commit()), "unlisted_path")
+
+
+def test_pr_tree_tampered_claude_asset_is_rejected(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	_write(pr.repo, ".claude/settings.json", '{"hooks": "evil"}\n')
+	_assert_rejected(pr.run(pr.commit()), "content_mismatch")
+
+
+def test_pr_tree_symlink_is_mode_mismatch(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	(pr.repo / ".claude" / "settings.json").unlink()
+	(pr.repo / ".claude" / "settings.json").symlink_to("../README.md")
+	_assert_rejected(pr.run(pr.commit()), "mode_mismatch")
+
+
+def test_pr_tree_deleting_unlisted_file_is_rejected(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	(pr.repo / "README.md").unlink()
+	match = _assert_rejected(pr.run(pr.commit()), "unlisted_path")
+	assert match.group(5) == "README.md"
+
+
+def test_pr_tree_deleting_modified_retired_file_is_rejected(pr: PrTree) -> None:
+	_write(pr.repo, ".claude/old.sh", "locally modified\n")
+	pr.base = pr.commit()
+	pr.stage_clean_update()
+	_assert_rejected(pr.run(pr.commit()), "retired_hash_mismatch")
+
+
+def test_pr_tree_reproduced_changelog_must_match(pr: PrTree) -> None:
+	_write(pr.reproduced, "CHANGELOG.md", "# Changelog\n\n## 2026-10-10\n- entry\n")
+	pr.stage_clean_update()
+	_write(pr.repo, "CHANGELOG.md", "# Changelog\n\n## 2026-10-10\n- entry\n")
+	assert _parse(*pr.run(pr.commit())).group(1) == "ok"
+
+
+def test_pr_tree_reproduced_changelog_mismatch_is_rejected(pr: PrTree) -> None:
+	_write(pr.reproduced, "CHANGELOG.md", "# Changelog\n\n## 2026-10-10\n- entry\n")
+	pr.stage_clean_update()
+	_write(pr.repo, "CHANGELOG.md", "# Changelog\n\n## 2026-10-10\n- injected\n")
+	match = _assert_rejected(pr.run(pr.commit()), "derived_mismatch")
+	assert match.group(5) == "CHANGELOG.md"
+
+
+def test_pr_tree_missing_reproduced_change_is_rejected(pr: PrTree) -> None:
+	_write(pr.reproduced, "changelog.d/.gitkeep", "")
+	pr.stage_clean_update()
+	match = _assert_rejected(pr.run(pr.commit()), "derived_missing")
+	assert match.group(5) == "changelog.d/.gitkeep"
+
+
+def test_pr_tree_reproduced_deletion_must_match(pr: PrTree) -> None:
+	_write(pr.repo, "changelog.d/1-x.md", "- fragment\n")
+	pr.base = pr.commit()
+	_g(pr.reproduced, "checkout", "-q", "--detach", pr.base)
+	(pr.reproduced / "changelog.d" / "1-x.md").unlink()
+	pr.stage_clean_update()
+	(pr.repo / "changelog.d" / "1-x.md").unlink()
+	assert _parse(*pr.run(pr.commit())).group(1) == "ok"
+
+
+def test_pr_tree_change_cap(pr: PrTree, capsys) -> None:
+	pr.stage_clean_update()
+	head = pr.commit()
+	module = _load_module()
+	module.MAX_PR_CHANGES = 1
+	rc = module.main(pr.args(head))
+	captured = capsys.readouterr()
+	_assert_rejected((rc, captured.out, captured.err), "too_many_changes")
+
+
+def test_pr_tree_invalid_arguments(pr: PrTree, tmp_path: Path) -> None:
+	pr.stage_clean_update()
+	head = pr.commit()
+	_assert_rejected(pr.run(head, base="HEAD~1"), "invalid_argument")
+	_assert_rejected(pr.run("refs/heads/main"), "invalid_argument")
+
+
+def test_pr_tree_unknown_commit_is_git_failed(pr: PrTree) -> None:
+	_assert_rejected(pr.run(OTHER_SHA), "git_failed")
+
+
+def test_pr_tree_tampered_release_is_rejected(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	head = pr.commit()
+	_write(pr.root, "workflow-templates/ai-review.yml", WRAPPER_TEMPLATE + "# tampered\n")
+	_assert_rejected(pr.run(head), "size_mismatch")

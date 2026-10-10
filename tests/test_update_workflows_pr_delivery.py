@@ -6,8 +6,10 @@ update_workflows.yml must never push to the consumer default branch. It
 commits to auto/update-workflows-<release-sha-12> with a lease-checked push,
 opens or refreshes one pull request found by a head+base scoped lookup, runs
 the auto-close lint before creating it, and enables auto-merge (bound to the
-pushed head) only when manifest verification reported verified=true. With the
-flag off the step keeps today's direct push.
+pushed head) only when manifest verification reported verified=true; since
+#7004 the separate `verify` job enables it after checking the PR tree, and
+this step records auto_merge=pending_verify. With the flag off the step keeps
+today's direct push.
 
 The behavioural tests run the step body with bash against a bare file://
 origin and a fake `gh` under tmp_path.
@@ -134,12 +136,17 @@ def test_lint_runs_before_any_push_or_pr_write() -> None:
 
 
 def test_auto_merge_is_bound_to_head_and_gated_on_verification() -> None:
+	# Since #7004 this step never enables auto-merge; the `verify` job does,
+	# after its PR-tree check (tests/test_update_workflows_template_gate.py).
 	run = _run_text()
 	gate = run.index('if [ "${VERIFIED_TEXT}" = "true" ]; then')
-	merge = run.index('gh pr merge "${PR_NUMBER}"')
-	assert gate < merge < run.index("AUTO_MERGE=\"skipped_unverified\"")
-	assert '--auto --squash --match-head-commit "${PUSHED_SHA}"' in run
-	assert run.count("gh pr merge") == 1
+	pending = run.index('AUTO_MERGE="pending_verify"')
+	assert gate < pending < run.index("AUTO_MERGE=\"skipped_unverified\"")
+	assert "gh pr merge" not in run
+	verify_steps = _doc()["jobs"]["verify"]["steps"]
+	publish = [step for step in verify_steps if step.get("id") == "verify_publish"]
+	assert len(publish) == 1
+	assert '--auto --squash --match-head-commit "${PUSHED_SHA}"' in publish[0]["run"]
 
 
 def test_no_pull_requests_permission_is_requested() -> None:
@@ -382,13 +389,16 @@ def test_fresh_run_opens_one_pr_without_touching_main(fx: Fixture) -> None:
 
 
 @needs_jq
-def test_verified_release_enables_bound_auto_merge(fx: Fixture) -> None:
+def test_verified_release_waits_for_the_verify_job(fx: Fixture) -> None:
 	result = fx.run(verified="true")
 	assert result.returncode == 0, result.stderr
 	pushed = _remote_sha(fx.origin, f"refs/heads/{BRANCH}")
-	merges = [call for call in fx.gh_calls() if call.startswith("pr merge")]
-	assert merges == [f"pr merge 77 --repo {REPO} --auto --squash --match-head-commit {pushed}"]
-	assert fx.outputs()["auto_merge"] == "enabled"
+	assert not any(call.startswith("pr merge") for call in fx.gh_calls())
+	outputs = fx.outputs()
+	assert outputs["auto_merge"] == "pending_verify"
+	assert outputs["pushed_sha"] == pushed
+	assert outputs["base"] == "main"
+	assert "ai-update-workflows/verify" in fx.body_copy.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("verified", ["skipped", "false", ""])
