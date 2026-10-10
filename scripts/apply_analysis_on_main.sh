@@ -260,7 +260,8 @@ doc_exists_on_ref()
 	stderr_file="$(mktemp)"
 	doc_type="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${doc_path}?ref=${ref}" --jq '.type' 2>"${stderr_file}")" || rc=$?
 	if [ "${rc}" -ne 0 ]; then
-		if grep -qE 'HTTP 404|Not Found' "${stderr_file}"; then
+		# Only an explicit 404 means the doc is gone; any other error fails closed.
+		if grep -qF 'HTTP 404' "${stderr_file}"; then
 			rm -f "${stderr_file}"
 			return 1
 		fi

@@ -1231,6 +1231,9 @@ jobs:
         env:
           REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # Same trusted-marker set the promote cycle and poller use, so the
+          # purge keeps every doc a trusted marker names.
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
         run: |
           set -euo pipefail
 

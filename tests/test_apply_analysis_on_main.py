@@ -537,6 +537,7 @@ def test_log_analysis_purge_keeps_docs_open_projects_use_and_fails_closed() -> N
 	workflow = (REPO_ROOT / ".github" / "workflows" / "workflow-log-analysis.yml").read_text(encoding="utf-8")
 	step = workflow.split("      - name: Commit and push report\n", 1)[1].split("\n      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ secrets.GH_PAT || github.token }}" in step
+	assert "COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}" in step
 	assert 'purge_in_flight_docs="$(APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash scripts/apply_analysis_on_main.sh)"' in step
 	# The guard is listed before the loop, gates the whole purge, and is
 	# consulted before every git rm.
