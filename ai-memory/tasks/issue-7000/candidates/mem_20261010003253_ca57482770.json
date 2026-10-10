@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: In this checkout the test `test_security_pass_exhaustion_judge_accepts_all_findings_and_passes` (`tests/test_orchestrate_poll_process.py:5881-5950`) does not have the line the triage cites. Line 5931 here checks `waived[0][\"waived_at_cycle\"] == 3`, and nothing in the test compares the waiver's `exploit_scenario` with the unchanged helper value. So the failing assertion came from PR #6999's head `ai/issue-6987` (open, not merged, at 94d0f073282c, run 38007443083 failed). A fix planned on `main` would change nothing. Stacking it onto `ai/issue-6987` is the only target that can turn that CI green.\nQ2: The test sets `remaining[\"exploit_scenario\"] = \"Notify @security-team about issue #123.\"` at line 5891. agents.md says waivers record the finding's own payload, and matching on scenario depends on it. So a waiver that holds the supplied scenario is correct, and a test expecting the helper's default is wrong. The triage could not confirm the cause because the log has no traceback. Option A lets the implementer reproduce the failure and fix whichever side breaks the documented behaviour, choosing from the documentation rather than \"make the test match the code\". It stays within the triage's single affected area.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - GITHUB FACTS: PR #6999 open, head `ai/issue-6987` @ 94d0f073282c; CI run 38007443083 failed on that head\n    - tests/test_orchestrate_poll_process.py:5881-5950 on this checkout (main): no waiver `exploit_scenario` assertion, so the failing line exists only on the PR branch\n  steps:\n    - Plan with `Target branch: ai/issue-6987` so the fix PR stacks onto PR #6999's head.\n    - First inspect the PR-branch version of the test around lines 5890-5945 to find the assertion that compares the waiver's `exploit_scenario`.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: n/a\n  reversibility: If PR #6999 is closed or reissued first, this fix PR becomes moot and can be closed. The retarget-merged-base helper moves it onto `main` if `ai/issue-6987` merges first.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_orchestrate_poll_process.py (PR-branch version of the named test)\n    - scripts/orchestrate_poll_process.sh waiver construction (~7156-7170 on the PR branch)\n    - agents.md security-pass waiver text (waivers match on exact id, or file/category/severity/exploit scenario)\n  steps:\n    - Run `pytest tests/test_orchestrate_poll_process.py -k test_security_pass_exhaustion_judge_accepts_all_findings_and_passes` on `ai/issue-6987` to get the actual assertion traceback.\n    - If the assertion expects the helper's default scenario, change it to `remaining[\"exploit_scenario\"]`. Keep the advisory-body escaping assertions (`@\u200bsecurity-team`, `#\u200b123`, no raw `@security-team`) unchanged.\n    - If instead the script records the wrong scenario or drops it, fix `scripts/orchestrate_poll_process.sh` so the waiver row stores the finding's own `exploit_scenario`, and keep the test's expectation.\n    - Re-run the named test, then the full module partition for shard group 2 (or the whole module) to confirm the shard passes.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: The fix is chosen from documented waiver semantics, not from what the code does now, so the test and the code end up agreeing with the documented contract.\n  reversibility: The change is a single-test or single-function edit on a stacked PR. Revert the commit if a reviewer disagrees.\n\nNotes:\n- Assumption: the PR branch's test differs from the main checkout read here. I inferred this from line 5931 differing; I did not read the PR-branch file directly.\n- Missing context: the CI log has no traceback, so the exact failing assertion must be confirmed by running the test.",
+  "fingerprint": "56f64079dc4cef6e5fa66fbee2b6c8b0226523af965081922ff0c13e4f005dc1",
+  "lineage": {
+    "issue_number": 7000,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38008913865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38008913865",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7000"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010003253_ca57482770",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7000,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38008913865"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7000",
+  "timestamps": {
+    "created_at": "2026-10-10T00:32:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
