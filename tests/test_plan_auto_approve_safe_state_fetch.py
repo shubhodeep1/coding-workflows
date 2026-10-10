@@ -290,6 +290,20 @@ def test_automation_path_gate_withholds_ungranted_plan() -> None:
 	assert "scripts/files_touched_scope_guard.py" not in post
 	assert "scripts/elsewhere.sh" not in post
 	assert "/approved [auto-approved-by-plan]" not in post
+	assert "cannot be granted through `files_touched`" not in post
+
+
+def test_automation_path_gate_hold_notes_ungrantable_directory_and_glob_entries() -> None:
+	# The grant builder drops entries ending in `/` or containing `*`, `?`, `[`,
+	# so the hold comment must point at `/approved` for them.
+	plan = "Implementation Plan\n\nFiles likely to change:\n- a `scripts/` helper\n- `workflow-templates/*.yml`\n"
+	result = _run_gate_case(plan=plan, issue=_issue_with_grant(["workflow-templates/*.yml"]), flag="true")
+	assert not _approved(result)
+	assert "reason=automation_path_ungranted outcome=defer issue=123 paths=2" in result["stdout"]
+	assert len(result["posts"]) == 1
+	post = result["posts"][0]
+	assert "`scripts/`" in post and "`workflow-templates/*.yml`" in post
+	assert "A directory entry ending in `/` or a glob entry" in post
 
 
 def test_automation_path_gate_skips_plans_without_automation_paths() -> None:

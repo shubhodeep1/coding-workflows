@@ -14859,7 +14859,7 @@ _automation_path_plan_hold_report()
           (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
           (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
           (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
-          (if any($paths[]; endswith("/")) then "_(A directory entry ending in `/` cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
+          (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
           "",
           "To proceed, a trusted OWNER/MEMBER/COLLABORATOR adds these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant), or replies `/approved`. The implement commit-time automation-path guard still applies either way.",
           "",
