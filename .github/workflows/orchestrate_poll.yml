@@ -195,7 +195,7 @@ jobs:
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
           MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
-          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}
+          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
           MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
@@ -649,6 +649,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
+          # Unrouted-reply detection on blocked issues (issue #6630); the
+          # poller script carries the same defaults.
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          RECLARIFY_UNROUTED_DETECT_ENABLED: ${{ vars.RECLARIFY_UNROUTED_DETECT_ENABLED || 'true' }}
+          RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
+          RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
@@ -865,6 +873,22 @@ jobs:
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
+      # Hourly Telegram WARNING naming every pool account at or above the usage
+      # gate (and every rejected token), from the probes the step above already
+      # ran; silent while every account is below the gate (#6951).
+      - name: Alert on Claude pool accounts at the usage gate
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CLAUDE_POOL_HEALTH_ALERT_ENABLED || 'true' }}
+          CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
+          CLAUDE_ENGINE_CONFIG: .codex-workflow-src/.github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -932,6 +956,8 @@ jobs:
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Merge-base freshness gate (scripts/pr_checks_lib.sh, Q35: A).
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),
           # which can legitimately run past the generic stall threshold (up to

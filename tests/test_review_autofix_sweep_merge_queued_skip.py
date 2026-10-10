@@ -78,6 +78,7 @@ def write_fake_gh(tmp: Path, prs: list[dict]) -> Path:
 		fi
 		if [ "$1" = "api" ]; then
 			case "$*" in
+				"api repos/"*" --jq .default_branch") printf 'main\\n'; exit 0 ;;
 				*"/pulls "*|*"/pulls") cat "{tmp}/pulls.json"; exit 0 ;;
 				*"/actions/workflows/"*) printf '%s' '{{"total_count":0,"workflow_runs":[]}}'; exit 0 ;;
 			esac
