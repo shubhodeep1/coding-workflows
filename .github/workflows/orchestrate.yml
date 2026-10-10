@@ -575,17 +575,30 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
+            # agents.md keeps precedence; consumer repos that only have
+            # AGENTS.md (the casing update_workflows.yml folds) fall back to it.
+            orchestrate_agents_file=""
             if [ -f agents.md ] && [ ! -L agents.md ]; then
-              echo "=== AGENTS.MD ==="
-              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
-              if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file agents.md 2>/dev/null)"; then
-                printf '%s\n' "${orchestrate_agents_render}"
-              else
-                cat agents.md
-              fi
-              echo
+              orchestrate_agents_file="agents.md"
             elif [ -L agents.md ]; then
               echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -z "${orchestrate_agents_file}" ]; then
+              if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
+                orchestrate_agents_file="AGENTS.md"
+              elif [ -L AGENTS.md ]; then
+                echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
+              fi
+            fi
+            if [ -n "${orchestrate_agents_file}" ]; then
+              echo "=== AGENTS.MD ==="
+              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+              if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${orchestrate_agents_file}" 2>/dev/null)"; then
+                printf '%s\n' "${orchestrate_agents_render}"
+              else
+                cat "${orchestrate_agents_file}"
+              fi
+              echo
             fi
             cat "${orchestrate_readme_context}"
             if [ -f probably_unnecessary_but_read_if_stuck.md ] && [ ! -L probably_unnecessary_but_read_if_stuck.md ]; then
