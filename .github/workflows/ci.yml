@@ -554,6 +554,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_pool_telemetry.py
 
+      - name: Prebuilt sandbox image tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
+
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail

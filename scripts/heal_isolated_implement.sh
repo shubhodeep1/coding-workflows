@@ -41,7 +41,13 @@ host_git_dir="${GIT_DIR:-}"
 snapshot_args=()
 [ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}"
-image="$(env -i PATH="${PATH}" docker build -q -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox/Dockerfile" "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox")"
+# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh).
+heal_sandbox_context="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox"
+if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+	image="$(env -i PATH="${PATH}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" bash "${support}/sandbox_image.sh" build --family clarify -f "${heal_sandbox_context}/Dockerfile" "${heal_sandbox_context}")" || image=""
+else
+	image="$(env -i PATH="${PATH}" docker build -q -f "${heal_sandbox_context}/Dockerfile" "${heal_sandbox_context}")"
+fi
 [ -n "${image}" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=image_build_failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY:?}" CLARIFY_MODEL="${MODEL_EDITOR:-openai/gpt-6-sol}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 "${support}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &

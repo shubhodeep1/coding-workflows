@@ -5793,7 +5793,7 @@ def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	stage_helper = _stage_helper_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
+	assert "review_apply_fixes.sh review_untrusted_sandbox.sh sandbox_image.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')

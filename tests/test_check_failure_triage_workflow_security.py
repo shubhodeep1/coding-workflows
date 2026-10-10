@@ -428,6 +428,7 @@ esac
 				"render_prompt.sh", "render_prompt.py", "assemble_prompt.sh",
 				"write_codex_config.sh", "codex_helpers.sh", "collect_pr_check_runs_context.py",
 				"check_failure_triage.sh", "clarify_isolated_run.sh", "clarify_openrouter_broker.py",
+				"sandbox_image.sh",
 			):
 				(support / "scripts" / filename).write_bytes(
 					(REPO_ROOT / "scripts" / filename).read_bytes()
@@ -452,7 +453,7 @@ esac
 			self.assertEqual((trusted / "scripts" / "render_prompt.sh").read_text(), "# trusted support\n")
 			self.assertEqual((trusted / "scripts" / "assemble_prompt.sh").read_text(), "# trusted support\n")
 			self.assertEqual((trusted / "scripts" / "check_failure_triage.sh").read_text(), "# trusted support\n")
-			for path in ("clarify_isolated_run.sh", "clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile", "write_codex_config.sh", "codex_model_catalog.json"):
+			for path in ("clarify_isolated_run.sh", "sandbox_image.sh", "clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile", "write_codex_config.sh", "codex_model_catalog.json"):
 				self.assertEqual((workspace / "scripts" / path).read_bytes(), (trusted / "scripts" / path).read_bytes())
 			self.assertEqual(
 				(trusted / "scripts" / "collect_pr_check_runs_context.py").read_bytes(),

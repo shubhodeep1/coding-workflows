@@ -56,6 +56,12 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
+	# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
+	# without the helper, build locally as before.
+	review_image_builder=(docker build -q)
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		review_image_builder=(bash "${support}/sandbox_image.sh" build --family review)
+	fi
 	# Ephemeral OpenCode retries must not require the Claude CLI or engine files.
 	if [ "${prepare_engine}" = claude ]; then
 		[ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ] || { echo '::error::Review Claude support missing' >&2; exit 1; }
@@ -63,10 +69,10 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		source "${support}/ai_engine.sh"
 		claude_cli_version="$(ai_engine_cli_version)"
 		[[ "${claude_cli_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Claude CLI version' >&2; exit 1; }
-		image="$(timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		image="$(timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" "${review_image_builder[@]}" --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'claude\n' > "${root}/engine"
 	else
-		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" "${review_image_builder[@]}" --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 	fi
 	[ -n "${image}" ] || exit 1
 	printf '%s\n' "${image}" > "${root}/image"

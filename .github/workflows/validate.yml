@@ -338,6 +338,7 @@ jobs:
               "scripts/workspace_safety_check.sh",
               "scripts/run_workspace_hook.sh",
               "scripts/codex_isolated_exec.sh",
+              "scripts/sandbox_image.sh",
               "scripts/codex_isolated_workspace.py",
               "scripts/validation_harness_sandbox.sh",
               "scripts/clarify_openrouter_broker.py"

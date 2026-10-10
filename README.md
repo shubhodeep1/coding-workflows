@@ -1405,7 +1405,7 @@ byte-identical.
 | The numbers that matter | Value |
 | --- | --- |
 | Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
-| Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
+| Image | pulled prebuilt from GHCR when one matches its inputs, else built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after); see "Prebuilt sandbox images" |
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | staged Node manifests and filtered `requirements.txt` / `pyproject.toml` dependencies (both when present) installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; installable Python source (`pyproject.toml`, or requirements with `setup.py`) runs separately offline, including Node/Python hybrids; a failed dev dependency install warns even if base dependencies install on retry; never copied back; when the proxy is unavailable, installation is skipped without restoring network access |
@@ -1481,6 +1481,40 @@ merged-PR check; only digits glued to the redirection (`2>&1`, `2>/dev/null`)
 are a file descriptor, as in Bash.
 An unresolved push source also requires confirmation instead of checking the
 session checkout's unrelated HEAD.
+
+### Prebuilt sandbox images
+
+The sandbox images the isolated agents run in are now pulled ready-made from
+GHCR instead of built on every job. `scripts/sandbox_image.sh` sits in front of
+each image build (`codex_isolated_exec.sh`, `clarify_isolated_run.sh`,
+`heal_isolated_implement.sh`, `review_untrusted_sandbox.sh`): it pulls
+`ghcr.io/shubhodeep1/coding-workflows-sandbox:<family>-<input hash>` and runs
+the same `docker build` as before when the pull fails, times out or returns an
+image whose `coding-workflows.sandbox-input` label does not match. A job no
+longer depends on Docker Hub, npm or the Debian mirrors being reachable, which
+on 2026-10-09 pushed Claude roles onto the codex fallback.
+
+The input hash covers the build context's files, the Dockerfile path and the
+build args (`CODEX_VERSION`, `OPENCODE_VERSION`, `CLAUDE_CLI_VERSION`). A repo
+that overrides one of them, or a ref whose Dockerfile differs from the published
+ones, finds no tag and builds locally exactly as before.
+`.github/workflows/publish-sandbox-images.yml` publishes the tags:
+
+| The numbers that matter | Value |
+| --- | --- |
+| Images per ref | 7: clarify (codex, Claude, heal defaults), review (OpenCode, Claude), `codex_isolated_exec.sh` (codex, Claude) |
+| Published from | pushes to `main` and `stable` that touch an image input; weekly forced rebuild Mondays 04:23 UTC (Debian security updates); `workflow_dispatch` |
+| Pull timeout | `SANDBOX_IMAGE_PULL_TIMEOUT_SECS`, default `60` |
+| Registry | `SANDBOX_IMAGE_REGISTRY`, default `ghcr.io/shubhodeep1/coding-workflows-sandbox`; `off` always builds locally |
+| Log line | `SANDBOX_IMAGE family=<f> outcome=pulled\|built reason=<pull_failed\|label_mismatch\|disabled> ref=<ref>` |
+
+What this means for operators: the package must be public so consumer repos
+pull it without credentials. GitHub creates a new package as private; after
+the first publish, set it to public once under the package's settings. Until
+then, and whenever GHCR is down, jobs build locally and log
+`outcome=built reason=pull_failed`. The publish job runs only in
+`shubhodeep1/coding-workflows` and logs in with the job's `GITHUB_TOKEN`
+(`packages: write`); no consumer job holds a registry credential.
 
 ### Workflow file size limit
 
