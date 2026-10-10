@@ -1061,6 +1061,14 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
+          # Issue #7079: the credential-scrub test and the wiring guard that
+          # requires this line land with PR #7012. Until then the file is
+          # absent here and pytest would exit 4, so run it only when present.
+          if [ -f tests/test_validate_driver_credential_scrub.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_driver_credential_scrub.py
+          else
+            echo "::notice::tests/test_validate_driver_credential_scrub.py not present on this ref; skipping (lands with PR #7012)."
+          fi
 
       - name: Review apply-fixes smoke deterministic contract test
         run: |
