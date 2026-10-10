@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1357-1359 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The added check correctly rejects the literal \"null\" when the API response has no `default_branch` field.\n  WHY: Without the check, \"null\" passes the branch-name regex and could be trusted even though the default branch was never read.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Read the default branch at most once per run or tick\"\n  expected_change_site: `scripts/gh_helpers.sh::_autofix_pr_named_review_runs` and its callers in `scripts/review_autofix_step_changes_lost_redispatch.sh`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `_autofix_pr_named_review_runs` reads the default branch on every invocation at scripts/gh_helpers.sh:1354-1359, with no shared per-run cache; in the changes-lost redispatch path, the peer check at lines 24-25 runs before the retry-budget check at lines 50-52, and both can invoke the function when branch-scoped probes find no matching run, causing two reads in one run; the editor-changes-lost redispatch path invokes it sequentially at lines 24-25 and 51-52 of `scripts/review_autofix_step_changes_lost_redispatch.sh`, causing two reads in one run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1357-1359 | severity=NIT | confidence=5\n  PROBLEM: The LAST RUN DIFF adds a check that `review_default_branch` is not the literal string \"null\", which `--jq '.default_branch'` outputs when the API response has no `default_branch` field. This is a correct defensive fix.\n  WHY: Without this check, the literal \"null\" string passes the regex `^[A-Za-z0-9._/-]+$` and becomes the trusted branch. A run with a null/empty `head_branch` would then be accepted as trusted even though the default branch was never read.\n- TASK_GAP\n  Requirement: \"Read the default branch at most once per run or tick\" (from the LINKED ISSUE Fix section)\n  Expected change site: `scripts/gh_helpers.sh::_autofix_pr_named_review_runs`\n  Evidence of absence: `_autofix_pr_named_review_runs` reads the default branch on every invocation (line 1354-1355), with no per-run cache. The function runs inside `$(...)` subshells, and the poller's memo mechanism (`_review_run_default_branch`) uses a temp file keyed on `GITHUB_RUN_ID` and `$$`, which is unavailable in the review_autofix runner context where the function runs as a standalone sourced helper. The editor acknowledged this gap in the previous run but deferred it due to the subshell constraint.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRead the default branch at most once per run or tick.\u201d\n  Expected change site: `scripts/gh_helpers.sh::_autofix_pr_named_review_runs` and its callers in `scripts/review_autofix_step_changes_lost_redispatch.sh`.\n  Evidence of absence: `_autofix_pr_named_review_runs` fetches the default branch on every invocation at `scripts/gh_helpers.sh:1354-1359`, with no shared per-run cache. In the changes-lost redispatch step, the peer check at lines 24-25 runs before the retry-budget check at lines 50-52. When the branch-scoped probes find no matching run, both checks can invoke `_autofix_pr_named_review_runs`, causing two default-branch reads in one run.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"read the default branch at most once per run or tick\"\n  Expected change site: `scripts/gh_helpers.sh::_autofix_pr_named_review_runs` and its callers in `scripts/review_autofix_step_changes_lost_redispatch.sh`\n  Evidence of absence: The function fetches the default branch on every invocation (`scripts/gh_helpers.sh:1354-1359`) with no per-run cache. The editor-changes-lost redispatch path invokes it sequentially at lines 24-25 and 51-52 of `scripts/review_autofix_step_changes_lost_redispatch.sh`, causing two reads in one run. The editor deferred this in the previous round (entry[6] and entry[7] editor summaries), citing that the poller's cache is unreachable from `gh_helpers.sh` and that adding a shared temp-file memo would complicate tests. The deferral is reasonable: the issue acknowledges \"Reuse #5094's helpers where they are reachable\", the PR adds no new API calls (the read existed before), and the changes-lost path is rare. The gap is real but low-priority.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c821011a65e7818e84795d1ab4233264bbf9fe5e70fa36bdee0d453ef5350c86",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6652,
+    "run_id": "38025735283",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38025735283",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010054205_7cf28168d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6652,
+    "run_id": "38025735283"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T05:42:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
