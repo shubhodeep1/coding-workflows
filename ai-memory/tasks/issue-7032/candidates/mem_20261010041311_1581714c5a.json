@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which reissue paths should the merged-PR check and the standalone `Integration branch:` line apply to?\nChoices:\nA) Only the unblock judge's `reissue` verdict in `scripts/unblock_actions.py`, the path that produced #6813 (RECOMMENDED)\nB) Every reissue path: unblock judge `reissue`, review-blocked judge `close_and_reissue` (`scripts/review_rb_judge.sh`), and poller stall-recovery `close_and_reissue` (`scripts/orchestrate_poll_process.sh`)\nC) A plus the review-blocked judge's `close_and_reissue`, leaving poller stall recovery unchanged\nQ2: How should an issue be recognised as a \"CI-failure issue\", and its owning PR found?\nChoices:\nA) Issues labelled `ai:check-triage` (also accept `ai:check-triage-escalated`). The owning PR is the one named on the triage body's `**Pull request:**` line, confirmed with one PR API read: same repository, number matches (RECOMMENDED)\nB) Any issue whose body links a PR in this repository, whatever its labels\nC) Only `ai:check-triage` issues whose triage markers include a PR number; skip the merged-PR check when the marker is absent\nQ3: What should happen when the owning PR has already merged and its required checks passed on the merged head?\nChoices:\nA) Create no replacement issue. Close the original as superseded, post a comment naming the merged PR and head SHA, and log a stable outcome. If the PR read or check read fails, fall back to the normal reissue (RECOMMENDED)\nB) Same as A, but if the PR or check state can't be verified, also skip the reissue and keep the block\nC) Still reissue, and only add a note that the owning PR has merged\nQ4: Where should the branch on the standalone `- Integration branch:` line come from, and what does \"compare with the PR head, not its base\" mean?\nChoices:\nA) Use the owning PR's verified head ref: from the PR API, same-repo head, PR still open, branch exists. Never take it from model-written text. When the PR targets a non-default base, compare against the PR head ref; never put the PR's base ref on the line. If the head can't be verified, add no line (RECOMMENDED)\nB) Copy an existing line-anchored `Integration branch:` / `Target branch:` from the original issue body, and add none if absent\nC) Pull the branch name out of the judge's `instructions` text, even when it appears inside a sentence, and rewrite it as a standalone line\n---\nAssumptions and notes:\n- I read this issue as the prevention follow-up only. Recording #6813 as superseded by PR #6786 needs no code change, so it is out of scope here.\n- The repo has no context on #6813 or #6786, so their exact failure couldn't be confirmed. The questions above are based on the current reissue code paths.",
+  "fingerprint": "b68a92b7cde2dc8fc557d20da48b98dcee085065f83be8cba821d2c1acef2072",
+  "lineage": {
+    "issue_number": 7032,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38022894746",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38022894746",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010041311_1581714c5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7032,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38022894746"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7032 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T04:13:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
