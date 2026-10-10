@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A can't be carried out from an answer. `scripts/resolve_integration_ref.sh` (lines 72-104) takes the target branch only from an `Integration branch:` or `Target branch:` line in the issue body or tracking-issue body. This issue's body has neither line, and the check-failure triage scripts never write one, so this issue's plan and implement runs would check out `main`. On `main` the template does not yet have PR #6668's bare-help change, so there is nothing to fix there. Porting the template change to `main` would duplicate PR #6674 and widen scope. The live copy can be fixed where the mismatch actually is: PR #6674's review/autofix editor admits `.claude/hooks/gh_api_write_guard.py` for Claude engine fixes, and `CHECK_RUNS_AUTOFIX_ENABLED` passes it this failed CI run as its top-priority input. The auto-merge required-checks wait (`lint` is required) keeps PR #6674 from merging while the copies differ. Option B adds nothing over that.\nQ2: The template on PR #6674's head is the intended change from issue #6668, so it should be authoritative. Copy it byte-for-byte over the live hook, keeping its executable mode. This keeps the new bare-help behaviour and its restrictions, and it is the direction `scripts/sync_claude_live_copies.py` always syncs (template to live). Option B would undo the approved feature. Option C invents a merge that nobody asked for.\nQ3: The automation-path guard needs an exact `files_touched` grant for `.claude/` and `workflow-templates/` paths. The grant should cover the two hook copies plus a changelog fragment and nothing else. The tests must not change and the hook must not be exempted from the parity check, so test files stay out of scope. Option C's open grant is broader than this fix needs.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (letter C; notes for the planner, since the decision means this issue makes no change on `main`):\n  strategy: reframe\n  inputs:\n    - scripts/resolve_integration_ref.sh (target branch comes only from the issue body)\n    - PR #6674 (head `ai/issue-6668` @ f82f3c47cdc0, base `main`), failed CI run 38016356983\n  steps:\n    - Plan no repository change for this issue on the default branch. Record that the fix belongs to PR #6674's review/autofix loop: copy the template hook over `.claude/hooks/gh_api_write_guard.py` byte-for-byte, including mode, as in Q2=A.\n    - If an editor does touch files under this issue, limit it to the Q3=A grant and make the live copy equal to the template on the checked-out branch. Never port PR #6668's template change onto `main`.\n  replaces_acceptance_criterion: \"this issue's fix PR makes `tests/test_claude_template_live_parity.py` pass on PR #6674\"\n  equivalence_argument: The parity test goes green on PR #6674's head through that PR's own review editor, which can write this one hook path. Required checks keep PR #6674 from merging until then, so `main` and the stable gate stay green.\n  reversibility: If PR #6674 merges with the mismatch, `main` CI fails and a new triage or heal issue is filed against `main`. There Q2=A and Q3=A apply directly with no branch problem.",
+  "fingerprint": "bca172d092b1c4367df2092fed0b179113ee6d2ca71b741b93d5fd8ef41457b2",
+  "lineage": {
+    "issue_number": 7020,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38018089816",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38018089816",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7020"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010025349_0c565c0b7e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7020,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38018089816"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7020",
+  "timestamps": {
+    "created_at": "2026-10-10T02:53:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
