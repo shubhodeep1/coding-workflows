@@ -1469,6 +1469,17 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertTrue(any(call.startswith("api -X GET repos/owner/repo/commits/main/check-runs -f check_name=external / lint") for call in calls))
 
+	def test_check_run_event_encodes_a_slash_in_the_base_ref(self) -> None:
+		calls: list[str] = []
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE, base={"ref": "release/1.x", "check_conclusion": "success"},
+			extra_env={"CHECK_TRIAGE_CHECK_RUN_ID": "55", "CHECK_TRIAGE_CHECK_NAME": "external / lint"}, calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("skip reason=pr_specific_failure base=release/1.x base_conclusion=success", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertTrue(any(call.startswith("api -X GET repos/owner/repo/commits/release%2F1.x/check-runs -f check_name=") for call in calls))
+
 	def test_check_run_event_with_failing_or_unknown_base_check_still_files(self) -> None:
 		for check_base, expected in (
 			({"ref": "main", "check_conclusion": "failure"}, "base_conclusion=failure pr=17"),

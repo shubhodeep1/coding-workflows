@@ -404,7 +404,10 @@ else
 			base_gate_reason="workflow_unresolved"
 		fi
 	else
-		base_gate_conclusion="$(gh_retry gh api -X GET "repos/${REPO}/commits/${BASE_REF}/check-runs" \
+		# The ref is one path segment: encode "/" (the only reserved character the
+		# BASE_REF check above admits) so a branch such as release/1.x resolves.
+		base_gate_ref_path="${BASE_REF//\//%2F}"
+		base_gate_conclusion="$(gh_retry gh api -X GET "repos/${REPO}/commits/${base_gate_ref_path}/check-runs" \
 			-f check_name="${CHECK_NAME}" -f filter=latest -f per_page=100 \
 			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) or any($r[]; .status != "completed") then "" elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
 		[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_check"
