@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7045_6094670679_approved",
   "issue_number": 7045,
   "metadata": {
+    "branch": "ai/issue-7045",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/7045-heal-streak-marker-trust.md",
+      "scripts/workflow_failure_heal_autofix_report.sh",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 7045,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7045",
+    "pr_number": 7051,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7051",
+    "run_attempt": "1",
+    "run_id": "38031190438",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38031190438"
   },
   "run_attempt": 1,
   "run_id": "38031190438",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-10T06:34:23Z",
+  "status": "completed",
+  "timestamp": "2026-10-10T06:58:42Z",
   "workflow": "implement"
 }
