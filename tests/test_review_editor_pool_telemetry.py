@@ -11,7 +11,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APPLY_FIXES = ROOT / "scripts" / "review_apply_fixes.sh"
-REPLAY = "{ grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' \"${tmp_err}\" 2>/dev/null || true; } | sed 's/^/stage=editor /' >&2 || true"
+REPLAY_HEAD = "{ grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' \"${tmp_err}\" 2>/dev/null || true; } | sed "
+REPLAY = next(
+	line.strip()
+	for line in APPLY_FIXES.read_text(encoding="utf-8").splitlines()
+	if line.strip().startswith(REPLAY_HEAD) and "-e 's/^/stage=editor /'" in line
+)
 
 
 def test_replay_runs_after_the_stderr_drain() -> None:
@@ -41,3 +46,17 @@ def test_replay_tolerates_a_missing_capture(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + REPLAY], env={"tmp_err": str(tmp_path / "absent"), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
 	assert result.returncode == 0
 	assert result.stderr == ""
+
+
+def test_replay_neutralises_workflow_commands(tmp_path: Path) -> None:
+	tmp_err = tmp_path / "err"
+	tmp_err.write_bytes(
+		b"CLAUDE_POOL run role=REVIEW_EDITOR\r::error::forged\n"
+		b"AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=##[error]x 50%\n"
+	)
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + REPLAY], env={"tmp_err": str(tmp_err), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)
+	assert "\r" not in result.stderr
+	assert result.stderr.splitlines() == [
+		"stage=editor CLAUDE_POOL run role=REVIEW_EDITOR ::error::forged",
+		"stage=editor AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=##\\[error]x 50%25",
+	]
