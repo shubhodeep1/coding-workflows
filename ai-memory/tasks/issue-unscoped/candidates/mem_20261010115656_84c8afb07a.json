@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_budget_watch.py:39-41 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_strip_comment` can incorrectly strip content from valid YAML values containing a space followed by a hash.\n  WHY: This can make `_is_wired` return False for validly wired tests and cause false-positive test failures in CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a new CI step to one existing job; a new job must also be added to `lint`'s `needs`.\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The new `budget-watch` job is NOT added to the `lint` job's `needs` list in `.github/workflows/ci.yml`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_budget_watch.py:39-41 | severity=MAJOR | confidence=4\n  PROBLEM: `_strip_comment` uses `line.find(\" #\")` to identify comments, which can incorrectly strip content from valid YAML values containing a space followed by a hash (e.g. `key: \"value # comment\"`).\n  WHY: This leads to `_is_wired` returning False for validly wired tests that happen to have such strings in their workflow definition, causing false-positive test failures in CI.\n- TASK_GAP\n  Requirement: \"Add a new CI step to one existing job; a new job must also be added to `lint`'s `needs`.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The new `budget-watch` job is NOT added to the `lint` job's `needs` list in `.github/workflows/ci.yml`. While the description notes it is skipped on PRs, the `lint` job aggregate status `CI / lint` should generally depend on all jobs to ensure nothing is silently skipped. Although `budget-watch` currently relies on `if: always()`, this is a deviation from the established wiring pattern.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "82e2fbe4827b4e20605614119b4b920c821f90ed8d5d9a7da988115143049da8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7012,
+    "run_id": "38048676593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38048676593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010115656_84c8afb07a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7012,
+    "run_id": "38048676593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T11:56:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
