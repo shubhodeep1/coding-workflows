@@ -1033,6 +1033,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_driver_credential_scrub.py
 
       - name: Review apply-fixes smoke deterministic contract test
         run: |
