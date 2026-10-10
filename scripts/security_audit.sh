@@ -1216,11 +1216,13 @@ def raw_lower(value: object) -> str:
 
 
 def raw_scenario(value: object) -> str:
-	# Both sides are cut to 600 characters (the poller's cap on reported and
-	# waived rows) before whitespace is collapsed; case is kept.
+	# Backticks are dropped and whitespace collapsed (as the prompt renders
+	# the scenario), then both sides are cut to 600 characters (the poller's
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
 	if not isinstance(value, str):
 		return ""
-	return " ".join(value[:600].split())
+	return " ".join(value.replace("`", "").split())[:600]
 
 
 normalized: list[dict] = []
@@ -1779,14 +1781,20 @@ def matching_waiver(finding: dict[str, object]) -> str | None:
 		return None
 	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
 	finding_severity = " ".join(str(finding.get("severity") or "").lower().split())
-	finding_scenario = " ".join(str(finding.get("exploit_scenario") or "")[:600].split())
+	# Same canonical form as the waiver side (raw_scenario above).
+	finding_scenario = " ".join(str(finding.get("exploit_scenario") or "").replace("`", "").split())[:600]
 	for waiver in waived_findings_input:
 		if not isinstance(waiver, dict):
 			continue
-		waived_id = waiver.get("match_finding_id")
-		if not isinstance(waived_id, str) or not waived_id.strip():
-			waived_id = waiver.get("finding_id")
-		if not isinstance(waived_id, str) or not waived_id.strip() or waived_id.strip() != finding_id:
+		# Exact match on the raw id or on the id as displayed in the prompt
+		# (finding_id is the prompt-sanitized form), so an auditor that reuses
+		# the id it was shown still matches.
+		waived_ids = {
+			value.strip()
+			for value in (waiver.get("match_finding_id"), waiver.get("finding_id"))
+			if isinstance(value, str) and value.strip()
+		}
+		if finding_id not in waived_ids:
 			continue
 		waived_category = str(waiver.get("match_category") or "")
 		waived_severity = str(waiver.get("match_severity") or "")

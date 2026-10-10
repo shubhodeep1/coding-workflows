@@ -6535,11 +6535,13 @@ def norm_category(value: object) -> str:
 
 
 def norm_scenario(value: object) -> str:
-	# Both sides are cut to 600 characters (the cap on reported and waived
-	# rows) before whitespace is collapsed; case is kept.
+	# Backticks are dropped and whitespace collapsed (as the engine's prompt
+	# renders the scenario), then both sides are cut to 600 characters (the
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
 	if not isinstance(value, str):
 		return ""
-	return " ".join(value[:600].split())
+	return " ".join(value.replace("`", "").split())[:600]
 
 
 def waiver_for(finding: dict) -> str | None:
@@ -6549,7 +6551,11 @@ def waiver_for(finding: dict) -> str | None:
 	finding_id = finding_id.strip()
 	for waiver in waivers:
 		waived_id = waiver.get("finding_id")
-		if not isinstance(waived_id, str) or not waived_id.strip() or waived_id.strip() != finding_id:
+		if not isinstance(waived_id, str) or not waived_id.strip():
+			continue
+		# Exact match on the recorded id or on the id the engine displayed in
+		# its prompt (backticks dropped, whitespace collapsed).
+		if finding_id not in (waived_id.strip(), " ".join(waived_id.replace("`", "").split())):
 			continue
 		waived_finding = waiver.get("finding")
 		waived_scenario = norm_scenario(waiver.get("exploit_scenario"))
