@@ -252,37 +252,61 @@ def test_bootstrap_validates_writer_and_generated_json() -> None:
 		assert valid.returncode == 0, valid.stderr.decode()
 
 
-def _alert_with_probe(probe_outcome: str, failure_class: str) -> tuple[subprocess.CompletedProcess[bytes], Path]:
-	directory = tempfile.mkdtemp()
-	root = Path(directory)
-	helper_copy = root / "opencode_helpers.sh"
-	helper_copy.write_text(HELPERS.read_text(encoding="utf-8"), encoding="utf-8")
-	(root / "provider_outage.py").write_text(f"print('outcome={probe_outcome} status=402')\n", encoding="utf-8")
-	runtime = root / "runtime"
-	runtime.mkdir()
-	capture = root / "telegram"
-	result = _bash(
-		f"source {helper_copy}; "
-		"tg_send_msg() { printf '%s\\n' \"$2\" > \"$TG_CAPTURE\"; }; "
-		f"opencode_emit_failure_alert phase reviewer vendor/model 17 {failure_class}",
-		{"TG_CAPTURE": str(capture), "RUNTIME_DIR": str(runtime)},
-	)
-	return result, capture
+def _alert_with_probe(probe_outcome: str, failure_class: str, open_outcome: str = "already_open") -> tuple[subprocess.CompletedProcess[bytes], list[str]]:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		helper_copy = root / "opencode_helpers.sh"
+		helper_copy.write_text(HELPERS.read_text(encoding="utf-8"), encoding="utf-8")
+		(root / "provider_outage.py").write_text(
+			"import sys\n"
+			"if sys.argv[1] == 'probe':\n"
+			f"\tprint('outcome={probe_outcome} status=402')\n"
+			"else:\n"
+			"\tout = sys.argv[sys.argv.index('--alert-out') + 1]\n"
+			f"\tif '{open_outcome}' == 'opened':\n"
+			"\t\topen(out, 'w').write('tracker alert\\n')\n"
+			f"\tprint('alert=0 outcome={open_outcome} tracker=1')\n",
+			encoding="utf-8",
+		)
+		runtime = root / "runtime"
+		runtime.mkdir()
+		capture = root / "telegram"
+		result = _bash(
+			f"source {helper_copy}; "
+			"tg_send_msg() { printf '%s\\n' \"$2\" >> \"$TG_CAPTURE\"; }; "
+			f"opencode_emit_failure_alert phase reviewer vendor/model 17 {failure_class}",
+			{"TG_CAPTURE": str(capture), "RUNTIME_DIR": str(runtime)},
+		)
+		levels = capture.read_text(encoding="utf-8").split() if capture.exists() else []
+	return result, levels
 
 
 def test_alert_is_suppressed_while_provider_probe_is_down() -> None:
 	# Issue #6633: the outage tracker sends the single alert.
-	result, capture = _alert_with_probe("down", "invocation_failed")
+	result, levels = _alert_with_probe("down", "invocation_failed")
 	assert result.returncode == 17
 	assert b"PROVIDER_OUTAGE op=alert phase=phase outcome=suppressed reason=provider_down" in result.stderr
-	assert not capture.exists()
+	assert levels == []
+
+
+def test_alert_opens_tracker_when_provider_probe_is_down() -> None:
+	# A fail-open caller can let the job succeed, so the helper opens the
+	# tracker itself and sends its one CRITICAL alert instead of the ERROR.
+	result, levels = _alert_with_probe("down", "invocation_failed", open_outcome="opened")
+	assert result.returncode == 17 and levels == ["CRITICAL"]
+
+
+def test_alert_is_sent_when_tracker_cannot_be_confirmed() -> None:
+	result, levels = _alert_with_probe("down", "invocation_failed", open_outcome="failed")
+	assert result.returncode == 17 and levels == ["ERROR"]
+	assert b"outcome=sent reason=tracker_unconfirmed" in result.stderr
 
 
 def test_alert_is_sent_when_provider_probe_is_up_or_failure_is_setup() -> None:
-	result, capture = _alert_with_probe("up", "invocation_failed")
-	assert result.returncode == 17 and capture.read_text(encoding="utf-8").strip() == "ERROR"
-	result, capture = _alert_with_probe("down", "config_generation")
-	assert result.returncode == 17 and capture.read_text(encoding="utf-8").strip() == "ERROR"
+	result, levels = _alert_with_probe("up", "invocation_failed")
+	assert result.returncode == 17 and levels == ["ERROR"]
+	result, levels = _alert_with_probe("down", "config_generation")
+	assert result.returncode == 17 and levels == ["ERROR"]
 
 
 def main() -> int:

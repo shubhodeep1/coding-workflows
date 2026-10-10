@@ -367,3 +367,15 @@ def test_dispatch_honours_allow_workflow_edits(monkeypatch: pytest.MonkeyPatch) 
 	monkeypatch.setenv("ALLOW_WORKFLOW_EDITS", "true")
 	gh.dispatch("internal-review.yml", "main", 2)
 	assert "allow_workflow_edits=false" in calls[0] and "allow_workflow_edits=true" in calls[1]
+
+
+def test_stale_probe_cache_is_re_probed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	import os as _os
+	cache = tmp_path / "probe.json"
+	cache.write_text(json.dumps({"outcome": "down", "status": "429"}))
+	assert po.cached_probe(str(cache), lambda *_a: pytest.fail("fresh cache must not probe"))["outcome"] == "down"
+	old = cache.stat().st_mtime - po.PROBE_CACHE_TTL_SECS - 10
+	_os.utime(cache, (old, old))
+	monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+	result = po.cached_probe(str(cache), lambda method, *_a: (200, b"{}"))
+	assert result["outcome"] == "up"

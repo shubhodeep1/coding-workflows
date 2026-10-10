@@ -85,6 +85,9 @@ PROBE_TIMEOUT_SECS = 15
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 OPENROUTER_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 LABEL_MARKER_LEAD = dt.timedelta(hours=1)
+# A cached probe result older than this is re-probed, so a transient early
+# 429/5xx cannot keep suppressing alerts for the rest of a long job.
+PROBE_CACHE_TTL_SECS = 300
 
 TRACKER_MARKER_RE = re.compile(
 	r"<!-- ai:provider-outage:v1 kind=(?P<kind>outage|capacity) provider=(?P<provider>[a-z0-9_-]{1,40}) "
@@ -246,6 +249,8 @@ def probe_openrouter(key: str, model: str, http: HttpFn | None = None) -> dict[s
 def cached_probe(cache_path: str | None, http: HttpFn | None = None) -> dict[str, str]:
 	if cache_path:
 		try:
+			if time.time() - Path(cache_path).stat().st_mtime > PROBE_CACHE_TTL_SECS:
+				raise OSError("stale probe cache")
 			cached = json.loads(Path(cache_path).read_text(encoding="utf-8"))
 			if isinstance(cached, dict) and cached.get("outcome") in {"up", "down", "unknown"}:
 				return {"outcome": str(cached["outcome"]), "status": _token(cached.get("status"), 20)}
@@ -575,16 +580,16 @@ def _write_output(path: str | None, values: dict[str, str]) -> None:
 		with open(path, "a", encoding="utf-8") as handle:
 			for key, value in values.items():
 				handle.write(f"{key}={value}\n")
-	except OSError:
-		pass
+	except OSError as exc:
+		_log(f"op=write_output outcome=failed reason=os_error type={type(exc).__name__}")
 
 
 def _write_alert(path: str | None, text: str) -> None:
 	if path and text:
 		try:
 			Path(path).write_text(text + "\n", encoding="utf-8")
-		except OSError:
-			pass
+		except OSError as exc:
+			_log(f"op=write_alert outcome=failed reason=os_error type={type(exc).__name__}")
 
 
 def resume(gh: Any, tracker: dict[str, Any], *, workflow: str, max_dispatch: int, release_rerun: bool, repository: str) -> dict[str, Any]:
