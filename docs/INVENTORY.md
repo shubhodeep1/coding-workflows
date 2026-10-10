@@ -81,6 +81,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
+- `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
@@ -178,6 +179,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/generate_codex_model_reference.py` — Generate the Codex model reference markdown from the catalog and optional overrides.
 - `scripts/generate_resource_id.py` — Generate stable-format resource IDs via the ai-memory record-ID helper.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
+- `scripts/gh_api_retry.py` — Rate-limit-aware `gh api` retry helper; Python twin of `gh_api_retry` in gh_helpers.sh.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
@@ -264,6 +266,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
+- `scripts/sandbox_image.sh` — Pull a prebuilt sandbox image from GHCR by input hash, or build it locally when the pull fails (`SANDBOX_IMAGE` log prefix).
+- `scripts/sandbox_images_publish.sh` — Build and push every sandbox image variant the build sites resolve (run by publish-sandbox-images.yml).
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.

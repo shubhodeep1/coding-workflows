@@ -146,6 +146,13 @@ jobs:
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
         run: |
           set -euo pipefail
+          # Classified retry for the active-run snapshot (issue #6634): the
+          # checked-out default-branch helper, the same copy the budget step uses.
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_api_retry()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+          fi
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
 
           # Fetch all open PRs, then filter to non-draft client-side.
           # `gh` rejects `--slurp` combined with `--jq`, so pipe the
@@ -196,10 +203,27 @@ jobs:
             exit 0
           fi
 
+          # Provenance (issue #6629): a dispatched run's title comes from the
+          # dispatched ref's workflow file, so a branch copy of
+          # internal-review.yml can name a run for any PR. Only a run that
+          # GitHub reports on the default branch (or with a null head_branch,
+          # #4928) is keyed by its PR below. One read per tick with at least
+          # one candidate, and no fallback: a failed read skips every dispatch
+          # this tick rather than risk replacing a pending review.
+          sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+          if ! [[ "${sweep_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${sweep_default_branch}" = "null" ]; then
+            echo "::warning::AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable — review dispatch runs cannot be verified; no dispatch this tick."
+            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+            exit 0
+          fi
+
           # Snapshot active review-family runs once per workflow, then do
           # per-PR lookups locally so the sweep avoids N×2 workflow-run API
           # fanout while preserving the existing active-run skip semantics.
           declare -A active_review_runs=()
+          # Set when a run listing failed: an incomplete snapshot is not "no
+          # active runs", so every dispatch waits for the next tick.
+          active_snapshot_incomplete=false
 
           snapshot_active_review_runs() {
             local workflow="$1"
@@ -232,13 +256,26 @@ jobs:
             # duplicate, so every tick re-dispatched and each new run
             # replaced the pending predecessor. A pending run never counts
             # as stale — it is bounded by its running peer's job timeout.
+            # Listings run outside the $(...) so a failure is visible. Only a
+            # 404 (exit 2 with GH_API_RETRY_LAST_STATUS=404: the workflow file
+            # is absent) counts as no runs; any other permanent error (a non-limit
+            # 403, 422, ...) leaves the snapshot incomplete.
+            local snap_raw="${RUNNER_TEMP:-/tmp}/sweep-active-runs-${workflow}.json" snap_rc
+            : > "${snap_raw}"
+            for status in queued in_progress pending; do
+              snap_rc=0
+              GH_API_RETRY_LAST_STATUS=""
+              GH_TOKEN="${READ_TOKEN}" gh_api_retry --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                -f status="${status}" \
+                -f per_page=100 \
+                >> "${snap_raw}" || snap_rc=$?
+              if [ "${snap_rc}" -ne 0 ] && { [ "${snap_rc}" -ne 2 ] || [ "${GH_API_RETRY_LAST_STATUS:-}" != "404" ]; }; then
+                active_snapshot_incomplete=true
+                echo "::warning::AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=${workflow} status=${status} rc=${snap_rc}"
+              fi
+            done
             if snapshot_json="$(
-              for status in queued in_progress pending; do
-                GH_TOKEN="${READ_TOKEN}" gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
-                  -f status="${status}" \
-                  -f per_page=100 \
-                  2>/dev/null || true
-              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+              cat "${snap_raw}" | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch "${sweep_default_branch}" '
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -260,8 +297,16 @@ jobs:
                   # marker cannot claim another PR key. Git refs cannot
                   # contain ":", so a "pr:<N>" key never collides with a
                   # branch key. Everything else stays keyed by head branch.
+                  # Provenance (issue #6629): the run must also come from the
+                  # default branch (or report a null head_branch, #4928) and
+                  # from internal-review.yml itself; a run from a branch copy keeps
+                  # its own head-branch key, which never matches a pr: key.
                   def dispatch_pr:
-                    if (.event // "") == "workflow_dispatch" then
+                    if (.event // "") == "workflow_dispatch"
+                      and ($default_branch != "")
+                      and (.head_branch == null or .head_branch == "" or .head_branch == $default_branch)
+                      and (((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) == ".github/workflows/internal-review.yml")
+                    then
                       ((.display_title // "")
                         | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
                         | first // "")
@@ -370,6 +415,11 @@ jobs:
             # for this branch on either workflow, or a dispatched run is named
             # for this PR (the `pr:<N>` key, issue #4618). In-progress and
             # pending runs always suppress dispatch; only queued runs can age out.
+            if [ "${active_snapshot_incomplete}" = "true" ]; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_snapshot_incomplete head_ref=${head_ref}"
+              skipped_active=$((skipped_active + 1))
+              continue
+            fi
             active=0
             for wf in internal-review.yml review_autofix.yml; do
               for dedupe_ref in "${head_ref}" "pr:${pr_number}"; do
@@ -419,7 +469,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete}"
 
       - name: Record GH_PAT budget at sweep end
         if: always()
