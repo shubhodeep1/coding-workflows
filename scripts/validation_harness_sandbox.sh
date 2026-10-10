@@ -22,7 +22,9 @@
 #   ingest-logs <dest>   validate a log tar on stdin and write it under <dest> (all or nothing)
 #
 # Exit codes: the harness exit code for `run`; 3 for any sandbox failure.
-# Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|fail reason=<token>
+# Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|retry|fail reason=<token>
+# (`retry` only from provision, when a test container would not start under the
+# systemd cgroup driver and the daemon is restarted with cgroupfs; #7063).
 # Values are never logged.
 
 set -euo pipefail
@@ -41,6 +43,11 @@ VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE
 # Empty (the default) keeps <workspace>/validation/logs. validation-refresh
 # sets it so logs stay outside the consumer clone it diffs for drift.
 VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-}"
+# Cgroup setup for the sandbox's rootless dockerd: `auto` (the default) tries a
+# systemd user session first and falls back to cgroupfs; `cgroupfs` skips the
+# systemd attempt. Either way provision only succeeds once a test container
+# has started.
+VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-auto}"
 SANDBOX_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 sandbox_log()
@@ -183,6 +190,159 @@ rootless_docker_ready()
 	as_sandbox docker info >/dev/null 2>&1
 }
 
+# Rootless dockerd defaults to the systemd cgroup driver on a cgroup v2 host
+# booted with systemd (moby daemon/daemon_unix.go UsingSystemd). That driver
+# needs the sandbox user's user-<uid>.slice and user bus, which only exist
+# inside a systemd user session; without one every container start fails with
+# "open /sys/fs/cgroup/user.slice/user-<uid>.slice/cgroup.controllers: no
+# such file or directory" (#6902, #6664, #7063). With
+# native.cgroupdriver=cgroupfs a rootless daemon uses no cgroups at all:
+# containers start, and resource limits are dropped with a warning. The user
+# namespace isolation and the separate daemon are unchanged either way.
+SANDBOX_SYSTEMD_RUN_DIR="${SANDBOX_SYSTEMD_RUN_DIR:-/run/systemd/system}"
+SANDBOX_CGROUP_ROOT="${SANDBOX_CGROUP_ROOT:-/sys/fs/cgroup}"
+SANDBOX_SESSION_WAIT_SECS="${SANDBOX_SESSION_WAIT_SECS:-15}"
+SANDBOX_PROBE_IMAGE="ai-validation-probe:local"
+
+# Start a systemd user session for the sandbox user (linger keeps
+# user@<uid>.service running without a login). Returns 0 once the user bus
+# and the user slice both exist.
+sandbox_systemd_session()
+{
+	local user="$1" uid="$2" waited=0
+	[ -d "${SANDBOX_SYSTEMD_RUN_DIR}" ] || return 1
+	command -v loginctl >/dev/null 2>&1 || return 1
+	sudo -n loginctl enable-linger "${user}" >/dev/null 2>&1 || return 1
+	sudo -n systemctl start "user@${uid}.service" >/dev/null 2>&1 || true
+	until sudo -n test -S "/run/user/${uid}/bus" && [ -d "${SANDBOX_CGROUP_ROOT}/user.slice/user-${uid}.slice" ]; do
+		[ "${waited}" -ge "${SANDBOX_SESSION_WAIT_SECS}" ] && return 1
+		sleep 1
+		waited=$((waited + 1))
+	done
+}
+
+# Start the sandbox user's rootless dockerd and wait until it answers.
+# <mode> is `systemd` (inside the user session) or `cgroupfs`.
+start_rootless_dockerd()
+{
+	local mode="$1" home="$2" runtime_dir="$3" waited=0
+	local -a daemon_env=("PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}") daemon_args=()
+	if [ "${mode}" = systemd ]; then
+		daemon_env+=("DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus")
+	else
+		daemon_args+=(--exec-opt native.cgroupdriver=cgroupfs)
+	fi
+	sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${daemon_env[@]}" \
+		setsid dockerd-rootless.sh "${daemon_args[@]}" </dev/null >/dev/null 2>&1 &
+	until rootless_docker_ready; do
+		[ "${waited}" -ge "${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT}" ] && return 1
+		sleep 2
+		waited=$((waited + 2))
+	done
+}
+
+# Stop the sandbox user's daemon. The signals are sent as the sandbox user, so
+# they can only reach processes that user already owns.
+stop_rootless_dockerd()
+{
+	local runtime_dir="$1" waited=0 name
+	for name in dockerd rootlesskit; do
+		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- pkill -TERM -x "${name}" >/dev/null 2>&1 || true
+	done
+	while sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- pgrep -x rootlesskit >/dev/null 2>&1; do
+		if [ "${waited}" -ge 30 ]; then
+			for name in dockerd containerd rootlesskit; do
+				sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- pkill -KILL -x "${name}" >/dev/null 2>&1 || true
+			done
+			break
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- rm -rf -- "${runtime_dir}/docker.pid" "${runtime_dir}/docker.sock" "${runtime_dir}/dockerd-rootless" >/dev/null 2>&1 || true
+}
+
+# Import a one-binary image (the host's /usr/bin/true and the libraries ldd
+# lists for it) into the sandbox daemon, so the probe needs no registry pull.
+build_probe_image()
+{
+	as_sandbox docker image inspect "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>&1 && return 0
+	command -v ldd >/dev/null 2>&1 || return 1
+	local -a files=()
+	local path
+	while IFS= read -r path; do
+		[ -n "${path}" ] && [ -f "${path}" ] && files+=("${path#/}")
+	done < <(printf '/usr/bin/true\n'; ldd /usr/bin/true 2>/dev/null | grep -oE '(^|[[:space:]])/[^[:space:]]+' | tr -d '[:blank:]')
+	[ "${#files[@]}" -ge 1 ] || return 1
+	set +e
+	tar -C / -chf - -- "${files[@]}" 2>/dev/null | as_sandbox docker import --change 'CMD ["/usr/bin/true"]' - "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>&1
+	local -a import_status=("${PIPESTATUS[@]}")
+	set -e
+	[ "${import_status[0]}" -eq 0 ] && [ "${import_status[1]}" -eq 0 ]
+}
+
+# Start (and remove) one container: 0 when it ran, 1 when the daemon refused
+# to start it (`docker run` exit 125, the cgroup failure), 2 when the probe is
+# inconclusive (no image, or the image's command could not run: 126/127), so
+# a probe problem is never mistaken for a broken daemon.
+rootless_docker_container_probe()
+{
+	local probe_err="" rc=0
+	build_probe_image || return 2
+	probe_err="$(as_sandbox docker run --rm --network none "${SANDBOX_PROBE_IMAGE}" 2>&1 >/dev/null)" || rc=$?
+	[ "${rc}" -eq 0 ] && return 0
+	# The daemon's own error line, for the job log (no credentials reach the sandbox).
+	printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=%s detail=%s\n' "${rc}" \
+		"$(printf '%s' "${probe_err}" | tr -c '[:print:]' ' ' | cut -c1-300)" >&2
+	[ "${rc}" -eq 125 ] && return 1
+	return 2
+}
+
+# Bring up a daemon that can start containers: systemd user session first
+# (unless VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=cgroupfs), cgroupfs when the
+# session cannot be set up or a container would not start under it. Every
+# outcome is logged; a daemon whose test container fails under both drivers
+# fails provisioning closed (container_start_failed).
+sandbox_start_verified_dockerd()
+{
+	local user="$1" uid="$2" home="$3" runtime_dir="$4" mode="" probe_rc=0
+	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
+		cgroupfs) mode=cgroupfs ;;
+		*)
+			if sandbox_systemd_session "${user}" "${uid}"; then
+				mode=systemd
+				sandbox_log provision ok systemd_user_session
+			else
+				mode=cgroupfs
+				sandbox_log provision ok systemd_user_session_unavailable
+			fi
+			;;
+	esac
+	sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
+	build_sandbox_env "${home}" "${home}/work" "unix://${runtime_dir}/docker.sock"
+	if rootless_docker_ready; then
+		# A daemon from an earlier provision in this job: its driver is unknown,
+		# so it gets the same container test.
+		mode=reused
+	else
+		start_rootless_dockerd "${mode}" "${home}" "${runtime_dir}" || sandbox_fail provision rootless_dockerd_start_timeout
+	fi
+	rootless_docker_container_probe || probe_rc=$?
+	if [ "${probe_rc}" -eq 1 ] && [ "${mode}" != cgroupfs ]; then
+		sandbox_log provision retry "container_start_failed_${mode}"
+		stop_rootless_dockerd "${runtime_dir}"
+		mode=cgroupfs
+		start_rootless_dockerd cgroupfs "${home}" "${runtime_dir}" || sandbox_fail provision rootless_dockerd_start_timeout
+		probe_rc=0
+		rootless_docker_container_probe || probe_rc=$?
+	fi
+	case "${probe_rc}" in
+		0) sandbox_log provision ok "container_probe_${mode}" ;;
+		2) sandbox_log provision ok container_probe_inconclusive ;;
+		*) sandbox_fail provision container_start_failed ;;
+	esac
+}
+
 # Docker's apt repository signing key (https://download.docker.com/linux/<distro>/gpg).
 # The key is checked against this fingerprint before apt trusts it.
 SANDBOX_DOCKER_APT_KEY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
@@ -303,21 +463,7 @@ cmd_provision()
 	fi
 
 	runtime_dir="/run/user/${uid}"
-	sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
-
-	build_sandbox_env "${home}" "${home}/work" "unix://${runtime_dir}/docker.sock"
-	if ! rootless_docker_ready; then
-		sudo -n -u "${user}" -- env -i "PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}" \
-			setsid dockerd-rootless.sh </dev/null >/dev/null 2>&1 &
-		local waited=0
-		until rootless_docker_ready; do
-			if [ "${waited}" -ge "${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT}" ]; then
-				sandbox_fail provision rootless_dockerd_start_timeout
-			fi
-			sleep 2
-			waited=$((waited + 2))
-		done
-	fi
+	sandbox_start_verified_dockerd "${user}" "${uid}" "${home}" "${runtime_dir}"
 
 	# Keep the credentialed job's own state unreadable to the sandbox user.
 	for dir in "${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}"; do
