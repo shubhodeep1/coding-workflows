@@ -75,8 +75,8 @@ exit 1
 		"body": "<!-- ai:reclarify-requeue:v1 source=11 -->",
 		"user": {"type": "Bot", "login": "github-actions[bot]"}}
 	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
-		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "GH_TOKEN": "test", "CALLS": str(calls),
-		"COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "RECLARIFY_UNROUTED_DETECT_ENABLED": "false",
+		"GH_TOKEN": "test", "CALLS": str(calls), "COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
 	def run(rows: list[dict], budget: int = 700) -> str:
 		comments.write_text(json.dumps([rows]))
 		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env={**env, "BUDGET": str(budget)},
@@ -108,6 +108,103 @@ exit 1
 	assert not run([{**source, "author_association": "NONE"}, marker])
 	assert not run([source, {**marker, "user": {"type": "User", "login": "attacker"}}])
 
+
+def test_replay_accepts_trailing_reclarify_source_only_without_marker(tmp_path: Path) -> None:
+	"""Issue #6630: the replay sweep uses the intake's any-line rule."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text('''#!/usr/bin/env bash
+if [ "$1:$2" = "api:rate_limit" ]; then echo 700; exit 0; fi
+if [ "$1:$2" = "api:user" ]; then echo owner; exit 0; fi
+if [ "$1:$2" = "issue:list" ]; then echo '[{"number":7}]'; exit 0; fi
+if [ "$1:$2" = "api:--paginate" ]; then cat "${COMMENTS}"; exit 0; fi
+if [ "$1:$2" = "api:repos/o/r/issues/7" ]; then
+  echo '{"number":7,"state":"open","labels":[{"name":"ai:reclarify-requeue"}]}'; exit 0
+fi
+if [ "$1:$2" = "api:-X" ]; then echo "$*" >> "${CALLS}"; exit 0; fi
+exit 1
+''')
+	gh.chmod(0o755)
+	comments = tmp_path / "comments.json"
+	calls = tmp_path / "calls"
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "RECLARIFY_UNROUTED_DETECT_ENABLED": "false",
+		"GH_TOKEN": "test", "CALLS": str(calls), "COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
+	marker = {"id": 12, "created_at": "2026-10-03T01:01:00Z",
+		"body": "<!-- ai:reclarify-requeue:v1 source=11 -->",
+		"user": {"type": "Bot", "login": "github-actions[bot]"}}
+	def run(body: str) -> str:
+		if calls.exists():
+			calls.unlink()
+		source = {"id": 11, "created_at": "2026-10-03T01:00:00Z", "body": body,
+			"user": {"type": "User", "login": "owner"}, "author_association": "OWNER"}
+		comments.write_text(json.dumps([[source, marker]]))
+		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		return calls.read_text() if calls.exists() else ""
+	assert "POST repos/o/r/issues/7/comments" in run("Answer first.\n\n/reclarify")
+	assert "POST" not in run("Answer\n/reclarify\n<!-- ai:clarification-questions -->")
+	assert "POST" not in run("please /reclarify later")
+
+
+def test_idle_poller_flags_unrouted_blocked_reply_once(tmp_path: Path) -> None:
+	"""Issue #6630: a blocked issue whose human reply never routed gets one advisory."""
+	from datetime import datetime, timedelta, timezone
+
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text('''#!/usr/bin/env bash
+if [ "$1:$2" = "api:rate_limit" ]; then echo 700; exit 0; fi
+if [ "$1:$2" = "api:user" ]; then exit 1; fi
+if [ "$1:$2" = "issue:list" ]; then echo '[{"number":9,"labels":[{"name":"ai:blocked"}]}]'; exit 0; fi
+if [ "$1:$2" = "api:graphql" ]; then
+  echo graphql >> "${CALLS}"
+  [ -n "${GRAPHQL_FAIL:-}" ] && exit 1
+  cat "${GRAPHQL}"; exit 0
+fi
+if [ "$1:$2" = "api:-X" ]; then echo "$*" >> "${CALLS}"; exit 0; fi
+exit 1
+''')
+	gh.chmod(0o755)
+	graphql = tmp_path / "graphql.json"
+	calls = tmp_path / "calls"
+	now = datetime.now(timezone.utc)
+	def ts(minutes: int) -> str:
+		return (now - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	def comment(cid: int, body: str, minutes: int) -> dict:
+		return {"databaseId": cid, "body": body, "createdAt": ts(minutes),
+			"authorAssociation": "OWNER", "author": {"login": "owner", "__typename": "User"}}
+	def write(comments: list) -> None:
+		graphql.write_text(json.dumps({"data": {"repository": {"i9": {
+			"number": 9, "labels": {"nodes": [{"name": "ai:blocked"}]},
+			"comments": {"nodes": comments},
+			"timelineItems": {"nodes": [{"createdAt": ts(120), "label": {"name": "ai:blocked"}}]}}}}}))
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "GH_TOKEN": "test", "GH_RETRY_MAX_ATTEMPTS": "1",
+		"CALLS": str(calls), "GRAPHQL": str(graphql), "PYTHONDONTWRITEBYTECODE": "1",
+		"TG_BOT_SECRET": "", "TG_ADMIN_CHAT_ID": ""}
+	def run(**extra: str) -> tuple[str, str]:
+		if calls.exists():
+			calls.unlink()
+		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env={**env, **extra},
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		return result.stdout, calls.read_text() if calls.exists() else ""
+	answer = comment(21, "Answer to the blocker.\n\n/reclarify", 30)
+	write([comment(20, "Clarification blocked: human input required.", 119), answer])
+	out, made = run()
+	assert "RECLARIFY_UNROUTED issue=9 comment=21 reason=command_unrouted" in out and "outcome=flagged" in out
+	assert made.count("POST repos/o/r/issues/9/comments") == 1
+	assert "<!-- ai:reclarify-unrouted:v1 comment=21 -->" in made
+	write([answer, comment(22, "advisory\n\n<!-- ai:reclarify-unrouted:v1 comment=21 -->", 5)])
+	out, made = run()
+	assert "POST" not in made and "outcome=flagged" not in out
+	out, made = run(GRAPHQL_FAIL="1")
+	assert "RECLARIFY_UNROUTED outcome=skip reason=graphql_unavailable" in out and "POST" not in made
+	out, made = run(RECLARIFY_UNROUTED_DETECT_ENABLED="false")
+	assert "graphql" not in made and "RECLARIFY_UNROUTED" not in out
 
 def test_standalone_snapshot_batches_clean_prs_and_skips_draft_claude_reads() -> None:
 	text = POLLER.read_text()
@@ -562,6 +659,9 @@ def _run_cap_skip(comments: list, commits: list, login: str | None, *, repo: str
 	import subprocess
 	import tempfile
 
+	# Fixture JSON is single-quoted with shlex.quote so Bash performs no
+	# command substitution (backticks, $(...)) or parameter expansion on
+	# comment bodies before the verbatim snippet sees them.
 	with tempfile.TemporaryDirectory() as tmp:
 		calls = Path(tmp) / "calls"
 		if ai_review is not None:
@@ -707,6 +807,17 @@ def test_cap_skip_suppresses_redispatch_when_cap_applied_on_head():
 	assert calls == 1, f"GET /user must be issued once per cycle, got {calls}"
 
 
+def test_cap_skip_harness_preserves_shell_metacharacters():
+	"""Fixture bodies with backticks, `$(...)` and `$VAR` must reach the
+	snippet byte for byte. Double-quoted assignment let Bash run command
+	substitution on them (an unbalanced backtick aborted the shell)."""
+	stray = {"user": {"login": "mallory"}, "body": "stray ` backtick and $(nope) and $HOME"}
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1"), stray], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert "DISPATCH" not in out, out
+	assert "SKIPPED=2" in out, out
+	assert f"NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=4332 head={CAP_HEAD}" in out, out
+
+
 def test_cap_skip_ignores_marker_for_older_head():
 	"""A push creates a new head; a cap marker for the old head must not
 	block recovery, and no identity lookup is spent on it."""
@@ -756,7 +867,7 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			if func is test_idle_poller_replays_only_trusted_failed_reclarify_once:
+			if func.__code__.co_argcount == 1:
 				with tempfile.TemporaryDirectory() as test_dir:
 					func(Path(test_dir))
 			else:

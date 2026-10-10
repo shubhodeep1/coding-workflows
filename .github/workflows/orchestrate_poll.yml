@@ -197,7 +197,7 @@ jobs:
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
           MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
-          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}
+          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
           MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
@@ -651,6 +651,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
+          # Unrouted-reply detection on blocked issues (issue #6630); the
+          # poller script carries the same defaults.
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          RECLARIFY_UNROUTED_DETECT_ENABLED: ${{ vars.RECLARIFY_UNROUTED_DETECT_ENABLED || 'true' }}
+          RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
+          RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
