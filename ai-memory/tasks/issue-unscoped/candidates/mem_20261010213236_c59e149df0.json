@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1820-1834 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A trusted failure comment without a failure marker does not end the scan, allowing an older host-only marker to suppress healing for a later failure.\n  WHY: Marker generation can fail, leaving the later comment unmarked; the scan then falls through to the older marker and may incorrectly skip a heal.\n- scripts/workflow_failure_heal.py:1820-1834 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A newer stale marker on a different head returns false rather than scanning for an older host-only marker that names the current head.\n  WHY: The reviewer states this is the intended policy that newer activity on any head beats an older host-only stop, and flags it for visibility only, with no runtime defect.\n- scripts/workflow_failure_heal_report.sh:181-184 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reporter fetches the pipeline account login for every `ai:needs-human` report, even when no trusted host-only marker is present.\n  WHY: This adds a `GET /user` call per such report, and suppressing stderr hides the local failure message if the read exhausts retries.\n- scripts/workflow_failure_heal_report.sh:197-227 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The comment above the new PR read does not explain why the issue payload cannot supply `head.sha`.\n  WHY: The reviewer identifies this as a documentation nit with no runtime effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Change heal routing so the host-only resolver failure, its identical-failure-cap report, and the resulting needs-human label do not create further heal issues.\"\n  expected_change_site: `scripts/workflow_failure_heal_report.sh` and `scripts/workflow_failure_heal_autofix_report.sh`\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `latest_trusted_autofix_marker_is_host_only` may incorrectly skip for an older marker even when a newer, unmarked failure comment exists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal.py:1820-1834 | severity=NIT | confidence=2\n  PROBLEM: A trusted failure comment without a `review-autofix-failure:v1` marker is skipped, so an older host-only marker can still decide.\n  WHY: A later failure comment without a marker leaves an older host-only marker in charge and can cause a missed heal.\n- scripts/workflow_failure_heal_report.sh:197-227 | severity=NIT | confidence=2\n  PROBLEM: The comment above the new PR read does not say why the issue payload cannot supply `head.sha`.\n  WHY: The reviewer identifies this as a documentation nit with no runtime effect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:1820-1834 | confidence=3\n  PROBLEM: The logic does not handle trusted comments from the pipeline account that lack a marker.\n  WHY: The function proceeds to examine older comments and may return true for an older host-only marker even when the newest failure comment was not a host-only stop.\n- Requirement: \"Change heal routing so the host-only resolver failure, its identical-failure-cap report, and the resulting needs-human label do not create further heal issues.\"\n  Expected change site: `scripts/workflow_failure_heal_report.sh` and `scripts/workflow_failure_heal_autofix_report.sh`\n  Evidence of absence: The PR implemented skipping for these paths, but `latest_trusted_autofix_marker_is_host_only` may incorrectly skip for an older marker even when a newer, unmarked failure comment exists. The intention to suppress further heal issues is not fully robust due to this fall-through behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"add regression tests for all three paths.\"\n  Expected change site: `tests/test_workflow_failure_heal.py`\n  Evidence of absence: The PR added tests for the per-run report, the cap report, and the needs-human label. It appears this requirement is satisfied.\n  SEVERITY: NONE\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The resolver's host-only conflict stop ... needs a manual merge, not a heal: its per-run report, an identical-failure-cap report repeating it ... and an ai:needs-human label on an item whose newest autofix marker by the GH_PAT account names it ... are skipped.\"\n  Expected change site: `scripts/workflow_failure_heal.py` (skip_reason)\n  Evidence of absence: The implementation covers all three skip paths defined in the requirement and tests them.\n  SEVERITY: NONE\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:1820-1834 | severity=NIT | confidence=2\n  PROBLEM: A newer stale marker on a different head returns False rather than continuing to scan older comments for a current-head host-only marker.\n  WHY: The reviewer states this is the intended fail-open behavior because newer activity on any head beats an older host-only stop; flagged for visibility only, with no runtime defect.\n- scripts/workflow_failure_heal_report.sh:181-184 | severity=NIT | confidence=2\n  PROBLEM: `HEAL_REPORTER_LOGIN` is fetched for every `ai:needs-human` report, even when the host-only check would not fire.\n  WHY: This adds one `GET /user` per report; stderr suppression removes the local failure message but does not break the script.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:1825-1834 | severity=NIT | confidence=4\n  PROBLEM: The scan skips a newer trusted failure comment when it lacks a failure marker, then can classify an older host-only marker as current.\n  WHY: The workflow posts failure comments without markers when marker generation fails, so a later failure on the same PR head can leave the older marker in charge and suppress a different failure from heal intake.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py:1820-1834 | severity=NIT | confidence=3\n  PROBLEM: The scan does not stop at pipeline-author failure comments that lack a marker, and can fall through to an older host-only marker.\n  WHY: When marker generation returns an empty string, a newer failure comment is unmarked; on the issue path the older marker can incorrectly suppress the unrelated failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c8d4b40b3aa9e2ccee37ee04956a8ade8bafc0b013753c417f22fa95965bd12d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6747,
+    "run_id": "38083262213",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38083262213",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010213236_c59e149df0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6747,
+    "run_id": "38083262213"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T21:32:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
