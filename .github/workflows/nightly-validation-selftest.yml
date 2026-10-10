@@ -13,9 +13,13 @@ jobs:
   validation-selftest:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # The self-test runs generated validation tests as the runner user; they
+    # can rewrite this checkout's .git (hooks, config, HEAD) and, on hosted
+    # runners, read the job token from the runner process. This job therefore
+    # holds only a read-only token; the status commit runs in the separate
+    # commit-selftest-status job on a fresh runner and checkout (#6568).
     permissions:
-      contents: write
-      actions: write
+      contents: read
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
@@ -25,6 +29,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          # Generated validation tests run inside this checkout; keep the token
+          # out of .git/config so they cannot read it (#6568).
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -57,6 +64,17 @@ jobs:
           path: |
             artifacts/validation-selftest-summary.json
             artifacts/validation-selftest-logs/
+
+      # Only the summary JSON crosses into the commit job; the fixture logs
+      # and workspaces never reach the job that holds a write token.
+      - name: Upload validation self-test summary for status commit
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 1
+          path: artifacts/validation-selftest-summary.json
 
       - name: Write self-test summary
         if: always()
@@ -114,8 +132,87 @@ jobs:
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Update validation self-test status artifact
+  # Daily check of the validation harness sandbox (scripts/validation_harness_sandbox.sh).
+  # Every real project validation runs its harness there, but smoke
+  # validations and the self-test above skip it, so a runner-image change that
+  # breaks provisioning (rootless Docker packages, user namespaces) went
+  # unnoticed until every project validation failed (#6959). This job runs the
+  # same provision, isolation self-check, staged run and log copy-back on a
+  # fresh runner each night; a failure reaches the workflow failure heal
+  # intake like a red main CI run. It runs only trusted checkout code.
+  harness-sandbox-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Provision and exercise the validation harness sandbox
+        run: |
+          set -euo pipefail
+          probe="${RUNNER_TEMP}/harness_sandbox_probe.sh"
+          logs="${RUNNER_TEMP}/harness-sandbox-probe-logs"
+          # Runs as the sandbox user inside the staged copy: rootless Docker
+          # must answer, and a log under validation/logs must copy back.
+          cat > "${probe}" <<'PROBE'
+          set -euo pipefail
+          mkdir -p validation/logs
+          docker info --format 'server={{.ServerVersion}} rootless={{json .SecurityOptions}}' > validation/logs/harness_sandbox_probe.log
+          echo "probe=ok" >> validation/logs/harness_sandbox_probe.log
+          PROBE
+          if ! bash scripts/validation_harness_sandbox.sh provision; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=provision_failed"
+            exit 1
+          fi
+          if ! VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}" \
+            bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=checked_run_failed"
+            exit 1
+          fi
+          if ! grep -qx 'probe=ok' "${logs}/harness_sandbox_probe.log" 2>/dev/null; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing"
+            exit 1
+          fi
+          echo "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok $(head -n 1 "${logs}/harness_sandbox_probe.log" | cut -c1-200)"
+
+      - name: Clean up the validation harness sandbox
         if: always()
+        run: bash scripts/validation_harness_sandbox.sh cleanup || true
+
+  commit-selftest-status:
+    needs: validation-selftest
+    if: always() && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # Fresh runner and checkout: nothing the self-test executed can have
+      # touched this .git (hooks, config, HEAD) before the token is used.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download validation self-test summary
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+
+      - name: Update validation self-test status artifact
         run: |
           set -euo pipefail
           python3 scripts/validation_selftest_status.py \
@@ -126,6 +223,7 @@ jobs:
         if: always() && github.ref_type == 'branch'
         env:
           TARGET_BRANCH: ${{ github.ref_name }}
+          STATUS_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           status_file="analysis/validation-selftest-status.json"
@@ -143,5 +241,10 @@ jobs:
           fi
 
           git commit -m "chore: update validation self-test status"
+          # Checkout does not persist credentials; authenticate pull/push
+          # through a one-shot helper that reads the token from the env.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=credential.helper
+          export GIT_CONFIG_VALUE_0='!f() { printf "username=x-access-token\npassword=%s\n" "${STATUS_PUSH_TOKEN}"; }; f'
           git pull --rebase origin "${TARGET_BRANCH}"
           git push origin "HEAD:${TARGET_BRANCH}"

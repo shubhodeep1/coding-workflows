@@ -5399,6 +5399,10 @@ jobs:
           # and restrict matches to issues opened by THIS orchestrate run
           # rather than scanning the whole open-issue list.
           DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # tracking_labels=e2e-smoke-test: the tracking title is model-written
+          # and may drop the smoke marker, so the label is what lets the
+          # scheduled poller (tracking_issue_is_smoke_fixture) keep this
+          # fixture project's Telegram alerts silent.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -5408,7 +5412,8 @@ jobs:
             --completion-timeout-secs 3000 \
             --completion-poll-interval-secs 20 \
             --status-log-prefix "orchestrate-bootstrap" \
-            --field "project_description=${PROJECT_DESC}"
+            --field "project_description=${PROJECT_DESC}" \
+            --field "tracking_labels=e2e-smoke-test"
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
@@ -6295,7 +6300,16 @@ jobs:
     # gate_only runs stop here: every test job above ran, nothing is tagged.
     if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
+    # retries still have to fit after it. A job timeout fails closed.
+    timeout-minutes: 50
+    # checks/actions read let the CI gate read check-runs and workflow runs
+    # when GH_PAT is absent; contents: write keeps the tag and release writes.
+    permissions:
+      contents: write
+      checks: read
+      actions: read
     # Serialise the mutating tag pushes across every dispatcher of this
     # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
     # The dispatchers' own locks end at dispatch time, so without this lock
@@ -6326,6 +6340,26 @@ jobs:
           fi
           echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
+      # Security finding release-gate-ignores-actions-ci (#6797, Refs #6532):
+      # the jobs above run this workflow's own tests, and the combined commit
+      # status never contains GitHub Actions check-runs, so a commit whose
+      # `CI / lint` aggregate was red, cancelled or never ran could be tagged.
+      # Require the github-actions `lint` check-run from ci.yml on the exact
+      # tested commit to be completed with success. Pending or missing runs
+      # are waited for (bounded); anything else fails closed. It runs before
+      # the changelog push and every tag write, and in dry runs too (read only).
+      # The tag may point at this commit plus a changelog-only commit; the
+      # RELEASE_UNTESTED_HEAD and RELEASE_STALE_TIP guards below bind it.
+      - name: Require CI / lint success on the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${RELEASE_TESTED_SHA}"
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         env:
@@ -6341,8 +6375,15 @@ jobs:
           # open (reset to the remote tip) if the commit cannot be pushed.
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
+          # commit. Fail open: a fragment that cannot fold stays in agents.d/
+          # for the next release, and a missing script (an older ref) is a no-op.
+          if [ -f scripts/assemble_agents.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py assemble --repo-root . \
+              || echo "::warning::agents.md fragment assembly failed; fragments stay in agents.d/ for the next release."
+          fi
 
-          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
+          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d agents.md agents.d)" ]; then
             echo "No changelog fragments to fold — nothing to commit."
             exit 0
           fi
@@ -6354,7 +6395,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A -- CHANGELOG.md changelog.d
+          git add -A -- CHANGELOG.md changelog.d agents.md agents.d
           git commit -m "chore: assemble changelog fragments for ${VERSION}"
 
           pushed="false"
@@ -6524,8 +6565,8 @@ jobs:
           HEAD_SHA="$(git rev-parse HEAD)"
           if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
             if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
-              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/)' || true)" ]; then
-              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog assembly; refusing to tag."
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/|agents\.md$|agents\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog/agents.md assembly; refusing to tag."
               exit 1
             fi
           fi

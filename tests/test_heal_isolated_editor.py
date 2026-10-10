@@ -4,6 +4,7 @@ import subprocess
 import sys
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -552,3 +553,131 @@ def test_intake_freezes_heal_scope_inputs_before_diagnosis() -> None:
 	open_issue = open_issue[:open_issue.index("\n}\n")]
 	assert '"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"' in open_issue
 	assert "*.verified" not in open_issue and "DIAG_FILE" not in open_issue.split("compose-issue")[0]
+
+
+# Issue #6982 (run 38017269081): the heal sandbox image had no PyYAML, so
+# every edited workflow file "failed" the validator's `import yaml`, the
+# repair loop could never fix it, and two attempts were discarded as
+# reason=syntax with no file named in the log.
+
+def _validator_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+	repo = tmp_path / "repo"
+	repo.mkdir(parents=True)
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "keep.txt").write_text("x\n")
+	subprocess.run(["git", "add", "--all"], cwd=repo, check=True)
+	subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "init"], cwd=repo, check=True)
+	for rel, text in files.items():
+		(repo / rel).parent.mkdir(parents=True, exist_ok=True)
+		(repo / rel).write_text(text)
+	return repo
+
+
+def _run_validator(repo: Path, tmp_path: Path, *, yaml_available: bool) -> subprocess.CompletedProcess:
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	env.pop("RUNTIME_DIR", None)
+	env.pop("CAPTURE_FILE", None)
+	if not yaml_available:
+		shadow = tmp_path / "no-yaml"
+		shadow.mkdir(exist_ok=True)
+		(shadow / "yaml.py").write_text("raise ImportError('PyYAML is not installed')\n")
+		env["PYTHONPATH"] = str(shadow)
+	return subprocess.run(["bash", str(ROOT / "scripts/validate_changed_files_syntax.sh")], cwd=repo, env=env, capture_output=True, text=True, check=False)
+
+
+def test_validator_reports_a_missing_yaml_checker_as_unavailable(tmp_path: Path) -> None:
+	pytest.importorskip("yaml")
+	repo = _validator_repo(tmp_path, {".github/workflows/review_autofix.yml": "name: ok\non: push\n"})
+	result = _run_validator(repo, tmp_path, yaml_available=False)
+	assert result.returncode == 3, result.stdout + result.stderr
+	assert "VALIDATE_CHANGED_FILES_SYNTAX outcome=validator_unavailable checker=yaml unchecked=1" in result.stdout
+	assert "::error file=.github/workflows/review_autofix.yml::YAML checker unavailable" in result.stdout
+	assert "YAML syntax error" not in result.stdout
+
+
+def test_validator_real_syntax_error_wins_over_an_unavailable_checker(tmp_path: Path) -> None:
+	repo = _validator_repo(tmp_path, {"a.yml": "name: ok\n", "broken.py": "def x(:\n"})
+	result = _run_validator(repo, tmp_path, yaml_available=False)
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "::error file=broken.py::Syntax error in broken.py" in result.stdout
+
+
+def test_validator_with_yaml_still_checks_yaml(tmp_path: Path) -> None:
+	pytest.importorskip("yaml")
+	good = _run_validator(_validator_repo(tmp_path / "good", {"a.yml": "name: ok\n"}), tmp_path / "good", yaml_available=True)
+	assert good.returncode == 0, good.stdout + good.stderr
+	bad = _run_validator(_validator_repo(tmp_path / "bad", {"a.yml": "name: [unclosed\n"}), tmp_path / "bad", yaml_available=True)
+	assert bad.returncode == 1
+	assert "::error file=a.yml::YAML syntax error in a.yml" in bad.stdout
+
+
+def test_heal_sandbox_image_ships_the_yaml_checker() -> None:
+	dockerfile = (ROOT / "scripts/clarify_sandbox/Dockerfile").read_text()
+	assert re.search(r"apt-get install -y --no-install-recommends [^\n]*\bpython3-yaml\b", dockerfile)
+
+
+@pytest.mark.parametrize("validator_rc,expected", [(3, "reason=validator_unavailable rc=3"), (1, "reason=syntax")])
+def test_heal_runner_names_validator_findings_and_never_repairs_a_missing_checker(tmp_path: Path, validator_rc: int, expected: str) -> None:
+	host = tmp_path / "host"
+	host.mkdir()
+	(host / ".github/workflows").mkdir(parents=True)
+	(host / ".github/workflows/review_autofix.yml").write_text("name: old\n")
+	subprocess.run(["git", "init", "-q", str(host)], check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, check=True)
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py"):
+		shutil.copy(ROOT / "scripts" / name, support / name)
+	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
+	(support / "clarify_openrouter_broker.py").write_text(
+		"import socket,sys,time\ns=socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[2])\ns.listen(1)\ntime.sleep(30)\n"
+	)
+	trusted = tmp_path / ".codex-workflow-src/scripts/clarify_sandbox"
+	trusted.mkdir(parents=True)
+	(trusted / "Dockerfile").write_text("FROM scratch\n")
+	prompt_dir = tmp_path / ".codex-workflow-src/prompts"
+	prompt_dir.mkdir()
+	(prompt_dir / "mode-implement-repair-syntax.txt").write_text("Repair syntax.\n")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	commands = tmp_path / "docker-commands"
+	docker = bin_dir / "docker"
+	docker.write_text("""#!/bin/bash
+printf '%s\\n' "$*" >> "__COMMANDS__"
+case "$1" in
+  build) echo fake-image ;;
+  run)
+    if [[ "$*" == *"/validator.sh"* ]]; then
+      echo "::error file=.github/workflows/review_autofix.yml::YAML checker unavailable (python3 cannot import yaml)"
+      echo "::stop-commands::injected"
+      exit __RC__
+    fi
+    for arg in "$@"; do
+      case "$arg" in
+        type=bind,src=*,dst=/results) dest="${arg#type=bind,src=}"; printf 'out\\n' > "${dest%%,dst=*}/output" ;;
+        type=bind,src=*,dst=/source) dest="${arg#type=bind,src=}"; printf 'name: new\\n' > "${dest%%,dst=*}/.github/workflows/review_autofix.yml" ;;
+      esac
+    done
+    ;;
+  ps|rm) ;;
+  *) exit 1 ;;
+esac
+""".replace("__COMMANDS__", str(commands)).replace("__RC__", str(validator_rc)))
+	docker.chmod(0o755)
+	prompt = tmp_path / "prompt"
+	prompt.write_text("Edit the workflow")
+	scope = tmp_path / "scope"
+	scope.write_text(".github/workflows/review_autofix.yml\ntests/**\nchangelog.d/*.md\n")
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", OPENROUTER_API_KEY="fake-model-key", HEAL_SCOPE_FILE=str(scope),
+		HEAL_TRUSTED_SUPPORT_DIR=str(support), RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path), WORKSPACE_PATH=str(host),
+		PYTHONDONTWRITEBYTECODE="1", MAX_POST_CODEX_REPAIR_ATTEMPTS="1")
+	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(tmp_path / "output")], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode != 0
+	assert expected in result.stderr, result.stderr
+	assert "HEAL_ISOLATED_EDITOR validation: ::error file=.github/workflows/review_autofix.yml::YAML checker unavailable" in result.stderr
+	# Only ::error lines are surfaced, and never at the start of a log line.
+	assert "stop-commands" not in result.stderr
+	assert not any(line.startswith("::") for line in result.stderr.splitlines())
+	validator_runs = sum(1 for line in commands.read_text().splitlines() if line.startswith("run ") and "/validator.sh" in line)
+	assert validator_runs == (1 if validator_rc == 3 else 2), validator_runs
+	assert (host / ".github/workflows/review_autofix.yml").read_text() == "name: old\n"

@@ -101,6 +101,37 @@ jobs:
       metadata_file: ${{ steps.collect_status.outputs.metadata_file }}
 
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Resolve integration ref
         id: refctx
         env:
@@ -172,6 +203,19 @@ jobs:
           })"; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
+            resolver_rc=$?
+            # A resolver that stayed rate-limited (exit 75, issue #6634) must
+            # not silently fall back to the default branch.
+            if [ "${resolver_rc}" -eq 75 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc}"
+              exit 1
+            fi
+            # Exit 2 is an API failure (retries exhausted or a permanent error);
+            # only exit 1 (declared branch missing) keeps the fallback below.
+            if [ "${resolver_rc}" -eq 2 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc}"
+              exit 1
+            fi
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
@@ -184,6 +228,8 @@ jobs:
           VALIDATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           if [ -z "${VALIDATE_TARGET_REF}" ]; then
             exit 0
           fi
@@ -211,10 +257,17 @@ jobs:
                 [ .[][] ] |
                 if length != 1 then error("\($what) PR binding is missing or ambiguous") else .[0] end
               end;'
-          target_prs="$(gh api --method GET --paginate --slurp \
+          # A transient or rate-limited listing is not "not authorized"
+          # (issue #6634): report it as an API failure.
+          target_prs_rc=0
+          target_prs="$(gh_api_retry --method GET --paginate --slurp \
             -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${VALIDATE_TARGET_REF}" \
             -f per_page=100 \
-            "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
+            "repos/${GITHUB_REPOSITORY}/pulls")" || target_prs_rc=$?
+          if [ "${target_prs_rc}" -ne 0 ]; then
+            echo "::error::VALIDATE_AUTHORIZE_TARGET outcome=api_unavailable rc=${target_prs_rc}"
+            exit 1
+          fi
           target_binding="$(jq -er --arg repo "${GITHUB_REPOSITORY}" \
             --arg branch "${VALIDATE_TARGET_REF}" --arg base "${VALIDATE_DEFAULT_BRANCH}" "${validate_pr_jq_defs}"'
             single_pr("target") |
@@ -329,6 +382,7 @@ jobs:
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
               "scripts/build_static_context.sh",
+              "scripts/assemble_agents.py",
               "scripts/write_codex_config.sh",
               "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
@@ -338,7 +392,9 @@ jobs:
               "scripts/workspace_safety_check.sh",
               "scripts/run_workspace_hook.sh",
               "scripts/codex_isolated_exec.sh",
+              "scripts/sandbox_image.sh",
               "scripts/codex_isolated_workspace.py",
+              "scripts/validation_harness_sandbox.sh",
               "scripts/clarify_openrouter_broker.py"
             ],
             "optional_preserve_scripts_before_templates": [
@@ -410,6 +466,11 @@ jobs:
             "required_remote_when_external_scripts": [
               "scripts/validate_driver.sh",
               "scripts/validate_process.sh"
+            ],
+            "self_repo_trusted_scripts": [
+              "scripts/validation_harness_sandbox.sh",
+              "scripts/codex_isolated_workspace.py",
+              "scripts/validate_driver.sh"
             ],
             "schema_files_if_missing": [
               "ai-memory/schemas/memory_record.v1.json",

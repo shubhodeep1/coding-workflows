@@ -74,6 +74,12 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 # go to check-failure triage instead.
 MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 
+# Scheduled self-checks in coding-workflows. The intake takes their failed
+# runs on the default branch only. The nightly self-test carries the daily
+# validation harness sandbox check, which catches runner-image drift before
+# project validations fail on it.
+SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
+
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
@@ -113,6 +119,7 @@ FAILURE_EVIDENCE_LIMIT = 4000  # same bound as ISSUE_EXCERPT_LIMIT (defined belo
 # them newest first. An editor summary ends the streak unless the next newer
 # failure marker shows that the same run failed after posting its summary.
 AUTOFIX_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
+	"AI review/autofix paused — model provider unavailable",
 	"AI review/autofix produced no output",
 	"AI review/autofix failed",
 	"AI review/autofix encountered a post-editor failure",
@@ -127,6 +134,13 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"Editor changes lost",
 	"Editor no-op suspicious",
 )
+
+# A model-provider outage (OpenRouter 402/401/429/5xx confirmed by a live
+# probe, scripts/provider_outage.py) is a repo-wide event, not a PR defect:
+# its failure markers count toward neither the identical-failure cap nor the
+# autofix failure streak (issue #6633, the 2026-09-30 credit outage).
+PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
+PROVIDER_UNAVAILABLE_COMMENT_MARKER = "AI review/autofix paused — model provider unavailable"
 
 # Pipeline phases whose failed runs report themselves (the `heal-report` job of
 # clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
@@ -145,6 +159,14 @@ PHASE_WRAPPER_WORKFLOW_FILES: dict[str, tuple[str, ...]] = {
 }
 REVIEW_WRAPPER_WORKFLOW_FILES = ("ai-review.yml", "internal-review.yml", "review_autofix.yml", "review_rb_judge_dispatch.yml")
 RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promote-main-to-stable.yml", "auto-release-stable.yml", "forward-merge-stable-to-main.yml")
+# CI workflow files a `workflow_run` report may cite. Accepted only for push
+# runs on the repository's default branch (checked against the run GitHub
+# returns, not the payload), matching the intake job's `if:` predicate.
+CI_WORKFLOW_FILES = ("ci.yml",)
+# Scheduled self-check workflow files (SCHEDULED_CHECK_WORKFLOW_NAMES) a
+# `workflow_run` report may cite. Accepted only for runs GitHub reports on the
+# default branch, matching the intake job's `if:` predicate.
+SCHEDULED_CHECK_WORKFLOW_FILES = ("nightly-validation-selftest.yml",)
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
@@ -254,6 +276,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
 _FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+# Issue #6625: a cap marker counts only on its own line, like the workflow and
+# poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
+_FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -289,6 +314,23 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
 _STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
 _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
+# The `env:` block of a step header prints every variable's value, and values
+# the runner does not know to be secrets (tokens minted in an earlier step,
+# derived credentials) are not masked. filter_log keeps only the names: an
+# entry keeps `NAME:` and gets `[redacted]` for its value, any other line in
+# the block (a multi-line value, an unparseable shape) is replaced whole, and
+# the block ends only at the header close. The runner prints `env:` as the last
+# section of a Run header (after `shell:` / `with:`), so a `with:` or `shell:`
+# line inside the block is a multi-line value continuation, not a header key,
+# and is redacted too. An inline `env: <value>` line keeps only `env:`.
+_STEP_ENV_OPEN_RE = re.compile(r"^env:\s*$")
+_STEP_ENV_INLINE_RE = re.compile(r"^env:\s*\S")
+_STEP_ENV_ENTRY_RE = re.compile(r"^(\s+[A-Za-z_][A-Za-z0-9_.-]*:)(\s*)(.*)$")
+_STEP_ENV_REDACTED_LINE = "  [redacted]"
+# A header that never closes (truncated log) after opening an `env:` block
+# cannot be bounded, so everything from its open line to the end of the job
+# log is replaced by this line. An open header without an `env:` block is kept.
+_STEP_ENV_UNTERMINATED_MARKER = "[env block omitted: unterminated step header]"
 # Test & Mark Stable Release runs dispatched by a promote cycle carry the
 # cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
 # scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
@@ -714,6 +756,9 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 		if not isinstance(comment, dict):
 			continue
 		body = sanitize_text(comment.get("body"))
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_FAILURE_MARKER_RE.search(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			# A provider outage neither adds to nor ends the streak.
+			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			streak += 1
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
@@ -1613,14 +1658,121 @@ def _drop_step_script_lines(text: str) -> str:
 	return "\n".join(kept)
 
 
+def _strip_step_env_values(text: str) -> str:
+	"""Redact the values of a step header's ``env:`` block in raw job-log text.
+
+	Inside a ``##[group]Run`` header, each ``NAME: value`` entry of the
+	``env:`` block keeps its name and gets ``[redacted]`` for its value; any
+	other non-empty line of the block is replaced with ``  [redacted]``
+	(fail closed). The block ends only at ``##[endgroup]``: the runner prints
+	``env:`` last, so a ``with:`` / ``shell:`` line inside it is part of a
+	multi-line value and is redacted. An inline ``env: <value>`` line keeps
+	``env:`` and opens the block. Lines outside the env block and
+	outside step headers are unchanged, so text without a Run header comes
+	back byte-for-byte. A header that is still open when the text ends and
+	opened an ``env:`` block cannot be bounded, so it is dropped from its open
+	line onwards and replaced by one marker line; an open header that never
+	opened an ``env:`` block holds no env values and is kept unchanged, so a
+	log cut mid-step still carries the step's diagnostic output.
+	Timestamps are compared without their prefix and kept in the output.
+	When the header's open line is timestamped (a real runner log), a line
+	without a timestamp inside the env block is a multi-line value
+	continuation, so it is redacted whole even if it looks like
+	``##[endgroup]`` or ``##[group]Run``; only a timestamped marker ends it.
+	A timestamped marker inside the env block that is followed by an
+	unstamped non-empty line is itself part of a value and is redacted too.
+	"""
+	kept: list[str] = []
+	header_lines: list[str] = []
+	in_header = False
+	in_env = False
+	env_seen = False
+	header_stamped = False
+	all_lines = text.split("\n")
+	for index, line in enumerate(all_lines):
+		content = _LOG_TIMESTAMP_RE.sub("", line)
+		stamp = line[: len(line) - len(content)]
+		if not in_header:
+			if _STEP_HEADER_OPEN_RE.match(content):
+				in_header = True
+				in_env = False
+				env_seen = False
+				header_stamped = bool(stamp)
+				header_lines = [line]
+			else:
+				kept.append(line)
+			continue
+		if in_env and header_stamped and not stamp:
+			# The runner timestamps every line it writes; an unstamped line in
+			# the env block of a stamped header continues a multi-line value.
+			header_lines.append(f"{_STEP_ENV_REDACTED_LINE}" if content.strip() else line)
+			continue
+		if (
+			in_env
+			and header_stamped
+			and (_STEP_HEADER_CLOSE_RE.match(content) or _STEP_HEADER_OPEN_RE.match(content))
+			and index + 1 < len(all_lines)
+			and all_lines[index + 1].strip()
+			and not _LOG_TIMESTAMP_RE.match(all_lines[index + 1])
+		):
+			# A marker followed by an unstamped value continuation is itself a
+			# value line that starts with a timestamp-shaped string: the runner
+			# never writes an unstamped line after a real marker. Redact it whole
+			# and stay in the env block (fail closed).
+			header_lines.append(_STEP_ENV_REDACTED_LINE)
+			continue
+		if _STEP_HEADER_CLOSE_RE.match(content):
+			kept.extend(header_lines)
+			kept.append(line)
+			header_lines = []
+			in_header = False
+			in_env = False
+			continue
+		if _STEP_HEADER_OPEN_RE.match(content):
+			in_env = False
+			header_lines.append(line)
+			continue
+		if _STEP_ENV_OPEN_RE.match(content):
+			in_env = True
+			env_seen = True
+			header_lines.append(line)
+			continue
+		if not in_env and _STEP_ENV_INLINE_RE.match(content):
+			in_env = True
+			env_seen = True
+			header_lines.append(f"{stamp}env: [redacted]")
+			continue
+		if not in_env or not content.strip():
+			header_lines.append(line)
+			continue
+		entry = _STEP_ENV_ENTRY_RE.match(content)
+		if entry and not entry.group(3):
+			header_lines.append(line)
+		elif entry:
+			header_lines.append(f"{stamp}{entry.group(1)} [redacted]")
+		else:
+			header_lines.append(f"{stamp}{_STEP_ENV_REDACTED_LINE}")
+	if in_header and env_seen:
+		kept.append(_STEP_ENV_UNTERMINATED_MARKER)
+	elif in_header:
+		# No env block was opened, so the buffered lines are verbatim and
+		# carry no env values; redact_secrets still runs over them later.
+		kept.extend(header_lines)
+	return "\n".join(kept)
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
 	"""Keep the high-signal lines plus the tail of a job log, bounded.
 
 	The echoed step script is dropped first (it has to be, before ANSI codes
 	are stripped), so the tail and the high-signal matches cover what the
-	steps printed rather than their source.
+	steps printed rather than their source. Step ``env:`` values are then
+	redacted (an unterminated header is dropped), and credential shapes are
+	masked with ``redact_secrets`` on the whole text before the tail and byte
+	cut, so a cut can never leave a token without its recognisable prefix.
+	The output feeds the diagnosis prompt and the heal issue evidence.
 	"""
-	lines = redact_secrets(sanitize_text(_drop_step_script_lines(text))).split("\n")
+	lines = redact_secrets(sanitize_text(_strip_step_env_values(_drop_step_script_lines(text)))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
@@ -1734,7 +1886,8 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
 	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then a failed editor
-	preflight (the editor never ran), then the editor flags, then the run
+	preflight, a failed reviewer step or a failed sandbox prepare (the editor
+	never ran), then the editor flags, then the run
 	summary's ``finalize_reason``, then ``workflow_failure``.
 	"""
 	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
@@ -1746,6 +1899,9 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	# failing phase rather than the empty editor output it left behind.
 	if flags.get("AUTOFIX_REVIEWERS_FAILED") == "true":
 		return "reviewers_failed"
+	# The review sandbox could not be prepared, so the editor never ran.
+	if flags.get("AUTOFIX_SANDBOX_PREPARE_FAILED") == "true":
+		return "sandbox_prepare_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":
@@ -1834,6 +1990,7 @@ _ERROR_LINE_RE = re.compile(r"^\s*(?:::error(?: [^:]*)?::|##\[error\])\s*(?P<msg
 _GENERIC_ERROR_RE = re.compile(r"^(?:Process completed with exit code [0-9]+\.?|.*\bAborting\.?)$", re.IGNORECASE)
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
+	# HTTP header names are case-insensitive (`curl -v` prints `authorization:`).
 	(re.compile(r"(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"(extraheader\s*[=:]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"(basic\s+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
@@ -1913,13 +2070,216 @@ def _safe_heal_path(path: str) -> bool:
 		and not path.lower().startswith((".github/ai/", ".claude/")))
 
 
-def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = ()) -> str:
+# Failing tests named by the run's own logs (operator decision Q37: A,
+# 2026-10-09). A CI heal's scope used to be the workflow file plus tests/**,
+# so the implementer could only edit tests, and when a test and the code
+# disagreed it rewrote the test to match whatever the code did: heal PRs
+# #6907 and #6916 flipped the security-pass cap rule that #6906 had just
+# restored, and main went red. The run logs are authenticated run metadata
+# (fetched by job id from the verified run, redacted and filtered before any
+# model sees them), so the test names they report may widen the frozen scope
+# deterministically: each failing test resolves to the test file that defines
+# it (git grep at the scope commit) and that file's stem to the subject it
+# covers (scripts/<stem>.sh, scripts/<stem>.py, .github/workflows/<stem>.yml,
+# with "-" for "_" too), only when that file exists at the scope commit and
+# passes the same path rules as every other scope entry. The diagnosis still
+# cannot add a path.
+_FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+	# A parameterized test reports ``test_x[param]``; only the function name is kept.
+	re.compile(r'"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"\s*,\s*"status"\s*:\s*"fail"'),
+	re.compile(r'"status"\s*:\s*"fail"\s*,\s*"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"'),
+	re.compile(r"^\s*FAIL\s+(test_[A-Za-z0-9_]{1,160})\b", re.MULTILINE),
+	# Pytest summary lines start the (timestamp-stripped) line; a class-based
+	# test reports ``tests/x.py::TestClass::test_y``.
+	re.compile(r"^\s*FAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(?:[A-Za-z_][A-Za-z0-9_]{0,160}::)?(test_[A-Za-z0-9_]{1,160})", re.MULTILINE),
+	re.compile(r"^\s*FAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b", re.MULTILINE),
+	# A test file CI runs as a script (``python3 tests/x.py``) fails with a
+	# traceback whose frame names the file and the test function, or with
+	# unittest's ``FAIL: test_x (module.Class.test_x)`` / ``ERROR:`` header.
+	re.compile(r'^\s*File "(?:[^"\n]{0,400}/)?(tests/(?:[A-Za-z0-9_-]{1,80}/){0,4}test_[A-Za-z0-9_]{1,160}\.py)", line [0-9]+, in (test_[A-Za-z0-9_]{1,160})\s*$', re.MULTILINE),
+	re.compile(r"^\s*(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,160}) \([A-Za-z0-9_.]{1,300}\)\s*$", re.MULTILINE),
+)
+FAILING_TEST_LIMIT = 20
+
+
+def extract_failing_tests(text: str) -> dict[str, list[str]]:
+	"""Failing test function names and test files that a filtered job log reports.
+
+	Returns ``{"names": [...], "files": [...], "pairs": [...]}`` in first-seen
+	order, deduped and capped at FAILING_TEST_LIMIT each. ``pairs`` holds
+	``<file>::<name>`` for every line that names both (the pytest summary shape),
+	so an ambiguous name can be bound to the file the log reported for it. Only
+	the shapes the CI shard runner, pytest and unittest print are recognised;
+	prose never matches.
+	"""
+	names: list[str] = []
+	files: list[str] = []
+	pairs: list[str] = []
+	# Raw Actions job logs prefix every line with an ISO timestamp, which
+	# filter_log keeps; strip it so the line-anchored shapes match.
+	cleaned = "\n".join(_LOG_TIMESTAMP_RE.sub("", line) for line in sanitize_text(text).split("\n"))
+	for pattern in _FAILING_TEST_PATTERNS:
+		for match in pattern.finditer(cleaned):
+			for group in match.groups():
+				if not group:
+					continue
+				bucket = files if group.startswith("tests/") else names
+				if group not in bucket and len(bucket) < FAILING_TEST_LIMIT:
+					bucket.append(group)
+			groups = [group for group in match.groups() if group]
+			if len(groups) == 2 and groups[0].startswith("tests/"):
+				pair = f"{groups[0]}::{groups[1]}"
+				if pair not in pairs and len(pairs) < FAILING_TEST_LIMIT:
+					pairs.append(pair)
+	return {"names": names, "files": files, "pairs": pairs}
+
+
+def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str]:
+	"""Test files plus the subject each one covers, when that subject exists.
+
+	``tests/test_<stem>.py`` maps to ``scripts/<stem>.sh``, ``scripts/<stem>.py``
+	and ``.github/workflows/<stem>.yml`` (also with ``-`` for ``_``); every
+	candidate must exist at the scope commit and pass ``_safe_heal_path``.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str) or not _safe_heal_path(test_file) or not test_file.startswith("tests/"):
+			continue
+		if not exists(test_file):
+			continue
+		if test_file not in out:
+			out.append(test_file)
+		stem = test_file.rsplit("/", 1)[-1]
+		if not stem.startswith("test_") or not stem.endswith(".py"):
+			continue
+		stem = stem[len("test_"):-len(".py")]
+		if not re.fullmatch(r"[A-Za-z0-9_]{1,120}", stem):
+			continue
+		candidates = [f"scripts/{stem}.sh", f"scripts/{stem}.py", f".github/workflows/{stem}.yml"]
+		dashed = stem.replace("_", "-")
+		if dashed != stem:
+			candidates.append(f".github/workflows/{dashed}.yml")
+		for candidate in candidates:
+			if candidate not in out and _safe_heal_path(candidate) and exists(candidate):
+				out.append(candidate)
+	return out
+
+
+# Guard tests check a property of other files, so their own name maps to no
+# subject (tests/test_workflow_file_size_limit.py has no
+# scripts/workflow_file_size_limit.*) and a heal for them was confined to
+# tests/**, where the guard cannot be fixed. Each one maps to the files its
+# fix edits instead; every entry must still exist at the scope commit.
+HEAL_SCOPE_GUARD_TEST_SUBJECTS: dict[str, tuple[str, ...]] = {
+	"tests/test_ci_job_split_contract.py": (".github/workflows/ci.yml",),
+	# Pin the inventory-parity step order and the shared shell-block guard step in ci.yml.
+	"tests/test_ci_inventory_parity_order_contract.py": (".github/workflows/ci.yml",),
+	"tests/test_ci_shared_shell_block_guard.py": (".github/workflows/ci.yml",),
+	# Pins the orchestrate-poll sharded step in ci.yml and its ports in both
+	# release gates; ci.yml, mark-stable.yml and test-and-mark-stable.yml run it.
+	"tests/test_ci_poll_test_sharding.py": (".github/workflows/ci.yml", ".github/workflows/mark-stable.yml", ".github/workflows/test-and-mark-stable.yml"),
+}
+# The workflow size guard (CLAUDE.md §27) is fixed by moving inline run:
+# bodies of the oversized workflow into new scripts/<workflow>_step_<slug>.sh
+# files, registered in the bootstrap list and the inventory. Its subjects are
+# the workflow files at or above the guard at the scope commit, those
+# registries, and one glob per oversized workflow for the new step scripts.
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST = "tests/test_workflow_file_size_limit.py"
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES = 480_000
+HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES = ("scripts/stage_workflow_support.sh", "docs/INVENTORY.md")
+# The only glob a scope may carry besides the trailing tests/** and
+# changelog.d/*.md: new step scripts of one named workflow, never scripts/*.
+_HEAL_SCOPE_STEP_GLOB_RE = re.compile(r"scripts/[a-z0-9][a-z0-9_]{0,79}_step_\*\.sh")
+
+
+def heal_scope_step_script_glob(workflow_path: str) -> str:
+	"""``scripts/<stem>_step_*.sh`` for ``.github/workflows/<stem>.yml`` (``-`` becomes ``_``), or ``""``."""
+	match = re.fullmatch(r"\.github/workflows/([A-Za-z0-9_-]{1,80})\.ya?ml", workflow_path or "")
+	if not match:
+		return ""
+	glob = f"scripts/{match.group(1).replace('-', '_').lower()}_step_*.sh"
+	return glob if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(glob) else ""
+
+
+def _heal_oversized_workflows(checkout: str, ref: str | None, guard_bytes: int = HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES) -> list[str]:
+	"""Workflow files at or above ``guard_bytes`` at ``ref`` (or in the checkout when ``ref`` is empty)."""
+	found: list[str] = []
+	if ref:
+		result = subprocess.run(["git", "ls-tree", "-l", "-z", ref, "--", ".github/workflows/"], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			return []
+		for entry in result.stdout.split(b"\0"):
+			meta, _, raw_path = entry.partition(b"\t")
+			fields = meta.split()
+			if len(fields) != 4 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") or not fields[3].isdigit():
+				continue
+			path = raw_path.decode("utf-8", errors="replace")
+			if int(fields[3]) >= guard_bytes and re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml", path):
+				found.append(path)
+		return sorted(found)
+	workflows = Path(checkout) / ".github" / "workflows"
+	for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
+		if path.is_file() and not path.is_symlink() and path.stat().st_size >= guard_bytes:
+			found.append(path.relative_to(checkout).as_posix())
+	return found
+
+
+def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_workflows: Any) -> list[str]:
+	"""Subjects of the failing guard tests: existing paths, plus step-script globs.
+
+	``oversized_workflows`` is called only when the size guard failed and returns
+	the workflow paths at or above the guard at the scope commit.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str):
+			continue
+		candidates: list[str] = list(HEAL_SCOPE_GUARD_TEST_SUBJECTS.get(test_file, ()))
+		if test_file == HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST:
+			oversized = [path for path in oversized_workflows() if isinstance(path, str)]
+			candidates.extend(oversized)
+			if oversized:
+				candidates.extend(HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES)
+			candidates.extend(heal_scope_step_script_glob(path) for path in oversized)
+		for candidate in candidates:
+			if not candidate or candidate in out:
+				continue
+			if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(candidate) or (_safe_heal_path(candidate) and exists(candidate)):
+				out.append(candidate)
+	return out
+
+
+# Explicit scope slots reserved for failing-test subjects ahead of changed_files.
+HEAL_SCOPE_SUBJECT_RESERVE = 8
+
+
+def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
 	paths = []
-	for path in [crash_file, *workflow_paths, *changed_files]:
-		if isinstance(path, str) and _safe_heal_path(path) and path not in paths and exists(path):
-			paths.append(path)
+	dropped = 0
+	# Test files are already covered by the trailing ``tests/**`` glob, so only
+	# the subjects they map to take one of the 20 explicit slots
+	# (verify_heal_scope accepts at most 20 explicit paths).
+	subjects = [path for path in test_subjects if isinstance(path, str) and not path.startswith("tests/")]
+	# Up to HEAL_SCOPE_SUBJECT_RESERVE subjects go ahead of the ownership
+	# ``changed_files`` list: a PR or base diff touching 20+ files would
+	# otherwise fill every slot first and confine the heal to tests/** again.
+	# The crash file and workflow paths keep priority; remaining subjects follow.
+	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
+	for path in ordered:
+		if not isinstance(path, str) or path in paths:
+			continue
+		step_glob = bool(_HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) and path in subjects
+		if not step_glob and not _safe_heal_path(path):
+			continue
 		if len(paths) >= 20:
-			break
+			# Counted without an existence lookup, so this is an upper bound.
+			dropped += 1
+		elif step_glob or exists(path):
+			# A step-script glob names files the fix creates, so it has no
+			# existence check; it comes only from heal_scope_guard_subjects.
+			paths.append(path)
+	if dropped:
+		print(f"WORKFLOW_HEAL warn heal_scope_truncated kept={len(paths)} dropped_candidates={dropped}", file=sys.stderr)
 	if not paths:
 		return ""
 	refs = list(runs)
@@ -1950,7 +2310,7 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 	runs = markers[0][1].split(",") if markers else []
 	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
 		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
-		or any(not _safe_heal_path(path) for path in paths[:-2])
+		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
 		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
 		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
 		status = "malformed"
@@ -2019,11 +2379,20 @@ def autofix_failure_fingerprint(*, failure_reason: str, evidence_text: str) -> d
 	}
 
 
-def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None) -> str:
+def _normalized_support_sha(support_sha: Any) -> str:
+	"""Return ``support_sha`` lowercased when it is a 40-hex SHA, else ``""``."""
+	value = str(support_sha or "").strip().lower()
+	return value if is_valid_sha(value) else ""
+
+
+def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None, support_sha: str | None = None) -> str:
 	"""Render the ``review-autofix-failure:v1`` marker appended to a failure comment.
 
 	``run`` lets the counter treat two failure comments of one run as a single
-	failure. Returns an empty string when the head or fingerprint is malformed.
+	failure. ``support`` (issue #6625) records the verified review-support SHA
+	that ran, so a later review on updated support can ignore failures from an
+	older support version; it is omitted when ``support_sha`` is not a 40-hex
+	SHA. Returns an empty string when the head or fingerprint is malformed.
 	"""
 	head = str(head_sha or "").strip().lower()
 	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
@@ -2032,6 +2401,9 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	run = safe_token(run_id, 20)
 	if run.isdigit():
 		fields.append(f"run={run}")
+	support = _normalized_support_sha(support_sha)
+	if support:
+		fields.append(f"support={support}")
 	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
 
 
@@ -2064,9 +2436,16 @@ def _run_workflow_file(run: dict[str, Any]) -> str | None:
 
 def verify_run_provenance(
 	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
-	trusted_login: str, self_repo: str,
+	trusted_login: str, self_repo: str, default_branch: str = "",
 ) -> dict[str, Any]:
-	"""Keep only run references corroborated by GitHub, before reading job logs."""
+	"""Keep only run references corroborated by GitHub, before reading job logs.
+
+	A ``workflow_run`` report may cite a CI run (``CI_WORKFLOW_FILES``) only
+	when GitHub reports it as a ``push`` run on ``default_branch``; an empty or
+	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
+	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
+	GitHub reports it on ``default_branch``, under the same fail-closed rule.
+	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
 	result: dict[str, Any] = {"status": "not_applicable", "reason": "", "run_refs": refs, "rejections": [], "pending_current_run": ""}
@@ -2088,7 +2467,7 @@ def verify_run_provenance(
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
 	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
 		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
-		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -2113,6 +2492,17 @@ def verify_run_provenance(
 			reason = "unexpected_run_event"
 		if not reason and _run_workflow_file(run) not in allowed:
 			reason = "unexpected_workflow_path"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in CI_WORKFLOW_FILES and not (
+			run.get("event") == "push"
+			and is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "ci_not_default_branch_push"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in SCHEDULED_CHECK_WORKFLOW_FILES and not (
+			is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "scheduled_check_not_default_branch"
 		if not reason and kind == "phase_failure":
 			linked = any(
 				isinstance(comment, dict) and bool(_comment_author(comment))
@@ -2162,12 +2552,15 @@ def verify_run_provenance(
 	return result
 
 
-def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> list[dict[str, Any]]:
+def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> list[dict[str, Any]]:
 	"""Return the trusted failure markers for ``head_sha``, oldest first.
 
 	A marker is trusted only when its comment was written by ``author_login``
 	(the identity the workflow posts as); markers from anyone else are ignored.
+	With a valid ``support_sha`` only markers carrying that ``support`` value
+	are returned (markers without one come from older support versions).
 	"""
+	support = _normalized_support_sha(support_sha)
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	markers: list[dict[str, Any]] = []
@@ -2179,19 +2572,22 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 		fields = _marker_fields(_FAILURE_MARKER_RE.search(sanitize_text(comment.get("body"))))
 		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
 		markers.append(
 			{
 				"fp": fields["fp"],
 				"reason": fields.get("reason") or "unknown",
 				"degraded": fields.get("degraded") == "1",
 				"run": fields.get("run", ""),
+				"support": fields.get("support", "").lower() if is_valid_sha(fields.get("support", "").lower()) else "",
 				"comment_id": safe_token(comment.get("id"), 20),
 			}
 		)
 	return markers
 
 
-def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> dict[str, Any]:
+def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> dict[str, Any]:
 	"""Count the trailing identical failures on ``head_sha``.
 
 	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
@@ -2205,7 +2601,15 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
+
+	With a valid ``support_sha`` (the verified review-support SHA of the
+	evaluating run, issue #6625), failure and cap markers whose ``support``
+	field is missing or different come from an older support version: they are
+	skipped like markers for another head, so they neither count nor end the
+	scan, and an older cap marker does not set ``cap_applied``. Without
+	``support_sha`` the legacy rules apply unchanged.
 	"""
+	support = _normalized_support_sha(support_sha)
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
@@ -2215,8 +2619,11 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	for comment in ordered:
 		if _comment_author(comment) != author:
 			continue
-		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(sanitize_text(comment.get("body"))))
-		if cap_fields.get("head", "").lower() == head:
+		cap_body = sanitize_text(comment.get("body"))
+		if any(
+			fields.get("head", "").lower() == head and (not support or fields.get("support", "").lower() == support)
+			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(cap_body))
+		):
 			result["cap_applied"] = True
 			break
 	seen_runs: set[str] = set()
@@ -2228,8 +2635,16 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			fields = _marker_fields(match)
 			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 				continue
-			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
+			if support and fields.get("support", "").lower() != support:
+				continue
 			run = fields.get("run", "")
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				# Outage markers never count and never end the scan; the
+				# run is remembered so its other comments are skipped too.
+				if run:
+					seen_runs.add(run)
+				continue
+			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			if run and run in seen_runs:
 				continue
 			if not result["fp"]:
@@ -2240,6 +2655,8 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			result["count"] += 1
 			if run:
 				seen_runs.add(run)
+			continue
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body:
 			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			break
@@ -2604,6 +3021,8 @@ def compose_issue_body(
 		if payload.get("source_kind") == "workflow_run":
 			if payload.get("workflow_name") in MAIN_CI_WORKFLOW_NAMES:
 				intro = "A CI run on the default branch failed."
+			elif payload.get("workflow_name") in SCHEDULED_CHECK_WORKFLOW_NAMES:
+				intro = "A scheduled self-check workflow run on the default branch failed."
 			else:
 				intro = "A release / promotion workflow run failed."
 			intro += (
@@ -3029,7 +3448,7 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
 	if args.head_sha:
-		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None, args.support_sha or None) + "\n")
 	return 0
 
 
@@ -3059,12 +3478,13 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
 		raise ValueError("comments JSON must be a list")
-	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login)
+	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
 	sys.stdout.write(f"count={int(result['count'])}\n")
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
+	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
 	return 0
 
 
@@ -3095,7 +3515,7 @@ def _cmd_verify_run_provenance(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json) if args.comments_json else None
 	except (OSError, ValueError):
 		comments = None
-	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo))
+	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo, default_branch=args.default_branch))
 	return 0
 
 
@@ -3167,13 +3587,71 @@ def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
 		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
 
 
+def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) -> list[str]:
+	"""Test files under tests/ at ``ref`` that define one of the failing test functions."""
+	found: list[str] = []
+	for name in names:
+		if not isinstance(name, str) or not re.fullmatch(r"test_[A-Za-z0-9_]{1,160}", name):
+			continue
+		# Indented definitions are class-based test methods.
+		cmd = ["git", "grep", "-l", "-z", "-E", f"^[[:space:]]*def {name}\\(", ref, "--", "tests/"]
+		result = subprocess.run(cmd, cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			continue
+		for entry in result.stdout.split(b"\0"):
+			text = entry.decode("utf-8", errors="replace")
+			path = text.split(":", 1)[1] if ":" in text else text
+			if path and path not in found and _safe_heal_path(path):
+				found.append(path)
+	return found
+
+
 def _cmd_heal_scope(args: argparse.Namespace) -> int:
 	if args.operation == "strip":
 		sys.stdout.write(strip_heal_scope_markers(Path(args.body_file).read_text()))
 	elif args.operation == "render":
 		data = _load_json_file(args.input_json)
-		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path) if args.ref else Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		exists = (lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path)) if args.ref else (lambda path: Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		failing = data.get("failing_tests") if isinstance(data.get("failing_tests"), dict) else {}
+		test_files = [path for path in (failing.get("files") or []) if isinstance(path, str)]
+		if args.ref:
+			# Bind log-reported test files to the scope commit: a file is kept only
+			# when it defines one of the reported failing tests there, so a stray or
+			# forged "FAILED tests/x.py" line naming an unrelated file cannot add it
+			# (or the subject its stem maps to). Names still come from the same
+			# verified-run logs, so an existing test name remains the residual trust.
+			# Each name resolves on its own: a name defined in more than one test
+			# file is ambiguous (another file can define the same name, so the
+			# failure does not establish which file, or subject, it exercised) and
+			# is kept only for the files the log itself reported for that name
+			# (a ``<file>::<name>`` pair), never for a file another failure reported.
+			reported_for_name: dict[str, set[str]] = {}
+			for pair in failing.get("pairs") or []:
+				if isinstance(pair, str) and "::" in pair:
+					pair_file, pair_name = pair.split("::", 1)
+					reported_for_name.setdefault(pair_name, set()).add(pair_file)
+			test_files = []
+			for name in failing.get("names") or []:
+				matches = _heal_test_files_for_names(args.checkout, args.ref, [name])
+				if len(matches) > 1:
+					matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]
+				test_files.extend(path for path in matches if path not in test_files)
+		subjects = heal_scope_test_subjects(test_files, exists)
+		subjects += [path for path in heal_scope_guard_subjects(test_files, exists, lambda: _heal_oversized_workflows(args.checkout, args.ref)) if path not in subjects]
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=subjects)
 		sys.stdout.write(marker + "\n")
+	elif args.operation == "failing-tests":
+		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
+		for log_path in args.log_files or []:
+			try:
+				found = extract_failing_tests(Path(log_path).read_text(encoding="utf-8", errors="replace"))
+			except OSError:
+				continue
+			for key in ("names", "files", "pairs"):
+				for item in found[key]:
+					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
+						merged[key].append(item)
+		_write_json(merged)
 	elif args.operation == "verify":
 		data = _load_json_file(args.input_json)
 		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
@@ -3545,6 +4023,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
+	p.add_argument("--support-sha", default="", help="verified review-support SHA; recorded as support= in the marker (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
@@ -3555,6 +4034,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
+	p.add_argument("--support-sha", default="", help="verified review-support SHA; markers from other support versions are ignored (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
@@ -3572,6 +4052,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", default="")
 	p.add_argument("--trusted-login", default="")
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--default-branch", default="")
 	p.set_defaults(func=_cmd_verify_run_provenance)
 
 	p = sub.add_parser("skip-reason", help="Print a skip reason (empty when the payload should be healed)")
@@ -3605,7 +4086,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_route)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "carry", "strip"))
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests"))
+	p.add_argument("--log-files", nargs="*")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
 	p.add_argument("--checkout", default=".")
