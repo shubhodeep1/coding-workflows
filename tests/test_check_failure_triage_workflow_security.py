@@ -1483,6 +1483,26 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
 				self.assertEqual(out.stdout.strip(), expected)
 
+	def test_pending_base_check_run_is_not_read_as_an_older_success(self) -> None:
+		# A pending base check run must not let an earlier completed success skip triage.
+		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
+		jq_filter = ('[.check_runs[]?] as $r | if ($r | length) == 0 or any($r[]; .status != "completed") then "" '
+			'elif all($r[]; .conclusion == "success") then "success" '
+			'else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end')
+		self.assertIn(jq_filter, source)
+		self.assertNotIn('select(.status == "completed")][0].conclusion', source)
+		for payload, expected in (
+			({"check_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, ""),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "queued", "conclusion": None}]}, ""),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}]}, "failure"),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
+			({"check_runs": []}, ""),
+			({}, ""),
+		):
+			with self.subTest(payload=payload):
+				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
+				self.assertEqual(out.stdout.strip(), expected)
+
 	def test_duplicate_issue_is_checked_before_the_base_gate(self) -> None:
 		# The gate's reads come after the open-issue dedup, so a duplicate costs nothing extra.
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")

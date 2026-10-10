@@ -370,7 +370,8 @@ fi
 # failed CI workflow run costs two reads (the failing run's workflow id, then
 # that workflow's newest push run on the base branch, used only once it has
 # completed, so a pending newest run never yields an older success); a check_run
-# event costs one (that check's newest run on the base branch tip). Fails open:
+# event costs one (that check's newest runs on the base branch tip, counted as
+# success only when every returned run has completed with success). Fails open:
 # any read failure, a pending or missing base result, or a conclusion other
 # than success files the issue as before.
 BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
@@ -399,7 +400,7 @@ else
 	else
 		base_gate_conclusion="$(gh_retry gh api -X GET "repos/${REPO}/commits/${BASE_REF}/check-runs" \
 			-f check_name="${CHECK_NAME}" -f filter=latest -f per_page=10 \
-			--jq '[.check_runs[]? | select(.status == "completed")][0].conclusion // ""' 2>/dev/null || true)"
+			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or any($r[]; .status != "completed") then "" elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
 		[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_check"
 	fi
 	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
