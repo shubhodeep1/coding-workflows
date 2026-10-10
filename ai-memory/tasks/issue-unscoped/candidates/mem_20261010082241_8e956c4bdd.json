@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:563 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reported `verdict` assignment is a syntax error.\n  WHY: The reviewer says `verdict =_read_json` is interpreted incorrectly and prevents execution.\n- scripts/unblock_ledger.py:405-470 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `latest_automation_rejection()` can reuse an automation-path rejection without checking whether a trusted unblock verdict was posted afterward.\n  WHY: If the guard later grants those paths, the regrant path can approve the issue and clear its scope block despite an unresolved verdict or fix-up decision.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py:563 | severity=BLOCKER | confidence=5\n  PROBLEM: The previous fix added a space after `verdict =` but also added an unnecessary space `verdict =_read_json`.\n  WHY: This is a syntax error because `verdict =_read_json` is interpreted as variable assignment where `_read_json` is not a defined variable/function name in that context, and the syntax is incorrect.\n- scripts/unblock_ledger.py:422-442 | severity=MAJOR | confidence=4\n  PROBLEM: `latest_automation_rejection()` selects the newest trusted guard rejection without checking whether a newer unblock verdict exists.\n  WHY: A stale rejection can be reused by the regrant path after a fix-up closes without merging or times out, bypassing an unresolved operator step or fix-up decision.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_ledger.py: latest_automation_rejection function, lines 405-462 (per the diff's @@ marker); called from scripts/unblock_judge.sh:480 unblock_try_regrant | severity=MAJOR | confidence=4\n  PROBLEM: `latest_automation_rejection` selects the newest trusted guard rejection without checking whether an unblock verdict marker has been posted on the issue.\n  WHY: A fresh automation-path rejection can trigger regrant while a prior descope or operator-step fix-up is pending, bypassing the verdict and fix-up; the existing tests do not cover this sequence.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_ledger.py: latest_automation_rejection(), lines 422-445 | severity=MAJOR | confidence=4\n  PROBLEM: The function does not check whether a trusted unblock verdict was posted after the automation-path rejection.\n  WHY: After a verdict leaves the issue scope-blocked and its fix-up closes without merging or times out, a later judge run can reuse the old rejection and resume the issue without a verdict.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_ledger.py: latest_automation_rejection(), lines 405-470 | severity=MAJOR | confidence=4\n  PROBLEM: The function selects the newest trusted automation-path rejection without checking whether a newer unblock verdict exists on the item.\n  WHY: If today's guard grants those paths, the regrant path can reuse the old rejection, post `/approved`, and clear the latch despite an unresolved operator step or fix-up decision.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "14be2529a69f110275c2c7862ba13bc45b76aa617d4f0339645c0564299a4cbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7038,
+    "run_id": "38035426839",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035426839",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010082241_8e956c4bdd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7038,
+    "run_id": "38035426839"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T08:22:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
