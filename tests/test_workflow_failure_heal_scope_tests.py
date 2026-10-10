@@ -209,3 +209,146 @@ def test_prompt_tells_the_healer_how_to_pick_a_side() -> None:
 	for path in ("prompts/mode-workflow-failure-heal.txt", "prompts/_templates/mode-workflow-failure-heal.txt"):
 		text = (REPO_ROOT / path).read_text(encoding="utf-8")
 		assert "decide which side is" in text and "never from \"the test should match what" in text, path
+
+
+# Guard tests (Q39: C, item 11): a guard checks other files, so its own file
+# name maps to no subject and the heal was confined to tests/**, where the
+# guard cannot be fixed. The size guard maps to the workflow files at or
+# above the guard at the scope commit, the split registries, and one
+# step-script glob per oversized workflow.
+
+def _init_guard_repo(root: Path, *, oversized: dict[str, int]) -> str:
+	(root / "tests").mkdir(parents=True)
+	(root / "tests/test_workflow_file_size_limit.py").write_text("def test_every_workflow_file_is_below_size_guard() -> None:\n\tpass\n")
+	(root / "tests/test_ci_job_split_contract.py").write_text("def test_no_step_runs_in_more_than_one_job() -> None:\n\tpass\n")
+	(root / ".github/workflows").mkdir(parents=True)
+	for name, size in oversized.items():
+		(root / ".github/workflows" / name).write_text("#" * (size - 1) + "\n")
+	(root / ".github/workflows/small.yml").write_text("name: small\n")
+	(root / "docs").mkdir()
+	(root / "docs/INVENTORY.md").write_text("# Inventory\n")
+	(root / "scripts").mkdir()
+	(root / "scripts/stage_workflow_support.sh").write_text("#!/usr/bin/env bash\n")
+	return _init_scope_repo(root)
+
+
+def _render_guard(root: Path, sha: str, tmpdir: str, names: list[str]) -> str:
+	inputs = Path(tmpdir) / "scope_inputs.json"
+	inputs.write_text(json.dumps({"crash_file": "", "runs": [f"{SELF_REPO}:1"], "workflow_paths": [".github/workflows/ci.yml"], "changed_files": [],
+		"failing_tests": {"names": names, "files": []}}))
+	return subprocess.run([sys.executable, str(HEAL_PY), "heal-scope", "render", "--input-json", str(inputs), "--checkout", str(root), "--ref", sha],
+		capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_size_guard_failure_scopes_the_oversized_workflow_its_registries_and_step_scripts() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		sha = _init_guard_repo(root, oversized={"review_autofix.yml": heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES, "issue-pr-status.yml": heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES + 5})
+		marker = _render_guard(root, sha, tmpdir, ["test_every_workflow_file_is_below_size_guard"])
+		assert marker == (f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,.github/workflows/issue-pr-status.yml,"
+			".github/workflows/review_autofix.yml,scripts/stage_workflow_support.sh,docs/INVENTORY.md,"
+			"scripts/issue_pr_status_step_*.sh,scripts/review_autofix_step_*.sh,tests/**,changelog.d/*.md "
+			f"runs={SELF_REPO}:1 -->")
+		verified = heal.verify_heal_scope(body=marker, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+		assert verified["status"] == "verified"
+		from files_touched_scope_guard import entry_matches
+		assert any(entry_matches(entry, "scripts/review_autofix_step_move_big_body.sh") for entry in verified["paths"])
+		assert not any(entry_matches(entry, "scripts/orchestrate_poll_process.sh") for entry in verified["paths"])
+		assert not any(entry_matches(entry, "scripts/review_autofix_step_x.py") for entry in verified["paths"])
+
+
+def test_size_guard_without_an_oversized_workflow_adds_nothing() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		sha = _init_guard_repo(root, oversized={"review_autofix.yml": heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES - 1})
+		marker = _render_guard(root, sha, tmpdir, ["test_every_workflow_file_is_below_size_guard"])
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+
+
+def test_ci_contract_guards_scope_ci_yml() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		sha = _init_guard_repo(root, oversized={})
+		inputs = Path(tmpdir) / "scope_inputs.json"
+		inputs.write_text(json.dumps({"crash_file": "", "runs": [f"{SELF_REPO}:1"], "workflow_paths": [], "changed_files": [],
+			"failing_tests": {"names": ["test_no_step_runs_in_more_than_one_job"], "files": []}}))
+		marker = subprocess.run([sys.executable, str(HEAL_PY), "heal-scope", "render", "--input-json", str(inputs), "--checkout", str(root), "--ref", sha],
+			capture_output=True, text=True, check=True).stdout.strip()
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+
+
+def test_oversized_workflows_read_the_checkout_without_a_ref() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		_init_guard_repo(root, oversized={"review_autofix.yml": heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES})
+		assert heal._heal_oversized_workflows(str(root), None) == [".github/workflows/review_autofix.yml"]
+		assert heal._heal_oversized_workflows(str(root), "no-such-ref") == []
+
+
+def test_step_script_glob_is_the_only_extra_glob_a_scope_accepts() -> None:
+	assert heal.heal_scope_step_script_glob(".github/workflows/review_autofix.yml") == "scripts/review_autofix_step_*.sh"
+	assert heal.heal_scope_step_script_glob(".github/workflows/Issue-PR-status.yaml") == "scripts/issue_pr_status_step_*.sh"
+	for bad in ("", "review_autofix.yml", ".github/workflows/../x.yml", ".github/workflows/a/b.yml", "scripts/x.sh"):
+		assert heal.heal_scope_step_script_glob(bad) == "", bad
+	runs = f"runs={SELF_REPO}:1 -->"
+	for bad_glob in ("scripts/*.sh", "scripts/*_step_*.sh", ".github/workflows/*.yml", "scripts/x_step_*.py", "scripts/a/b_step_*.sh", "scripts/x_step_**.sh"):
+		body = f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,{bad_glob},tests/**,changelog.d/*.md {runs}"
+		assert heal.verify_heal_scope(body=body, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")["status"] == "malformed", bad_glob
+	# A step glob is accepted only as a guard subject, never from ownership inputs.
+	marker = heal.render_heal_scope_marker(crash_file="scripts/x_step_*.sh", workflow_paths=[".github/workflows/ci.yml"], changed_files=["scripts/y_step_*.sh"],
+		exists=lambda path: True, runs=[f"{SELF_REPO}:1"])
+	assert "_step_*" not in marker
+
+
+def test_size_guard_threshold_matches_the_guard_test() -> None:
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("size_guard", REPO_ROOT / "tests" / "test_workflow_file_size_limit.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	assert heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES == module.WORKFLOW_FILE_SIZE_GUARD_BYTES
+	assert (REPO_ROOT / heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST).is_file()
+	assert "def test_every_workflow_file_is_below_size_guard(" in (REPO_ROOT / heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST).read_text(encoding="utf-8")
+	for registry in heal.HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES:
+		assert (REPO_ROOT / registry).is_file(), registry
+	for test_file, subjects in heal.HEAL_SCOPE_GUARD_TEST_SUBJECTS.items():
+		for subject in subjects:
+			assert (REPO_ROOT / subject).is_file(), (test_file, subject)
+
+
+SCRIPT_RUN_LOG = """2026-10-10T01:00:00.0000000Z FAIL: test_alpha (__main__.T.test_alpha)
+2026-10-10T01:00:00.0000000Z ----------------------------------------------------------------------
+2026-10-10T01:00:00.0000000Z Traceback (most recent call last):
+2026-10-10T01:00:00.0000000Z   File "/home/runner/work/coding-workflows/coding-workflows/tests/test_ut.py", line 4, in test_alpha
+2026-10-10T01:00:00.0000000Z ERROR: test_gamma (test_mod.TestK.test_gamma)
+2026-10-10T01:00:01.0000000Z Traceback (most recent call last):
+2026-10-10T01:00:01.0000000Z   File "/home/runner/work/coding-workflows/coding-workflows/tests/test_script.py", line 8, in <module>
+2026-10-10T01:00:01.0000000Z   File "/home/runner/work/coding-workflows/coding-workflows/tests/test_script.py", line 2, in test_beta
+2026-10-10T01:00:01.0000000Z AssertionError: x
+"""
+
+
+def test_extract_failing_tests_reads_script_run_tracebacks_and_unittest_headers() -> None:
+	found = heal.extract_failing_tests(SCRIPT_RUN_LOG)
+	assert found["names"] == ["test_alpha", "test_beta", "test_gamma"]
+	assert found["files"] == ["tests/test_ut.py", "tests/test_script.py"]
+	assert found["pairs"] == ["tests/test_ut.py::test_alpha", "tests/test_script.py::test_beta"]
+	# A helper frame or a quoted file name in prose is not a failing test.
+	assert heal.extract_failing_tests('  File "/x/tests/test_a.py", line 3, in helper\nsee File "tests/test_b.py", line 1, in test_c here\n')["names"] == []
+
+
+def test_real_size_guard_failure_output_resolves_to_its_subjects() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		sha = _init_guard_repo(root, oversized={"review_autofix.yml": heal.HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES})
+		(root / "tests/test_workflow_file_size_limit.py").write_text((REPO_ROOT / "tests/test_workflow_file_size_limit.py").read_text(encoding="utf-8"))
+		subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+		subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "guard"], check=True)
+		sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+		# The way ci.yml runs it: as a script.
+		run = subprocess.run([sys.executable, "tests/test_workflow_file_size_limit.py"], cwd=root, capture_output=True, text=True,
+			env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"})
+		assert run.returncode != 0
+		found = heal.extract_failing_tests(run.stdout + run.stderr)
+		assert "test_every_workflow_file_is_below_size_guard" in found["names"]
+		marker = _render_guard(root, sha, tmpdir, found["names"])
+		assert ",.github/workflows/review_autofix.yml,scripts/stage_workflow_support.sh,docs/INVENTORY.md,scripts/review_autofix_step_*.sh,tests/**," in marker

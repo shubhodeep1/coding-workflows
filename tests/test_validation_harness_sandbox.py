@@ -427,3 +427,106 @@ def test_provision_still_fails_closed_when_the_packages_cannot_be_installed() ->
 def test_ci_runs_this_file() -> None:
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_validation_harness_sandbox.py" in ci
+
+
+# Daily sandbox check (Q39: C, item 9): smoke validations skip the sandbox, so
+# a runner-image change that broke provisioning showed up only when every
+# project validation failed (#6959). The nightly self-test workflow now runs
+# provision, the isolation self-check, a staged run and log copy-back.
+
+NIGHTLY = REPO_ROOT / ".github" / "workflows" / "nightly-validation-selftest.yml"
+
+# Stand-in for the sandbox helper: `checked-run` runs the entry in a scratch
+# copy and copies validation/logs back, the way the real helper does.
+FAKE_HELPER = r"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${FAKE_CALLS}"
+case "$1" in
+	provision) exit "${FAKE_PROVISION_RC:-0}" ;;
+	checked-run)
+		[[ "$2" =~ ^[0-9]+$ ]] || exit 3
+		work="$(mktemp -d)"
+		(cd "${work}" && bash "$3") || exit $?
+		dest="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:?}"
+		mkdir -p "${dest}"
+		cp -R "${work}/validation/logs/." "${dest}/"
+		;;
+	cleanup) exit 0 ;;
+esac
+"""
+
+
+def _nightly_step(job: str, name: str) -> str:
+	import yaml
+
+	steps = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))["jobs"][job]["steps"]
+	return next(step for step in steps if step.get("name") == name)["run"]
+
+
+def _run_nightly_check(tmp: Path, *, docker_body: str, provision_rc: int = 0) -> subprocess.CompletedProcess:
+	(tmp / "scripts").mkdir()
+	helper = tmp / "scripts" / "validation_harness_sandbox.sh"
+	helper.write_text(FAKE_HELPER, encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text(f"#!/bin/sh\n{docker_body}\n", encoding="utf-8")
+	docker.chmod(0o755)
+	runner_temp = tmp / "runner-temp"
+	runner_temp.mkdir()
+	env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp), "RUNNER_TEMP": str(runner_temp),
+		"FAKE_CALLS": str(tmp / "calls"), "FAKE_PROVISION_RC": str(provision_rc)}
+	return subprocess.run(["bash", "-c", _nightly_step("harness-sandbox-check", "Provision and exercise the validation harness sandbox")],
+		cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_nightly_sandbox_check_is_wired_on_a_fresh_read_only_runner() -> None:
+	import yaml
+
+	workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+	on = workflow.get("on", workflow.get(True))
+	assert on["schedule"] == [{"cron": "15 2 * * *"}]
+	job = workflow["jobs"]["harness-sandbox-check"]
+	assert job["permissions"] == {"contents": "read"}
+	assert "needs" not in job and job["timeout-minutes"] <= 20
+	checkout = job["steps"][0]
+	assert checkout["uses"].startswith("actions/checkout@") and checkout["with"]["persist-credentials"] is False
+	run = _nightly_step("harness-sandbox-check", "Provision and exercise the validation harness sandbox")
+	assert "bash scripts/validation_harness_sandbox.sh provision" in run
+	assert 'bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"' in run
+	assert 'VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}"' in run
+	cleanup = next(step for step in job["steps"] if step.get("name") == "Clean up the validation harness sandbox")
+	assert cleanup["if"] == "always()" and "validation_harness_sandbox.sh cleanup" in cleanup["run"]
+
+
+def test_nightly_sandbox_check_passes_when_rootless_docker_answers() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		result = _run_nightly_check(Path(td), docker_body="echo 'server=27.0.0 rootless=[\"name=rootless\"]'")
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok server=27.0.0" in result.stdout
+		calls = (Path(td) / "calls").read_text().splitlines()
+		assert calls[0] == "provision" and calls[1].startswith("checked-run ") and calls[1].endswith("/harness_sandbox_probe.sh")
+
+
+@pytest.mark.parametrize("docker_body,provision_rc", (("exit 1", 0), ("echo ok", 3)))
+def test_nightly_sandbox_check_fails_when_docker_or_provision_fails(docker_body, provision_rc) -> None:
+	with tempfile.TemporaryDirectory() as td:
+		result = _run_nightly_check(Path(td), docker_body=docker_body, provision_rc=provision_rc)
+		assert result.returncode != 0
+		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok" not in result.stdout
+
+
+def test_nightly_sandbox_check_fails_when_no_log_copies_back() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		result = _run_nightly_check(tmp, docker_body="echo ok")
+		assert result.returncode == 0
+		# A copy-back that delivers nothing is a failure, not a silent pass.
+		helper = tmp / "scripts" / "validation_harness_sandbox.sh"
+		helper.write_text(FAKE_HELPER.replace('cp -R "${work}/validation/logs/." "${dest}/"', ": copy-back lost"), encoding="utf-8")
+		(tmp / "runner-temp" / "harness-sandbox-probe-logs" / "harness_sandbox_probe.log").unlink()
+		env = {"PATH": f"{tmp / 'bin'}:/usr/bin:/bin", "HOME": str(tmp), "RUNNER_TEMP": str(tmp / "runner-temp"), "FAKE_CALLS": str(tmp / "calls")}
+		again = subprocess.run(["bash", "-c", _nightly_step("harness-sandbox-check", "Provision and exercise the validation harness sandbox")],
+			cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
+		assert again.returncode == 1
+		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing" in again.stdout

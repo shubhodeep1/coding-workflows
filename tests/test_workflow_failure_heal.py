@@ -236,8 +236,11 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	on = _on(intake)
 	assert on["repository_dispatch"]["types"] == [heal.DISPATCH_EVENT_TYPE]
 	assert on["workflow_run"]["types"] == ["completed"]
-	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES)
+	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES) + list(heal.SCHEDULED_CHECK_WORKFLOW_NAMES)
 	assert _yaml(REPO_ROOT / ".github" / "workflows" / "ci.yml")["name"] in heal.MAIN_CI_WORKFLOW_NAMES
+	assert _yaml(REPO_ROOT / ".github" / "workflows" / "nightly-validation-selftest.yml")["name"] in heal.SCHEDULED_CHECK_WORKFLOW_NAMES
+	# Scheduled checks are healed from the default branch only.
+	assert "(github.event.workflow_run.name != 'Nightly Validation Self-Test' || github.event.workflow_run.head_branch == github.event.repository.default_branch)" in " ".join(intake["jobs"]["intake"]["if"].split())
 	assert "payload_json" in on["workflow_dispatch"]["inputs"]
 	actual_names = {
 		_yaml(REPO_ROOT / ".github" / "workflows" / name)["name"]

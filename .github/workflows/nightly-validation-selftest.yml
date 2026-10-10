@@ -132,6 +132,52 @@ jobs:
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
+  # Daily check of the validation harness sandbox (scripts/validation_harness_sandbox.sh).
+  # Every real project validation runs its harness there, but smoke
+  # validations and the self-test above skip it, so a runner-image change that
+  # breaks provisioning (rootless Docker packages, user namespaces) went
+  # unnoticed until every project validation failed (#6959). This job runs the
+  # same provision, isolation self-check, staged run and log copy-back on a
+  # fresh runner each night; a failure reaches the workflow failure heal
+  # intake like a red main CI run. It runs only trusted checkout code.
+  harness-sandbox-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Provision and exercise the validation harness sandbox
+        run: |
+          set -euo pipefail
+          probe="${RUNNER_TEMP}/harness_sandbox_probe.sh"
+          logs="${RUNNER_TEMP}/harness-sandbox-probe-logs"
+          # Runs as the sandbox user inside the staged copy: rootless Docker
+          # must answer, and a log under validation/logs must copy back.
+          cat > "${probe}" <<'PROBE'
+          set -euo pipefail
+          mkdir -p validation/logs
+          docker info --format 'server={{.ServerVersion}} rootless={{json .SecurityOptions}}' > validation/logs/harness_sandbox_probe.log
+          echo "probe=ok" >> validation/logs/harness_sandbox_probe.log
+          PROBE
+          bash scripts/validation_harness_sandbox.sh provision
+          VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}" \
+            bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"
+          if ! grep -qx 'probe=ok' "${logs}/harness_sandbox_probe.log" 2>/dev/null; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing"
+            exit 1
+          fi
+          echo "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok $(head -n 1 "${logs}/harness_sandbox_probe.log" | cut -c1-200)"
+
+      - name: Clean up the validation harness sandbox
+        if: always()
+        run: bash scripts/validation_harness_sandbox.sh cleanup || true
+
   commit-selftest-status:
     needs: validation-selftest
     if: always() && github.ref_type == 'branch'
