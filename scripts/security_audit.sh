@@ -1786,15 +1786,11 @@ def matching_waiver(finding: dict[str, object]) -> str | None:
 	for waiver in waived_findings_input:
 		if not isinstance(waiver, dict):
 			continue
-		# Exact match on the raw id or on the id as displayed in the prompt
-		# (finding_id is the prompt-sanitized form), so an auditor that reuses
-		# the id it was shown still matches.
-		waived_ids = {
-			value.strip()
-			for value in (waiver.get("match_finding_id"), waiver.get("finding_id"))
-			if isinstance(value, str) and value.strip()
-		}
-		if finding_id not in waived_ids:
+		# Exact match on the raw recorded id only.  The prompt-sanitized
+		# finding_id (backticks dropped, whitespace collapsed) is never an
+		# alias: it would let a waiver for one id suppress a distinct id.
+		waived_id = waiver.get("match_finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip() or waived_id.strip() != finding_id:
 			continue
 		waived_category = str(waiver.get("match_category") or "")
 		waived_severity = str(waiver.get("match_severity") or "")

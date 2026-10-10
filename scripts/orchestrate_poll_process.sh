@@ -6553,9 +6553,9 @@ def waiver_for(finding: dict) -> str | None:
 		waived_id = waiver.get("finding_id")
 		if not isinstance(waived_id, str) or not waived_id.strip():
 			continue
-		# Exact match on the recorded id or on the id the engine displayed in
-		# its prompt (backticks dropped, whitespace collapsed).
-		if finding_id not in (waived_id.strip(), " ".join(waived_id.replace("`", "").split())):
+		# Exact match on the recorded id only; a displayed (backtick-free)
+		# form is never an alias, so a distinct id cannot match.
+		if waived_id.strip() != finding_id:
 			continue
 		waived_finding = waiver.get("finding")
 		waived_scenario = norm_scenario(waiver.get("exploit_scenario"))

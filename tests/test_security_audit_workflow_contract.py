@@ -2032,6 +2032,33 @@ def test_security_audit_waiver_matches_scenario_as_displayed_in_prompt() -> None
 		assert payload["counts"]["suppressed_waived"] == 1
 
 
+def test_security_audit_waiver_displayed_id_is_not_an_alias() -> None:
+	"""A waiver for `SEC`-1` must not suppress a distinct finding `SEC-1` (#6987)."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-waived-alias-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		waived_findings_path = tmp_path / "waived-findings.json"
+		waived_findings_path.write_text(json.dumps([{
+			"finding_id": "SEC`-1", "owasp_or_stride_category": "A04:2021-Insecure Design",
+			"severity": "medium", "file": "file_b.py", "line": 1,
+			"exploit_scenario": "The original weakness is bounded.",
+		}]), encoding="utf-8")
+		distinct = _finding_payload("SEC-1", file_path="file_b.py", category="A04:2021-Insecure Design",
+			severity="medium", exploit_scenario="The original weakness is bounded.")
+		result, state = _run_security_audit(
+			{}, codex_output=json.dumps([distinct]), cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT), "SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"), "SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha, "SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_findings_path),
+			},
+		)
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(state["security_audit_findings_output"])
+		assert [row["finding_id"] for row in payload["findings"]] == ["SEC-1"]
+		assert payload["counts"]["suppressed_waived"] == 0
+
+
 def test_security_audit_reused_waiver_id_cannot_hide_new_exploit() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-id-") as fixture_td:
 		tmp_path = Path(fixture_td)
