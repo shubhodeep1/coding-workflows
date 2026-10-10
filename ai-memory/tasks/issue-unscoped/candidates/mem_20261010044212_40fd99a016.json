@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:2099 and 2344 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `VALIDATE_CHANGED_FILES_SYNTAX` log prefix is inserted out of alphabetical order in both the stable-log-prefix list and the `LOG_PREFIX.name` registry.\n  WHY: The prefix remains unique and runtime consumers match by name, but its misplaced position disrupts the registry's organization.\n- scripts/validate_changed_files_syntax.sh:lines 257-260, 263, 299-303 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: YAML-checker-unavailable annotations are emitted at `::error` level even though the failure is a validator outage, not a YAML syntax error.\n  WHY: The red annotations mislead operators viewing Actions run summaries and PR checks about the cause of validation failure.\n- scripts/heal_isolated_implement.sh:108 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `grep -E '^::error'` filter drops `::warning::` and `::notice::` annotations from the validator log.\n  WHY: Relevant diagnostic context emitted at those annotation levels is omitted from the run log.\n- scripts/heal_isolated_implement.sh:lines 107-110 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `grep -E '^::error'` filter also matches malformed prefixes such as `::erroring` instead of only valid `::error file=...` or `::error::message` workflow commands.\n  WHY: A future validator could emit a malformed line that is then surfaced as though it were a valid workflow command.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- agents.md:lines 2099 and 2344 | severity=low | confidence=5\n  PROBLEM: The new log prefix `VALIDATE_CHANGED_FILES_SYNTAX` is inserted between `APPLY_ANALYSIS_DISPATCHED` and `APPLY_ANALYSIS_CANDIDATES` in both the contractual stable-log-prefix list and the LOG_PREFIX.name registry, although both lists are sorted alphabetically.\n  WHY: No runtime failure occurs because the prefix is unique and valid; log-prefix consumers match by name, not position.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_changed_files_syntax.sh:263 | severity=high | confidence=4\n  PROBLEM: The script emits an ::error:: workflow command when the YAML checker is unavailable.\n  WHY: This incorrectly flags a validator environment outage as a repository syntax error in the Actions UI, which is misleading for operators trying to debug CI failures.\n- scripts/heal_isolated_implement.sh:108 | severity=high | confidence=3\n  PROBLEM: The grep -E '^::error' filter is too restrictive and loses context.\n  WHY: This filter silently drops ::warning:: or ::notice:: annotations emitted by the validator, obscuring potentially relevant diagnostic information from the run log.\n- agents.md:2099 and 2344 | severity=low | confidence=4\n  PROBLEM: The new log prefix VALIDATE_CHANGED_FILES_SYNTAX is inserted out of alphabetical order.\n  WHY: It does not cause a runtime failure as the prefix is unique, but it disrupts the organization of the registry.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validate_changed_files_syntax.sh:lines 257-260 (per-file annotation) and lines 299-303 (summary annotation) | severity=high | confidence=5\n  PROBLEM: Both annotations are emitted at `::error` level when the YAML checker is unavailable. The actual failure is a validator outage (no PyYAML in the image), not a YAML syntax error.\n  WHY: A consumer viewing the Actions run summary / PR checks page sees one red `::error` annotation per edited YAML file plus a red summary annotation. The annotation level advertises a syntax failure, but the validator's exit code (`VALIDATOR_UNAVAILABLE_EXIT=3`) and the heal runner's reason (`reason=validator_unavailable`) both classify this as an outage. Operators triaging from the Actions UI will misinterpret the failure mode (the entire premise of the PR description is that a missing checker must not be reported as a syntax error \u2014 the script still does exactly that to the UI).\n- scripts/heal_isolated_implement.sh:lines 107-110 | severity=low | confidence=3\n  PROBLEM: `grep -E '^::error' \"${root}/results/validation.log\"` matches any line beginning with the literal characters `::error`, including `::erroring`, `::error-foo`, etc. The validator's own annotation is `::error file=...::YAML checker unavailable` (a workflow command with `file=`), and `grep -E '^::error'` also matches `::erroring` if a future validator emits one. The intended match is the GitHub Actions workflow-command form `::error file=...` or `::error::message`.\n  WHY: A future validator change that emits, e.g., `::error_blame=foo::\u2026` would be printed through the HEAL_ISOLATED_EDITOR prefix and might leak a non-workflow-command line that the runner happens to treat as one (the test guards `::stop-commands::injected`, but a `::error_blame=` style line would survive). Tightening the regex to `^::error(file=|::)` keeps both valid forms and rejects the loose ones; the test's `assert \"stop-commands\" not in result.stderr` already continues to pass with that pattern.\n- agents.md:lines 2099 and 2344 (the two `VALIDATE_CHANGED_FILES_SYNTAX` insertions) | severity=low | confidence=4\n  PROBLEM: The new log prefix is inserted between `APPLY_ANALYSIS_DISPATCHED` and `APPLY_ANALYSIS_CANDIDATES` in both the contractual stable-log-prefix list and the `LOG_PREFIX.name=` registry, rather than placed with the other validator / heal prefixes (`HEAL_ISOLATED_EDITOR`, `HEAL_SCOPE_REFUSED`, `WORKFLOW_HEAL_EVIDENCE`, `AUTOFIX_FAILURE_HEADLINE`, `AUTOFIX_FAILURE_FIRST_ERROR`).\n  WHY: Position does not change runtime behaviour \u2014 the prefix name is unique and consumers match on the literal `VALIDATE_CHANGED_FILES_SYNTAX` token \u2014 but the misalignment makes the registry harder to scan by domain and violates the implicit grouping convention in the surrounding entries. Moving the two insertions next to the heal-side prefixes keeps the registry organised without changing any contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "5aeb0fe60b62d3415bfbb969e033da9f8845ec3fee0b86bf266b86de75fb8783",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7030,
+    "run_id": "38022341086",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38022341086",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010044212_40fd99a016",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7030,
+    "run_id": "38022341086"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T04:42:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
