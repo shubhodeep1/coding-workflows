@@ -1414,7 +1414,7 @@ byte-identical.
 | The numbers that matter | Value |
 | --- | --- |
 | Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
-| Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
+| Image | pulled prebuilt from GHCR when one matches its inputs, else built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after); see "Prebuilt sandbox images" |
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | staged Node manifests and filtered `requirements.txt` / `pyproject.toml` dependencies (both when present) installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; installable Python source (`pyproject.toml`, or requirements with `setup.py`) runs separately offline, including Node/Python hybrids; a failed dev dependency install warns even if base dependencies install on retry; never copied back; when the proxy is unavailable, installation is skipped without restoring network access |
@@ -1490,6 +1490,40 @@ merged-PR check; only digits glued to the redirection (`2>&1`, `2>/dev/null`)
 are a file descriptor, as in Bash.
 An unresolved push source also requires confirmation instead of checking the
 session checkout's unrelated HEAD.
+
+### Prebuilt sandbox images
+
+The sandbox images the isolated agents run in are now pulled ready-made from
+GHCR instead of built on every job. `scripts/sandbox_image.sh` sits in front of
+each image build (`codex_isolated_exec.sh`, `clarify_isolated_run.sh`,
+`heal_isolated_implement.sh`, `review_untrusted_sandbox.sh`): it pulls
+`ghcr.io/shubhodeep1/coding-workflows-sandbox:<family>-<input hash>` and runs
+the same `docker build` as before when the pull fails, times out or returns an
+image whose `coding-workflows.sandbox-input` label does not match. A job no
+longer depends on Docker Hub, npm or the Debian mirrors being reachable, which
+on 2026-10-09 pushed Claude roles onto the codex fallback.
+
+The input hash covers the build context's files, the Dockerfile path and the
+build args (`CODEX_VERSION`, `OPENCODE_VERSION`, `CLAUDE_CLI_VERSION`). A repo
+that overrides one of them, or a ref whose Dockerfile differs from the published
+ones, finds no tag and builds locally exactly as before.
+`.github/workflows/publish-sandbox-images.yml` publishes the tags:
+
+| The numbers that matter | Value |
+| --- | --- |
+| Images per ref | 7: clarify (codex, Claude, heal defaults), review (OpenCode, Claude), `codex_isolated_exec.sh` (codex, Claude) |
+| Published from | pushes to `main` and `stable` that touch an image input; weekly forced rebuild Mondays 04:23 UTC (Debian security updates); `workflow_dispatch` |
+| Pull timeout | `SANDBOX_IMAGE_PULL_TIMEOUT_SECS`, default `60` |
+| Registry | `SANDBOX_IMAGE_REGISTRY`, default `ghcr.io/shubhodeep1/coding-workflows-sandbox`; `off` always builds locally |
+| Log line | `SANDBOX_IMAGE family=<f> outcome=pulled\|built reason=<pull_failed\|label_mismatch\|disabled> ref=<ref>` |
+
+What this means for operators: the package must be public so consumer repos
+pull it without credentials. GitHub creates a new package as private; after
+the first publish, set it to public once under the package's settings. Until
+then, and whenever GHCR is down, jobs build locally and log
+`outcome=built reason=pull_failed`. The publish job runs only in
+`shubhodeep1/coding-workflows` and logs in with the job's `GITHUB_TOKEN`
+(`packages: write`); no consumer job holds a registry credential.
 
 ### Workflow file size limit
 
@@ -2258,7 +2292,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
-| `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor container wall-time limit. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. |
+| `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor wall-time limit, for the codex container and for the Claude run alike. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. When `IMPLEMENT` resolves to Claude (the default), `scripts/heal_isolated_implement.sh` runs the heal editor and its syntax repairs through `ai_engine.sh` `claude_run` on its own snapshot (in `codex_isolated_exec.sh`'s credential-free write container, never the job's shared workspace sandbox), then applies the same syntax validation and scoped transfer as a codex edit. Claude unavailable (exit 75) runs the isolated codex editor; any other Claude failure fails the run. `HEAL_ISOLATED_EDITOR ... engine=` names the engine that ran. |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |

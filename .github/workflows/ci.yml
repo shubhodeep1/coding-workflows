@@ -549,6 +549,21 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pool_reviewer.py
 
+      - name: Workflow-heal editor on the Claude engine tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_heal_isolated_claude_editor.py
+
+      - name: Review editor account-pool telemetry tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_pool_telemetry.py
+
+      - name: Prebuilt sandbox image tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
+
       - name: Review sandbox image build retry tests
         run: |
           set -euo pipefail

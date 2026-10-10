@@ -38,6 +38,16 @@ else
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
 [ -f "${support}/clarify_sandbox/Dockerfile" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/write_codex_config.sh" ] && [ -f "${support}/codex_model_catalog.json" ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
+# without the helper, build locally as before. Arguments: docker build args.
+clarify_image_build()
+{
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
+	else
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
+	fi
+}
 # The source root is read as data only; host Python never imports from it.
 source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
 omit_agent_instructions="${CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false}"
@@ -172,7 +182,7 @@ if [ "${engine}" = claude ]; then
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
-	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"; then
+	if ! image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}")"; then
 		ai_engine_fallback "${engine_role}" image_build_failed
 		exit 75
 	fi
@@ -262,7 +272,7 @@ fi
 
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.
 # The Docker build context contains only the pinned Dockerfile.
-image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"
+image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}")"
 [ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 -I -B "${support}/clarify_openrouter_broker.py" broker "${run_root}/socket/provider.sock" &
