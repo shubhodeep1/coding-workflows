@@ -227,6 +227,7 @@ esac
 if [ "$1" = "api" ]; then
   case "$2" in
     user) echo "${FAKE_PAT_LOGIN}"; exit 0 ;;
+    graphql) exit "${FAKE_GRAPHQL_RC:-0}" ;;
     */activity*) cat "${FAKE_ACTIVITY_JSON}"; exit 0 ;;
     */compare/*)
       if [ -n "${FAKE_COMPARE_SIDE_EFFECT:-}" ]; then bash -c "${FAKE_COMPARE_SIDE_EFFECT}" >/dev/null 2>&1; fi
@@ -421,6 +422,42 @@ def test_rerun_with_open_pr_refreshes_it(fx: Fixture) -> None:
 	assert not any(call.startswith("pr create") for call in calls)
 	assert fx.outputs()["pr_action"] == "refreshed"
 	assert _remote_sha(fx.origin, "refs/heads/main") == fx.base_sha
+
+
+AUTO_ENROLLED_PR = [{"number": 5, "url": "https://github.com/octo/consumer/pull/5", "state": "OPEN", "isCrossRepository": False, "headRefName": BRANCH, "mergedAt": None, "id": "PR_node5", "autoMergeRequest": {"mergeMethod": "SQUASH"}}]
+
+
+@needs_jq
+def test_refresh_withdraws_earlier_auto_merge_before_push(fx: Fixture) -> None:
+	fx.pr_list.write_text(json.dumps(AUTO_ENROLLED_PR), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode == 0, result.stderr
+	calls = fx.gh_calls()
+	withdraw = [i for i, call in enumerate(calls) if call.startswith("api graphql") and "disablePullRequestAutoMerge" in call]
+	assert len(withdraw) == 1
+	assert "id=PR_node5" in calls[withdraw[0]]
+	edit = next(i for i, call in enumerate(calls) if call.startswith("pr edit 5"))
+	assert withdraw[0] < edit
+	assert fx.outputs()["auto_merge"] == "pending_verify"
+
+
+@needs_jq
+def test_refresh_without_enrollment_skips_withdrawal(fx: Fixture) -> None:
+	fx.pr_list.write_text(json.dumps([{**AUTO_ENROLLED_PR[0], "autoMergeRequest": None}]), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode == 0, result.stderr
+	assert not any(call.startswith("api graphql") for call in fx.gh_calls())
+
+
+@needs_jq
+def test_failed_auto_merge_withdrawal_fails_closed(fx: Fixture) -> None:
+	fx.pr_list.write_text(json.dumps(AUTO_ENROLLED_PR), encoding="utf-8")
+	(fx.bin / "gh").write_text(FAKE_GH.replace('graphql) exit "${FAKE_GRAPHQL_RC:-0}"', "graphql) exit 1"), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode != 0
+	assert "auto_merge_withdraw_failed" in result.stdout + result.stderr
+	assert not any(call.startswith("pr edit") for call in fx.gh_calls())
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == ""
 
 
 @needs_jq

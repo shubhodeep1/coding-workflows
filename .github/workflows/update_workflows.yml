@@ -1078,7 +1078,7 @@ jobs:
 
           # One lookup scoped to head and base. The list API (not search) sees a
           # pull request created seconds earlier.
-          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt)" || pr_fail pr_lookup_failed
+          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest)" || pr_fail pr_lookup_failed
           OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
           CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
           [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
@@ -1086,6 +1086,18 @@ jobs:
             PR_NUMBER="${OPEN_PR%% *}"
             PR_URL="${OPEN_PR#* }"
             [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
+            # #7004: GitHub keeps auto-merge enrollment across pushes, so an
+            # earlier run's enrollment would merge the refreshed head before
+            # the verify job checks it. Withdraw it before pushing; the verify
+            # job re-enables it for the verified head. Reuses the lookup above
+            # (§14); a failed withdrawal fails closed before any push.
+            OPEN_PR_AUTO="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0] | if .autoMergeRequest == null then "" else (.id // "missing") end')" || pr_fail pr_lookup_failed
+            if [ "${OPEN_PR_AUTO}" = "missing" ]; then
+              pr_fail auto_merge_withdraw_failed
+            elif [ -n "${OPEN_PR_AUTO}" ]; then
+              gh api graphql -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' -f "id=${OPEN_PR_AUTO}" >/dev/null || pr_fail auto_merge_withdraw_failed
+              echo "UPDATER_PR_DELIVERY #${PR_NUMBER}: withdrew auto-merge enrolled by an earlier run before refreshing the head."
+            fi
           elif [ "${CLOSED_UNMERGED}" -gt 0 ]; then
             # A human closed this release's pull request: respect the rejection.
             echo "::warning::$(pr_log skipped closed_by_human)"

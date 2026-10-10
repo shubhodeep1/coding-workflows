@@ -58,6 +58,8 @@ and accepts a changed path only when:
   entry of `workflow-templates/.claude/<rel>` or `CLAUDE.md`;
 - it is deleted, listed in the attested `workflow-templates/retired_files.txt`
   and its base blob sha256 is one of the listed hashes.
+A wrapper, `.claude/` or `CLAUDE.md` path the PR adds, or whose mode the PR
+changes, must carry the manifest entry's mode (`mode_mismatch`).
 Anything else is `unlisted_path`. Every reproduced path must be in the change
 set (`derived_missing`). Added or modified paths must be regular files.
 
@@ -604,6 +606,19 @@ def _check_hash_entry(git_dir: str, change: dict, entry: dict) -> None:
 		raise VerifyError("content_mismatch", path)
 
 
+def _check_mode(change: dict, entry: dict) -> None:
+	"""Reject a PR that sets a mode the attested release does not record.
+
+	An added path, or a modified path whose mode the PR changes, must carry
+	the manifest entry's mode. A modified path that keeps its existing mode
+	is accepted: the updater's `cp` onto an existing file keeps the consumer's
+	mode, so only modes the PR itself introduces are checked.
+	"""
+	if change["status"] == "A" or change["old_mode"] != change["new_mode"]:
+		if change["new_mode"] != entry["mode"]:
+			raise VerifyError("mode_mismatch", change["path"])
+
+
 def _check_change(git_dir: str, root: Path, release_sha: str, index: dict, retired, change: dict) -> None:
 	path = change["path"]
 	status = change["status"]
@@ -620,8 +635,10 @@ def _check_change(git_dir: str, root: Path, release_sha: str, index: dict, retir
 	wrapper = WRAPPER_PATH_RE.fullmatch(path)
 	if wrapper:
 		template_rel = "workflow-templates/" + wrapper.group(1)
-		if _manifest_regular_entry(index, template_rel) is None:
+		template_entry = _manifest_regular_entry(index, template_rel)
+		if template_entry is None:
 			raise VerifyError("unlisted_path", path)
+		_check_mode(change, template_entry)
 		expected = _expected_wrapper_bytes(root, template_rel, release_sha, path)
 		if _blob_size(git_dir, change["new_oid"]) != len(expected):
 			raise VerifyError("content_mismatch", path)
@@ -636,6 +653,7 @@ def _check_change(git_dir: str, root: Path, release_sha: str, index: dict, retir
 		entry = None
 	if entry is None:
 		raise VerifyError("unlisted_path", path)
+	_check_mode(change, entry)
 	_check_hash_entry(git_dir, change, entry)
 
 

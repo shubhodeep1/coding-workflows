@@ -673,6 +673,31 @@ def test_pr_tree_symlink_is_mode_mismatch(pr: PrTree) -> None:
 	_assert_rejected(pr.run(pr.commit()), "mode_mismatch")
 
 
+def test_pr_tree_added_file_with_wrong_mode_is_rejected(pr: PrTree) -> None:
+	pr.stage_clean_update()
+	_write(pr.repo, ".claude/settings.json", "{}\n", 0o755)
+	match = _assert_rejected(pr.run(pr.commit()), "mode_mismatch")
+	assert match.group(5) == ".claude/settings.json"
+
+
+def test_pr_tree_mode_only_change_is_rejected(pr: PrTree) -> None:
+	_write(pr.repo, ".claude/settings.json", "{}\n")
+	pr.base = pr.commit()
+	pr.stage_clean_update()
+	_write(pr.repo, ".claude/settings.json", "{}\n", 0o755)
+	match = _assert_rejected(pr.run(pr.commit()), "mode_mismatch")
+	assert match.group(5) == ".claude/settings.json"
+
+
+def test_pr_tree_existing_consumer_mode_is_kept(pr: PrTree) -> None:
+	# The updater's cp onto an existing file keeps the consumer's mode.
+	_write(pr.repo, ".claude/settings.json", "{\"old\": 1}\n", 0o755)
+	pr.base = pr.commit()
+	pr.stage_clean_update()
+	_write(pr.repo, ".claude/settings.json", "{}\n", 0o755)
+	assert _parse(*pr.run(pr.commit())).group(1) == "ok"
+
+
 def test_pr_tree_deleting_unlisted_file_is_rejected(pr: PrTree) -> None:
 	pr.stage_clean_update()
 	(pr.repo / "README.md").unlink()
