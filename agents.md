@@ -465,7 +465,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     checks referenced runs' repository, failure status and workflow path
     (a `ci.yml` run only as a `push` run on the default branch, which comes
     from `WORKFLOW_HEAL_DEFAULT_BRANCH` or the intake event's
-    `repository.default_branch`, else `ci_not_default_branch_push`);
+    `repository.default_branch`, else `ci_not_default_branch_push`; a
+    `nightly-validation-selftest.yml` run only on the default branch, else
+    `scheduled_check_not_default_branch`);
     phase and autofix runs must also be linked to the issue or PR. Self-repo
     phase failure comments must come from the intake token's account; consumer
     phase comments require a trusted GitHub-reported author association or
@@ -955,13 +957,28 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   failing test names and files from the verified runs' own filtered job
   logs (`heal-scope failing-tests`, shapes: the CI shard runner's
   `TEST_CASE_EVENT ... "status":"fail"` and `FAIL  test_x`, pytest's
-  `FAILED tests/x.py::test_y`), freezes them with the other inputs, and
+  `FAILED tests/x.py::test_y`, and for a test file CI runs as a script the
+  traceback frame `File ".../tests/x.py", line N, in test_y` or unittest's
+  `FAIL: test_y (...)` / `ERROR: test_y (...)`), freezes them with the other inputs, and
   `heal-scope render` resolves each name to the test file that defines it
   (`git grep` at the scope commit) and that file's stem to the subject it
   covers: `scripts/<stem>.sh`, `scripts/<stem>.py`,
   `.github/workflows/<stem>.yml` (also with `-` for `_`), only when the file
   exists at the scope commit and passes the usual path rules (never
-  `.claude/` or `.github/ai/`). The diagnosis still cannot add a path. The
+  `.claude/` or `.github/ai/`). Guard tests check other files, so their own
+  name maps to no subject; `HEAL_SCOPE_GUARD_TEST_SUBJECTS` maps them to the
+  files their fix edits (`tests/test_ci_job_split_contract.py`,
+  `tests/test_ci_inventory_parity_order_contract.py` and
+  `tests/test_ci_shared_shell_block_guard.py` to
+  `.github/workflows/ci.yml`; `tests/test_ci_poll_test_sharding.py` to
+  `ci.yml`, `mark-stable.yml` and `test-and-mark-stable.yml`).
+  A failing `tests/test_workflow_file_size_limit.py` adds every workflow at
+  or above 480,000 bytes at the scope commit, `scripts/stage_workflow_support.sh`,
+  `docs/INVENTORY.md`, and `scripts/<workflow>_step_*.sh` for each oversized
+  workflow (`-` becomes `_`) so the heal can create the step scripts §27
+  asks for. That step-script glob is the only glob a scope accepts besides
+  the trailing `tests/**` and `changelog.d/*.md`, and only as a guard
+  subject. The diagnosis still cannot add a path. The
   heal prompt tells the healer to pick the wrong side from the documented
   behaviour (README, agents.md, changelog fragments, the introducing issues
   and PRs), never from "the test should match what the code does now".
@@ -1651,6 +1668,8 @@ committing the corresponding file:
   It keeps the synthetic `TEST_*` fixtures and masks global/system git config.
 - `scripts/validation_refresh_runner.py` runs each consumer self-test through the same sandbox: `provision` once per runner, then `checked-run <runner pid> scripts/validate_driver.sh`, which runs `selfcheck` against the `GH_TOKEN`-holding runner process before `run`. Logs are copied back to the old out-of-clone directory through `VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST` (default `<workspace>/validation/logs`), so drift detection is unchanged. A sandbox failure is a `self_test` failure (`red`); there is no host fallback.
 - The nightly self-test (`nightly-validation-selftest.yml`) still calls the driver on the host with the per-test scrub; it runs this repository's own `tests/fixtures/selftest` fixtures, not consumer or model-written tests. Its checkout uses `persist-credentials: false`, and the self-test job holds only a read-only `GITHUB_TOKEN` (`contents: read`). Those tests run as the runner user and could rewrite that checkout's `.git` (hooks, config, `HEAD`), so the status commit does not run there: the `commit-selftest-status` job (`contents: write`) runs on a fresh runner and checkout, receives only the summary JSON artifact, and authenticates its pull/push through a one-shot credential helper that reads `github.token` from its commit step's env. Log prefix: `VALIDATION_HARNESS_SANDBOX`.
+- Its `harness-sandbox-check` job is the daily check of this sandbox: on a fresh runner it runs `provision`, then `checked-run` with a probe that asks the sandbox user's rootless Docker for `docker info` and writes a log that must copy back, then `cleanup`, and logs `VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok|fail`. Smoke validations and the fixtures skip the sandbox, so before this a runner-image change that broke provisioning surfaced only when every project validation failed (#6959). A failed run on the default branch reaches the workflow failure heal intake (`SCHEDULED_CHECK_WORKFLOW_NAMES`).
+- Self-repo validation runs without an explicit target stage the harness infrastructure from the verified support commit, not from the validation checkout (an integration branch): `self_repo_trusted_scripts` in `validate.yml`'s staging manifest (`validation_harness_sandbox.sh`, `codex_isolated_workspace.py`, `validate_driver.sh`), staged by `stage_self_repo_trusted_support_entry` in `scripts/stage_workflow_support.sh` after the required scripts. It logs `VALIDATE_TRUSTED_SUPPORT_OVERRIDE` when the checkout's copy differed and `VALIDATE_TRUSTED_SUPPORT` once staged, refuses paths outside `scripts/` and symlinked paths, and fails closed when the trusted copy is missing. This generalises the renderer rule (#6940): project #6664 revalidated with an integration-branch sandbox script that predated #6959 and could not provision. `validate_process.sh` and the project's other scripts still come from the checkout, and consumer and explicit-target runs are unchanged.
 
 ## Workflow scenario traces
 
@@ -1720,7 +1739,10 @@ V1 and V2 state comments are read only when every selected comment is authored b
 When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
 enters `security-pass` before validation or finalization. A pass is valid only
 when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
-matches the current integration head. Findings enter `security-pass-fixing`
+matches the current integration head (so the periodic `main` sync skips both
+security-pass states; a final PR that `main` makes unmergeable is synced and
+healed during the pass by `security_pass_sync_final_pr_if_unmergeable`, see
+README 12d). Findings enter `security-pass-fixing`
 through one consolidated `ai:orchestrator-managed` issue (whose body asks the
 implementer to clear every instance of each finding's defect class, not only
 the cited line); a merged fix advances `security_pass_cycle`, clears the
@@ -2073,7 +2095,7 @@ and shipped:
 - `RECLARIFY_UNROUTED` (`detect_unrouted_blocked_comments` in `scripts/orchestrate_poll_process.sh`: `issue= comment= reason=command_unrouted|no_command age_minutes= outcome=flagged|post_failed`, `outcome=skip reason=budget_low|issue_list_unavailable|graphql_unavailable|classifier_failed`)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `UNBLOCK_SCAN` (`run_unblock_scan` in `scripts/orchestrate_poll_process.sh`: `candidates= dispatched= skipped= outcome=idle|done|skip reason=`, and `item= kind= outcome=dispatched|dispatch_failed`)
-- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation)
+- `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation; `op=regrant run= paths= outcome=regranted`, `op=regrant [run=] outcome=skip reason=still_denied|already_regranted|not_automation_path|missing|truncated|malformed|grant_unavailable|rejection_unreadable|disabled`, `op=regrant run= outcome=failed reason=actuation_failed`; `origin= outcome=escalated reason=fixup_blocked`, `origin= outcome=skip reason=fixup_escalated`, `origin= outcome=failed reason=fixup_escalation_failed`)
 - `UNBLOCK_PROJECT` (`handle_unblock_judge_project_hooks`: `tracking_issue= action=abandoned|fixup id= item= issue= outcome=`)
 - `UNBLOCK_HANDOVER` (poller and `review_autofix.yml`: `tracking_issue=|pr= stop=judge_output|rb_judge reason= failures= outcome=counted|failed|labelled`)
 - `UNBLOCK_BULK_DELETE_OVERRIDE` (`implement.yml` "Unblock judge bulk-delete override" and the destructive guard: `outcome=enabled|skip reason= marker=`, `applied deletions=`)
@@ -2104,6 +2126,9 @@ and shipped:
 - `EAGER_DRAFT_PR_CREATED`
 - `APPLY_ANALYSIS_SKIPPED`
 - `APPLY_ANALYSIS_DISPATCHED`
+- `APPLY_ANALYSIS_DOC_GONE`
+- `APPLY_ANALYSIS_IN_FLIGHT_DOCS`
+- `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED`
 - `APPLY_ANALYSIS_CANDIDATES`
 - `PROMOTE_CYCLE_SKIPPED`
 - `PROMOTE_CYCLE_FAILED`
@@ -2149,6 +2174,9 @@ and shipped:
 - `VALIDATE_TRUSTED_TEMPLATES`
 - `VALIDATE_TRUSTED_RENDERER_OVERRIDE`
 - `VALIDATE_TRUSTED_RENDERER`
+- `VALIDATE_TRUSTED_SUPPORT_OVERRIDE`
+- `VALIDATE_TRUSTED_SUPPORT`
+- `VALIDATION_HARNESS_SANDBOX_DAILY`
 - `REVIEWER_RISK_TIER`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
@@ -2169,6 +2197,9 @@ and shipped:
 - `DRIFT_SCAN_OK`
 - `DRIFT_SCAN_ERROR`
 - `SECURITY_PASS_STARTED`
+- `SECURITY_PASS_FINAL_PR_SYNC`
+- `SMOKE_FIXTURE_PROJECT`
+- `TG_NOTIFY_SMOKE_SILENCED`
 - `ORCHESTRATOR_STATE_AUTHOR_FILTER` (`tracking_issue= outcome=identity_unavailable|filtered ignored=<count>` when filtered)
 - `SECURITY_PASS_SCOPE`
 - `SECURITY_PASS_CLEAN`
@@ -2258,6 +2289,7 @@ and shipped:
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
+- `VALIDATE_CHANGED_FILES_SYNTAX`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2350,6 +2382,9 @@ LOG_PREFIX.name=FINAL_MERGE_INELIGIBILITY_ALERT_SENT
 LOG_PREFIX.name=EAGER_DRAFT_PR_CREATED
 LOG_PREFIX.name=APPLY_ANALYSIS_SKIPPED
 LOG_PREFIX.name=APPLY_ANALYSIS_DISPATCHED
+LOG_PREFIX.name=APPLY_ANALYSIS_DOC_GONE
+LOG_PREFIX.name=APPLY_ANALYSIS_IN_FLIGHT_DOCS
+LOG_PREFIX.name=WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED
 LOG_PREFIX.name=APPLY_ANALYSIS_CANDIDATES
 LOG_PREFIX.name=PROMOTE_CYCLE_SKIPPED
 LOG_PREFIX.name=PROMOTE_CYCLE_FAILED
@@ -2395,6 +2430,9 @@ LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATE_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATES
 LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER
+LOG_PREFIX.name=VALIDATE_TRUSTED_SUPPORT_OVERRIDE
+LOG_PREFIX.name=VALIDATE_TRUSTED_SUPPORT
+LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX_DAILY
 LOG_PREFIX.name=REVIEWER_RISK_TIER
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
@@ -2415,6 +2453,9 @@ LOG_PREFIX.name=DRIFT_SCAN_DIFF
 LOG_PREFIX.name=DRIFT_SCAN_OK
 LOG_PREFIX.name=DRIFT_SCAN_ERROR
 LOG_PREFIX.name=SECURITY_PASS_STARTED
+LOG_PREFIX.name=SECURITY_PASS_FINAL_PR_SYNC
+LOG_PREFIX.name=SMOKE_FIXTURE_PROJECT
+LOG_PREFIX.name=TG_NOTIFY_SMOKE_SILENCED
 LOG_PREFIX.name=ORCHESTRATOR_STATE_AUTHOR_FILTER
 LOG_PREFIX.name=SECURITY_PASS_SCOPE
 LOG_PREFIX.name=SECURITY_PASS_CLEAN
@@ -2503,6 +2544,7 @@ LOG_PREFIX.name=GH_API_RETRY
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
+LOG_PREFIX.name=VALIDATE_CHANGED_FILES_SYNTAX
 
 ---
 

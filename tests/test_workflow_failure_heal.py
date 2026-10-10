@@ -236,8 +236,11 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	on = _on(intake)
 	assert on["repository_dispatch"]["types"] == [heal.DISPATCH_EVENT_TYPE]
 	assert on["workflow_run"]["types"] == ["completed"]
-	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES)
+	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES) + list(heal.SCHEDULED_CHECK_WORKFLOW_NAMES)
 	assert _yaml(REPO_ROOT / ".github" / "workflows" / "ci.yml")["name"] in heal.MAIN_CI_WORKFLOW_NAMES
+	assert _yaml(REPO_ROOT / ".github" / "workflows" / "nightly-validation-selftest.yml")["name"] in heal.SCHEDULED_CHECK_WORKFLOW_NAMES
+	# Scheduled checks are healed from the default branch only.
+	assert "(github.event.workflow_run.name != 'Nightly Validation Self-Test' || github.event.workflow_run.head_branch == github.event.repository.default_branch)" in " ".join(intake["jobs"]["intake"]["if"].split())
 	assert "payload_json" in on["workflow_dispatch"]["inputs"]
 	actual_names = {
 		_yaml(REPO_ROOT / ".github" / "workflows" / name)["name"]
@@ -1278,6 +1281,8 @@ def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
 		 "A release / promotion workflow run failed."),
 		("Mark Stable Release", "A release / promotion workflow run failed.",
 		 "A CI run on the default branch failed."),
+		("Nightly Validation Self-Test", "A scheduled self-check workflow run on the default branch failed.",
+		 "A release / promotion workflow run failed."),
 	):
 		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 			repo=SELF_REPO,
@@ -5120,6 +5125,21 @@ def test_verify_run_provenance_accepts_ci_push_on_default_branch() -> None:
 	# ci.yml is not accepted for other report kinds.
 	pr_payload = heal.validate_payload(_autofix_payload())
 	assert heal.verify_run_provenance(pr_payload, runs={"500": {**_provenance_run(path="ci.yml", event="push", head_branch="main"), "pull_requests": [{"number": 4174}]}}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO, default_branch="main")["reason"] == "no_verified_runs"
+
+
+def test_verify_run_provenance_accepts_scheduled_check_on_default_branch_only() -> None:
+	payload = heal.validate_payload(heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Nightly Validation Self-Test", "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Nightly Validation Self-Test"},
+	))
+	def check(run, default_branch="main"):
+		return heal.verify_run_provenance(payload, runs={"500": run}, comments=None, trusted_login="", self_repo=SELF_REPO, default_branch=default_branch)
+	nightly = _provenance_run(repo=SELF_REPO, path="nightly-validation-selftest.yml", event="schedule", head_branch="main")
+	assert check(nightly)["status"] == "ok"
+	assert check({**nightly, "event": "workflow_dispatch"})["status"] == "ok"
+	for run, default_branch in (({**nightly, "head_branch": "feature/x"}, "main"), ({**nightly, "head_branch": None}, "main"), (nightly, "")):
+		assert check(run, default_branch)["reason"] == "current_run_rejected:scheduled_check_not_default_branch"
+	assert check({**nightly, "conclusion": "success"})["reason"] == "current_run_rejected:not_failed"
 
 
 def test_verify_run_provenance_cli_default_branch_for_ci_run(tmp_path) -> None:
