@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/seed-repo.md:49 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The required output checklist omits `status=skipped_empty` as a condition for manually setting up a secret.\n  WHY: An unset library secret can produce `status=skipped_empty` without failing propagation, so the report may omit that secret and leave the consumer without it.\n- workflow-templates/.claude/commands/seed-repo.md:49 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The required output checklist omits `status=skipped_empty` as a condition for manually setting up a secret.\n  WHY: An unset library secret can produce `status=skipped_empty` without failing propagation, so the report may omit that secret and leave the consumer without it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Remove the contradictory manual-secrets onboarding step\" \u2014 \"Change both copies to make successful registration and the propagation run the normal secrets path; instruct manual consumer secret setup only after a failed run or an explicit no-register seed.\"\n  expected_change_site: `.claude/commands/seed-repo.md` line 49 and `workflow-templates/.claude/commands/seed-repo.md` line 49\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The last-run diff (commit a3d0f0ad) modified lines 22 and 26 in both files to add `status=skipped_empty` to the manual-setup conditions, but did not touch line 49. Line 49 in both files still reads \"add them by hand only if that run fails or the repo was seeded with `no-register`\" \u2014 missing the `status=skipped_empty` case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/seed-repo.md, Line 49 (Output Format template, checklist item 2) | severity=MAJOR | confidence=5\n  PROBLEM: The Output Format checklist at line 49 says to add secrets by hand \"only if that run fails or the repo was seeded with `no-register`\", omitting the `status=skipped_empty` case that step 6 (line 22) now requires.\n  WHY: The seeder follows the Output Format template verbatim when generating the report. If propagation produces `status=skipped_empty` for a secret \u2014 meaning the library secret is unset and the run stays green without copying it \u2014 the generated report will not tell the user to add that secret by hand. The user will assume all secrets were copied and leave the consumer without a required secret.\n- workflow-templates/.claude/commands/seed-repo.md, Line 49 (Output Format template, checklist item 2) | severity=MAJOR | confidence=5\n  PROBLEM: Same issue as the `.claude/` copy \u2014 line 49 omits `status=skipped_empty` from the manual-setup condition, contradicting step 6 at line 22.\n  WHY: Same consequence \u2014 the report template produces an incomplete checklist when `status=skipped_empty` occurs.\n- TASK_GAP\n  Requirement: \"Remove the contradictory manual-secrets onboarding step\" \u2014 the linked issue says: \"Change both copies to make successful registration and the propagation run the normal secrets path; instruct manual consumer secret setup only after a failed run or an explicit no-register seed.\"\n  Expected change site: `.claude/commands/seed-repo.md` line 49 and `workflow-templates/.claude/commands/seed-repo.md` line 49\n  Evidence of absence: The last-run diff (commit a3d0f0ad) modified lines 22 and 26 in both files to add `status=skipped_empty` to the manual-setup conditions, but did not touch line 49. Line 49 in both files still reads \"add them by hand only if that run fails or the repo was seeded with `no-register`\" \u2014 missing the `status=skipped_empty` case. The linked issue's requirement that all three locations (step 6 prose and the report checklist) agree on manual-setup conditions is partially unfulfilled.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/seed-repo.md; workflow-templates/.claude/commands/seed-repo.md, The procedure at line 22 says to request manual setup for a secret reported as `status=skipped_empty`, but the required output checklist at line 49 says to add secrets manually only if propagation fails or the seed used `no-register`. | severity=MAJOR | confidence=5\n  PROBLEM: The required report format still omits the `status=skipped_empty` case.\n  WHY: An unset library secret produces `status=skipped_empty` without failing the propagation run. Following the required checklist can therefore leave that secret out of the onboarding report and leave the consumer without it.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "23e296952b34dd23793dd0cdc7d5f57a4aff06946755bf7e67b6b228e8132f85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "38016870922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38016870922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010024730_2d7ae63592",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "38016870922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T02:47:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
