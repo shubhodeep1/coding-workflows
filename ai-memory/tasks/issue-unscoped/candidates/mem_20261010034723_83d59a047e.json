@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1414-1425 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _autofix_pr_named_review_runs duplicates provenance logic instead of using the centralized _pr_named_review_trust_jq_def helper.\n  WHY: Future changes to provenance requirements must be manually synchronized, risking divergence and incorrect trust decisions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1414-1425 | severity=NIT | confidence=4\n  PROBLEM: Redundant implementation of provenance logic within the `jq` filter.\n  WHY: This logic redefines the provenance rules instead of utilizing the centralized `_pr_named_review_trust_jq_def` helper defined in the orchestrator poller. Any future changes to provenance requirements must be manually synchronized here, increasing the risk of divergence and incorrect trust decisions if only one site is updated.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh\n  Location: review_path helper in _autofix_pr_named_review_runs (around lines 1408-1417)\n  Issue: The review_path helper lacks the `$repo != \"\"` guard that the poller's `pr_named_review_path` has in `_pr_named_review_trust_jq_def`. With an empty GITHUB_REPOSITORY, `startswith(\"/\")` would match paths beginning with \"/\", which could incorrectly strip a prefix from non-canonical paths.\n  Suggested minimal fix: Add `and $repo != \"\"` before the startswith check to match the poller's stricter pattern.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2cc892f9fd505cfecaeefe33d73d8aed501312c4d4cb90d5e410dedb47e811f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6652,
+    "run_id": "38019318075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38019318075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010034723_83d59a047e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6652,
+    "run_id": "38019318075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T03:47:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
