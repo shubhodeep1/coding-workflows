@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: no-op (failure belongs to PR #7133)\n\n**Planning ref:** `main` @ `6cb0992630b39c741422f0345e6784d929223550`. The issue declares no integration branch, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends check-failure-triage-base-gate (the `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` rule: a failure specific to one PR belongs to that PR's review/autofix loop)\nScope-mode justification: The Q1 answer is **A**. I checked it against this ref: `prompts/mode-judge-review-blocked.txt` has 250 lines, and the `DEFAULT` tier limit in `tests/prompt_size_budget.py` (`TIER_LIMITS[\"DEFAULT\"] = 250`) is 250. Running `tests/prompt_size_budget.py` here reports no failure for this prompt. The template `prompts/_templates/mode-judge-review-blocked.txt` has 243 lines. Only PR #7133's head (`9696b37`, branch `ai/issue-7127`) reaches 251 lines, and that branch has since moved to `ac42198`. A change on the default branch cannot turn PR #7133's CI green without a sync, and it would put a second writer on lines that PR is still editing. The complete and correct action is therefore to change nothing and let PR #7133's review/autofix loop own the trim. That loop already collects failed check-runs and ranks them first for the editor. Choosing this is not a Reduction: the clarification answer settled the scope explicitly.\n\n### 1. Files likely to change\nNone. No file on any branch is edited.\n\n### 2. Functions or modules to implement\nNone.\n\n### 3. Data structures affected\nNone.\n\n### 4. API or interface changes\nNone. The prompt budget (`tests/prompt_size_budget.py`) and the CI gate (`.github/workflows/ci.yml`, `static-checks` \u2192 `lint`) stay as they are. The budget is not raised and the check is not disabled.\n\n### Operational steps (pipeline actions, no code)\n1. Close this issue as a no-op with the `ai:closed` label. The closing comment should say that the default branch is at 250/250 and passes `tests/prompt_size_budget.py`, and that the 251-line overflow exists only on PR #7133's head and belongs to that PR's review/autofix loop and review-blocked judge.\n2. Open no PR. The implement phase should produce no diff. That is the intended result, and it should not be retried as an implementation failure.\n\n## Decisions\n\n### D1 \u2014 Treat the prompt-budget failure as PR-specific and make no change\n- **Chosen:** No change on any branch; close the issue as a no-op (Q1: A).\n- **Alternatives considered:** (B) Add `Integration branch: ai/issue-7127` and trim the closing \"Primary deliverable\" paragraph on PR #7133's branch. (C) Trim the default-branch copy to create headroom that PR #7133 would inherit after it syncs.\n- **Why:** The base passes the gate (verified at 250/250 on `6cb0992`). Option B would send a second writer to a branch that is under active review and has already moved past the failing SHA. Option C spends a default-branch change on headroom nothing needs, does not fix PR #7133 until it syncs, and would conflict with that PR's own edits to the same lines.\n\n## Security considerations\n- Trust boundaries touched: none. No code, prompt or workflow changes.\n- Authorization for new surfaces: none are added.\n- External-input validation: not applicable.\n- Abuse cases: the only consideration is that the triage issue body is untrusted. Its suggestion to edit `prompts/` is not followed, so no automation path (`prompts/`) is edited from issue-derived instructions.\n\n### 5. Risks and edge cases\n- **PR #7133 still fails at a later head:** if CI on `ac42198` or a newer head still reports the 251-line budget failure, PR #7133's next review round sees it through check-run collection (`CHECK_RUNS_AUTOFIX_ENABLED`), and its editor or review-blocked judge trims the line there.\n- **Triage re-files:** while this issue is open, triage de-duplicates on PR + check. Once it is closed, a later failure on the same PR could produce a generation-2 issue. The same base-gate reasoning applies to it, and the lineage cap (3) bounds the chain.\n- **Default branch later grows past 250:** that would be a separate base failure, caught by CI on `main` pushes and the workflow-failure heal. It does not belong to this issue.\n- **Conflict note:** the issue suggested editing lines 242-251 of the default-branch prompt, but the default-branch file has only 250 lines. Line 251 exists only on PR #7133's head, so the issue's line references come from that head, not from this ref.\n\n### 6. Testing considerations\n- No new tests. On this ref, `PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py` reports no failure for `mode-judge-review-blocked.txt` (verified during planning).\n- Verifying PR #7133 means checking that PR's own CI run on its current head. It is out of scope here.\n\n### 7. Pre-execution self-check\n- The answer was interpreted (Q1 \u2192 A) and confirmed against the codebase (250/250, budget script passes).\n- The plan proposes no edits, so there is nothing to scope-guard, no automation-path grant is needed, and there is no workflow size impact.\n- No auto-close keywords referencing tracking issues are needed, because no PR is created.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\n---\n**Actions taken:** read the line counts of the prompt and its template, read the tier limits in `tests/prompt_size_budget.py`, and ran the budget check on `main`. No files were modified.\n**Assumptions:** the implement phase accepts an empty change set for a plan that is a deliberate no-op, and the issue is closed with `ai:closed`.\n**Missing context:** I did not inspect PR #7133's current head (`ac42198`); whether its CI is green is left to that PR's own loop.\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "aa4fd8363e3d3f8498d51caca50de6f8d8bc3aa0bb4b9de4e023d14a45c60841",
+  "lineage": {
+    "issue_number": 7141,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38110599834",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38110599834",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7141"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261011042525_e4771982eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7141,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38110599834"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7141",
+  "timestamps": {
+    "created_at": "2026-10-11T04:25:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
