@@ -1689,7 +1689,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   call). It resolves the `vX.Y.Z` release whose tag points at the `stable`
   commit, downloads the asset, runs `gh attestation verify` with a
   `--cert-identity-regex` limited to this repo's `mark-stable.yml` /
-  `test-and-mark-stable.yml` at `refs/heads/(main|stable)`, hash-checks the
+  `test-and-mark-stable.yml` at `refs/heads/stable`, hash-checks the
   verifier modules against the manifest (`verifier_unattested` for releases
   whose manifest predates them, `verifier_hash_mismatch`), and runs
   `scripts/verify_release_manifest.py verify` on every file the updater reads

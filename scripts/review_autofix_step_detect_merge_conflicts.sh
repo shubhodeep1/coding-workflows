@@ -14,7 +14,12 @@ echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 # review push could not land anyway ("Push all pending commits" skips these
 # branches), so do not spend a resolver run on a conflicted updater PR.
 if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
-  echo "AUTOFIX_MERGE_CONFLICT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+  echo "AUTOFIX_MERGE_CONFLICT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch pre_review_resolve=${AUTOFIX_PRE_REVIEW_RESOLVE:-false}"
+  # The pre-review gate already found a content conflict and skipped review:
+  # say so instead of ending green with no trace of the unreviewed PR.
+  if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
+    echo "::warning::Consumer-updater PR #${PR_NUMBER:-unknown} conflicts with its base; review and conflict resolution were skipped. The next updater run rebuilds the branch, or a human must resolve it."
+  fi
   return 0 2>/dev/null || exit 0
 fi
 

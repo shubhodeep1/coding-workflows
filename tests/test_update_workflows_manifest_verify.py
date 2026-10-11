@@ -98,7 +98,7 @@ def test_attestation_and_bootstrap_hash_precede_the_verifier() -> None:
 	verifier = run.index("scripts/verify_release_manifest.py\" verify")
 	assert attest < bootstrap < verifier
 	assert "--repo shubhodeep1/coding-workflows" in run
-	assert "--cert-identity-regex '^https://github\\.com/shubhodeep1/coding-workflows/\\.github/workflows/(mark-stable|test-and-mark-stable)\\.yml@refs/heads/(main|stable)$'" in run
+	assert "--cert-identity-regex '^https://github\\.com/shubhodeep1/coding-workflows/\\.github/workflows/(mark-stable|test-and-mark-stable)\\.yml@refs/heads/stable$'" in run
 	assert "--deny-self-hosted-runners" in run
 	assert '--expected-sha "${UPSTREAM_SHA}"' in run
 	assert "--paths-file" in run
