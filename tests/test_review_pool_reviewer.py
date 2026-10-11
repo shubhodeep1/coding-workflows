@@ -273,8 +273,10 @@ def test_pool_slot_contract_in_scripts_and_workflow() -> None:
 	assert "pr_closed|skipped_unmapped|skipped_open|skipped_pool)" in reviewers
 	assert "skipped_unmapped|skipped_open|skipped_pool)\n        review_skip_only_statuses" in reviewers
 	# The sandbox only admits PANEL_REVIEWER read-only.
-	assert "SECURITY_JUDGE|PANEL_REVIEWER) ;; *) exit 2 ;; esac" in sandbox
-	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER)\n\t\t[ \"${claude_access}\" = read ] || exit 2 ;;" in sandbox
+	# The role list also carries this project's SUMMARISER, BEHAVIOURAL_SMOKE
+	# and JUDGE_INTERIM roles; PANEL_REVIEWER must stay admitted.
+	assert "|JUDGE_INTERIM|PANEL_REVIEWER) ;; *) exit 2 ;; esac" in sandbox
+	assert "|JUDGE_INTERIM|PANEL_REVIEWER)\n\t\t[ \"${claude_access}\" = read ] || exit 2 ;;" in sandbox
 	# The workflow resolves the role (so the CLI and pool credential install)
 	# and exposes the fallback model with a default.
 	assert "ai_engine_for_role PANEL_REVIEWER" in workflow
@@ -379,12 +381,14 @@ def test_pool_skip_does_not_count_as_a_hard_failure(tmp_path: Path) -> None:
 ])
 def test_fallback_alert_names_the_panel_slot_action(tmp_path: Path, role: str, expected: str, absent: str) -> None:
 	# ai_engine_fallback's Telegram alert must not claim codex runs for the
-	# Claude review-panel slot, which has no codex path.
+	# Claude review-panel slot, which has no codex path. Only a capacity
+	# reason sends the alert under the default fallback policy; other
+	# reasons are refused (AI_ENGINE_FALLBACK_REFUSED) without one.
 	sent = tmp_path / "sent.txt"
 	script = textwrap.dedent(f"""\
 		tg_send_msg() {{ printf '%s\\n' "$1" >> "{sent}"; }}
 		source "{REPO_ROOT / 'scripts' / 'ai_engine.sh'}"
-		ai_engine_fallback {role} all_accounts_failed
+		ai_engine_fallback {role} all_usage_limit
 		""")
 	subprocess.run(["bash", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path)}, capture_output=True, text=True, check=True)
 	message = sent.read_text(encoding="utf-8")
