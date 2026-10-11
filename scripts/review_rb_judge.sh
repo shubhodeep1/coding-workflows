@@ -1972,9 +1972,12 @@ case "${RB_ACTION}" in
 esac
 # Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
 # only that workflow's verify job may merge them, after its PR-tree check.
-if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
+# Every judge action is held, not only merges: a `fix` commit would land an
+# unverified head under the verify job's auto-merge enrollment, and
+# `close_and_reissue` would make the updater skip the release as closed_by_human.
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
   && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
-  echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge"
+  echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge judge_action=${RB_ACTION}"
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"
   echo "judge_skip_reason=updater_pr_verify_job_owns_merge" >> "$GITHUB_OUTPUT"

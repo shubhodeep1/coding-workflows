@@ -313,6 +313,17 @@ def test_review_blocked_judge_never_merges_updater_prs() -> None:
 	assert "judge_skip_reason=updater_pr_verify_job_owns_merge" in script[guard:guard + 600]
 	assert script.index('RB_MERGE_ACTION="false"') < guard < script.index("rb_security_merge_gate; then")
 	assert guard < script.index('if gh pr merge "${PR_NUMBER}"')
+	# Every action is held (fix pushes, close_and_reissue), not only merges.
+	condition = script[script.rindex("if ", 0, guard):guard]
+	assert "RB_MERGE_ACTION" not in condition
+	assert guard < script.index('git push origin "HEAD:${TARGET_BRANCH}"')
+
+
+def test_review_editor_never_commits_to_updater_branches() -> None:
+	script = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
+	guard = script.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]')
+	assert "reason=updater_pr_verify_job_owns_branch" in script[guard:guard + 400]
+	assert guard < script.index("git commit")
 
 
 def test_telegram_helpers_come_from_the_attested_checkout() -> None:

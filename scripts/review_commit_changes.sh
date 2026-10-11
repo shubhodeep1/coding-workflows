@@ -117,6 +117,15 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
   exit 0
 fi
 
+# Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
+# only the updater writes their branch and only its verify job may merge them.
+# An editor commit would land an unverified head under that job's auto-merge.
+if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  echo "AUTOFIX_COMMIT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+  echo "- commit skipped (consumer-updater branch; only the updater writes it)" > "${COMMITTED_FILES_FILE}"
+  exit 0
+fi
+
 if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ] && [ "${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}" != "true" ]; then
   withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-validation_tail_incomplete}"
   echo "Partial finalize findings-only fallback: discarding local edits before commit (${withheld_reason})."
