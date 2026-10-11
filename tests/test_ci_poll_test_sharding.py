@@ -647,12 +647,16 @@ class ShardJudgeTest(unittest.TestCase):
 				self.assertNotIn("had no FAIL line", result.stdout)
 
 	def test_judgment_loop_is_identical_across_workflows(self) -> None:
-		"""CI and both release gates must judge shards with the same loop text."""
+		"""CI and both release gates must annotate failed shards with the same text (#6885).
+
+		Only the #6885 annotation block is compared: ci.yml's loop also carries
+		the ci-only #6889/#6946 failure-summary code, which the release gates
+		intentionally do not have.
+		"""
 		loops = {}
 		for workflow_name, step_run in self.step_runs().items():
-			start = step_run.index("shard_failures=0")
-			tally_error = step_run.index("orchestrate-poll shard(s) failed.", start)
-			end = step_run.index("\nfi\n", tally_error) + len("\nfi\n")
+			start = step_run.index("# Name the failing tests in annotations (#6885)")
+			end = step_run.index("shard_failures=$((shard_failures + 1))", start)
 			loops[workflow_name] = step_run[start:end]
 		self.assertIn("^  FAIL  ", loops["ci"])
 		for workflow_name, loop in loops.items():
