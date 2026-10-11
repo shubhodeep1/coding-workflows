@@ -13,12 +13,18 @@ exactly that). The check runs in CI on pull requests:
 A change to `agents.md` / `AGENTS.md` (top level) between the two commits is a
 violation when
 
-- a diff hunk only inserts lines (no line removed) outside the Repo-tree
-  section: that is new documentation, or
-- its hunks outside the Repo-tree section add more than
+- a diff hunk only inserts lines (no line removed) outside the generated
+  text: that is new documentation, or
+- its hunks outside the generated text add more than
   AGENTS_MD_DIRECT_NET_ADD_MAX lines (default 5) beyond the lines they
   replace: a correction that also appends. Each hunk's surplus counts on its
   own, so a removal elsewhere cannot offset an addition.
+
+The generated text is only what `make generate` rewrites: the lines between
+a `<!-- TREE:START ... -->` and the next `<!-- TREE:END ... -->` marker under
+the Repo-tree section. Prose elsewhere in that section, the markers
+themselves and any hunk that adds a `## ` heading are checked like the rest of
+the file.
 
 Output: one `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|error ...` line,
 plus `::error::` lines naming each offending hunk. Exit 0 when ok, 1 on a
@@ -56,6 +62,20 @@ def _section_of_line(lines: list[str], line_number: int) -> str:
 	return heading
 
 
+def _generated_spans(lines: list[str]) -> list[tuple[int, int]]:
+	"""1-based (START, END) marker line pairs; only the lines between are generated."""
+	spans: list[tuple[int, int]] = []
+	open_line = 0
+	for number, text in enumerate(lines, 1):
+		stripped = text.strip()
+		if stripped.startswith("<!-- TREE:START"):
+			open_line = number
+		elif stripped.startswith("<!-- TREE:END") and open_line:
+			spans.append((open_line, number))
+			open_line = 0
+	return spans
+
+
 def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list[str], dict[str, int]]:
 	violations: list[str] = []
 	totals: dict[str, int] = {}
@@ -68,6 +88,7 @@ def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list
 		diff = _git(repo_root, "diff", "-U0", "--no-color", base, head, "--", path)
 		net_added = 0
 		surplus = 0
+		spans = _generated_spans(new_lines)
 		for header in diff.splitlines():
 			match = HUNK_RE.match(header)
 			if not match:
@@ -80,7 +101,14 @@ def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list
 			# that re-creates the Repo-tree heading would exempt the prose after it.
 			section = _section_of_line(new_lines, start - 1 if added else start + 1)
 			adds_heading = any(text.startswith("## ") for text in new_lines[max(start - 1, 0):start - 1 + added])
-			if section == GENERATED_SECTION and not adds_heading:
+			# Exempt only what `make generate` rewrites: added lines strictly
+			# between a TREE:START and its TREE:END marker (for a pure deletion,
+			# the position after the start marker line).
+			if added:
+				in_span = any(s < start and start + added - 1 < e for s, e in spans)
+			else:
+				in_span = any(s <= start < e for s, e in spans)
+			if section == GENERATED_SECTION and not adds_heading and in_span:
 				continue
 			net_added += added - removed
 			surplus += max(added - removed, 0)
@@ -99,8 +127,9 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--repo-root", default=".")
 	args = parser.parse_args(argv)
 	raw_max = os.environ.get("AGENTS_MD_DIRECT_NET_ADD_MAX", str(DEFAULT_NET_ADD_MAX)).strip()
-	net_add_max = int(raw_max) if raw_max.isdigit() else DEFAULT_NET_ADD_MAX
-	if not raw_max.isdigit():
+	max_valid = raw_max.isascii() and raw_max.isdigit()
+	net_add_max = int(raw_max) if max_valid else DEFAULT_NET_ADD_MAX
+	if not max_valid:
 		print(f"::warning::AGENTS_MD_DIRECT_NET_ADD_MAX={raw_max[:40]!r} is not a non-negative integer; using {DEFAULT_NET_ADD_MAX}")
 	if not re.fullmatch(r"[0-9a-f]{40}|HEAD", args.base) or not re.fullmatch(r"[0-9a-f]{40}|HEAD", args.head):
 		print("::error::AGENTS_MD_DIRECT_EDIT outcome=error reason=invalid_ref")

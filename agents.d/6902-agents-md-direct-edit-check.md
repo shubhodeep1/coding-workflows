@@ -2,9 +2,9 @@
 CI enforces the agents.md fragment contract (CLAUDE.md §30) on pull requests.
 The `static-checks` step `agents.md direct-edit check (CLAUDE.md §30)` runs
 `scripts/check_agents_md_direct_edits.py --base <merge^1> --head <merge>` and
-fails when an `agents.md` / `AGENTS.md` hunk outside
-`## Repo-tree (auto-generated)` only inserts lines, or when its hunks outside
-that section add more than `AGENTS_MD_DIRECT_NET_ADD_MAX` lines (default `5`)
+fails when an `agents.md` / `AGENTS.md` hunk outside the generated TREE-marker
+blocks of `## Repo-tree (auto-generated)` only inserts lines, or when its hunks
+outside those blocks add more than `AGENTS_MD_DIRECT_NET_ADD_MAX` lines (default `5`)
 beyond the lines they replace. Corrections and removals pass. The step skips
 a project's final PR from `orchestrator/project-*` (its sub-PRs were checked
 when they merged into the integration branch) and an

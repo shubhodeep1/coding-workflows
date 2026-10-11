@@ -128,6 +128,24 @@ def test_recreated_repo_tree_heading_does_not_exempt_new_prose(tmp_path: Path) -
 	assert "AGENTS_MD_DIRECT_EDIT outcome=violation" in result.stdout
 
 
+def test_prose_after_tree_end_marker_is_not_exempt(tmp_path: Path) -> None:
+	"""`make generate` rewrites only the lines between TREE markers, so prose
+	added elsewhere in the Repo-tree section survives and must be checked."""
+	repo, base = _repo(tmp_path)
+	head = _commit(repo, "agents.md", BASE_DOC.replace("<!-- TREE:END -->\n", "<!-- TREE:END -->\n\nNew prose.\n"))
+	result = _check(repo, base, head)
+	assert result.returncode == 1, result.stdout
+	assert "under '## Repo-tree (auto-generated)'" in result.stdout
+
+
+def test_non_ascii_digit_limit_falls_back_to_default(tmp_path: Path) -> None:
+	repo, base = _repo(tmp_path)
+	head = _commit(repo, "agents.md", BASE_DOC.replace("Line two.\n", "Line two, corrected.\n"))
+	result = _check(repo, base, head, AGENTS_MD_DIRECT_NET_ADD_MAX="\u00b2")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "::warning::AGENTS_MD_DIRECT_NET_ADD_MAX" in result.stdout
+
+
 def test_fragment_only_change_passes(tmp_path: Path) -> None:
 	repo, base = _repo(tmp_path)
 	head = _commit(repo, "agents.d/1-new.md", '<!-- agents: section="Workflow architecture" -->\nNew.\n')

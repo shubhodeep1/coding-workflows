@@ -1225,8 +1225,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > release fold's generated text); both skips require a same-repository head
 > targeting the default branch. `scripts/check_agents_md_direct_edits.py` diffs the PR merge commit
 > against its base parent and fails when an `agents.md` / `AGENTS.md` hunk
-> outside `## Repo-tree (auto-generated)` only inserts lines, or when its
-> hunks outside that section add more than `AGENTS_MD_DIRECT_NET_ADD_MAX`
+> outside the generated TREE-marker blocks of `## Repo-tree (auto-generated)`
+> only inserts lines, or when its hunks outside those blocks add more than `AGENTS_MD_DIRECT_NET_ADD_MAX`
 > lines (default `5`) beyond the lines they replace, so a correction cannot
 > carry new documentation along. It logs
 > `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|error`. The release
