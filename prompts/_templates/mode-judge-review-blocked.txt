@@ -116,8 +116,7 @@ Rules:
   because it was already merged before the judge ran, or because the
   synchronous merge just landed in this turn. Both the standalone and
   orchestrator paths gate the merge on ALL check-runs (required AND
-  informational) being completed with success/neutral/skipped (a cancelled
-  newest run of a check blocks) — so
+  informational) completing success/neutral/skipped (a cancelled newest run blocks) — so
   the merge never lands while CI is still validating. Both paths also bind the
   merge to the judged head SHA via `--match-head-commit`, so a concurrent push
   between judge decision and merge is rejected by GitHub. Cite `file:line` refs
