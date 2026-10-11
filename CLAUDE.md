@@ -84,6 +84,37 @@ Rules:
 - Do NOT use numeric question numbering (1, 2, 3) — only Q-IDs.
 - If multiple selections allowed, state explicitly.
 
+### Clear-Winner Assumptions
+
+A `(RECOMMENDED)` mark alone is not a reason to ask: the format above puts one
+on every question. When a decision has a clear winner, take it without asking
+and list it as an assumption instead. A decision is a clear winner only when
+**all** of these hold:
+
+- One option is clearly correct: an existing repo convention, the code or
+  docs require it, it follows from an answer the user already gave, or it is
+  the only option that is not unsafe or breaking. If the rationale would
+  start with "it depends", it is not a clear winner.
+- It is cheap to undo: a change on the session's working branch, not an
+  action outside the repository.
+- It is not about what the user wants built (feature intent, scope, target
+  repo or environment) and not a tradeoff the user should weigh.
+- It is not ask-first anywhere else in this file: §6 renames and removals,
+  §10 DB / index / contract changes, §12.D, §18.A manual scripts, §18.D gates,
+  §22.B, §23.C, §24.D and §29.B operations, or any deletion of data.
+
+Assumptions share the Q-ID sequence with the open questions and appear in the
+same message, under an **Assumed** heading, before any work starts:
+
+> **Assumed**
+> - **Q3: \<question\>** — took **A** (\<option\>) because \<one-line reason\>.
+>   Other options: **B** — \<description\>. Reply `Q3: B` to override.
+
+If open questions remain, wait for the answers as usual; an override arrives
+with them. If every decision was a clear winner, give the Assumed list at the
+top of the reply and proceed. This subsection is the only exception to §0 and
+to the Forbidden list below; everything else in §0 and §2 still applies.
+
 ### When to Ask
 
 Ask if any of these are unclear:
@@ -94,7 +125,8 @@ Ask if any of these are unclear:
 - **Operations:** timing, concurrency, rollback/recovery.
 
 ### Forbidden
-- Guessing intent or applying "reasonable defaults" without confirmation.
+- Guessing intent or applying "reasonable defaults" without confirmation
+  (a clear-winner assumption listed under **Assumed** is not a default).
 - Silent refactors, cleanups, or speculative fixes.
 
 ---
