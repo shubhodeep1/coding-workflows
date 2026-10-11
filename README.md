@@ -1904,9 +1904,14 @@ through `clarify → plan → implement → review`.
   (`skip reason=downstream_gate_failure`) because the gate run reports itself.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
   comments, and the repository's recent runs. It links at most 3 listed failed
-  runs whose display title matches the issue title; run URLs in comments can
+  runs whose display title matches the issue title, or, for an orchestrator
+  project, ends in `[tracking:<issue number>]` (the validate wrappers' run name,
+  `AI Validate [tracking:N]`); run URLs in comments can
   prioritize those runs but cannot introduce an unverified run ID. A run absent
-  from the recent listing is omitted. Lineage markers in the source issue are
+  from the recent listing is omitted. A report that still links no run, or whose
+  linked runs' job logs could not be read, is fingerprinted on the label and the escalated item
+  (`label:<label>|source:<repo>#<n>`), so run-less reports from different
+  issues or repositories never share one lineage. Lineage markers in the source issue are
   inherited only from an `ai:workflow-heal` issue with a canonical header
   authored by a bot or an owner/member/collaborator;
   forged markers on other issues do not consume the heal generation budget.
