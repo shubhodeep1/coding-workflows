@@ -911,7 +911,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	opencode = steps[names.index("Install OpenCode CLI for isolated review-blocked judge")]
-	assert opencode["if"] == "steps.find_tracking.outputs.has_work == 'true'"
+	assert opencode["if"] == "(steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')"
 	assert opencode["continue-on-error"] is True
 	assert opencode["uses"] == (
 		"shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f"
@@ -934,7 +934,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		step = steps[names.index(name)]
 		assert step["uses"] == uses
 		assert step["continue-on-error"] is True
-		assert step["if"] == "steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'"
+		assert step["if"] == "(steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true') && steps.ai_engine.outputs.any_claude == 'true'"
 		assert names.index(name) < names.index("Process each tracking issue")
 	process_env = steps[names.index("Process each tracking issue")]["env"]
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE", "SECURITY_AUDIT"):

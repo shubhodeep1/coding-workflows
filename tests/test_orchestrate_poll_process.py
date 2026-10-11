@@ -5306,6 +5306,30 @@ def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
 		assert result["api_calls"].count("search/issues") == (enabled == "true")
 
 
+def test_standalone_stall_recovery_sweep_only_mode_runs_without_tracking_work() -> None:
+	"""Issue #7183: no-project ticks run only standalone stall recovery."""
+	for enabled, expected in (
+		("false", "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=false."),
+		("true", "Standalone issue stall recovery"),
+	):
+		result = _run_poller(
+			state=_base_state(status="in_progress"),
+			enable_validation="false",
+			max_validate_cycles="3",
+			env_overrides={
+				"STANDALONE_STALL_RECOVERY_SWEEP_ONLY": "true",
+				"ENABLE_STANDALONE_STALL_RECOVERY": enabled,
+				"OPENROUTER_API_KEY": "",
+			},
+		)
+		combined_log = result["stdout"] + result["stderr"]
+		assert expected in combined_log
+		assert "Processing tracking issue" not in combined_log
+		assert "Staged-support needs-human latch release" not in combined_log
+		assert "UNBLOCK_SCAN" not in combined_log
+		assert "Standalone PR conflict sweep" not in combined_log
+
+
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
 	engine_sha = "c" * 40
 

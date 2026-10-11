@@ -215,6 +215,7 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -237,11 +238,21 @@ jobs:
             echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
             echo "has_work=false" >> "$GITHUB_OUTPUT"
+            # Standalone stall recovery still runs on ticks with no active
+            # project (issue #7183); the full poller runs it after its loop
+            # otherwise. Same truthy test as is_truthy in the poller.
+            case "$(printf '%s' "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) standalone_recovery=true ;;
+              *) standalone_recovery=false ;;
+            esac
+            echo "Standalone stall recovery without active projects: standalone_recovery=${standalone_recovery}"
+            echo "standalone_recovery=${standalone_recovery}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "standalone_recovery=false" >> "$GITHUB_OUTPUT"
 
           # If every active tracking issue is the test-and-mark-stable
           # smoke fixture, suppress per-phase Telegram alerts; the gate
@@ -274,19 +285,19 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Setup Node.js
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Setup Python
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         # Intentionally use the released action ref as the rollout boundary.
         # Consumers pick this up when test-and-mark-stable retags @stable.
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
@@ -294,14 +305,14 @@ jobs:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install OpenCode CLI for isolated review-blocked judge
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         continue-on-error: true
         uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:
           opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
 
       - name: Install OS-level core tools
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -335,7 +346,9 @@ jobs:
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
-        if: steps.find_tracking.outputs.has_work == 'true'
+        id: validate_env
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
+        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -400,6 +413,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
@@ -780,7 +794,7 @@ jobs:
       # STALL_JUDGE default and open non-tracking `ai:engine-claude` issues.
       - name: Resolve AI engine
         id: ai_engine
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
@@ -874,7 +888,7 @@ jobs:
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true') && steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
@@ -882,7 +896,7 @@ jobs:
 
       - name: Resolve Claude credential
         id: claude_pool
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true') && steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
@@ -905,9 +919,13 @@ jobs:
         run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
 
       - name: Process each tracking issue
-        if: steps.find_tracking.outputs.has_work == 'true'
+        # On ticks with no active project this step runs only standalone stall
+        # recovery (STANDALONE_STALL_RECOVERY_SWEEP_ONLY, issue #7183), and
+        # only when the key check and support staging both succeeded.
+        if: steps.find_tracking.outputs.has_work == 'true' || (steps.find_tracking.outputs.standalone_recovery == 'true' && steps.validate_env.outcome == 'success' && steps.stage_support.outcome == 'success')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STANDALONE_STALL_RECOVERY_SWEEP_ONLY: ${{ steps.find_tracking.outputs.has_work != 'true' && 'true' || 'false' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -1070,10 +1088,19 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-        run: bash scripts/orchestrate_poll_process.sh
+        run: |
+          set -euo pipefail
+          # A staged poller without the sweep-only mode would run its full
+          # post-loop sequence and repeat the no-project sweeps; skip instead.
+          if [ "${STANDALONE_STALL_RECOVERY_SWEEP_ONLY}" = "true" ] \
+            && ! grep -q 'STANDALONE_STALL_RECOVERY_SWEEP_ONLY:-false' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone stall recovery sweep-only mode is not yet staged; skipping.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
-        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        if: ${{ !cancelled() && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1084,7 +1111,7 @@ jobs:
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run unblock scan without active projects
-        if: steps.find_tracking.outputs.has_work != 'true'
+        if: ${{ !cancelled() && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

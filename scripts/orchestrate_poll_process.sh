@@ -20741,6 +20741,16 @@ if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue, orchestrate_poll.yml runs this step in this mode
+# instead of the per-project loop (issue #7183, activation gap of PR #6682).
+# The latch and unblock sweeps run in their own no-project steps, so this
+# mode runs only standalone stall recovery and stays exclusive with them.
+if _is_truthy "${STANDALONE_STALL_RECOVERY_SWEEP_ONLY:-false}"; then
+  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  run_standalone_stall_recovery
+  exit 0
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
