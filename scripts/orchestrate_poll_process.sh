@@ -13175,7 +13175,7 @@ dispatch_validation_if_needed() {
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
     phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
-      '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then ((.validation_cycle_dispatch_count // 1) + 1) else 1 end)
+      '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then (((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1) else 1 end)
        | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
