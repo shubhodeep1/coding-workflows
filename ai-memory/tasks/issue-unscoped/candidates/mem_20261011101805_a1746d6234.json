@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:335 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The overlay loader runs without isolated mode, allowing a branch-added `scripts/json.py` to execute while the workflow holds `GH_PAT` and provides `GITHUB_ENV`.\n  WHY: `python3 scripts/load_workflow_overlay.py` imports `json` from the script directory, so the poisoned module can access checkout Git credentials and modify `GITHUB_ENV`.\n- tests/test_security_dependency.py:test_isolated_helper_ignores_poisoned_branch_modules, control assertion `'\"none\"' not in control.stdout` | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The control assertion is vacuous and does not verify the expected control outcome.\n  WHY: The poisoned module exits before the helper prints output, leaving stdout empty; the assertion adds no control strength, though reviewers differ in how they characterize the consequence.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_security_dependency.py, test_isolated_helper_ignores_poisoned_branch_modules, control assertion `'\"none\"' not in control.stdout` | severity=NIT | confidence=4\n  PROBLEM: The control assertion relies on empty stdout to indicate poisoning succeeded but does not explicitly verify the failure state.\n  WHY: If the control process produces stdout for another reason, the assertion could pass even if poisoning failed to stop execution as expected.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml, line 335; `scripts/load_workflow_overlay.py:8`; `.github/workflows/clarify.yml:150` | severity=BLOCKER | confidence=5\n  PROBLEM: The clarify workflow invokes the overlay loader without `-I`, so a branch-added `scripts/json.py` can be imported while loading the trusted helper.\n  WHY: Python places the script directory on `sys.path`; the imported code can access checkout Git credentials and modify the provided `GITHUB_ENV`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_security_dependency.py, test_isolated_helper_ignores_poisoned_branch_modules, line with `assert '\"none\"' not in control.stdout`\n  PROBLEM: The assertion is vacuously true because the poisoned module raises `SystemExit(0)` before producing JSON output.\n  WHY: The assertion adds no control strength beyond the sentinel check.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_security_dependency.py, test_isolated_helper_ignores_poisoned_branch_modules, control assertion `'\"none\"' not in control.stdout` | severity=NIT | confidence=4\n  PROBLEM: The control run's stdout is always empty, so this assertion is vacuous and documents no expected control shape beyond the sentinel check.\n  WHY: It does not fail at runtime; a future regression that produced stdout in the control run would not be caught by it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9190eea3a1044edadec2fe99b4d6a75b74bf3d7cb26c63e5b9fea37075b9d318",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7164,
+    "run_id": "38127635625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38127635625",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011101805_a1746d6234",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7164,
+    "run_id": "38127635625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T10:18:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
