@@ -1125,7 +1125,7 @@ jobs:
       # scripts/release_manifest_publish.sh (log prefix RELEASE_MANIFEST).
       - name: Build release manifest
         id: release_manifest
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
           RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release-manifest
@@ -1139,7 +1139,7 @@ jobs:
             --output-dir "${RELEASE_MANIFEST_DIR}"
 
       - name: Attest release manifest
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
@@ -1207,7 +1207,7 @@ jobs:
           exit "${RELEASE_CREATE_RC}"
 
       - name: Upload release manifest asset
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}

@@ -28,7 +28,9 @@ WORKFLOWS = (
 )
 SCRIPT = REPO_ROOT / "scripts" / "release_manifest_publish.sh"
 ASSET_NAME = "release-manifest.v1.json"
-DRY_RUN_GUARD = "${{ !inputs.dry_run }}"
+# The release job publishes only outside dry runs and while STABLE_RELEASE_ENABLED
+# is on (#6877), so the manifest steps share the publishing steps' guard.
+DRY_RUN_GUARD = "${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}"
 NEW_STEPS = ("Build release manifest", "Attest release manifest", "Upload release manifest asset")
 STEP_ORDER = (
 	"Tag version and update stable pointer",
