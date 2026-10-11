@@ -568,7 +568,10 @@ its `workflow-templates/` twin exempts an unquoted literal-ID loop counter
 only when the entire loop passes the read-only body validator. Unvetted
 loops with unquoted `gh api` arguments still prompt; the two hooks must stay
 byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
-inside a loop prompt even when the loop counter is not expanded.
+inside a loop prompt even when the loop counter is not expanded. A `gh api`
+call whose only argument is `--help` or `-h` is a read (it prints usage and
+sends no API request); `--help` / `-h` next to any endpoint, flag or `--`
+stays unreadable and prompts (#6668).
 
 The merged-PR guard in `.claude/hooks/pr_merge_status_guard.py` and its
 `workflow-templates/` twin distinguish numeric branch refspecs from adjacent
