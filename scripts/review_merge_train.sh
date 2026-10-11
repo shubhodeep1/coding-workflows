@@ -1126,6 +1126,9 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            0-5; MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP seconds apart,
 #            default 2), each logged as
 #            MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted ... attempt=<n>/<max>
+#            A first-page re-read whose union of runs read so far covers the
+#            latest total_count is complete, logged as
+#            MERGE_TRAIN_RUNS_LISTING outcome=accepted reason=union_covers_total status=<s> page=1 read=<n> total=<n>
 # The repository's default branch for review-run provenance (issue #6629).
 # One `GET repos/<repo>` per process; no fallback, so a failed read is never
 # mistaken for "main". Output-variable API: `_mt_resolve_default_branch
@@ -1203,6 +1206,21 @@ _mt_inflight_review_branches()
 				break
 			fi
 			if [ "${__mt_runs_page_len}" -lt 100 ]; then
+				# Re-reads of the same first-page query accumulate in the union;
+				# once it holds at least as many runs as the latest total_count
+				# the listing is accepted as a best-effort cover. This is a
+				# count, not proof: a run that left the status since stays in
+				# the union and can mask a live run no read returned, so the
+				# release may re-dispatch a review that is already in flight
+				# (bounded by the second status pass and the pr-autofix
+				# concurrency group; accepted trade-off, Q59). GitHub's count and its listing
+				# disagree for several seconds while runs churn, so three reads
+				# 2 s apart all came back short (run 38043169762, Q59). Later
+				# pages carry their own created bound, so this is page 1 only.
+				if [ "${__mt_runs_page}" -eq 1 ] && [ "${__mt_runs_read}" -ge "${__mt_runs_total}" ]; then
+					echo "MERGE_TRAIN_RUNS_LISTING outcome=accepted reason=union_covers_total status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total}" >&2
+					break
+				fi
 				# Runs changed status between GitHub's count and its listing. One
 				# run starting mid-read used to abort the whole release tick
 				# (run 38003551535); re-read the same query a bounded number of
