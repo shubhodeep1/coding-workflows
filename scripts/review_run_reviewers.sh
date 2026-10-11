@@ -5143,6 +5143,8 @@ run_pool_reviewer() {
   local pool_attempt_stderr=""
   local pool_attempt_wall=0
   local pool_rejected_bytes=0
+  local pool_rejected_file=""
+  local pool_rejected_kept_bytes=0
   local pool_budget_remaining=0
   local pool_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
   local -a pool_attempt_models=()
@@ -5317,13 +5319,20 @@ run_pool_reviewer() {
     # up to 64 KiB of it next to the per-reviewer log; the rejected_ prefix
     # keeps it out of the <prefix>_*.txt reviewer-output globs.
     pool_rejected_bytes=0
+    pool_rejected_kept_bytes=0
+    pool_rejected_file="${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt"
     if [ -s "${pool_attempt_output}" ]; then
       pool_rejected_bytes="$(wc -c < "${pool_attempt_output}" | tr -d '[:space:]')"
-      head -c 65536 "${pool_attempt_output}" > "${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt" 2>/dev/null || true
+      head -c 65536 "${pool_attempt_output}" > "${pool_rejected_file}" 2>/dev/null || true
+      # kept_bytes reports what actually landed on disk, so a failed or
+      # partial copy (full disk, unwritable dir) logs 0 / a short size.
+      if [ -f "${pool_rejected_file}" ]; then
+        pool_rejected_kept_bytes="$(wc -c < "${pool_rejected_file}" 2>/dev/null | tr -d '[:space:]')" || pool_rejected_kept_bytes=0
+      fi
     else
-      rm -f "${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt" 2>/dev/null || true
+      rm -f "${pool_rejected_file}" 2>/dev/null || true
     fi
-    pool_log "REVIEWER_POOL_REJECTED_OUTPUT slot=${model} pass=${output_prefix} attempt=${pool_attempt} model=${pool_attempt_model} bytes=${pool_rejected_bytes:-0} reason=${pool_skip_reason:-${pool_last_reason:-unknown}} kept_bytes=$(( ${pool_rejected_bytes:-0} > 65536 ? 65536 : ${pool_rejected_bytes:-0} )) truncated=$([ "${pool_rejected_bytes:-0}" -gt 65536 ] && echo true || echo false)"
+    pool_log "REVIEWER_POOL_REJECTED_OUTPUT slot=${model} pass=${output_prefix} attempt=${pool_attempt} model=${pool_attempt_model} bytes=${pool_rejected_bytes:-0} reason=${pool_skip_reason:-${pool_last_reason:-unknown}} kept_bytes=${pool_rejected_kept_bytes:-0} truncated=$([ "${pool_rejected_bytes:-0}" -gt 65536 ] && echo true || echo false)"
     [ -z "${pool_skip_reason}" ] || break
   done
 
