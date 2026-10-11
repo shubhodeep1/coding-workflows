@@ -815,7 +815,7 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert workflow["on"]["workflow_call"]["secrets"]["TG_BOT_SECRET"]["required"] is False
 	assert steps("Run security audit")["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
 	assert steps("Run security audit")["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
-	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
+	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -2821,7 +2821,7 @@ def test_security_audit_claude_fallback_no_account() -> None:
 
 
 def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
-	# The pool step drops every account at or above gate_utilization (0.9)
+	# The pool step drops every account at or above gate_utilization (0.95)
 	# and reports all_gated; the audit must not start Claude at all.
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-gated-") as td:
 		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})

@@ -516,6 +516,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
 
+      - name: Telegram alert levels page only when a person must act
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_alert_levels_human_only.py
+
       - name: Memory maintenance extraction contract tests
         run: |
           set -euo pipefail
@@ -1127,6 +1132,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+
+      - name: Review conflict guard-hook template merge tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_guard_hook_template_merge.py
 
       - name: Review conflict folded-fragment keep test
         run: |
@@ -1836,6 +1846,26 @@ jobs:
             esac
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              # Name the failing tests in annotations (#6885): the per-shard
+              # log above sits inside a ::group:: that triage cannot read.
+              # Match the runner's exact "  FAIL  <name>: ..." prefix, cap at
+              # 20 lines, and escape workflow-command data. Without a FAIL
+              # line (interrupted shard), print the log tail with a prefix so
+              # log text can never start a workflow command.
+              mapfile -t shard_fail_lines < <(grep -a -E '^  FAIL  ' "/tmp/poll_shard_${shard}.log" | head -n 20 || true)
+              if [ "${#shard_fail_lines[@]}" -gt 0 ]; then
+                for shard_fail_line in "${shard_fail_lines[@]}"; do
+                  shard_fail_line="${shard_fail_line//%/%25}"
+                  shard_fail_line="${shard_fail_line//$'\r'/%0D}"
+                  shard_fail_line="${shard_fail_line//$'\n'/%0A}"
+                  echo "::error::orchestrate-poll shard ${shard}: ${shard_fail_line#  }"
+                done
+              else
+                echo "::error::orchestrate-poll shard ${shard} had no FAIL line; last log lines follow"
+                while IFS= read -r shard_tail_line || [ -n "${shard_tail_line}" ]; do
+                  echo "orchestrate-poll shard ${shard} | ${shard_tail_line}"
+                done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
+              fi
               shard_failures=$((shard_failures + 1))
               # `|| true`: under pipefail a grep with no match would abort the
               # step before the tally below.
