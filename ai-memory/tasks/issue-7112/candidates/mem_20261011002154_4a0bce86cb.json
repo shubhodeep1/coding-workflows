@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should this fix land on, given that the default branch already has the corrected template?\nChoices:\nA. Target PR #6563's head branch. Treat the issue as declaring `Integration branch: ai/issue-6557` and open the fix PR into it, editing only `prompts/_templates/mode-judge-unblock.txt` to match that branch's active `prompts/mode-judge-unblock.txt`. Applies only if PR #6563 is still open. (RECOMMENDED)\nB. Treat the issue as already done on the default branch and close it with no code change. Choose this if PR #6563 is already merged or closed, or if fixing that branch is left to its own review/autofix loop.\nC. Target `ai/issue-6557`, but bring the default branch into it instead: merge the default branch so the branch picks up #6812's template fix and regression test. This replaces a hand edit of the template.\n**Note:** A and C both need PR #6563 to be open. If it is merged or closed, only B applies.",
+  "fingerprint": "7a75966f1ffaeb5cb1ab6e043b3ce49d0b3aee533dbed502c28f093c620f8a8d",
+  "lineage": {
+    "issue_number": 7112,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38097942409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38097942409",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011002154_4a0bce86cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7112,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38097942409"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7112 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T00:21:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
