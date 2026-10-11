@@ -2747,13 +2747,14 @@ def test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is
 
 def _assert_shared_workflow_route(result, state_after) -> None:
 	assert result.returncode == 0, result.stderr + result.stdout
-	created = state_after["issues_created"][0]
+	# The scope guard is off by default (#6871): the intake composes the heal
+	# issue and logs the routing, but creates no issue and posts no comment.
+	created = _composed_issues(state_after)[0]
 	assert created["repo"] == SELF_REPO
 	assert TARGET_BRANCH_RE.search(created["body"]) is None
 	assert "target_branch=default" in result.stdout and "target_branch_source=shared_workflow" in result.stdout
-	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
-	assert outcome and "on the default branch" in outcome[0]["body"]
-	assert "own branch" not in outcome[0]["body"] and "ai/issue-4173" not in outcome[0]["body"]
+	assert not [c for c in state_after.get("comments_posted", []) if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert "on the default branch, because the failing code is the shared workflow support" in INTAKE_SCRIPT.read_text(encoding="utf-8")
 	# No Target branch is chosen, so no branch lookup is made.
 	assert not [call for call in state_after["calls"] if any("/branches/" in part for part in call)]
 
