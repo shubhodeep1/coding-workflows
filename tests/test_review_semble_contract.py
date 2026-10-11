@@ -8,15 +8,12 @@ import subprocess
 import tempfile
 import sys
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"

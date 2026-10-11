@@ -32,8 +32,6 @@ PREPARE = ROOT / "scripts" / "review_conflict_prepare.sh"
 RESOLVE = ROOT / "scripts" / "review_conflict_resolve.sh"
 COMMIT = ROOT / "scripts" / "review_commit_changes.sh"
 AUTOFIX = ROOT / ".github" / "workflows" / "review_autofix.yml"
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 def _source_text(path: Path) -> str:

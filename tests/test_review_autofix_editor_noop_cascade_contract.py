@@ -38,7 +38,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -46,8 +45,6 @@ from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E4
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 TEST_AND_MARK_STABLE = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"

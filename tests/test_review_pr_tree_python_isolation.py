@@ -14,8 +14,6 @@ from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E4
 
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 SCRIPTS = ROOT / "scripts"
 
 
