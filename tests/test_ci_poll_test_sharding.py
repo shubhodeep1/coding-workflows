@@ -290,7 +290,7 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertLess(summary_print, tally)
 		self.assertLess(summary_print, exit_line)
 		self.assertIn("shard_failure_summaries=()", self.run)
-		self.assertIn("grep -E '^  FAIL  [A-Za-z0-9_]+:'", self.run)
+		self.assertIn("grep -a -E '^  FAIL  [A-Za-z0-9_]+:'", self.run)
 		self.assertNotIn(" rg ", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:

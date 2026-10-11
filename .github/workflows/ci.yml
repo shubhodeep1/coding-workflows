@@ -1890,7 +1890,7 @@ jobs:
               fi
               # `|| true`: under pipefail a grep with no match would abort the
               # step before the tally below.
-              shard_failed_names="$(grep -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
+              shard_failed_names="$(grep -a -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
                 | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | awk '!seen[$0]++' || true)"
               if [ -z "${shard_failed_names}" ]; then
                 shard_failed_list="no FAIL lines (process failure)"
@@ -1919,13 +1919,13 @@ jobs:
                 echo "  shard ${failed_shard}: no log; its tests did not run"
                 continue
               fi
-              failed_test_names="$({ grep -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
+              failed_test_names="$({ grep -a -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
                 | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | tr '\n' ' ')"
               if [ -n "${failed_test_names// /}" ]; then
                 echo "::error::orchestrate-poll shard ${failed_shard} failing tests: ${failed_test_names% }"
               fi
               echo "  shard ${failed_shard}: FAIL lines (first 50):"
-              { grep -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
+              { grep -a -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
               echo "  shard ${failed_shard}: last 20 log lines:"
               tail -n 20 "${failed_shard_log}" | sed 's/^/    | /'
             done
