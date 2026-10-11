@@ -1288,7 +1288,11 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # -I (issue #7159): this copy was installed from the verified support
+          # checkout above, but scripts/ is the branch checkout, so without
+          # isolated mode a branch-added scripts/json.py (or any stdlib-shadowing
+          # module, or a PYTHONPATH) would run here with GITHUB_ENV write access.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/load_workflow_overlay.py \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -1916,7 +1920,17 @@ jobs:
             exit 0
           fi
           printf '%s\n' "${DEPENDENCY_META}" > "${ISSUE_META_FILE}"
-          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          # Run the trusted runtime copy in isolated mode (issue #7159): the
+          # checkout's scripts/ is branch-controlled, and Python would import a
+          # branch-added scripts/json.py from the script's directory while
+          # GH_TOKEN holds GH_PAT. A missing or symlinked copy fails closed.
+          _security_dependency_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/security_dependency.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_security_dependency_helper}" ] || [ -L "${_security_dependency_helper}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=trusted_helper_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
           if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
@@ -2097,7 +2111,14 @@ jobs:
             echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
             exit 0
           fi
-          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py rejection-snapshot \
+          # Trusted runtime copy, isolated mode (issue #7159): never import
+          # branch-controlled modules from the checkout's scripts/ with GH_PAT.
+          _unblock_ledger_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/unblock_ledger.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_unblock_ledger_helper}" ] || [ -L "${_unblock_ledger_helper}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=trusted_helper_unavailable"
+            exit 0
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/unblock_ledger.py" rejection-snapshot \
               --run-file "${rejection_dir}/run.json" --artifact-file "${rejection_dir}/artifact.json" \
               --zip-file "${rejection_dir}/snapshot.zip" --item "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --approved-json "${approved_deletions}" > "${rejection_dir}/verified.json"; then
@@ -2299,7 +2320,15 @@ jobs:
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
-          verdict="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          # Trusted runtime copy, isolated mode (issue #7159); see "Validate
+          # approval phase label". A missing or symlinked copy fails closed.
+          _security_dependency_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/security_dependency.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_security_dependency_helper}" ] || [ -L "${_security_dependency_helper}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=trusted_helper_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
           if [ "$(printf '%s' "${verdict}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held_before_edits outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"

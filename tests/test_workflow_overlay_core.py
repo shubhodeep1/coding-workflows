@@ -631,7 +631,8 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 
 	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
 	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
-	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	# Isolated mode (issue #7159): the in-tree copy sits in the branch checkout's scripts/.
+	assert 'python3 -I -B scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
 	review_autofix_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	assert 'bash "${helper}"' in review_autofix_text
 	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"' in stage_helper_text

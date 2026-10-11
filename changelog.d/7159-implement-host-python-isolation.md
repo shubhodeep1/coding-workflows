@@ -1,0 +1,6 @@
+<!-- changelog: security -->
+- **Implement and clarify no longer import Python modules from the checked-out branch while they hold `GH_PAT`.** A branch that added, for example, `scripts/json.py` had that file run on the runner with the token.
+
+The security-dependency gates in `implement.yml` ("Validate approval phase label" and "Recheck security dependency before edits") and the bulk-delete override check now run the trusted copy of `security_dependency.py` / `unblock_ledger.py` from `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`, outside the checkout, with `python3 -I -B`. If that copy is missing or is a symlink, implement stops (`reason=trusted_helper_unavailable`) and the override is not spent. The WORKFLOW.md overlay loader in `implement.yml` and the dependency gate in `clarify.yml` keep their just-staged in-tree copies but now run in isolated mode, so neither the branch's `scripts/` directory nor a `PYTHONPATH` reaches their imports.
+
+What this means for operators: nothing to do. A new `reason=trusted_helper_unavailable` value can appear on the `AI_PHASE_GATE_V1 gate=security_dependency` and `UNBLOCK_BULK_DELETE_OVERRIDE` log lines.
