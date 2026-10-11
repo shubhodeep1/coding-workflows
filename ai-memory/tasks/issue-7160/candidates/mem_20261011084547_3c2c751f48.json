@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: On an unmerged PR close, what should count as the binding that allows the issue to be labelled `ai:closed` and closed?\nChoices:\nA. Use data the workflow can already read: the PR's head is in this repository, the head branch is exactly `ai/issue-<n>` for that issue, and the PR author is the pipeline's own `GH_PAT` account (one `/user` read). If the account cannot be confirmed, leave the issue unchanged. Every other referenced issue is left unchanged, and the lineage finalize list skips it too. (RECOMMENDED)\nB. Head branch `ai/issue-<n>` from this repository only, with no author check. Anyone who can push a branch with that name can still close that issue.\nC. Add a new durable marker: `implement.yml` posts a `<!-- ai:implementation-pr:v1 issue=<n> pr=<m> -->` comment from the pipeline account when it creates the PR, and the close path accepts only issues that have a trusted marker for this exact PR. PRs opened before the change have no marker, so their unmerged close would no longer close their issue.\nD. Stop closing issues on any unmerged PR close. Only remove the in-progress labels and leave the issue open for the stall/unblock machinery.",
+  "fingerprint": "dede72e8a51b50be4320095fe7742dfcc15d3ce179b78e1caf4982c9c78c4ef1",
+  "lineage": {
+    "issue_number": 7160,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38125367917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38125367917",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011084547_3c2c751f48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7160,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38125367917"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7160 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T08:45:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
