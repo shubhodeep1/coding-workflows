@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:1063-1077 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The \u201cRun unblock scan without active projects\u201d poller invocation omits `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`, so it cannot honor an explicit `false` setting and may activate the marker-fallback approval gate.\n  WHY: The unset variable can cause standalone plans with trusted hold markers to receive automatic `/approved` without the intended grant check; severity disagreement: one reviewer rated this BLOCKER and two rated it MAJOR.\n- tests/test_plan_auto_approve_safe_state_fetch.py:269-275 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test checks flag forwarding only for the \u201cProcess each tracking issue\u201d step and does not cover the other poller invocation.\n  WHY: The test can pass while a poller-invoking step omits the variable, leaving that forwarding contract unverified.\n- README.md:99-105 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The documentation claims `orchestrate_poll.yml` forwards the variable without noting that the \u201cRun unblock scan without active projects\u201d step does not.\n  WHY: Operators may believe setting the variable to `false` disables the gate on every poller tick, although the standalone scan can still activate marker-based behavior.\n- agents.d/6838-automation-path-plan-auto-approval.md:1-19 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fragment claims `orchestrate_poll.yml` forwards the flag to the poller without noting that the \u201cRun unblock scan without active projects\u201d step does not.\n  WHY: Operators may believe explicitly disabling the flag ignores old markers on every poller tick, although the standalone scan can still activate marker-based behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml:933-1077 | severity=BLOCKER | confidence=5\n  PROBLEM: The \u201cRun unblock scan without active projects\u201d poller invocation omits `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`.\n  WHY: With the flag omitted, explicit false configurations are ignored by this invocation, and standalone stall recovery may post an automatic `/approved` comment for an ungranted automation-path plan when a trusted hold marker is absent.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate_poll.yml:1063-1077 | severity=MAJOR | confidence=5\n  PROBLEM: The \u201cRun unblock scan without active projects\u201d step does not forward `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`.\n  WHY: The unset value activates the marker-fallback branch, so an operator setting the repo variable to `false` may still see the poller activate the gate on no-tracking-issue ticks.\n- tests/test_plan_auto_approve_safe_state_fetch.py:269-275 | severity=NIT | confidence=5\n  PROBLEM: The test checks env forwarding only for the \u201cProcess each tracking issue\u201d step, not the \u201cRun unblock scan without active projects\u201d step.\n  WHY: The test can pass while the forwarding contract is partially violated, leaving the omission uncaught by CI.\n- README.md:99-105 | severity=MAJOR | confidence=5\n  PROBLEM: The row description says `orchestrate_poll.yml` forwards the repo variable, but only the main \u201cProcess each tracking issue\u201d step does so.\n  WHY: A consumer may believe setting the variable to `false` fully disables the gate on every poller tick, including standalone unblock scans.\n- agents.d/6838-automation-path-plan-auto-approval.md:1-19 | severity=MAJOR | confidence=5\n  PROBLEM: The fragment says `orchestrate_poll.yml` forwards the flag to the poller, but the \u201cRun unblock scan without active projects\u201d step does not.\n  WHY: An operator following the documentation cannot rely on `false` to disable marker-based activation on every poller tick.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_poll.yml:1063-1077 | severity=MAJOR | confidence=5\n  PROBLEM: This poller invocation does not receive `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`.\n  WHY: It runs when no tracking issue is active, and the standalone scan may bypass the intended approval hold because the step-level environment from the preceding invocation does not carry over.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/orchestrate_poll.yml:1063-1077 | confidence=5\n  PROBLEM: The reported omission is a false positive: `scripts/orchestrate_poll_process.sh:20402-20413` shows the `UNBLOCK_SCAN_SWEEP_ONLY` branch runs `run_unblock_scan` and exits before stall recovery, and `run_unblock_scan` at `orchestrate_poll_process.sh:17749-17818` does not call `_automation_path_plan_auto_approval_gate` or post `/approved`.\n  WHY: The only invocation that reaches standalone `auto_approve` is the \u201cProcess each tracking issue\u201d step, which forwards the flag at line 936; the sweep-only fallback is inert.\n=== END FINDINGS FROM z-ai_glm-5_3-flash===",
+  "fingerprint": "89954e3b2e681365717e021a8f75d3d2c3a7477a61de52b2e0690ff0555f2f71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6849,
+    "run_id": "38139642241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38139642241",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011132150_e083c70654",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6849,
+    "run_id": "38139642241"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T13:21:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
