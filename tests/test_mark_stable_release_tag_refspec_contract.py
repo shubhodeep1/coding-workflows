@@ -10,6 +10,7 @@ release jobs trigger by checking out the `stable` branch and then creating a
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -865,13 +866,19 @@ def _check_runs_body(*runs: dict, total_count: int | None = None) -> str:
 	})
 
 
+_LINT_RUN_IDS = itertools.count(1000)
+
+
 def _lint_run(
 	status: str = "completed",
 	conclusion: str | None = "success",
 	slug: str = "github-actions",
 	suite_id: int = CI_SUITE_ID,
+	run_id: int | None = None,
 ) -> dict:
+	# Ids increase with each call, so a later call is the newer check-run.
 	return {
+		"id": next(_LINT_RUN_IDS) if run_id is None else run_id,
 		"name": "lint",
 		"status": status,
 		"conclusion": conclusion,
@@ -992,6 +999,27 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 			"outcome=pass",
 		),
 		"other_workflow_only": ([_check_runs_body(_lint_run(suite_id=99))], False, "reason=missing"),
+		# Like scripts/release_ci_gate.sh, the newest check-run (highest id) decides.
+		"rerun_passed": (
+			[_check_runs_body(_lint_run(conclusion="failure", run_id=1), _lint_run(run_id=2))],
+			True,
+			"outcome=pass",
+		),
+		"rerun_failed": (
+			[_check_runs_body(_lint_run(run_id=2), _lint_run(conclusion="cancelled", run_id=3))],
+			False,
+			"reason=failed",
+		),
+		"rerun_running": (
+			[_check_runs_body(_lint_run(run_id=1), _lint_run(status="in_progress", conclusion=None, run_id=4))],
+			False,
+			"reason=incomplete",
+		),
+		"no_id": (
+			[_check_runs_body({**_lint_run(), "id": None})],
+			False,
+			"reason=missing",
+		),
 	}
 	expected_calls = [
 		f"gh:api repos/owner/repo/actions/workflows/ci.yml/runs?head_sha={TESTED_SHA}&per_page=100",
@@ -1024,6 +1052,18 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 				working_directory, workflow_path, [_check_runs_body(_lint_run())], wait_secs="08"
 			)
 			assert leading_zero.returncode == 0, (leading_zero.stdout, leading_zero.stderr)
+
+			# Waits above 2400 seconds (the RELEASE_CI_GATE_WAIT_SECS range) fall back to 600.
+			for oversized in ("2401", "99999999999999999999999"):
+				capped, capped_calls = _run_ci_lint_gate_scenario(
+					working_directory,
+					workflow_path,
+					[_check_runs_body(_lint_run(status="queued", conclusion=None))],
+					wait_secs=oversized,
+				)
+				assert capped.returncode != 0, (oversized, capped.stdout, capped.stderr)
+				assert "is above 2400; using 600" in capped.stdout, (oversized, capped.stdout)
+				assert capped_calls.count("sleep:30") == 20, (oversized, capped_calls.count("sleep:30"))
 
 			bad_sha, bad_sha_calls = _run_ci_lint_gate_scenario(
 				working_directory, workflow_path, [_check_runs_body(_lint_run())], tested_sha="not-a-sha"

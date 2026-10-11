@@ -707,8 +707,10 @@ jobs:
       # Runs before the first step that can push, whatever dry_run and the
       # switch say. Only `lint` check-runs created by the github-actions app
       # in a check suite of a `.github/workflows/ci.yml` run for the SHA
-      # count (other workflows also have `lint` jobs); every run must be
-      # completed with `success`. Missing and incomplete results are
+      # count (other workflows also have `lint` jobs). As in
+      # scripts/release_ci_gate.sh, the newest of them (highest check-run id)
+      # decides, so a re-run that passed outweighs an older failed attempt;
+      # it must be completed with `success`. Missing and incomplete results are
       # re-checked within a bounded wait; whatever is still missing or
       # incomplete then, and failed or unreadable results, fail closed.
       # GitHub API audit (§14): no existing call in this job returns
@@ -736,6 +738,12 @@ jobs:
               gate_wait_secs=600
               ;;
           esac
+          # Same range as RELEASE_CI_GATE_WAIT_SECS (0..2400); the length check
+          # runs first so a huge value never reaches shell arithmetic.
+          if [ "${#gate_wait_secs}" -gt 4 ] || [ "$((10#${gate_wait_secs}))" -gt 2400 ]; then
+            echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is above 2400; using 600."
+            gate_wait_secs=600
+          fi
           # Force base 10: a leading zero (`0900`, `08`) would be read as octal.
           gate_wait_secs=$((10#${gate_wait_secs}))
           gate_poll_secs=30
@@ -772,11 +780,14 @@ jobs:
                     else
                       [$wr.workflow_runs[] | select(type == "object" and .head_sha == $sha) | .check_suite_id | select(type == "number")] as $suites
                       | [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions"
-                          and ((.check_suite.id? // null) as $sid | ($sid | type) == "number" and any($suites[]; . == $sid)))] as $runs
+                          and ((.check_suite.id? // null) as $sid | ($sid | type) == "number" and any($suites[]; . == $sid))
+                          and ((.id? // null) | type) == "number")] as $runs
                       | if ($runs | length) == 0 then "missing 0"
-                        elif any($runs[]; .status != "completed") then "incomplete \($runs | length)"
-                        elif any($runs[]; .conclusion != "success") then "failed \($runs | length)"
-                        else "pass \($runs | length)"
+                        else ($runs | max_by(.id)) as $newest
+                          | if $newest.status != "completed" then "incomplete \($runs | length)"
+                            elif $newest.conclusion != "success" then "failed \($runs | length)"
+                            else "pass \($runs | length)"
+                            end
                         end
                     end
                 end' 2>/dev/null)"; then
