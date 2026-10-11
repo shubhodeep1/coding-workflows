@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.85,
+  "details": "The `seed-repo` command exists both under `.claude/commands/` and under `workflow-templates/.claude/commands/`. When changing this command, update both copies so newly seeded repositories receive the same behavior.",
+  "fingerprint": "9b24d57f7c7a87136a70a568b17864168e08406679e1626d7e9c212ca832cb34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38100444111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38100444111",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6668",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6712",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6812",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7103",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6722",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7104",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7111"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261011010850_2f1e758d09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep mirrored Claude commands in the main repository and workflow templates synchronized.",
+  "timestamps": {
+    "created_at": "2026-10-11T01:08:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
