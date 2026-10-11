@@ -6371,10 +6371,14 @@ jobs:
       # combined-status read cannot see `lint`, the aggregate job of ci.yml.
       # Runs before the first step that can push, whatever dry_run and the
       # switch say. Only `lint` check-runs created by the github-actions app
-      # count; every run must be completed with `success`. Missing,
-      # incomplete (after a bounded wait), failed and unreadable results all
-      # fail closed. GitHub API audit (§14): no existing call in this job
-      # returns check-runs.
+      # in a check suite of a `.github/workflows/ci.yml` run for the SHA
+      # count (other workflows also have `lint` jobs); every run must be
+      # completed with `success`. Missing and incomplete results are
+      # re-checked within a bounded wait; whatever is still missing or
+      # incomplete then, and failed or unreadable results, fail closed.
+      # GitHub API audit (§14): no existing call in this job returns
+      # check-runs; each poll makes two reads (ci.yml runs for the SHA,
+      # then the commit's `lint` check-runs).
       - name: Require successful CI lint check-run
         id: ci_lint_gate
         env:
@@ -6397,10 +6401,13 @@ jobs:
               gate_wait_secs=600
               ;;
           esac
+          # Force base 10: a leading zero (`0900`, `08`) would be read as octal.
+          gate_wait_secs=$((10#${gate_wait_secs}))
           gate_poll_secs=30
           gate_polls_left=$((gate_wait_secs / gate_poll_secs))
           gate_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate.XXXXXX")"
-          trap 'rm -f "${gate_response_file}"' EXIT
+          gate_runs_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate_runs.XXXXXX")"
+          trap 'rm -f "${gate_response_file}" "${gate_runs_file}"' EXIT
 
           # Prints "<reason> <runs>" where reason is one of
           # pass|missing|incomplete|failed|unreadable.
@@ -6408,27 +6415,36 @@ jobs:
             local gate_rc=0
             local gate_verdict=""
             set +e
-            gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${gate_sha}/check-runs?check_name=${gate_check_name}&filter=latest&per_page=100" >"${gate_response_file}"
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${gate_sha}&per_page=100" >"${gate_runs_file}"
             gate_rc=$?
+            if [ "${gate_rc}" -eq 0 ]; then
+              gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${gate_sha}/check-runs?check_name=${gate_check_name}&filter=latest&per_page=100" >"${gate_response_file}"
+              gate_rc=$?
+            fi
             set -e
             if [ "${gate_rc}" -ne 0 ]; then
               printf 'unreadable 0\n'
               return 0
             fi
-            if ! gate_verdict="$(jq -rs --arg name "${gate_check_name}" '
-                if length != 1 then "unreadable 0"
-                else .[0]
+            if ! gate_verdict="$(jq -rn --arg name "${gate_check_name}" --arg sha "${gate_sha}" \
+                --slurpfile checks "${gate_response_file}" --slurpfile ci_runs "${gate_runs_file}" '
+                if ($checks | length) != 1 or ($ci_runs | length) != 1 then "unreadable 0"
+                else $ci_runs[0] as $wr
+                  | $checks[0]
                   | if (type != "object") or ((.check_runs | type) != "array") or ((.total_count | type) != "number") then "unreadable 0"
-                    elif .total_count > (.check_runs | length) then "unreadable \(.check_runs | length)"
+                    elif ($wr | type) != "object" or (($wr.workflow_runs | type) != "array") or (($wr.total_count | type) != "number") then "unreadable 0"
+                    elif .total_count > (.check_runs | length) or $wr.total_count > ($wr.workflow_runs | length) then "unreadable \(.check_runs | length)"
                     else
-                      [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions")] as $runs
+                      [$wr.workflow_runs[] | select(type == "object" and .head_sha == $sha) | .check_suite_id | select(type == "number")] as $suites
+                      | [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions"
+                          and ((.check_suite.id? // null) as $sid | ($sid | type) == "number" and any($suites[]; . == $sid)))] as $runs
                       | if ($runs | length) == 0 then "missing 0"
                         elif any($runs[]; .status != "completed") then "incomplete \($runs | length)"
                         elif any($runs[]; .conclusion != "success") then "failed \($runs | length)"
                         else "pass \($runs | length)"
                         end
                     end
-                end' "${gate_response_file}" 2>/dev/null)"; then
+                end' 2>/dev/null)"; then
               printf 'unreadable 0\n'
               return 0
             fi
@@ -6447,9 +6463,9 @@ jobs:
               echo "STABLE_RELEASE_CI_GATE outcome=pass sha=${gate_sha} runs=${gate_runs}"
               exit 0
             fi
-            if [ "${gate_reason}" = "incomplete" ] && [ "${gate_polls_left}" -gt 0 ]; then
+            if { [ "${gate_reason}" = "incomplete" ] || [ "${gate_reason}" = "missing" ]; } && [ "${gate_polls_left}" -gt 0 ]; then
               gate_polls_left=$((gate_polls_left - 1))
-              echo "STABLE_RELEASE_CI_GATE outcome=wait reason=incomplete sha=${gate_sha} runs=${gate_runs} polls_left=${gate_polls_left}"
+              echo "STABLE_RELEASE_CI_GATE outcome=wait reason=${gate_reason} sha=${gate_sha} runs=${gate_runs} polls_left=${gate_polls_left}"
               sleep "${gate_poll_secs}"
               continue
             fi

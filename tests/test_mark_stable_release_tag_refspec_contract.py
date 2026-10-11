@@ -800,14 +800,26 @@ def test_script_validates_git_identity_for_annotated_tag() -> None:
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TESTED_SHA = "a" * 40
 PUBLISHING_STEP_IF = "        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}\n"
+CI_SUITE_ID = 7
+CI_WORKFLOW_RUNS_BODY = json.dumps({
+	"total_count": 1,
+	"workflow_runs": [{"head_sha": TESTED_SHA, "check_suite_id": CI_SUITE_ID, "path": ".github/workflows/ci.yml"}],
+})
 CI_LINT_GATE_MOCK = r'''gh() {
 	local gate_mock_count gate_mock_file
-	gate_mock_count="$(cat "${GATE_MOCK_COUNT}")"
-	gate_mock_count=$((gate_mock_count + 1))
-	printf '%s\n' "${gate_mock_count}" > "${GATE_MOCK_COUNT}"
 	printf 'gh:%s\n' "$*" >> "${GATE_MOCK_CALL_LOG}"
-	gate_mock_file="${GATE_MOCK_RESPONSES}/${gate_mock_count}"
-	[ -f "${gate_mock_file}" ] || gate_mock_file="${GATE_MOCK_RESPONSES}/last"
+	case "$*" in
+		*"/actions/workflows/ci.yml/runs?"*)
+			gate_mock_file="${GATE_MOCK_WORKFLOW_RUNS}"
+			;;
+		*)
+			gate_mock_count="$(cat "${GATE_MOCK_COUNT}")"
+			gate_mock_count=$((gate_mock_count + 1))
+			printf '%s\n' "${gate_mock_count}" > "${GATE_MOCK_COUNT}"
+			gate_mock_file="${GATE_MOCK_RESPONSES}/${gate_mock_count}"
+			[ -f "${gate_mock_file}" ] || gate_mock_file="${GATE_MOCK_RESPONSES}/last"
+			;;
+	esac
 	if [ "$(cat "${gate_mock_file}")" = "__FAIL__" ]; then
 		echo 'gh: Resource not accessible by integration (HTTP 403)' >&2
 		return 1
@@ -853,8 +865,19 @@ def _check_runs_body(*runs: dict, total_count: int | None = None) -> str:
 	})
 
 
-def _lint_run(status: str = "completed", conclusion: str | None = "success", slug: str = "github-actions") -> dict:
-	return {"name": "lint", "status": status, "conclusion": conclusion, "app": {"slug": slug}}
+def _lint_run(
+	status: str = "completed",
+	conclusion: str | None = "success",
+	slug: str = "github-actions",
+	suite_id: int = CI_SUITE_ID,
+) -> dict:
+	return {
+		"name": "lint",
+		"status": status,
+		"conclusion": conclusion,
+		"app": {"slug": slug},
+		"check_suite": {"id": suite_id},
+	}
 
 
 def _run_ci_lint_gate_scenario(
@@ -864,6 +887,7 @@ def _run_ci_lint_gate_scenario(
 	*,
 	wait_secs: str = "0",
 	tested_sha: str = TESTED_SHA,
+	workflow_runs: str = CI_WORKFLOW_RUNS_BODY,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
 	scenario_directory = Path(tempfile.mkdtemp(dir=working_directory))
 	response_directory = scenario_directory / "responses"
@@ -871,6 +895,8 @@ def _run_ci_lint_gate_scenario(
 	for index, body in enumerate(responses, start=1):
 		(response_directory / str(index)).write_text(body, encoding="utf-8")
 	(response_directory / "last").write_text(responses[-1], encoding="utf-8")
+	workflow_runs_file = scenario_directory / "workflow_runs.json"
+	workflow_runs_file.write_text(workflow_runs, encoding="utf-8")
 	call_log = scenario_directory / "calls.log"
 	call_log.write_text("", encoding="utf-8")
 	call_count = scenario_directory / "count"
@@ -892,6 +918,7 @@ def _run_ci_lint_gate_scenario(
 			GATE_MOCK_CALL_LOG=str(call_log),
 			GATE_MOCK_COUNT=str(call_count),
 			GATE_MOCK_RESPONSES=str(response_directory),
+			GATE_MOCK_WORKFLOW_RUNS=str(workflow_runs_file),
 			GITHUB_REPOSITORY="owner/repo",
 			RELEASE_TESTED_SHA=tested_sha,
 			RUNNER_TEMP=str(scenario_directory),
@@ -926,6 +953,8 @@ def test_ci_lint_gate_step_is_identical_and_ordered_in_both_release_jobs() -> No
 		switch_script = _workflow_step_script(workflow_text, "Resolve stable release switch")
 		assert "${{" not in gate_script and "${{" not in switch_script
 		assert "check_name=${gate_check_name}&filter=latest&per_page=100" in gate_script
+		assert "actions/workflows/ci.yml/runs?head_sha=${gate_sha}&per_page=100" in gate_script
+		assert "gate_wait_secs=$((10#${gate_wait_secs}))" in gate_script
 		gate_scripts.append(gate_script)
 		switch_scripts.append(switch_script)
 	assert gate_scripts[0] == gate_scripts[1], "both release workflows must keep a byte-identical CI lint gate"
@@ -936,7 +965,13 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 	if shutil.which("jq") is None:
 		print("skip: jq is not installed")
 		return
-	other_name = {"name": "static-checks", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}
+	other_name = {
+		"name": "static-checks",
+		"status": "completed",
+		"conclusion": "success",
+		"app": {"slug": "github-actions"},
+		"check_suite": {"id": CI_SUITE_ID},
+	}
 	scenarios = {
 		"pass": ([_check_runs_body(_lint_run(), _lint_run())], True, "outcome=pass"),
 		"missing": ([_check_runs_body()], False, "reason=missing"),
@@ -950,10 +985,18 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 		"partial_page": ([_check_runs_body(_lint_run(), total_count=2)], False, "reason=unreadable"),
 		"foreign_app": ([_check_runs_body(_lint_run(slug="third-party"))], False, "reason=missing"),
 		"other_name": ([_check_runs_body(other_name)], False, "reason=missing"),
+		# A `lint` job of another workflow (lint-plan-archival.yml) must not count.
+		"other_workflow_failed": (
+			[_check_runs_body(_lint_run(), _lint_run(conclusion="failure", suite_id=99))],
+			True,
+			"outcome=pass",
+		),
+		"other_workflow_only": ([_check_runs_body(_lint_run(suite_id=99))], False, "reason=missing"),
 	}
-	expected_call = (
-		f"gh:api repos/owner/repo/commits/{TESTED_SHA}/check-runs?check_name=lint&filter=latest&per_page=100"
-	)
+	expected_calls = [
+		f"gh:api repos/owner/repo/actions/workflows/ci.yml/runs?head_sha={TESTED_SHA}&per_page=100",
+		f"gh:api repos/owner/repo/commits/{TESTED_SHA}/check-runs?check_name=lint&filter=latest&per_page=100",
+	]
 	with tempfile.TemporaryDirectory() as temporary_directory:
 		working_directory = Path(temporary_directory)
 		for workflow_path in WORKFLOWS:
@@ -962,8 +1005,25 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 				label = f"{workflow_path.name}:{scenario_name}"
 				assert (result.returncode == 0) is should_pass, (label, result.stdout, result.stderr)
 				assert expected_text in result.stdout, (label, result.stdout)
-				assert [call for call in calls if call.startswith("gh:")] == [expected_call], label
+				assert [call for call in calls if call.startswith("gh:")] == expected_calls, label
 				assert not [call for call in calls if call.startswith("sleep:")], label
+
+			for runs_name, runs_body in (
+				("runs_api_error", "__FAIL__"),
+				("runs_malformed", "{not json"),
+				("runs_partial", json.dumps({"total_count": 2, "workflow_runs": []})),
+			):
+				result, calls = _run_ci_lint_gate_scenario(
+					working_directory, workflow_path, [_check_runs_body(_lint_run())], workflow_runs=runs_body
+				)
+				label = f"{workflow_path.name}:{runs_name}"
+				assert result.returncode != 0, (label, result.stdout)
+				assert "reason=unreadable" in result.stdout, (label, result.stdout)
+
+			leading_zero, _ = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [_check_runs_body(_lint_run())], wait_secs="08"
+			)
+			assert leading_zero.returncode == 0, (leading_zero.stdout, leading_zero.stderr)
 
 			bad_sha, bad_sha_calls = _run_ci_lint_gate_scenario(
 				working_directory, workflow_path, [_check_runs_body(_lint_run())], tested_sha="not-a-sha"
@@ -994,7 +1054,22 @@ def test_ci_lint_gate_waits_a_bounded_time_for_incomplete_ci() -> None:
 			assert exhausted.returncode != 0
 			assert "reason=incomplete" in exhausted.stdout
 			assert exhausted_calls.count("sleep:30") == 2
-			assert len([call for call in exhausted_calls if call.startswith("gh:")]) == 3
+			assert len([call for call in exhausted_calls if "/check-runs?" in call]) == 3
+
+			# CI that has not created its check-run yet is waited for, not failed at once.
+			missing_then_pass, missing_calls = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [_check_runs_body(), _check_runs_body(_lint_run())], wait_secs="60"
+			)
+			assert missing_then_pass.returncode == 0, missing_then_pass.stdout
+			assert "outcome=wait reason=missing" in missing_then_pass.stdout
+			assert missing_calls.count("sleep:30") == 1
+
+			missing_exhausted, missing_exhausted_calls = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [_check_runs_body()], wait_secs="60"
+			)
+			assert missing_exhausted.returncode != 0
+			assert "outcome=fail reason=missing" in missing_exhausted.stdout
+			assert missing_exhausted_calls.count("sleep:30") == 2
 
 			failed, failed_calls = _run_ci_lint_gate_scenario(
 				working_directory, workflow_path, [_check_runs_body(_lint_run(conclusion="failure"))], wait_secs="60"
