@@ -880,7 +880,8 @@ jobs:
             tests/test_validate_process_render_recovery.py \
             tests/test_verify_integration_fingerprints_partial_removal.py \
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
