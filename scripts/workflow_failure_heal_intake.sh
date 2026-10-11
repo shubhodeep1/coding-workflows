@@ -1221,6 +1221,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "URL: ${ISSUE_URL}"
 		echo "Escalation label: ${LABEL}"
 		echo "Other labels: $(_pf '.labels | join(", ")')"
+		if [ "${LABEL}" = "ai:scope-blocked" ]; then
+			# Validated logins and association only (Q81): the automation-path
+			# guard grants a pipeline-authored issue without files_touched
+			# differently from any other author.
+			echo "Issue author: $(_pf '.issue_author_login // "unknown"') (association: $(_pf '.issue_author_association // "unknown"'))"
+			echo "Pipeline account (the reporter's identity): $(_pf '.reporter_pipeline_login // "unknown"')"
+		fi
 	else
 		echo "Failed workflow: ${PAYLOAD_WORKFLOW_NAME} (conclusion: $(_pf '.conclusion // "unknown"'))"
 		echo "Branch: ${HEAD_BRANCH:-unknown}  Head SHA: ${HEAD_SHA:-unknown}"
