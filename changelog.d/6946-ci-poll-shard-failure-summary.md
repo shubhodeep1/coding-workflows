@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **A failed orchestrate-poll CI shard now names its failing tests at the end of the step log.** Issue #6946, from the triage of PR #6940.
+
+Each shard's log in the `orchestrate-poll` matrix job of `.github/workflows/ci.yml` is printed in a collapsed group, and the step used to end with only a count (`N orchestrate-poll shard(s) failed.`). A log tail, and the check-failure triage that reads one, therefore showed the last shard's passing summary and never the test that failed. After the groups, the step now prints a summary for each failed shard: its `FAIL` lines (first 50) and its last 20 log lines, each prefixed with `    | ` so test output cannot act as a workflow command. It also adds one `::error::orchestrate-poll shard N failing tests: <names>` annotation per shard, limited to `[A-Za-z0-9_]` test names. Failure counting and the exit status are unchanged, and the release gates' copies of the step are not touched.

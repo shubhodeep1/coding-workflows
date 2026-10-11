@@ -19,6 +19,10 @@ import re
 from pathlib import Path
 
 import pytest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
@@ -104,6 +108,27 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 )
 def test_each_agent_site_uses_the_helper(relative, needle):
 	assert needle in (REPO_ROOT / relative).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+	"relative, expected_launches",
+	[
+		(".github/workflows/workflow-log-analysis.yml", 4),
+		("scripts/workflow_retro_fanout.sh", 1),
+	],
+)
+def test_every_log_analysis_agent_launch_is_read_only_isolated(relative, expected_launches):
+	# Issue #6637: these agents read collected CI logs (untrusted text). Every
+	# launch must run in the credential-free, network-isolated read-only
+	# container; a workspace-mode or host launch would give injected log text
+	# write access or credentials.
+	text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+	launches = [line for line in logical_lines(text) if "exec --skip-git-repo-check" in line]
+	assert len(launches) == expected_launches, launches
+	for line in launches:
+		assert "codex_isolated_exec.sh" in line, line
+		assert re.search(r'''codex_isolated_exec\.sh"?\s+run\s+--mode\s+read-only\b''', line), line
+	assert "--mode workspace" not in text
 
 
 def test_helper_container_has_no_credentials_network_or_host_checkout():
@@ -321,7 +346,7 @@ def test_poller_judges_stay_on_the_review_sandbox():
 	]
 	assert isolated_exec_uses == [], POLLER_JUDGE_DECISION
 
-	agents = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents = _agents_text_with_fragments()
 	section = agents[agents.index("## Isolated Codex agents"):]
 	section = section[: section.index("\n## ")]
 	assert "review_untrusted_sandbox.sh" in section
