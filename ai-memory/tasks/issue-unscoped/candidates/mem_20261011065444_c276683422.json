@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:125-126, 134; prompts/_templates/mode-judge-review-blocked.txt:118-119, 127 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The prompt wording can lead the judge to refuse `merge_with_followup` when any check-run is pending, even when the explicitly empty required-checks list configures the gate to allow all.\n  WHY: `_pr_checks_completed` returns success for allow-all before evaluating check-runs, so the prompt's unqualified pending-run language can contradict the gate and leave the PR in `ai:review-blocked`.\n- agents.d/7127-checks-gate-cancelled.md (same wording in changelog.d/7127-checks-gate-cancelled.md, paragraph 3) | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The docs overstate that a cancelled required check makes `_pr_wait_for_required_checks` refuse at once, because unrelated pending advisory runs can keep it polling.\n  WHY: `PR_CHECKS_LAST_PENDING` includes pending advisory runs, so the wait refuses at once only when that count is 0; the merge remains withheld.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7127-checks-gate-cancelled.md (same wording in changelog.d/7127-checks-gate-cancelled.md, paragraph 3) | severity=low | confidence=3\n  PROBLEM: The docs overstate that a cancelled required check makes `_pr_wait_for_required_checks` refuse at once, because an unrelated pending advisory run can keep it polling.\n  WHY: `PR_CHECKS_LAST_PENDING` counts every non-completed, non-self newest-per-name run, advisory ones included; the wait refuses at once only when that count is 0, and the merge is still withheld.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/mode-judge-review-blocked.txt | severity=high | confidence=5\n  PROBLEM: The merge-with-followup rule sentence and refusal clause can be read as blocking on any pending check-run even when allow-all is configured.\n  WHY: The parenthetical allow-all exception may be read as a side note rather than controlling the unqualified pending-run rules, contradicting `_pr_checks_completed`.\n- prompts/_templates/mode-judge-review-blocked.txt | severity=high | confidence=5\n  PROBLEM: The merge-with-followup rule sentence and refusal clause can be read as blocking on any pending check-run even when allow-all is configured.\n  WHY: The template carries the same ambiguity into the model prompt, contradicting `_pr_checks_completed`.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-judge-review-blocked.txt; prompts/_templates/mode-judge-review-blocked.txt | severity=high | confidence=5\n  PROBLEM: The prompt says an explicitly empty required-checks list allows all, but then says any pending run blocks, and the refusal clause repeats that pending runs block.\n  WHY: With `ORCH_FINAL_MERGE_REQUIRED_CHECKS=\"\"` and no branch-protection contexts, `_pr_checks_completed` returns success before evaluating check-runs, so the contradictory prompt can direct the judge to refuse `merge_with_followup` and leave the PR in `ai:review-blocked`.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/7127-checks-gate-cancelled.md; changelog.d/7127-checks-gate-cancelled.md | severity=low | confidence=4\n  PROBLEM: The docs overstate that a cancelled required check makes `_pr_wait_for_required_checks` refuse at once, because an unrelated pending advisory check can keep it polling.\n  WHY: The wait refuses immediately only when `PR_CHECKS_LAST_PENDING` is 0, but that count includes non-completed advisory runs; the merge is still withheld.\n\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b98c9ae08cc54dac2691890941b721607bfcc74c6e312fed7de479bd17a2202b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7133,
+    "run_id": "38117204142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38117204142",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011065444_c276683422",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7133,
+    "run_id": "38117204142"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:54:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
