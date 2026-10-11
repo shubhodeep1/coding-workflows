@@ -414,6 +414,8 @@ def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
         return "soft_deadline"
     if status == "skipped_open":
         return "cached_open"
+    if status == "skipped_pool":
+        return "pool_unavailable"
     if status == "skipped_unmapped":
         if stall_guard_logged:
             return "stall_guard"

@@ -734,6 +734,30 @@ def test_out_of_scope_rejection_reverses_when_file_is_in_scope() -> None:
 		assert artifact["results"][0]["verdict"] == "does-not-support"
 
 
+def test_out_of_scope_rejection_reverses_for_an_agents_fragment_when_agents_md_is_in_scope() -> None:
+	"""CLAUDE.md §30: a scope naming agents.md covers its agents.d/ fragments."""
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_linked_issue_context(runtime, ["src/module.py", "agents.md"])
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="out-of-scope",
+				typed_header="EVIDENCE_FILES_TOUCHED",
+				typed_body="cited_path: agents.d/7100-x.md\nfiles_touched: src/module.py, agents.md",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "Linked issue files_touched includes the agents file that agents.d/7100-x.md documents." in block
+		assert _load_artifact(workspace)["results"][0]["verdict"] == "does-not-support"
+
+
 def test_verifier_sanitizes_non_numeric_pr_number_for_artifact_paths() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
