@@ -5320,6 +5320,8 @@ run_pool_reviewer() {
     if [ -s "${pool_attempt_output}" ]; then
       pool_rejected_bytes="$(wc -c < "${pool_attempt_output}" | tr -d '[:space:]')"
       head -c 65536 "${pool_attempt_output}" > "${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt" 2>/dev/null || true
+    else
+      rm -f "${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt" 2>/dev/null || true
     fi
     pool_log "REVIEWER_POOL_REJECTED_OUTPUT slot=${model} pass=${output_prefix} attempt=${pool_attempt} model=${pool_attempt_model} bytes=${pool_rejected_bytes:-0} reason=${pool_skip_reason:-${pool_last_reason:-unknown}}"
     [ -z "${pool_skip_reason}" ] || break
