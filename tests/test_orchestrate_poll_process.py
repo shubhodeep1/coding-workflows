@@ -14816,6 +14816,83 @@ def test_validation_active_run_prevents_redispatch():
 	assert result["latest_state"]["status"] == "validating"
 
 
+def _stale_validation_state(dispatches: int | None) -> dict:
+	"""A project whose cycle-1 validation runs keep ending with no verdict."""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_ts"] = 1  # far past the 1h stale threshold
+	state["validation_last_dispatch_cycle"] = 1
+	if dispatches is not None:
+		state["validation_cycle_dispatch_count"] = dispatches
+	return state
+
+
+_VERDICTLESS_FAILED_RUN = [{
+	"id": 8101,
+	"status": "completed",
+	"conclusion": "failure",
+	"created_at": "2026-01-01T00:00:00Z",
+	"html_url": "https://github.com/o/r/actions/runs/8101",
+}]
+
+
+def test_stale_validation_redispatch_counts_dispatches_per_cycle():
+	"""Q50: a verdict-less stale run under the cap is re-dispatched and the
+	per-cycle dispatch count goes up; state without the counter reads as 1."""
+	for prior, expected in ((None, 2), (2, 3)):
+		result = _run_poller(
+			state=_stale_validation_state(prior),
+			enable_validation="true",
+			max_validate_cycles="3",
+			tracking_labels=["ai:validating"],
+			validation_workflow_runs=_VERDICTLESS_FAILED_RUN,
+		)
+		output = result["stdout"] + result["stderr"]
+		assert len(result["validation_dispatches"]) == 1, output
+		assert result["latest_state"]["validation_cycle_dispatch_count"] == expected
+		assert result["latest_state"]["status"] == "validating"
+		assert "VALIDATION_DISPATCH_CAP outcome=redispatch" in output
+
+
+def test_stale_validation_redispatch_stops_at_cap_as_harness_error():
+	"""Q50: binance-blessings#249 re-dispatched a failing validate.yml every
+	hour. After MAX_VALIDATION_DISPATCHES_PER_CYCLE (default 3) verdict-less
+	runs the poller stops and fails validation as a harness error, which
+	adds ai:harness-broken for the heal path and spends no judge recovery."""
+	result = _run_poller(
+		state=_stale_validation_state(3),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=_VERDICTLESS_FAILED_RUN,
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert result["validation_dispatches"] == [], output
+	assert ls["status"] == "failed"
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert ls.get("validation_recovery_count", 0) == 0
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert "VALIDATION_DISPATCH_CAP outcome=exhausted" in output
+	assert "dispatches=3 max=3 last_conclusion=failure" in output
+	assert "3 validation run(s) dispatched for cycle 1 ended without a verdict label" in ls["validation_failure_reason"]
+
+
+def test_stale_validation_redispatch_cap_is_configurable():
+	result = _run_poller(
+		state=_stale_validation_state(1),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=_VERDICTLESS_FAILED_RUN,
+		env_overrides={"MAX_VALIDATION_DISPATCHES_PER_CYCLE": "1"},
+	)
+	assert result["validation_dispatches"] == []
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
 # ---------------------------------------------------------------------------
 # Tests: judge advancement logic (fix-up issue handling)
 # ---------------------------------------------------------------------------
