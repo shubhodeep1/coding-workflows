@@ -23,7 +23,7 @@ name: AI Sync Labels
         type: boolean
 
 env:
-  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
 
 permissions:
   contents: read
