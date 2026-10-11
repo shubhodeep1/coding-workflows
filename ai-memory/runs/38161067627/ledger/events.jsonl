@@ -1,0 +1,1 @@
+{"actor": "shubhodeep1", "entry_id": "run_event_20261011182021_3be1cbc57f", "event_type": "phase_started", "issue_number": null, "message": "review_autofix run started", "metadata": {"run_attempt": 1}, "pr_number": 6877, "run_id": "38161067627", "schema_version": "run_ledger_entry.v1", "status": "ok", "timestamp": "2026-10-11T18:20:21Z", "workflow": "review_autofix"}
