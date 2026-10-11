@@ -19466,9 +19466,9 @@ REISSUE_EOF
           ensure_label_exists 'ai:workflow-heal'
           _heal_reissue_label_args=(--label 'ai:workflow-heal')
         fi
-        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
         new_url=""
         if [ -n "${orig_title}" ]; then
+          mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
           new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         else
           # Source read failed: skip the create; the failure branch keeps both open.
