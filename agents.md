@@ -374,9 +374,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`, or the verified support ref's branch for a
-    review/autofix failure from a PR in this repo (`stable` or main ancestor),
-    falling back to the PR head if unresolved; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`; a review/autofix failure from this repo
+    targets its PR head only when `script_ref` equals the head SHA,
+    the verified support branch for `stable` or a main-ancestor ref,
+    and otherwise has no Target branch and targets the default branch
+    (`target_branch_source=shared_workflow`, issue #6680);
+    `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
     `already-fixed` → Telegram + comment only, honoured only when its
     `## Fixed by` section cites a commit that landed after the failing SHA,
