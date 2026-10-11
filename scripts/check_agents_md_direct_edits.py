@@ -15,12 +15,14 @@ violation when
 
 - a diff hunk only inserts lines (no line removed) outside the Repo-tree
   section: that is new documentation, or
-- the file gains more than AGENTS_MD_DIRECT_NET_ADD_MAX lines in total
-  (default 5) outside the Repo-tree section: a correction that also appends.
+- its hunks outside the Repo-tree section add more than
+  AGENTS_MD_DIRECT_NET_ADD_MAX lines (default 5) beyond the lines they
+  replace: a correction that also appends. Each hunk's surplus counts on its
+  own, so a removal elsewhere cannot offset an addition.
 
-Output: one `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped ...` line,
-plus `::error::` lines naming each offending hunk. Exit 0 when ok or skipped,
-1 on a violation, 2 on a usage or git error. It runs no GitHub API calls.
+Output: one `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|error ...` line,
+plus `::error::` lines naming each offending hunk. Exit 0 when ok, 1 on a
+violation, 2 on a usage or git error. It runs no GitHub API calls.
 """
 
 from __future__ import annotations
@@ -65,6 +67,7 @@ def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list
 			continue  # deleted: removing the file is not an addition
 		diff = _git(repo_root, "diff", "-U0", "--no-color", base, head, "--", path)
 		net_added = 0
+		surplus = 0
 		for header in diff.splitlines():
 			match = HUNK_RE.match(header)
 			if not match:
@@ -76,11 +79,12 @@ def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list
 			if section == GENERATED_SECTION:
 				continue
 			net_added += added - removed
+			surplus += max(added - removed, 0)
 			if added and not removed:
 				violations.append(f"{path}:{start} adds {added} line(s) under '{section or 'top of file'}' without changing existing text")
 		totals[path] = net_added
-		if net_added > net_add_max:
-			violations.append(f"{path} gains {net_added} line(s) outside {GENERATED_SECTION!r} (limit {net_add_max})")
+		if surplus > net_add_max:
+			violations.append(f"{path} gains {surplus} line(s) outside {GENERATED_SECTION!r} (limit {net_add_max})")
 	return violations, totals
 
 
@@ -92,8 +96,10 @@ def main(argv: list[str] | None = None) -> int:
 	args = parser.parse_args(argv)
 	raw_max = os.environ.get("AGENTS_MD_DIRECT_NET_ADD_MAX", str(DEFAULT_NET_ADD_MAX)).strip()
 	net_add_max = int(raw_max) if raw_max.isdigit() else DEFAULT_NET_ADD_MAX
+	if not raw_max.isdigit():
+		print(f"::warning::AGENTS_MD_DIRECT_NET_ADD_MAX={raw_max[:40]!r} is not a non-negative integer; using {DEFAULT_NET_ADD_MAX}")
 	if not re.fullmatch(r"[0-9a-f]{40}|HEAD", args.base) or not re.fullmatch(r"[0-9a-f]{40}|HEAD", args.head):
-		print("AGENTS_MD_DIRECT_EDIT outcome=skipped reason=invalid_ref")
+		print("::error::AGENTS_MD_DIRECT_EDIT outcome=error reason=invalid_ref")
 		return 2
 	try:
 		violations, totals = check(Path(args.repo_root), args.base, args.head, net_add_max)

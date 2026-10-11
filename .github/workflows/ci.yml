@@ -255,9 +255,13 @@ jobs:
       # The merge commit is compared with its first parent (the base tip it
       # was built on). A project's final PR (head orchestrator/project-*) is
       # skipped: its sub-issue PRs were checked when they targeted the
-      # integration branch.
+      # integration branch. A forward-merge fallback PR
+      # (auto/forward-merge-stable-*) is skipped too: it carries the release
+      # fold's generated agents.md text. Both skips apply only to a
+      # same-repository head targeting the default branch, so a branch name
+      # alone does not exempt an ordinary PR.
       - name: agents.md direct-edit check (CLAUDE.md §30)
-        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'orchestrator/project-')
+        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"

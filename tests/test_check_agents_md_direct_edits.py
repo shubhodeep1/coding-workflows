@@ -101,6 +101,16 @@ def test_correction_that_also_appends_beyond_the_allowance_is_a_violation(tmp_pa
 	assert _check(repo, base, head, AGENTS_MD_DIRECT_NET_ADD_MAX="10").returncode == 0
 
 
+def test_removal_elsewhere_does_not_offset_an_addition(tmp_path: Path) -> None:
+	repo, base = _repo(tmp_path)
+	extra = "".join(f"Extra {n}.\n" for n in range(6))
+	head = _commit(repo, "agents.md", BASE_DOC.replace("Line two.\n", "Line two, corrected.\n" + extra).replace(
+		"## Stable log prefixes (contractual)\n\n- `OLD_PREFIX`\nLOG_PREFIX.name=OLD_PREFIX\n\n", ""))
+	result = _check(repo, base, head)
+	assert result.returncode == 1, result.stdout
+	assert "agents.md gains 6 line(s)" in result.stdout
+
+
 def test_generated_repo_tree_section_is_exempt(tmp_path: Path) -> None:
 	repo, base = _repo(tmp_path)
 	head = _commit(repo, "agents.md", BASE_DOC.replace("scripts/a.sh\n", "scripts/a.sh\nscripts/b.sh\nscripts/c.sh\n"))
@@ -128,13 +138,17 @@ def test_invalid_refs_are_a_usage_error(tmp_path: Path) -> None:
 	repo, _base = _repo(tmp_path)
 	result = _check(repo, "main", "HEAD")
 	assert result.returncode == 2
-	assert "outcome=skipped reason=invalid_ref" in result.stdout
+	assert "outcome=error reason=invalid_ref" in result.stdout
 
 
 def test_ci_runs_the_check_on_pull_requests_except_project_final_prs() -> None:
 	jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))["jobs"]
 	step = next(step for step in jobs["static-checks"]["steps"] if step.get("name") == "agents.md direct-edit check (CLAUDE.md §30)")
-	assert step["if"] == "github.event_name == 'pull_request' && !startsWith(github.head_ref, 'orchestrator/project-')"
+	assert step["if"] == (
+		"github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository"
+		" && github.base_ref == github.event.repository.default_branch"
+		" && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))"
+	)
 	assert 'git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"' in step["run"]
 	assert 'scripts/check_agents_md_direct_edits.py' in step["run"]
 	assert '--base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"' in step["run"]
