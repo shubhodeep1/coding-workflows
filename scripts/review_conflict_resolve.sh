@@ -774,19 +774,25 @@ raise SystemExit(0 if found else 1)
     if jq -e '.[0].labels | index("ai:orchestrator-managed") != null' "${reissue_dir}/linked.json" >/dev/null 2>&1; then
       reissue_managed="true"
     fi
-    if jq --argjson src "${reissue_source}" --arg managed "${reissue_managed}" \
+    jq --argjson src "${reissue_source}" --arg managed "${reissue_managed}" \
       --arg body "Superseded by #${reissue_issue}: pull request #${PR_NUMBER} was closed because its merge with ${reissue_base} conflicted on host-only path(s) this issue declares in files_touched (${reissue_paths})." '
       .ops += ([{op: "comment", issue: $src, body: $body}]
         + (if $managed == "true" then [] else [{op: "close", issue: $src, reason: "not_planned", pr: false}] end))
-    ' "${reissue_dir}/ops_suffix.json" > "${reissue_dir}/ops_suffix_full.json"; then
-      mv -f -- "${reissue_dir}/ops_suffix_full.json" "${reissue_dir}/ops_suffix.json"
-    fi
+    ' <<< '{"ops": []}' > "${reissue_dir}/ops_source.json" || rm -f -- "${reissue_dir}/ops_source.json"
   fi
+  # The PR close and the source-issue ops run separately, so a source-issue
+  # failure after a successful PR close is not reported as a failed PR close.
+  # The source ops run only after the PR closed, as before.
   if _resolver_run_unblock_ops "${reissue_dir}/ops_suffix.json"; then
-    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=reissued reason=declared_in_files_touched"
+    if [ -s "${reissue_dir}/ops_source.json" ] && ! _resolver_run_unblock_ops "${reissue_dir}/ops_source.json"; then
+      echo "::warning::Host-only re-issue: PR #${PR_NUMBER} was closed, but updating its source issue #${reissue_source} failed (replacement #${reissue_issue})."
+      echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=reissued reason=source_issue_update_failed"
+    else
+      echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=reissued reason=declared_in_files_touched"
+    fi
   else
     if [ "${reissue_comment_posted}" = "true" ]; then
-      echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} (or its source issue) failed after creating #${reissue_issue}; the re-issue marker prevents a duplicate."
+      echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} failed after creating #${reissue_issue}; the re-issue marker prevents a duplicate."
     else
       # Neither the marker nor the close landed: a later run on this open PR
       # could create a second replacement, so an operator must close it.
