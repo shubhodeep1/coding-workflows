@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7174,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7174\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7175\",\"pr_number\":7175,\"branch\":\"ai/issue-7174\",\"run_id\":\"38146189121\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38146189121\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\"README.md\",\"agents.d/7174-standalone-recovery-idle-ticks.md\",\"changelog.d/7174-standalone-recovery-idle-ticks.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_claude_pool_health_alert.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_orchestrator_judges_claude_engine.py\",\"tests/test_plan_auto_approve_safe_state_fetch.py\"]}",
+  "fingerprint": "6ce7e476b20c4e1debba42c1572d020a2e3375b33ed50971301ba91edd17af4e",
+  "lineage": {
+    "issue_number": 7174,
+    "parent_ids": [],
+    "pr_number": 7175,
+    "run_id": "38146189121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38146189121",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7175"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261011143550_04afd35273",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7174,
+    "level": "run",
+    "pr_number": 7175,
+    "run_id": "38146189121"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7174: https://github.com/shubhodeep1/coding-workflows/pull/7175",
+  "timestamps": {
+    "created_at": "2026-10-11T14:35:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
