@@ -53,6 +53,7 @@ VERIFY_EXECUTED_SCRIPTS = {
 	"verify_release_manifest.py",
 	"apply_audit_gate_assets.py",
 	"assemble_changelog.py",
+	"assemble_agents.py",
 }
 BOOTSTRAP_SCRIPTS = {
 	"scripts/verify_release_manifest.py",
@@ -60,6 +61,7 @@ BOOTSTRAP_SCRIPTS = {
 	"scripts/workflow_wrapper_refs.py",
 	"scripts/apply_audit_gate_assets.py",
 	"scripts/assemble_changelog.py",
+	"scripts/assemble_agents.py",
 }
 
 
@@ -156,6 +158,8 @@ def test_template_stays_backward_compatible() -> None:
 	assert caller["uses"] == "shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable"
 	assert caller["with"] == {"allow_workflow_edits": "${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}"}
 	assert caller["secrets"] == "inherit"
+	# Consumer kill switch (plan Q49): unset means on, 'false' stops the job.
+	assert caller["if"] == "${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}"
 	text = TEMPLATE.read_text(encoding="utf-8")
 	assert "commits directly to the default branch" not in text
 	assert "UPDATER_PR_DELIVERY_ENABLED" in text
@@ -285,6 +289,21 @@ def test_attestation_policy_matches_the_update_job() -> None:
 	assert "--deny-self-hosted-runners" in flags
 	assert any(flag.startswith("--cert-identity-regex") for flag in flags)
 	assert any(flag.startswith("--predicate-type https://slsa.dev/provenance/v1") for flag in flags)
+
+
+def test_review_auto_merge_skips_updater_prs() -> None:
+	# Ordinary review must never enable auto-merge on an updater PR; only the
+	# verify job does, after its PR-tree check.
+	script = (REPO_ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8")
+	guard = script.index("^auto/update-workflows-[0-9a-f]{12}$")
+	assert "reason=updater_pr_verify_job_owns_merge" in script[guard:guard + 400]
+	assert guard < script.index("gh_retry gh pr merge")
+
+
+def test_verify_job_reproduces_agents_fragment_assembly() -> None:
+	run = _verify_step("verify_reproduce")["run"]
+	assert '"${RELEASE_ROOT}/scripts/assemble_agents.py" assemble' in run
+	assert '--repo-root "${BASE_TREE}"' in run
 
 
 def test_template_gate_is_registered_in_ci() -> None:

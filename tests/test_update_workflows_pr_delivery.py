@@ -44,7 +44,7 @@ EXPECTED_PREDICATE = (
 	"steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || "
 	"steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || "
 	"steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || "
-	"steps.changelog_assemble.outputs.changelog_assembled == 'true'"
+	"steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'"
 )
 AUTO_CLOSE_RE = re.compile(r"(?i)(?<![\w-])(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+(?:[\w.-]+/[\w.-]+)?#\d+")
 
@@ -288,6 +288,9 @@ class Fixture:
 		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_assembled }}", "false")
 		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_fragment_count }}", "0")
 		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_layout }}", "none")
+		script = script.replace("${{ steps.agents_assemble.outputs.agents_assembled }}", "false")
+		script = script.replace("${{ steps.agents_assemble.outputs.agents_file }}", "AGENTS.md")
+		script = script.replace("${{ steps.agents_assemble.outputs.agents_fragment_count }}", "0")
 		assert "${{" not in script
 		env = {
 			**_clean_env(),

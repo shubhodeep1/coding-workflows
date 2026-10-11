@@ -25,6 +25,8 @@
 # Opting out:
 #   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
 #   automatic updates. The workflow will still run but skip all changes.
+#   Set the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' to
+#   stop the job entirely; unset (or any other value) means it runs.
 #
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten
 # by the update process. Do not add custom logic here.
@@ -41,6 +43,7 @@ permissions:
   statuses: write
 jobs:
   update:
+    if: ${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}
     uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}

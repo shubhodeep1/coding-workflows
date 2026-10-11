@@ -20,6 +20,8 @@ Surface (one rule per updater step, see SURFACE_RULES):
 - "Sync changelog fragment assets from upstream" / "Assemble changelog
   fragments": scripts/assemble_changelog.py (it generates the changelog
   assets, so the script is the attested asset).
+- "Assemble agents.md fragments": scripts/assemble_agents.py (the verify
+  job also reruns it on the PR's parent tree).
 - "Verify attested release manifest": scripts/verify_release_manifest.py and
   scripts/release_manifest.py (the step hash-checks both, plus
   scripts/workflow_wrapper_refs.py, before running the verifier).
@@ -83,6 +85,8 @@ SURFACE_RULES = (
 	("file", "scripts/workflow_wrapper_refs.py", True),
 	("file", "scripts/apply_audit_gate_assets.py", True),
 	("file", "scripts/assemble_changelog.py", True),
+	# "Assemble agents.md fragments" runs this from the release checkout.
+	("file", "scripts/assemble_agents.py", True),
 	# The updater's verification step (#6960) runs these two modules from the
 	# release checkout, so their bytes must be attested too.
 	("file", "scripts/verify_release_manifest.py", True),
