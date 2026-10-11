@@ -2222,6 +2222,25 @@ def test_intake_unreadable_run_logs_fingerprint_is_per_escalated_item() -> None:
 	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
 
 
+def test_intake_filter_failed_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A job log that was fetched but whose `filter-log` failed is emptied and
+	is not readable evidence either: it must not count as a read log, or the
+	report falls back to the shared `no-error-lines` signature."""
+	def _fail_filter_log(_tmp: Path, work: Path) -> None:
+		heal_py = work / "scripts" / "workflow_failure_heal.py"
+		text = heal_py.read_text(encoding="utf-8")
+		guard = 'if __name__ == "__main__" and sys.argv[1:2] == ["filter-log"]:\n\tsys.exit(1)\n\n\nif __name__ == "__main__":'
+		assert text.count('if __name__ == "__main__":') == 1
+		heal_py.write_text(text.replace('if __name__ == "__main__":', guard), encoding="utf-8")
+
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_fail_filter_log)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_filter_failed" in result.stdout
+	assert "warn job_log_fetch_failed" not in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # Autofix-failure reports (review_autofix.yml failure path)
 # ---------------------------------------------------------------------------
