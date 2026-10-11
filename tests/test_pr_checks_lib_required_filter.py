@@ -488,6 +488,16 @@ def test_ci_side_channel_aggregates_every_matching_run() -> None:
 		assert state == expected, (runs, state, expected)
 
 
+def test_ci_side_channel_counts_only_bound_runs_when_ids_are_given() -> None:
+	runs = _page([_ci_run("lint", "completed", "success", run_id="555")])
+	_, _, state = _ci_side_channel(runs, {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "999"})
+	assert state == "absent", state
+	_, _, state = _ci_side_channel(runs, {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "999,555"})
+	assert state == "success", state
+	_, _, state = _ci_side_channel(runs, {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": ""})
+	assert state == "absent", state
+
+
 def test_ci_side_channel_is_unknown_on_api_failure_and_set_on_allow_all() -> None:
 	_, _, state = _ci_side_channel("{}", THIS_REPO_ENV)
 	assert state == "unknown", state

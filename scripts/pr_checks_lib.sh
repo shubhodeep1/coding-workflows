@@ -74,6 +74,12 @@
 #                            (no extra API call) and enforced only by
 #                            _pr_wait_for_required_checks; the return value
 #                            of _pr_checks_completed does not depend on it.
+#   PR_CHECKS_CI_RUN_IDS   — optional input: when set, only check-runs whose
+#                            details_url run id is in this comma-separated
+#                            list count toward PR_CHECKS_LAST_CI_STATE
+#                            (_pr_wait_for_required_checks passes the
+#                            AUTO_MERGE_WAIT_WORKFLOWS run ids on the head).
+#                            Unset: match by name and head SHA only.
 
 # Built-in default required-check set. Defined set-if-unset so a caller
 # that already declared it (the orchestrator does, near
@@ -231,8 +237,10 @@ _pr_checks_completed()
 	# `unknown`, never `success`. The name reaches jq only through --arg.
 	if [ "${PR_CHECKS_LAST_CI_NAME}" != "none" ]; then
 		local ci_state
-		ci_state="$(printf '%s' "${check_runs_json}" | jq -r --arg ci "${PR_CHECKS_LAST_CI_NAME}" --arg self_run "${self_run}" --arg sha "${head_sha}" '
+		ci_state="$(printf '%s' "${check_runs_json}" | jq -r --arg ci "${PR_CHECKS_LAST_CI_NAME}" --arg self_run "${self_run}" --arg sha "${head_sha}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" '
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+			def _is_bound_run: ($bound == "__unbound__") or (([(.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first) as $rid
+				| ($rid != null) and (($bound | split(",") | index($rid)) != null));
 			(
 				if (type == "array") then [.[]? | select(type == "object") | (.check_runs // [])[]]
 				elif (type == "object" and (.check_runs | type == "array")) then .check_runs
@@ -240,7 +248,7 @@ _pr_checks_completed()
 			) as $runs |
 			if ($runs == null) then "unknown"
 			else
-				[$runs[] | select(type == "object" and .name == $ci and ((.head_sha // $sha) | tostring | startswith($sha)) and (_is_self_check_run | not))] as $m |
+				[$runs[] | select(type == "object" and .name == $ci and ((.head_sha // $sha) | tostring | startswith($sha)) and (_is_self_check_run | not) and _is_bound_run)] as $m |
 				if ([$m[] | select(.status == "completed" and .conclusion != "success")] | length) > 0 then "failure"
 				elif ([$m[] | select(.status != "completed")] | length) > 0 then "pending"
 				elif ([$m[] | select(.conclusion == "success")] | length) > 0 then "success"
@@ -460,7 +468,9 @@ _pr_auto_merge_required_ci_check_name()
 # produced a result. The wait refuses with reason=ci_run_cancelled; a
 # later re-run returns the workflow to pending.
 # Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
-# (integers), return 0.
+# (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
+# workflows on the head, self excluded) and PR_CHECKS_RUNS_READ
+# (true | false when the read failed or was skipped | disabled), return 0.
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
 # when disabled or the SHA/repository is unusable. Fail-open: a failed or
 # malformed read counts as 0 pending (the check-run gate still applies).
@@ -469,9 +479,11 @@ _pr_head_ci_runs_pending()
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
 	PR_CHECKS_RUNS_PENDING=0
 	PR_CHECKS_RUNS_UNRUN=0
+	PR_CHECKS_RUNS_READ="false"
+	PR_CHECKS_RUNS_IDS=""
 	names_csv="${AUTO_MERGE_WAIT_WORKFLOWS-CI}"
 	case "$(printf '%s' "${names_csv}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-		""|none|off) return 0 ;;
+		""|none|off) PR_CHECKS_RUNS_READ="disabled"; return 0 ;;
 	esac
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
 	self_run="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}"
@@ -491,6 +503,19 @@ _pr_head_ci_runs_pending()
 	PR_CHECKS_RUNS_UNRUN="${counts##* }"
 	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
 	[[ "${PR_CHECKS_RUNS_UNRUN}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_UNRUN=0
+	# Run ids of the listed workflows on this head (self excluded), for the
+	# named CI check binding (issue #6963). Same listing, no extra call.
+	local run_ids
+	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
+		| if (type == "object" and (.workflow_runs | type) == "array") then
+			[.workflow_runs[] | select((.id | tostring) != $self_run)
+				| select((.name // "" | ascii_downcase) as $n | $wanted | index($n)) | (.id | tostring)] | "ids:" + join(",")
+		else "invalid" end' 2>/dev/null | tail -n1)"
+	if [[ "${run_ids}" =~ ^ids:[0-9,]*$ ]]; then
+		PR_CHECKS_RUNS_READ="true"
+		PR_CHECKS_RUNS_IDS="${run_ids#ids:}"
+	fi
 	return 0
 }
 
@@ -501,15 +526,32 @@ _pr_wait_for_required_checks()
 	local base_ref="${3:-}"
 	local max_minutes="${4:-${AUTO_MERGE_CHECKS_WAIT_MINUTES:-45}}"
 	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
-	local waited=0 rc=0
+	local waited=0 rc=0 ci_runs_fresh=0 ci_bind ci_required_name
+	ci_required_name="$(_pr_auto_merge_required_ci_check_name 2>/dev/null)"
 	PR_CHECKS_WAIT_OUTCOME="timeout"
 	PR_CHECKS_WAIT_WAITED_S=0
 	[[ "${max_minutes}" =~ ^[0-9]+$ ]] || max_minutes=45
 	[[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]] || poll_seconds=60
 	while :; do
 		rc=0
-		PR_CHECKS_SELF_RUN_ID="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}" \
+		# Bind the named CI check to a run of an AUTO_MERGE_WAIT_WORKFLOWS
+		# workflow on this head (issue #6963): other workflows also have a
+		# job named `lint` (lint-pr-body-auto-close.yml, lint-plan-archival.yml),
+		# and their success must not stand in for CI. With the runs listing
+		# unreadable, a success is not trusted (state unknown, keep polling);
+		# with AUTO_MERGE_WAIT_WORKFLOWS=none the match is by name only.
+		ci_runs_fresh=0
+		ci_bind="__unbound__"
+		if [ "${ci_required_name}" != "none" ]; then
+			_pr_head_ci_runs_pending "${head_sha}"
+			ci_runs_fresh=1
+			[ "${PR_CHECKS_RUNS_READ}" = "true" ] && ci_bind="${PR_CHECKS_RUNS_IDS}"
+		fi
+		PR_CHECKS_CI_RUN_IDS="${ci_bind}" PR_CHECKS_SELF_RUN_ID="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}" \
 			_pr_checks_completed "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null || rc=$?
+		if [ "${ci_runs_fresh}" = "1" ] && [ "${PR_CHECKS_RUNS_READ}" = "false" ] && [ "${PR_CHECKS_LAST_CI_STATE}" = "success" ]; then
+			PR_CHECKS_LAST_CI_STATE="unknown"
+		fi
 		case "${PR_CHECKS_LAST_REASON}" in
 			ok|allow_all)
 				# A listed CI workflow run on this head is still queued or
@@ -518,7 +560,7 @@ _pr_wait_for_required_checks()
 				# outcome (branch protection decides), so CI's result would be
 				# ignored after the wait too.
 				if [ "${PR_CHECKS_LAST_REASON}" = "ok" ]; then
-					_pr_head_ci_runs_pending "${head_sha}"
+					[ "${ci_runs_fresh}" = "1" ] || _pr_head_ci_runs_pending "${head_sha}"
 					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
 						echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_RUNS_PENDING} CI workflow run(s) on ${head_sha:0:7} not completed yet; waiting ${poll_seconds}s."
 						sleep "${poll_seconds}"

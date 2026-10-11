@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from review_autofix_step_scripts import expanded_review_autofix_text

@@ -426,6 +426,7 @@ class RequiredChecksWait(unittest.TestCase):
 THIS_REPO = {"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows"}
 NO_LINT = _runs(("CI", "completed", "success"), ("review / gate", "completed", "success"))
 LINT_RUNNING = _runs(("CI", "completed", "success"), ("lint", "in_progress", ""), ("review / gate", "completed", "success"))
+CI_DONE = [json.dumps({"workflow_runs": [{"name": "CI", "status": "completed", "conclusion": "success", "id": 999}]})]
 LINT_SELF_ONLY = json.dumps([{"check_runs": [
 	{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/999/job/1"},
 	{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/4242/job/7"},
@@ -436,26 +437,26 @@ class RequiredCiCheckWait(unittest.TestCase):
 	"""Issue #6963: the configured CI check must exist on the head and succeed."""
 
 	def test_empty_listing_never_authorizes_when_ci_check_is_required(self) -> None:
-		rc, out = _wait([EMPTY], max_minutes="0", env=THIS_REPO)
+		rc, out = _wait([EMPTY], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 1)
 		self.assertIn("outcome=timeout", out)
 		self.assertIn("ci_check=lint ci_state=absent", out)
 		self.assertNotIn("outcome=ok", out)
 
 	def test_missing_ci_check_is_waited_for_even_when_other_checks_are_green(self) -> None:
-		rc, out = _wait([NO_LINT, GREEN], env=THIS_REPO)
+		rc, out = _wait([NO_LINT, GREEN], env=THIS_REPO, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 0)
 		self.assertIn("required CI check 'lint' is absent", out)
 		self.assertIn("outcome=ok waited_s=1", out)
 
 	def test_old_review_gate_success_alone_does_not_authorize(self) -> None:
 		only_gate = _runs(("review / gate", "completed", "success"))
-		rc, out = _wait([only_gate], max_minutes="0", env=THIS_REPO)
+		rc, out = _wait([only_gate], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 1)
 		self.assertIn("ci_state=absent", out)
 
 	def test_pending_then_success_proceeds(self) -> None:
-		rc, out = _wait([LINT_RUNNING, GREEN], env=THIS_REPO)
+		rc, out = _wait([LINT_RUNNING, GREEN], env=THIS_REPO, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=ok waited_s=1", out)
 		self.assertIn("ci_check=lint ci_state=success", out)
@@ -464,24 +465,24 @@ class RequiredCiCheckWait(unittest.TestCase):
 		for conclusion in ("failure", "skipped", "neutral", "cancelled"):
 			with self.subTest(conclusion=conclusion):
 				runs = _runs(("CI", "completed", "success"), ("lint", "completed", conclusion))
-				rc, out = _wait([runs], env=THIS_REPO)
+				rc, out = _wait([runs], env=THIS_REPO, ci_runs_sequence=CI_DONE)
 				self.assertEqual(rc, 1)
 				self.assertIn("ci_check=lint ci_state=failure", out)
 				self.assertIn("outcome=failed", out)
 
 	def test_a_failing_duplicate_outranks_a_success(self) -> None:
 		runs = _runs(("lint", "completed", "success"), ("lint", "completed", "failure"))
-		rc, out = _wait([runs], env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+		rc, out = _wait([runs], env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"}, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 1)
 		self.assertIn("outcome=failed", out)
 
 	def test_own_run_never_satisfies_the_ci_check(self) -> None:
-		rc, out = _wait([LINT_SELF_ONLY], max_minutes="0", env=THIS_REPO)
+		rc, out = _wait([LINT_SELF_ONLY], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 1)
 		self.assertIn("ci_state=absent", out)
 
 	def test_allow_all_still_waits_for_the_ci_check(self) -> None:
-		rc, out = _wait([NO_LINT], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
+		rc, out = _wait([NO_LINT], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""}, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 1)
 		self.assertIn("outcome=timeout", out)
 
@@ -497,8 +498,31 @@ class RequiredCiCheckWait(unittest.TestCase):
 		self.assertIn("outcome=ok waited_s=0 pending=0 ci_check=none", out)
 
 	def test_custom_check_name_with_spaces(self) -> None:
-		rc, out = _wait([NO_LINT], env={"AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"})
+		rc, out = _wait([NO_LINT], env={"AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"}, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 0)
+		self.assertIn("ci_state=success", out)
+
+	def test_same_named_check_from_another_workflow_does_not_count(self) -> None:
+		"""lint-pr-body-auto-close.yml's job is also named `lint`; only a CI run's `lint` counts."""
+		other = json.dumps([{"check_runs": [
+			{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/555/job/1"},
+		]}])
+		rc, out = _wait([other], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("ci_state=absent", out)
+		rc, out = _wait([other], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("ci_state=absent", out)
+
+	def test_unreadable_runs_listing_never_trusts_a_success(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=["not json"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_state=unknown", out)
+
+	def test_wait_workflows_none_matches_by_name_only(self) -> None:
+		rc, out = _wait([GREEN], env={**THIS_REPO, "AUTO_MERGE_WAIT_WORKFLOWS": "none"})
+		self.assertEqual(rc, 0, out)
 		self.assertIn("ci_state=success", out)
 
 
