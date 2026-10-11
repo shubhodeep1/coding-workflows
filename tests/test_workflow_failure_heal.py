@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -236,8 +237,11 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	on = _on(intake)
 	assert on["repository_dispatch"]["types"] == [heal.DISPATCH_EVENT_TYPE]
 	assert on["workflow_run"]["types"] == ["completed"]
-	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES)
+	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES) + list(heal.SCHEDULED_CHECK_WORKFLOW_NAMES)
 	assert _yaml(REPO_ROOT / ".github" / "workflows" / "ci.yml")["name"] in heal.MAIN_CI_WORKFLOW_NAMES
+	assert _yaml(REPO_ROOT / ".github" / "workflows" / "nightly-validation-selftest.yml")["name"] in heal.SCHEDULED_CHECK_WORKFLOW_NAMES
+	# Scheduled checks are healed from the default branch only.
+	assert "(github.event.workflow_run.name != 'Nightly Validation Self-Test' || github.event.workflow_run.head_branch == github.event.repository.default_branch)" in " ".join(intake["jobs"]["intake"]["if"].split())
 	assert "payload_json" in on["workflow_dispatch"]["inputs"]
 	actual_names = {
 		_yaml(REPO_ROOT / ".github" / "workflows" / name)["name"]
@@ -304,7 +308,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 
 def test_stable_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
@@ -337,6 +341,33 @@ def test_select_failed_runs_matches_title_and_conclusion() -> None:
 	]
 	picked = heal.select_failed_runs(runs, title="Fix login")
 	assert [run["run_id"] for run in picked] == ["2", "4"]
+
+
+def test_select_failed_runs_picks_the_tracking_issues_validation_runs() -> None:
+	"""binance-blessings#249: its validation run is titled `AI Validate
+	[tracking:249]`, never the project title, so the report carried no runs."""
+	runs = [
+		{"id": 7, "conclusion": "failure", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:04:45Z", "html_url": "u7", "name": "AI Validate"},
+		{"id": 8, "conclusion": "failure", "display_title": "Internal: AI Validate [tracking:249]", "created_at": "2026-10-11T03:05:45Z", "html_url": "u8", "name": "Internal: AI Validate"},
+		{"id": 9, "conclusion": "failure", "display_title": "AI Validate [tracking:2490]", "created_at": "2026-10-11T03:06:45Z", "html_url": "u9", "name": "AI Validate"},
+		{"id": 10, "conclusion": "success", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:07:45Z", "html_url": "u10", "name": "AI Validate"},
+		{"id": 11, "conclusion": "failure", "display_title": "AI Validate [tracking:249] extra", "created_at": "2026-10-11T03:08:45Z", "html_url": "u11", "name": "AI Validate"},
+	]
+	title = "[Orchestrator] Support/Resistance TWAP Flips and Sell Guardrails"
+	assert [run["run_id"] for run in heal.select_failed_runs(runs, title=title, tracking_issue=249)] == ["7", "8"]
+	assert heal.select_failed_runs(runs, title=title) == []
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:harness-broken",
+		issue={**_issue(249, title=title, labels=["ai:orchestrator-tracking", "ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["7", "8"]
+	pr_payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="pull_request", label="ai:harness-broken",
+		issue={**_issue(249, title="Unrelated PR", labels=["ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert pr_payload["run_refs"] == []
 
 
 def _issue(number: int = 42, *, title: str = "Add retries to the poller", body: str = "body", labels: list[str] | None = None, state: str = "open") -> dict:
@@ -689,9 +720,11 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	filtered = heal.filter_log(RAW_STEP_LOG)
 	assert "could not resolve ${branch} head sha" not in filtered
 	assert "set -euo pipefail\n" not in filtered.split("##[group]Run set -euo pipefail", 1)[1]
-	# The header line, the env block, and every line the step printed survive.
+	# The header line, the env variable names, and every line the step printed
+	# survive; env values are redacted (basic-auth-survives-evidence-redaction).
 	assert "##[group]Run set -euo pipefail" in filtered
-	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: [redacted]" in filtered
+	assert "EDITOR_RETRY_BUDGET_MINUTES: 25" not in filtered
 	assert "retry run #35940786276: status=pending" in filtered
 	assert "##[error]Retry review run did not complete within 25 minutes" in filtered
 	# Cyan output printed by the step itself (outside a Run header) is kept.
@@ -699,6 +732,193 @@ def test_filter_log_drops_the_echoed_step_script_but_keeps_step_output() -> None
 	# Text without a Run header (reporter evidence) is unchanged by the drop.
 	evidence = "::error::PR diff unavailable\nstderr tail\n"
 	assert heal._drop_step_script_lines(evidence) == evidence
+
+
+def test_filter_log_redacts_basic_authorization_in_step_output() -> None:
+	log = (
+		"2026-09-24T00:00:01Z > Authorization: Basic dXNlcjpwYXNz\n"
+		"2026-09-24T00:00:02Z > authorization: basic bG93ZXI6Y2FzZQ==\n"
+		"2026-09-24T00:00:03Z ##[error]Process completed with exit code 1.\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "dXNlcjpwYXNz" not in filtered
+	assert "bG93ZXI6Y2FzZQ==" not in filtered
+	assert "Authorization: [redacted]" in filtered
+	assert "authorization: [redacted]" in filtered
+
+
+ENV_STEP_LOG = (
+	"2026-09-24T00:00:00Z before the step\n"
+	"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+	"2026-09-24T00:00:01Z \x1b[36;1m./mint.sh\x1b[0m\n"
+	"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+	"2026-09-24T00:00:01Z env:\n"
+	"2026-09-24T00:00:01Z   GH_TOKEN: ghp_x\n"
+	"2026-09-24T00:00:01Z   FOO: plainvalue\n"
+	"2026-09-24T00:00:01Z   MULTI: first-line\n"
+	"continuation-secret-line\n"
+	"2026-09-24T00:00:01Z   EMPTY:\n"
+	"2026-09-24T00:00:01Z ##[endgroup]\n"
+	"2026-09-24T00:00:02Z step output stays: FOO: visible\n"
+)
+
+
+def test_filter_log_redacts_step_env_values_but_keeps_names() -> None:
+	filtered = heal.filter_log(ENV_STEP_LOG)
+	assert "GH_TOKEN: [redacted]" in filtered
+	assert "FOO: [redacted]" in filtered
+	assert "MULTI: [redacted]" in filtered
+	assert "EMPTY:" in filtered
+	for secret in ("ghp_x", "plainvalue", "first-line", "continuation-secret-line"):
+		assert secret not in filtered
+	assert "shell: /usr/bin/bash -e {0}" in filtered
+	assert "./mint.sh\n" not in filtered.split("##[group]Run ./mint.sh", 1)[1]
+	assert "before the step" in filtered
+	assert "step output stays: FOO: visible" in filtered
+	# The continuation line is replaced whole, not passed through.
+	assert "\n  [redacted]\n" in filtered
+
+
+def test_strip_step_env_values_keeps_other_header_sections() -> None:
+	# The runner prints `with:` / `shell:` before `env:`; those stay readable.
+	log = (
+		"##[group]Run actions/checkout@v4\n"
+		"with:\n"
+		"  ref: main\n"
+		"shell: /usr/bin/bash\n"
+		"env:\n"
+		"  A: secret-a\n"
+		"##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	assert "secret-a" not in stripped
+	assert "  A: [redacted]" in stripped
+	assert "with:\n  ref: main\nshell: /usr/bin/bash\nenv:\n" in stripped
+	# Text without a Run header comes back unchanged, and the pass is idempotent.
+	evidence = "::error::PR diff unavailable\nenv:\n  X: y\n"
+	assert heal._strip_step_env_values(evidence) == evidence
+	assert heal._strip_step_env_values(stripped) == stripped
+	once = heal._strip_step_env_values(ENV_STEP_LOG)
+	assert heal._strip_step_env_values(once) == once
+
+
+def test_strip_step_env_values_header_like_lines_do_not_end_env_block() -> None:
+	# A multi-line value continuation that looks like a header key must not
+	# switch redaction off for the rest of the block.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"with: confidential-one\n"
+		"shell: confidential-two\n"
+		"env: FOO=confidential-three\n"
+		"2026-09-24T00:00:01Z   TOKEN2: confidential-four\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z ##[group]Run ./other.sh\n"
+		"2026-09-24T00:00:02Z env: INLINE=confidential-five\n"
+		"2026-09-24T00:00:02Z   NEXT: confidential-six\n"
+		"2026-09-24T00:00:02Z ##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for n in ("one", "two", "three", "four", "five", "six"):
+		assert f"confidential-{n}" not in stripped
+	assert "2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}" in stripped
+	assert "  TOKEN2: [redacted]" in stripped
+	assert "2026-09-24T00:00:02Z env: [redacted]" in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_strip_step_env_values_marker_shaped_value_lines_do_not_end_env_block() -> None:
+	# Unstamped continuation lines of a multi-line value that look like the
+	# header close or a new Run header must not end redaction early.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"##[endgroup]\n"
+		"leaked-after-close\n"
+		"##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("first", "leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert stripped.count("##[endgroup]") == 1
+	assert heal._strip_step_env_values(stripped) == stripped
+	filtered = heal.filter_log(log)
+	assert "leaked-after-close" not in filtered
+	assert "step output kept" in filtered
+
+
+def test_strip_step_env_values_timestamp_shaped_marker_value_lines_do_not_end_env_block() -> None:
+	# A value line that itself starts with a timestamp and reads like a marker
+	# is followed by an unstamped continuation, so it cannot be a real marker.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert stripped.count("##[endgroup]") == 1
+	assert stripped.endswith("2026-09-24T00:00:01Z ##[endgroup]\n2026-09-24T00:00:02Z step output kept\n")
+	assert heal._strip_step_env_values(stripped) == stripped
+
+
+def test_filter_log_drops_unterminated_step_header() -> None:
+	log = (
+		"2026-09-24T00:00:00Z earlier output kept\n"
+		"2026-09-24T00:00:01Z ##[group]Run ./deploy.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   TOKEN: unterminated-value\n"
+		"2026-09-24T00:00:01Z after header line\n"
+	)
+	filtered = heal.filter_log(log)
+	assert "earlier output kept" in filtered
+	assert "unterminated-value" not in filtered
+	assert "TOKEN" not in filtered
+	assert "after header line" not in filtered
+	assert "##[group]Run ./deploy.sh" not in filtered
+	assert filtered.count(heal._STEP_ENV_UNTERMINATED_MARKER) == 1
+
+
+def test_filter_log_keeps_unterminated_step_header_without_env_block() -> None:
+	# A log cut mid-step whose header never opened an env block carries no env
+	# values, so its diagnostic output must survive (heal intake relies on it).
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run codex\n"
+		"2026-09-24T00:00:02Z ::error::resolve_integration_ref.sh: branch missing\n"
+		"2026-09-24T00:00:03Z Authorization: Basic dXNlcjpwYXNz\n"
+	)
+	filtered = heal.filter_log(log)
+	assert heal._STEP_ENV_UNTERMINATED_MARKER not in filtered
+	assert "##[group]Run codex" in filtered
+	assert "resolve_integration_ref.sh: branch missing" in filtered
+	assert "dXNlcjpwYXNz" not in filtered
+
+
+def test_filter_log_byte_cut_never_leaves_an_unredacted_token_suffix() -> None:
+	token = "ghp_" + "Z" * 60
+	log = "x" * 200 + "\n" + "value " + token + "\n"
+	for max_bytes in range(5, 80):
+		filtered = heal.filter_log(log, max_bytes=max_bytes)
+		assert "ZZZZ" not in filtered
 
 
 def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
@@ -1089,6 +1309,8 @@ def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
 		 "A release / promotion workflow run failed."),
 		("Mark Stable Release", "A release / promotion workflow run failed.",
 		 "A CI run on the default branch failed."),
+		("Nightly Validation Self-Test", "A scheduled self-check workflow run on the default branch failed.",
+		 "A release / promotion workflow run failed."),
 	):
 		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 			repo=SELF_REPO,
@@ -1277,6 +1499,8 @@ if args[:1] == ["api"]:
 		if body_arg.startswith("body=@"):
 			text = Path(body_arg[len("body=@"):]).read_text()
 			state.setdefault("comments_posted", []).append({"path": path, "body": text})
+			if state.get("comment_post_fail"):
+				fail("HTTP 500")
 			out("{}")
 	if "/issues/" in path and path.endswith("/comments"):
 		if method != "GET":
@@ -1372,6 +1596,8 @@ if args[:2] == ["issue", "create"]:
 	out("https://github.com/%s/issues/%d\n" % (record.get("repo"), 900 + len(state["issues_created"])))
 if args[:2] == ["issue", "edit"]:
 	state.setdefault("issue_edits", []).append(args[2:])
+	if state.get("issue_edit_fail"):
+		fail("HTTP 422")
 	out("")
 fail("unexpected gh call " + " ".join(args))
 '''
@@ -1550,6 +1776,7 @@ def _consumer_payload(**overrides) -> dict:
 
 JOB_LOG = (
 	"2026-09-20T10:00:00.000Z ##[group]Run codex\n"
+	"2026-09-20T10:00:00.000Z ##[endgroup]\n"
 	"2026-09-20T10:00:01.000Z codex: applying plan\n"
 	"2026-09-20T10:00:02.000Z ::error::resolve_integration_ref.sh: Integration branch 'orchestrator/project-4123' declared in child issue #4200 does not exist.\n"
 	"2026-09-20T10:00:03.000Z ##[error]Process completed with exit code 1.\n"
@@ -1688,6 +1915,54 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	for call in state["calls"]:
 		if any(part.endswith("/jobs") or part.endswith("/issues") for part in call):
 			assert "--method" in call and call[call.index("--method") + 1] == "GET"
+
+
+@pytest.mark.parametrize("status", ("behind", "diverged"))
+def test_intake_targets_the_default_branch_when_stable_lacks_the_pinned_release(status: str) -> None:
+	"""#6902 -> #7063: a consumer pinned to a main-only commit got a stable hotfix
+	issue for a file stable does not have, and its plan could only block."""
+	state = _intake_state(compare=_compare(0, [], status=status), branches=["stable", "main"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+	assert f"target_branch_retarget from=stable to=main reason=wrapper_pin_not_on_target pin={SHA_A} compare_status={status}" in result.stdout
+	assert "target_branch=main" in result.stdout and "target_branch_source=wrapper_pin_not_on_target" in result.stdout
+	# No extra API call: the branch-progress compare already answered it.
+	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
+	assert len(compare_calls) == 1 and any(f"compare/{SHA_A}...stable" in part for part in compare_calls[0])
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"]
+	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
+
+
+@pytest.mark.parametrize("compare", (_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")], status="ahead"), _compare(0, [], status="identical"), None))
+def test_intake_keeps_stable_when_it_contains_the_pin_or_the_compare_is_unavailable(compare) -> None:
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "target_branch_retarget" not in result.stdout
+	assert "target_branch_source=default" in result.stdout
+
+
+def test_intake_retarget_uses_the_configured_default_branch_for_consumer_issue_reports() -> None:
+	"""Consumer issue reports skip the provenance block; the retarget must still
+	read WORKFLOW_HEAL_DEFAULT_BRANCH instead of assuming `main`."""
+	state = _intake_state(compare=_compare(0, [], status="behind"), branches=["stable", "main", "develop"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "develop"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "develop"
+	assert "target_branch_retarget from=stable to=develop" in result.stdout
+
+
+def test_intake_retarget_falls_back_to_main_without_a_known_default_branch() -> None:
+	state = _intake_state(compare=_compare(0, [], status="behind"))
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": ""})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
 
 
 def test_intake_routes_consumer_defect_to_consumer_repo() -> None:
@@ -1920,6 +2195,54 @@ def test_intake_without_linked_runs_still_files_from_label_context() -> None:
 	assert "no failed run could be linked" in prompt
 	created = state["issues_created"][0]
 	assert created["title"] == f"Workflow heal: ai:needs-human on {CONSUMER_REPO}#42"
+
+
+def test_intake_label_only_fingerprint_is_per_escalated_item() -> None:
+	"""A run-less label report used to fingerprint as `label:<label>` alone, so
+	every repository's run-less reports of that label shared one lineage:
+	binance-blessings#249's first ai:harness-broken report escalated at
+	generation 4 because three unrelated heals (the last #7063, from
+	coding-workflows#6902) carried that fingerprint."""
+	shared_fp = heal.fingerprint("label:ai:needs-human", "", "label:ai:needs-human")
+	unrelated = _sourced_heal_issue(7063, state="closed", fp=shared_fp, source=f"{SELF_REPO}#6902", gen=3)
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [unrelated], CONSUMER_REPO: []})
+	result, state_after, _ = _run_intake(_consumer_payload(run_refs=[]), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	expected_fp = heal.fingerprint("label:ai:needs-human", "", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=label:ai:needs-human" in result.stdout
+	assert "reason=lineage_cap" not in result.stdout
+	created = state_after["issues_created"][0]
+	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
+
+
+def test_intake_unreadable_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A report whose linked runs' job logs all failed to fetch carries only
+	"(job log unavailable)" placeholders, whose `no-error-lines` signature is
+	the same for every item; it is keyed on the escalated item instead."""
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(job_logs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_fetch_failed" in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
+
+
+def test_intake_filter_failed_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A job log that was fetched but whose `filter-log` failed is emptied and
+	is not readable evidence either: it must not count as a read log, or the
+	report falls back to the shared `no-error-lines` signature."""
+	def _fail_filter_log(_tmp: Path, work: Path) -> None:
+		heal_py = work / "scripts" / "workflow_failure_heal.py"
+		text = heal_py.read_text(encoding="utf-8")
+		guard = 'if __name__ == "__main__" and sys.argv[1:2] == ["filter-log"]:\n\tsys.exit(1)\n\n\nif __name__ == "__main__":'
+		assert text.count('if __name__ == "__main__":') == 1
+		heal_py.write_text(text.replace('if __name__ == "__main__":', guard), encoding="utf-8")
+
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_fail_filter_log)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_filter_failed" in result.stdout
+	assert "warn job_log_fetch_failed" not in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -2497,6 +2820,7 @@ def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot(
 	assert workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"].split() == [
 		"workflow_failure_heal.py",
 		"workflow_failure_heal_autofix_report.sh",
+		"provider_outage.py",
 	]
 	steps = workflow["jobs"]["codex-agent"]["steps"]
 	names = [step.get("name") for step in steps]
@@ -2620,7 +2944,7 @@ def test_render_failure_marker_is_log_safe_and_rejects_bad_input() -> None:
 	assert heal.render_failure_marker("abc", "editor_empty_noop", fp, False) == ""
 	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", "not-a-fingerprint", False) == ""
 	parsed = heal.parse_failure_markers([{"id": 9, "author_login": CAP_AUTHOR, "body": "x\n" + marker}], head_sha=SHA_A, author_login=CAP_AUTHOR)
-	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "comment_id": "9"}]
+	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "support": "", "comment_id": "9"}]
 	assert heal.parse_failure_markers([{"author_login": "someone-else", "body": marker}], head_sha=SHA_A, author_login=CAP_AUTHOR) == []
 	assert heal.parse_failure_markers([{"user": {"login": CAP_AUTHOR}, "body": marker}], head_sha=SHA_B, author_login=CAP_AUTHOR) == []
 
@@ -2688,6 +3012,62 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 	assert heal.count_identical_failures(retryable, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
 
 
+SUPPORT_NEW = "5" * 40
+SUPPORT_OLD = "6" * 40
+
+
+def _support_marker_comment(text: str, *, run: str, support: str = "", author: str = CAP_AUTHOR, reason: str = "editor_empty_noop") -> dict:
+	marker = heal.render_failure_marker(SHA_A, reason, _cap_fp(reason), False, run, support or None)
+	assert marker
+	return {"id": int(run), "author_login": author, "body": f"{text}\n\n{marker}"}
+
+
+def test_failure_markers_are_support_version_aware() -> None:
+	"""Issue #6625: failures recorded by an older review-support version do not
+	count toward (or keep applied) the cap of a review on updated support."""
+	fp = _cap_fp()
+	marker = heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", SUPPORT_NEW.upper())
+	assert marker == f"<!-- review-autofix-failure:v1 head={SHA_A} reason=editor_empty_noop fp={fp} degraded=0 run=7 support={SUPPORT_NEW} -->"
+	# An invalid support SHA is omitted, so the marker is byte-identical to the legacy one.
+	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", "abc") == heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7")
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (1, 2, 3)]
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (4, 5, 6)]
+	legacy = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (7, 8, 9)]
+	count = heal.count_identical_failures
+	assert count(current, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	assert count(older, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW) == {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	assert count(legacy, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# Older markers interleaved with current ones neither count nor end the scan.
+	mixed = [current[0], older[0], legacy[0], current[1], older[1]]
+	assert count(mixed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 2
+	# Without a support SHA the legacy rules count every version.
+	assert count([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 6
+	# An untrusted author carrying the current support SHA is still ignored.
+	forged = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW, author="attacker") for run in (10, 11, 12)]
+	assert count(forged, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# A non-retryable failure of an older version does not trip the new one.
+	old_host_only = [_support_marker_comment(AUTOFIX_FAILED_COMMENT, run="13", support=SUPPORT_OLD, reason="conflict_resolver_sandbox_path_host_only")]
+	assert count(old_host_only, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["non_retryable"] is False
+	# Cap markers: only the same head and support version count as applied.
+	def cap(support: str) -> dict:
+		field = f" support={support}" if support else ""
+		return {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3{field} -->"}
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap("")], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap(SUPPORT_NEW)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is True
+	# A cap marker quoted inline (a "First error" code span) is not a cap marker,
+	# and it does not hide the real marker on its own line later in the body.
+	inline = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_NEW)["body"] + "`"}
+	assert count([*current, inline], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	shadowed = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_OLD)["body"] + "`\n\n" + cap(SUPPORT_NEW)["body"]}
+	assert count([*current, shadowed], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	# parse_failure_markers applies the same filter and reports the version.
+	parsed = heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert [marker["run"] for marker in parsed] == ["1", "2", "3"] and {marker["support"] for marker in parsed} == {SUPPORT_NEW}
+	assert len(heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)) == 6
+
+
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-fp-cli-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -2714,7 +3094,20 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false"]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support=", "newest_reason=editor_empty_noop"]
+		# Issue #6625: --support-sha ignores markers of other support versions.
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-2:] == [f"support={SUPPORT_NEW}", "newest_reason="]
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
+				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert f"marker={heal.render_failure_marker(SHA_A, 'editor_empty_noop', fp, False, '42', SUPPORT_NEW)}" in result.stdout.splitlines()
+		assert f" run=42 support={SUPPORT_NEW} -->" in result.stdout
 		(tmp / "comments.json").write_text("{}", encoding="utf-8")
 		bad = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
@@ -2735,6 +3128,10 @@ def test_derived_failure_reason_matches_the_reporter_precedence() -> None:
 		({"EDITOR_NOOP_REFUSAL": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
 		({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}, None),
+		({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, RUN_SUMMARY_LINE),
+		({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_SANDBOX_PREPARE_FAILED": "true"}, None),
+		({"EDITOR_PREFLIGHT_FAILED": "true", "AUTOFIX_SANDBOX_PREPARE_FAILED": "true"}, None),
+		({"AUTOFIX_SANDBOX_PREPARE_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, None),
 		({}, RUN_SUMMARY_LINE.replace("editor_empty_noop", "reviewers_unavailable")),
 		({}, None),
 	]
@@ -2835,11 +3232,11 @@ def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:
 
 
 def test_fingerprint_cap_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
 		assert f"- `{prefix}`" in agents_text, prefix
 		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
-	workflow_text = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	workflow_text = expanded_review_autofix_text()
 	for prefix in ("AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=", "AUTOFIX_FINGERPRINT pr="):
 		assert prefix in workflow_text, prefix
 
@@ -3266,6 +3663,72 @@ def test_gate_stops_a_head_on_its_first_non_retryable_failure() -> None:
 		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true"
 
 
+def test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host_only_marker() -> None:
+	"""Issue #6743 (#6733): a force_rb_judge run re-ran the resolver that had
+	already refused host-only paths, so the review-blocked judge never ran."""
+	force = {"FORCE_RB_JUDGE": "true"}
+	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-skip-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env=force)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert outputs["force_rb_judge_conflict_skip"] == "true", result.stdout
+		assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false"
+		assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=skip reason=host_only_marker marker_reason={HOST_ONLY_REASON}" in result.stdout
+	newer_other_reason = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="502", reason="workflow_failure")
+	unsupported = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="503", reason="conflict_resolver_sandbox_path_unsupported")
+	newer_outage = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="506", reason="provider_unavailable")
+	cases = [
+		("newer_provider_outage", [_host_only_failure_comment(), newer_outage], {}, {}, True, "newest_reason_mismatch"),
+		("untrusted_author", [_host_only_failure_comment(author="attacker")], {}, {}, True, "no_trusted_marker"),
+		("different_head", [_host_only_failure_comment(head=SHA_B)], {}, {}, True, "no_trusted_marker"),
+		("newer_other_reason", [_host_only_failure_comment(), newer_other_reason], {}, {}, True, "reason_mismatch"),
+		("unsupported_reason", [unsupported], {}, {}, True, "reason_mismatch"),
+		("user_fail", [_host_only_failure_comment()], {}, {"user_fail": True}, True, "marker_author_unavailable"),
+		("comments_fail", [_host_only_failure_comment()], {}, {"comments_fail": True}, True, "api_error"),
+		("disabled", [_host_only_failure_comment()], {"REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED": "false"}, {}, True, "disabled"),
+		("helper_missing", [_host_only_failure_comment()], {}, {}, False, "helper_missing"),
+	]
+	for name, comments, extra_env, overrides, with_helper, reason in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env}, state_overrides=overrides, with_helper=with_helper)
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == "false", (name, result.stdout)
+			assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false", (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=run reason={reason} " in result.stdout, (name, result.stdout)
+	# The skip runs with the fingerprint cap disabled (it has its own switch),
+	# and only on a marker from the current support version.
+	current_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="504", support=SUPPORT_NEW, reason=HOST_ONLY_REASON)
+	old_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="505", support=SUPPORT_OLD, reason=HOST_ONLY_REASON)
+	for name, comments, extra_env, expected in (
+		("cap_disabled", [_host_only_failure_comment()], {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, "outcome=skip reason=host_only_marker"),
+		("current_support", [current_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=skip reason=host_only_marker"),
+		("old_support", [old_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=run reason=no_trusted_marker"),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env})
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == ("true" if "outcome=skip" in expected else "false"), (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} {expected} " in result.stdout, (name, result.stdout)
+	# Without force_rb_judge the host-only marker still trips the cap and no skip is exported.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-noforce-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()])
+		assert outputs["fingerprint_cap"] == "true" and outputs["force_rb_judge_conflict_skip"] == "false"
+		assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP" not in result.stdout
+
+
+def test_newest_trusted_failure_reason_does_not_pass_over_outage_markers() -> None:
+	"""Issue #6743: the force_rb_judge skip needs the newest trusted marker's
+	reason, including provider_unavailable, which the cap counter skips."""
+	host_only = _host_only_failure_comment()
+	outage = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="506", reason="provider_unavailable")
+	newest = heal.newest_trusted_failure_reason
+	assert newest([host_only], head_sha=SHA_A, author_login=CAP_AUTHOR) == HOST_ONLY_REASON
+	assert newest([host_only, outage], head_sha=SHA_A, author_login=CAP_AUTHOR) == "provider_unavailable"
+	assert heal.count_identical_failures([host_only, outage], head_sha=SHA_A, author_login=CAP_AUTHOR)["reason"] == HOST_ONLY_REASON
+	assert newest([host_only, {**outage, "author_login": "attacker"}], head_sha=SHA_A, author_login=CAP_AUTHOR) == HOST_ONLY_REASON
+	assert newest([host_only], head_sha=SHA_B, author_login=CAP_AUTHOR) == ""
+	assert newest([host_only], head_sha=SHA_A, author_login="") == ""
+
+
 def test_fingerprint_cap_block_names_the_non_retryable_first_error() -> None:
 	cap_env = {"FINGERPRINT_CAP_NON_RETRYABLE": "true", "FINGERPRINT_CAP_REASON": HOST_ONLY_REASON, "FINGERPRINT_CAP_COUNT": "1"}
 	with tempfile.TemporaryDirectory(prefix="heal-cap-job-nonretryable-") as tmp_name:
@@ -3309,6 +3772,94 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)
 		assert "reason=head_moved" in result.stdout
 		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
+
+
+def test_gate_cap_ignores_markers_from_other_support_versions() -> None:
+	"""Issue #6625: a review on updated support retries a head capped by an older one."""
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (101, 102, 103)]
+	legacy = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (104, 105, 106)]
+	for comments in (older, legacy):
+		with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-old-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+			assert f"count=0 max=3 support={SUPPORT_NEW}" in result.stdout
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (107, 108, 109)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-new-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[*older, *current], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert outputs["fingerprint_cap"] == "true" and outputs["skip_reason"] == "fingerprint_cap", result.stdout
+		assert f"non_retryable=false support={SUPPORT_NEW}" in result.stdout
+
+
+def test_fingerprint_cap_block_marker_records_support_version() -> None:
+	"""The cap marker carries support=, and a cap from an older version does not block a new one."""
+	old_cap = {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_OLD} -->"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[old_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert len(state["comments_posted"]) == 1, result.stdout
+		comment = state["comments_posted"][0]
+		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->" in comment
+		assert heal.count_identical_failures([{"author_login": CAP_AUTHOR, "body": comment}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	quoted_cap = {**old_cap, "body": f"First error: `x support={SUPPORT_NEW} y`\n" + old_cap["body"]}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-quoted-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[quoted_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	# A whole current-support cap marker quoted inline (a failure comment's
+	# "First error" code span) is not a cap marker.
+	inline_marker = f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->"
+	inline_cap = {"author_login": CAP_AUTHOR, "body": f"{AUTOFIX_FAILED_COMMENT}\n\n**First error:** `{inline_marker}`"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-inline-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[inline_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	same_cap = {**old_cap, "body": old_cap["body"].replace(SUPPORT_OLD, SUPPORT_NEW)}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-same-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[same_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" in result.stdout
+		assert "comments_posted" not in state
+
+
+def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
+	"""Issues #6625/#6938: the gate and every failure-marker site use the verified SHA.
+
+	Structural, not counted: every `autofix-failure-fingerprint` call passes
+	`--support-sha`, and the jobs that build markers or verify helper
+	checkouts take REVIEW_SUPPORT_SHA from the gate's verified output. A new
+	marker site or consumer then has to follow the rule instead of breaking
+	an occurrence count.
+	"""
+	wf = expanded_review_autofix_text()
+	calls = wf.split("autofix-failure-fingerprint \\\n")[1:]
+	assert calls, "no autofix-failure-fingerprint call sites found"
+	# A single-line call has no continuation to split on; every invocation
+	# must be one of the multi-line calls checked below.
+	invocations = [line for line in wf.splitlines() if '"${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint' in line]
+	assert len(invocations) == len(calls), invocations
+	for call in calls:
+		# The call's continuation lines end at the first line without a trailing backslash.
+		block = call.split(")\"", 1)[0]
+		assert '--support-sha "${REVIEW_SUPPORT_SHA:-}"' in block, block[:400]
+	# Spelling- and layout-agnostic: any non-comment, non-grep line naming the
+	# subcommand (a renamed variable, or the subcommand on its own continuation
+	# line) must be one of the checked calls.
+	mentions = [line for line in wf.splitlines() if "autofix-failure-fingerprint" in line and not line.lstrip().startswith("#") and "grep " not in line]
+	assert len(mentions) == len(calls), mentions
+	jobs = yaml.safe_load(wf)["jobs"]
+	gate_steps = {step.get("name"): step for step in jobs["gate"]["steps"]}
+	assert gate_steps["Evaluate review gate"]["env"]["REVIEW_SUPPORT_SHA"] == "${{ steps.resolve_support.outputs.review_support_sha }}"
+	verified = "${{ needs.gate.outputs.review_support_sha }}"
+	for job in ("fingerprint-cap-block", "codex-agent"):
+		assert jobs[job]["env"]["REVIEW_SUPPORT_SHA"] == verified, job
+	det_skip = {step.get("name"): step for step in jobs["deterministic-skip-merge"]["steps"]}
+	assert det_skip["Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"]["env"]["REVIEW_SUPPORT_SHA"] == verified
+	# No job may take the support SHA from anywhere but the verified outputs.
+	for line in wf.splitlines():
+		if line.strip().startswith("REVIEW_SUPPORT_SHA:"):
+			assert line.strip() in (f"REVIEW_SUPPORT_SHA: {verified}", "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}"), line
+	assert 'git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}"' in wf
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 
 
 # ---------------------------------------------------------------------------
@@ -3860,6 +4411,16 @@ def test_summariser_empty_stdout_prefix_class_covers_every_accepted_prefix() -> 
 	assert heal.reviewer_failure_evidence([look_alike]) == "reviewers_failed=true\n"
 
 
+def test_sandbox_prepare_failed_names_the_failure_after_the_reviewers() -> None:
+	# A failed review sandbox prepare skips the editor: it names the failure
+	# ahead of the editor flags, after reviewers_failed and the preflight.
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "editor_empty_noop") == "sandbox_prepare_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_REVIEWERS_FAILED": "true"}) == "reviewers_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "EDITOR_PREFLIGHT_FAILED": "true"}) == "editor_preflight_failed"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "true", "AUTOFIX_FAILURE_REASON": "identical_failure_cap"}) == "identical_failure_cap"
+	assert heal.derive_autofix_failure_reason({"AUTOFIX_SANDBOX_PREPARE_FAILED": "false", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}) == "editor_empty_noop"
+
+
 def test_reviewers_failed_names_the_failure_before_the_editor_flags() -> None:
 	assert heal.derive_autofix_failure_reason({"AUTOFIX_REVIEWERS_FAILED": "true", "AUTOFIX_EDITOR_EMPTY_NOOP": "true"}) == "reviewers_failed"
 	assert heal.derive_autofix_failure_reason({"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_REVIEWERS_FAILED": "true"}) == "identical_failure_cap"
@@ -3932,6 +4493,8 @@ def test_redact_secrets_patterns() -> None:
 	assert heal.redact_secrets("ghp_abcDEF123 github_pat_11AA_bb") == "ghp_[redacted] github_pat_[redacted]"
 	assert heal.redact_secrets("key sk-or-v1-abc") == "key sk-or-[redacted]"
 	assert heal.redact_secrets("plain text") == "plain text"
+	assert heal.redact_secrets("AUTHORIZATION: BASIC abc") == "AUTHORIZATION: [redacted]"
+	assert heal.redact_secrets("Authorization: Basic dXNlcjpwYXNz") == "Authorization: [redacted]"
 
 
 def test_failure_headline_cli(tmp_path) -> None:
@@ -4002,7 +4565,7 @@ def test_heal_prompt_rule_for_deterministic_failures() -> None:
 
 
 def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() -> None:
-	wf = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	wf = expanded_review_autofix_text()
 	assert 'bash "${RESOLVER_SCRIPT}" 2> >(tee -a "${RUNTIME_DIR}/resolver_stage_stderr.txt" >&2)' in wf
 	assert '--evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt"' in wf
 	assert "select(.runner_name == env.RUNNER_NAME) | .steps[] | select(.conclusion == \"failure\") | .name" in wf
@@ -4392,11 +4955,25 @@ def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "yes"})
 	assert "WORKFLOW_HEAL warn invalid_require_report_auth value=yes; using false" in result.stdout
 	assert "report_auth=absent reason=bound" in result.stdout
-	# Phase reports carry no identity (heal-report runs with permissions: {});
-	# the provenance gate binds them, so enforcement does not skip them.
+	# Phase reports get no exemption (issue #6834): heal-report is granted
+	# id-token: write, so a tokenless phase report is rejected under
+	# enforcement before the provenance gate runs...
 	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
 	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"report_auth=rejected reason=unauthenticated_report source={CONSUMER_REPO} kind=phase_failure" in result.stdout
+	assert "provenance_verified" not in result.stdout
+	assert _api_writes(state) == []
+	# ...and still accepted through the provenance gate by default.
+	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
 	assert "unauthenticated_report" not in result.stdout and "provenance_verified" in result.stdout
+	# A phase report carrying a valid identity passes under enforcement.
+	with tempfile.TemporaryDirectory(prefix="heal-identity-phase-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name), run_id="500", job_workflow_ref=f"{SELF_REPO}/.github/workflows/plan.yml@refs/heads/main")
+		result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", **_identity_env(token_file, jwks_file)})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "report_auth=verified" in result.stdout and "provenance_verified" in result.stdout
+		assert token not in result.stdout + result.stderr
 	# Manual re-runs are bound but never need an identity.
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", "WORKFLOW_HEAL_REPORT_ORIGIN": "workflow_dispatch"})
 	assert "report_auth=manual reason=bound" in result.stdout
@@ -4786,6 +5363,21 @@ def test_verify_run_provenance_accepts_ci_push_on_default_branch() -> None:
 	assert heal.verify_run_provenance(pr_payload, runs={"500": {**_provenance_run(path="ci.yml", event="push", head_branch="main"), "pull_requests": [{"number": 4174}]}}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO, default_branch="main")["reason"] == "no_verified_runs"
 
 
+def test_verify_run_provenance_accepts_scheduled_check_on_default_branch_only() -> None:
+	payload = heal.validate_payload(heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Nightly Validation Self-Test", "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Nightly Validation Self-Test"},
+	))
+	def check(run, default_branch="main"):
+		return heal.verify_run_provenance(payload, runs={"500": run}, comments=None, trusted_login="", self_repo=SELF_REPO, default_branch=default_branch)
+	nightly = _provenance_run(repo=SELF_REPO, path="nightly-validation-selftest.yml", event="schedule", head_branch="main")
+	assert check(nightly)["status"] == "ok"
+	assert check({**nightly, "event": "workflow_dispatch"})["status"] == "ok"
+	for run, default_branch in (({**nightly, "head_branch": "feature/x"}, "main"), ({**nightly, "head_branch": None}, "main"), (nightly, "")):
+		assert check(run, default_branch)["reason"] == "current_run_rejected:scheduled_check_not_default_branch"
+	assert check({**nightly, "conclusion": "success"})["reason"] == "current_run_rejected:not_failed"
+
+
 def test_verify_run_provenance_cli_default_branch_for_ci_run(tmp_path) -> None:
 	payload_file = tmp_path / "payload.json"
 	runs_file = tmp_path / "runs.json"
@@ -4955,10 +5547,27 @@ def test_phase_report_skip_paths() -> None:
 
 PLAN_JOB_LOG = (
 	"2026-10-05T23:41:45.000Z ##[group]Run bash scripts/run_plan_codex.sh\n"
+	"2026-10-05T23:41:45.000Z ##[endgroup]\n"
 	"2026-10-05T23:41:47.000Z codex_stall_guard.sh: unknown option: --engine\n"
 	"2026-10-05T23:42:19.000Z ##[error]Codex planning failed after 3 attempts.\n"
 	"2026-10-05T23:42:19.000Z ##[error]Process completed with exit code 1.\n"
 )
+
+
+def test_job_log_fixtures_close_every_run_header() -> None:
+	# Real Actions job logs always close a ##[group]Run step header with
+	# ##[endgroup]; the log filter fails closed on a header it never sees
+	# closed, so fixtures must keep the real shape (#6876).
+	for fixture in (JOB_LOG, PLAN_JOB_LOG):
+		open_header = False
+		for raw in fixture.splitlines():
+			content = heal._LOG_TIMESTAMP_RE.sub("", raw)
+			if heal._STEP_HEADER_OPEN_RE.match(content):
+				assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
+				open_header = True
+			elif heal._STEP_HEADER_CLOSE_RE.match(content):
+				open_header = False
+		assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
 
 
 def _plan_intake_state(*, repo: str = CONSUMER_REPO, **overrides) -> dict:
@@ -5204,7 +5813,7 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		condition = " ".join(job["if"].split())
 		assert condition.startswith(f"always() && needs.{job_name}.result == 'failure' &&")
 		assert "!contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)" in condition
-		assert job["permissions"] == {}
+		assert job["permissions"] == {"id-token": "write"}
 		assert job["env"]["WORKFLOW_HEAL_PHASE"] == name
 		assert job["env"]["WORKFLOW_HEAL_PHASE_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}"
 		assert job["env"]["WORKFLOW_HEAL_ISSUE_NUMBER"] == "${{ github.event.issue.number }}"
@@ -5215,6 +5824,16 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		report = next(step["run"] for step in job["steps"] if step.get("name") == "Report the failed run to workflow failure heal")
 		assert ".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh" in report and "reason=reporter_missing" in report
 		assert "${{" not in report
+	# A reusable-workflow job asking for more than its caller grants fails the
+	# whole run at startup, so every caller must grant id-token: write.
+	for name in ("clarify", "plan", "implement"):
+		for caller in (REPO_ROOT / "workflow-templates" / f"ai-{name}.yml", REPO_ROOT / ".github" / "workflows" / f"internal-{name}.yml"):
+			doc = yaml.safe_load(caller.read_text(encoding="utf-8"))
+			calling = [job for job in (doc.get("jobs") or {}).values() if f"/.github/workflows/{name}.yml@" in str(job.get("uses") or "")]
+			assert calling, caller
+			for job in calling:
+				granted = job["permissions"] if "permissions" in job else (doc.get("permissions") or {})
+				assert granted == "write-all" or (isinstance(granted, dict) and granted.get("id-token") == "write"), caller
 	implement = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
 	assert "needs.implement.outputs.heal_report == 'true'" in implement["jobs"]["heal-report"]["if"]
 	assert implement["jobs"]["implement"]["outputs"]["heal_report"] == "${{ steps.heal_report_gate.outputs.report }}"
@@ -5227,3 +5846,554 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# ---------------------------------------------------------------------------
+# Non-retryable autofix_failure routing (#6750 / PR #6535)
+# ---------------------------------------------------------------------------
+
+NR_LOGIN = "workflow-bot"
+NR_PR_COMMENTS = f"repos/{CONSUMER_REPO}/issues/4174/comments"
+NR_DIAG_MARKER_PREFIX = "<!-- ai:workflow-heal-non-retryable:v1"
+
+
+def _nr_failure_comment(*, head: str = SHA_B, author: str = NR_LOGIN, reason: str = HOST_ONLY_REASON, first_error: str = HOST_ONLY_FIRST_ERROR, run: str = "501") -> dict:
+	comment = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run=run, head=head, author=author, reason=reason)
+	comment["body"] = comment["body"].replace("\n\n<!--", f"\n\n**First error:** `{first_error}`\n\n<!--", 1)
+	return comment
+
+
+def _nr_diagnosis_comment(*, head: str = SHA_B, author: str = NR_LOGIN, reason: str = HOST_ONLY_REASON) -> dict:
+	return {"author_login": author, "body": "diagnosis\n\n" + heal.render_non_retryable_marker(4174, head, reason)}
+
+
+def _nr_tg_setup(tg_log: Path):
+	def _setup(_tmp: Path, work: Path) -> None:
+		(work / "scripts" / "tg_helpers.sh").write_text(
+			# The fixtures carry no report identity, so the intake also sends its
+			# pre-existing #6559 "unauthenticated report" WARNING; drop it here so
+			# these tests see only the non-retryable routing alerts.
+			"tg_send_msg() { case \"${1:-}\" in *'unauthenticated report'*) return 0 ;; esac; "
+			f"printf '%s\\t%s\\n' \"${{2:-}}\" \"${{1//$'\\n'/ }}\" >> '{tg_log}'; }}\n", encoding="utf-8"
+		)
+	return _setup
+
+
+def _nr_state(comments: list[dict] | None = None, **overrides) -> dict:
+	state = _intake_state(
+		jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Resolve conflicts", "conclusion": "failure"}]}]},
+		job_logs={"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"},
+	)
+	state["comments"][NR_PR_COMMENTS] = comments if comments is not None else [_nr_failure_comment()]
+	state.update(overrides)
+	return state
+
+
+def _nr_label_edits(state: dict) -> list[list[str]]:
+	return [edit for edit in state.get("issue_edits", []) if "ai:needs-human" in edit]
+
+
+def test_non_retryable_route_decisions() -> None:
+	payload = heal.validate_payload(_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment()], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["reason"] == HOST_ONLY_REASON and decision["suffix"] == "host_only"
+	assert decision["paths"] == [".claude/hooks/pr_merge_status_guard.py"] and decision["already_diagnosed"] is False
+	# Suffix map.
+	assert heal.non_retryable_suffix("conflict_resolver_sandbox_path_unsupported") == "unsupported"
+	assert heal.non_retryable_suffix("conflict_resolver_sandbox_support_missing") == "support_missing"
+	# A retryable reason, another source kind, or a missing login never routes.
+	assert heal.non_retryable_route(heal.validate_payload(_autofix_payload()), comments=[], trusted_login=NR_LOGIN)["route"] is False
+	assert heal.non_retryable_route(dict(payload, source_kind="issue"), comments=[], trusted_login=NR_LOGIN)["route"] is False
+	assert heal.non_retryable_route(payload, comments=[], trusted_login="")["route"] is False
+	# Paths: invalid entries and "..." are dropped, at most 20 kept; another head or author yields none.
+	prefix = "Conflict resolver: host-only conflicted path(s) need a manual merge: "
+	many = ", ".join(["../escape"] + [f"f{i}.py" for i in range(25)] + ["..."])
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment(first_error=prefix + many)], trusted_login=NR_LOGIN)
+	assert decision["paths"] == [f"f{i}.py" for i in range(20)]
+	# A First error line cut at FAILURE_HEADLINE_LIMIT drops its possibly truncated last entry.
+	long_line = (prefix + ", ".join(f"some/long/directory/file_{i}.py" for i in range(20)))[: heal.FAILURE_HEADLINE_LIMIT]
+	paths = heal.non_retryable_route(payload, comments=[_nr_failure_comment(first_error=long_line)], trusted_login=NR_LOGIN)["paths"]
+	assert paths and all(long_line.find(path + ", ") >= 0 for path in paths)
+	assert heal.non_retryable_route(payload, comments=[_nr_failure_comment(author="attacker")], trusted_login=NR_LOGIN)["paths"] == []
+	assert heal.non_retryable_route(payload, comments=[_nr_failure_comment(head=SHA_A)], trusted_login=NR_LOGIN)["paths"] == []
+	# already_diagnosed needs the trusted author and the same pr, head and reason.
+	assert heal.non_retryable_route(payload, comments=[_nr_diagnosis_comment()], trusted_login=NR_LOGIN)["already_diagnosed"] is True
+	for other in (_nr_diagnosis_comment(author="attacker"), _nr_diagnosis_comment(head=SHA_A), _nr_diagnosis_comment(reason="conflict_resolver_sandbox_path_unsupported")):
+		assert heal.non_retryable_route(payload, comments=[other], trusted_login=NR_LOGIN)["already_diagnosed"] is False
+	# identical_failure_cap routes only on trusted, same-head, non-retryable markers.
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	assert heal.non_retryable_route(cap, comments=[_nr_failure_comment()], trusted_login=NR_LOGIN)["reason"] == HOST_ONLY_REASON
+	for comment in (_nr_failure_comment(author="attacker"), _nr_failure_comment(head=SHA_A), _nr_failure_comment(reason="editor_empty_noop")):
+		assert heal.non_retryable_route(cap, comments=[comment], trusted_login=NR_LOGIN)["route"] is False
+	# The rendered comment names the path and ends with the marker.
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment()], trusted_login=NR_LOGIN)
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777")
+	assert "`.claude/hooks/pr_merge_status_guard.py`" in body and "manual merge" in body.lower()
+	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->")
+
+
+def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
+	payload = _consumer_payload()
+	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == "non_retryable_diagnosed"
+	assert heal.skip_reason(dict(payload, label="ai:scope-blocked"), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == ""
+	# defer_host_only_autofix leaves only the autofix_failure host-only stop to the intake.
+	host_only = heal.validate_payload(_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	assert heal.skip_reason(host_only, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "host_only_conflict_manual_merge"
+	assert heal.skip_reason(host_only, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, defer_host_only_autofix=True) == ""
+	assert heal.skip_reason(host_only, registered_repos=[], self_repo=SELF_REPO, defer_host_only_autofix=True) == "unregistered_source_repo"
+	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, host_only_conflict=True, defer_host_only_autofix=True) == "host_only_conflict_manual_merge"
+	reporter_marker = {"author": NR_LOGIN, "body": _nr_diagnosis_comment()["body"]}
+	assert heal.non_retryable_label_suppressed([reporter_marker], trusted_login=NR_LOGIN) is True
+	assert heal.non_retryable_label_suppressed([dict(reporter_marker, author="attacker")], trusted_login=NR_LOGIN) is False
+	newer_failure = {"author": NR_LOGIN, "body": _nr_failure_comment()["body"]}
+	assert heal.non_retryable_label_suppressed([reporter_marker, newer_failure], trusted_login=NR_LOGIN) is False
+	assert heal.non_retryable_label_suppressed([newer_failure, reporter_marker], trusted_login=NR_LOGIN) is True
+	assert heal.non_retryable_label_suppressed([reporter_marker], trusted_login="") is False
+	newer_success = {"author": NR_LOGIN, "body": "AI autofix editor summary\n\nChanges made:\n- none"}
+	assert heal.non_retryable_label_suppressed([reporter_marker, newer_success], trusted_login=NR_LOGIN) is False
+
+
+def test_intake_routes_verified_host_only_failure_to_manual_merge(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	result, state, prompt = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL skip reason=non_retryable_host_only outcome=diagnosed" in result.stdout
+	assert "issues_created" not in state and prompt == ""
+	posted = [c for c in state["comments_posted"] if c["path"] == NR_PR_COMMENTS]
+	assert len(posted) == 1 and len(state["comments_posted"]) == 1
+	assert ".claude/hooks/pr_merge_status_guard.py" in posted[0]["body"]
+	assert f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->" in posted[0]["body"]
+	assert _nr_label_edits(state) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]]
+	warnings = [line for line in tg_log.read_text().splitlines() if line.startswith("WARNING\t")]
+	assert len(warnings) == 1 and ".claude/hooks/pr_merge_status_guard.py" in warnings[0]
+	assert not any(any(part.endswith("/logs") for part in call) for call in state["calls"])
+
+
+def test_intake_non_retryable_requires_verified_provenance(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	payload = _autofix_payload(failure_reason=HOST_ONLY_REASON)
+	state = _nr_state([], run_details={"500": {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_B, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [],
+	}})
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=provenance_rejected" in result.stdout and "non_retryable" not in result.stdout
+	assert "comments_posted" not in state_after and not _nr_label_edits(state_after)
+	assert "non-retryable" not in (tg_log.read_text() if tg_log.exists() else "")
+	# A missing trusted identity is rejected the same way.
+	result, state_after, _ = _run_intake(payload, _nr_state(user_fetch_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "skip reason=provenance_rejected" in result.stdout and "non_retryable" not in result.stdout
+	assert "comments_posted" not in state_after and not _nr_label_edits(state_after)
+
+
+def test_intake_non_retryable_duplicate_report_stays_silent(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment()], pull_request=_pr(4174, labels=["ai:needs-human"]))
+	result, state_after, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL skip reason=non_retryable_host_only outcome=duplicate" in result.stdout and "label=present" in result.stdout
+	assert "comments_posted" not in state_after and not _nr_label_edits(state_after) and "issues_created" not in state_after
+	assert not tg_log.exists()
+	# A marker by another author does not count as a diagnosis.
+	state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment(author="attacker")])
+	result, state_after, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "outcome=diagnosed" in result.stdout and len(state_after["comments_posted"]) == 1
+
+
+def test_intake_retryable_and_disabled_routing_still_file_heal_issues() -> None:
+	result, state, _ = _run_intake(_autofix_payload(), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	disabled = {"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"}
+	unsupported = "conflict_resolver_sandbox_path_unsupported"
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=unsupported), _nr_state([_nr_failure_comment(reason=unsupported)]),
+		diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=disabled)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	# With routing off, a host-only stop keeps #6745's early skip: no heal issue.
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=disabled)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL skip reason=host_only_conflict_manual_merge" in result.stdout and "stage=after_provenance" not in result.stdout
+	assert "non_retryable" not in result.stdout and "issues_created" not in state and "comments_posted" not in state
+
+
+def test_intake_identical_failure_cap_routes_only_on_trusted_non_retryable_markers() -> None:
+	cap_payload = _autofix_payload(failure_reason="identical_failure_cap", failure_fingerprint=FP_HEX)
+	result, state, _ = _run_intake(cap_payload, _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=non_retryable_host_only outcome=diagnosed" in result.stdout and "issues_created" not in state
+	result, state, _ = _run_intake(cap_payload, _nr_state([_nr_failure_comment(reason="editor_empty_noop")]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+
+
+def test_intake_non_retryable_comment_failure_adds_no_label_or_issue(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(comment_post_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL error non_retryable_comment_failed" in result.stdout
+	assert not _nr_label_edits(state) and "issues_created" not in state
+	assert tg_log.read_text().startswith("WARNING\t") and "could not post the non-retryable diagnosis" in tg_log.read_text()
+
+
+def test_intake_non_retryable_label_failure_is_reported_and_retried(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	payload = _autofix_payload(failure_reason=HOST_ONLY_REASON)
+	result, state, _ = _run_intake(payload, _nr_state(issue_edit_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "outcome=diagnosed" in result.stdout and "label=failed" in result.stdout and "issues_created" not in state
+	warning = tg_log.read_text()
+	assert "FAILED" in warning and "ai:needs-human applied" not in warning
+	# The next report for the same head finds the marker but no label on the PR: it re-adds it.
+	dup_state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment()])
+	result, state, _ = _run_intake(payload, dup_state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "outcome=duplicate" in result.stdout and "label=reapplied" in result.stdout
+	assert _nr_label_edits(state) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]] and "comments_posted" not in state
+
+
+def test_non_retryable_comment_text_matches_the_reason() -> None:
+	support = "conflict_resolver_sandbox_support_missing"
+	payload = heal.validate_payload(_autofix_payload(failure_reason=support))
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment(reason=support, first_error="Conflict resolver: support missing")], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["paths"] == []
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert "workflow support" in body and "executed on the host" not in body and "could not be read" not in body
+	unsupported = "conflict_resolver_sandbox_path_unsupported"
+	decision = heal.non_retryable_route(heal.validate_payload(_autofix_payload(failure_reason=unsupported)), comments=[], trusted_login=NR_LOGIN)
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert "symlinks" in body and "executed on the host" not in body
+
+
+def test_reporter_skips_label_event_caused_by_non_retryable_diagnosis() -> None:
+	def run(comments: list[dict], **state_overrides) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-reporter-nr-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state = _report_state(**state_overrides)
+			state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].extend(comments)
+			state_file.write_text(json.dumps(state), encoding="utf-8")
+			env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": "ai:needs-human", "WORKFLOW_HEAL_IS_PULL_REQUEST": "true"})
+			return _run(REPORT_SCRIPT, work, env), _state(state_file)
+
+	def marker(author: str = NR_LOGIN) -> dict:
+		return {"body": "diagnosis\n\n" + heal.render_non_retryable_marker(42, SHA_B, HOST_ONLY_REASON), "user": {"login": author}, "created_at": "2026-09-20T00:00:00Z"}
+
+	result, state = run([marker()])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL_REPORT skip reason=non_retryable_diagnosed" in result.stdout and "dispatches" not in state
+	result, state = run([marker(author="attacker")])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(state["dispatches"]) == 1
+	newer_failure = {"body": _nr_failure_comment(head=SHA_B)["body"], "user": {"login": NR_LOGIN}, "created_at": "2026-09-21T00:00:00Z"}
+	result, state = run([marker(), newer_failure])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(state["dispatches"]) == 1
+	result, state = run([marker()], user_fetch_fail=True)
+	assert result.returncode == 1
+	assert "error non_retryable_marker_author_unavailable" in result.stdout and "dispatches" not in state
+
+
+# ---------------------------------------------------------------------------
+# Host-only resolver conflict: a manual merge, never a heal issue (#6738)
+# ---------------------------------------------------------------------------
+
+HOST_ONLY_SKIP = "host_only_conflict_manual_merge"
+
+
+def _host_only_cap_comment(*, author: str = CAP_AUTHOR, reason: str = HOST_ONLY_REASON, head: str = SHA_B) -> dict:
+	return {"author_login": author, "body": f"**AI review/autofix stopped: non-retryable failure**\n\n<!-- review-autofix-failure-cap:v1 head={head} fp={FP_HEX} reason={reason} count=1 -->"}
+
+
+def test_skip_reason_drops_host_only_conflict_reports() -> None:
+	per_run = heal.validate_payload(_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	assert heal.skip_reason(per_run, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == HOST_ONLY_SKIP
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason=HOST_ONLY_REASON))
+	assert heal.skip_reason(cap, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == HOST_ONLY_SKIP
+	label = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="pull_request", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None))
+	assert heal.skip_reason(label, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, host_only_conflict=True) == HOST_ONLY_SKIP
+	# Not suppressed: the other non-retryable resolver reasons, a cap that
+	# repeats another reason, the label path without the verified marker, and
+	# the verified marker on another escalation label.
+	unsupported = heal.validate_payload(_autofix_payload(failure_reason="conflict_resolver_sandbox_path_unsupported"))
+	assert heal.skip_reason(unsupported, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	missing = heal.validate_payload(_autofix_payload(failure_reason="conflict_resolver_sandbox_support_missing"))
+	assert heal.skip_reason(missing, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	other_cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason="editor_empty_noop"))
+	assert heal.skip_reason(other_cap, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	assert heal.skip_reason(label, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	scope_label = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="pull_request", label="ai:scope-blocked", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None))
+	assert heal.skip_reason(scope_label, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, host_only_conflict=True) == ""
+
+
+def test_validate_payload_keeps_only_a_wellformed_repeated_failure_reason() -> None:
+	built = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="identical_failure_cap",
+		failure_evidence="", failure_streak=1, run_id="500", run_url=None, wrapper_sha=None, reporter_run_url=None,
+		repeated_failure_reason=HOST_ONLY_REASON,
+	)
+	assert built["repeated_failure_reason"] == HOST_ONLY_REASON
+	assert heal.validate_payload(built)["repeated_failure_reason"] == HOST_ONLY_REASON
+	# The builder sends it only on a cap report, and only well-formed.
+	not_cap = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="editor_empty_noop",
+		failure_evidence="", failure_streak=1, run_id="500", run_url=None, wrapper_sha=None, reporter_run_url=None,
+		repeated_failure_reason=HOST_ONLY_REASON,
+	)
+	assert "repeated_failure_reason" not in not_cap
+	assert heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason="Bad Reason!"))["repeated_failure_reason"] is None
+	assert heal.validate_payload(_autofix_payload(repeated_failure_reason=HOST_ONLY_REASON))["repeated_failure_reason"] is None
+	# A legacy report without the key still validates, unchanged.
+	legacy = _autofix_payload(failure_reason="identical_failure_cap")
+	assert "repeated_failure_reason" not in legacy
+	assert heal.validate_payload(legacy)["repeated_failure_reason"] is None
+	issue_kind = heal.validate_payload(dict(_consumer_payload(), repeated_failure_reason=HOST_ONLY_REASON))
+	assert "repeated_failure_reason" not in issue_kind
+
+
+def test_latest_trusted_autofix_marker_is_host_only() -> None:
+	check = heal.latest_trusted_autofix_marker_is_host_only
+	assert check([_host_only_cap_comment()], CAP_AUTHOR)
+	assert check([_failure_marker_comment("AI review/autofix failed", head=SHA_B, reason=HOST_ONLY_REASON)], CAP_AUTHOR)
+	# The label reporter's rows carry the login under `author`.
+	cap = _host_only_cap_comment()
+	assert check([{"author": CAP_AUTHOR.upper(), "body": cap["body"]}], CAP_AUTHOR)
+	assert check([{"user": {"login": CAP_AUTHOR}, "body": cap["body"]}], CAP_AUTHOR)
+	# Forged by another author, superseded by a newer trusted marker or editor
+	# summary, or no identity: not host-only.
+	assert not check([_host_only_cap_comment(author="contributor")], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), _failure_marker_comment("AI review/autofix failed", head=SHA_B, reason="editor_empty_noop")], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT}], CAP_AUTHOR)
+	# A newer trusted failure comment whose marker failed to render ends the scan.
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR, SHA_B)
+	# A newer provider-outage comment (markerless or marked) never ends the scan (#6633).
+	outage_text = "AI review/autofix paused — model provider unavailable"
+	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": outage_text}], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_B, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_A, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
+	# A markerless failure comment quoting the pause phrase in its First error
+	# line is a failure, not a pause: it still ends the scan.
+	quoting = f"**AI review/autofix failed — needs human intervention**\n\n**First error:** `{outage_text}`"
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": quoting}], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": f"**{outage_text}**\n\nThe model provider failed."}], CAP_AUTHOR, SHA_B)
+	# A forged host-only marker quoted inline in a trusted failure comment's
+	# First error line does not decide; the comment's own-line marker does.
+	forged = f"<!-- review-autofix-failure:v1 head={SHA_B} reason={HOST_ONLY_REASON} -->"
+	injected = _failure_marker_comment(f"**AI review/autofix failed**\n\n**First error:** `{forged}`", head=SHA_B, reason="editor_empty_noop", run="8")
+	assert not check([injected], CAP_AUTHOR, SHA_B)
+	assert not check([{"author_login": CAP_AUTHOR, "body": f"**AI review/autofix failed**\n\n**First error:** `{forged}`"}], CAP_AUTHOR, SHA_B)
+	# The same markerless text from another author is ignored.
+	assert check([_host_only_cap_comment(), {"author_login": "contributor", "body": "AI review/autofix failed"}], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment()], "")
+	assert not check([], CAP_AUTHOR)
+	# An untrusted newer marker does not hide the trusted host-only one.
+	assert check([_host_only_cap_comment(), _host_only_cap_comment(author="contributor", reason="editor_empty_noop")], CAP_AUTHOR)
+	# Bound to the current head: a marker for another head is stale.
+	assert check([_host_only_cap_comment()], CAP_AUTHOR, SHA_B)
+	assert not check([_host_only_cap_comment()], CAP_AUTHOR, SHA_A)
+
+
+def test_host_only_conflict_marker_cli() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-host-only-cli-") as tmp_name:
+		tmp = Path(tmp_name)
+		env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+		comments = tmp / "comments.json"
+		comments.write_text(json.dumps([_host_only_cap_comment()]), encoding="utf-8")
+		cmd = ["python3", str(LIB_PATH), "host-only-conflict-marker", "--comments-json", str(comments), "--author-login", CAP_AUTHOR]
+		assert subprocess.run(cmd, capture_output=True, text=True, check=False, env=env).stdout == "true\n"
+		comments.write_text("not json", encoding="utf-8")
+		malformed = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+		assert malformed.returncode == 0 and malformed.stdout == "false\n"
+		payload = tmp / "payload.json"
+		payload.write_text(json.dumps(heal.validate_payload(_consumer_payload())), encoding="utf-8")
+		skip = subprocess.run(
+			["python3", str(LIB_PATH), "skip-reason", "--payload-json", str(payload), "--self-repo", CONSUMER_REPO, "--host-only-conflict"],
+			capture_output=True, text=True, check=False, env=env,
+		)
+		assert skip.stdout == HOST_ONLY_SKIP + "\n"
+
+
+def test_autofix_report_forwards_host_only_conflict_failure() -> None:
+	# Since #6756 the reporter forwards the host-only stop: the intake verifies
+	# it and posts the PR diagnosis, or falls back to its own #6745 skip.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-host-only-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_REASON": HOST_ONLY_REASON})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"dispatched pr=4174 failure={HOST_ONLY_REASON}" in result.stdout, result.stdout + result.stderr
+		assert HOST_ONLY_SKIP not in result.stdout
+		assert len(_state(state_file)["dispatches"]) == 1
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-unsupported-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_REASON": "conflict_resolver_sandbox_path_unsupported"})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=conflict_resolver_sandbox_path_unsupported" in result.stdout, result.stdout + result.stderr
+		assert len(_state(state_file)["dispatches"]) == 1
+
+
+def test_autofix_report_forwards_cap_repeating_host_only_conflict() -> None:
+	cap_flags = {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_FAILURE_FP": FP_HEX}
+	host_only_markers = [_failure_marker_comment("AI review/autofix failed", head=SHA_B, reason=HOST_ONLY_REASON, run="7")]
+	cases = [
+		# The gate's reason, inherited from the fingerprint-cap-block job env.
+		([], {"FINGERPRINT_CAP_REASON": HOST_ONLY_REASON}, True),
+		# No gate env: the trusted head markers name the reason.
+		(host_only_markers, {"AUTOFIX_FAILURE_MARKER_AUTHOR": CAP_AUTHOR}, True),
+		# Markers from another author, a different repeated reason, or an
+		# invalid gate value keep the old dispatch.
+		(host_only_markers, {"AUTOFIX_FAILURE_MARKER_AUTHOR": "someone-else"}, False),
+		([], {"FINGERPRINT_CAP_REASON": "editor_empty_noop"}, False),
+		([], {"FINGERPRINT_CAP_REASON": "Not A Reason"}, False),
+	]
+	for comments, extra, host_only in cases:
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-host-only-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=comments, flags={**cap_flags, **extra})
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			state = _state(state_file)
+			# Every case is forwarded (#6756); the repeated reason tells the intake
+			# which ones are host-only stops.
+			assert "dispatched pr=4174 failure=identical_failure_cap" in result.stdout, (extra, result.stdout + result.stderr)
+			report = state["dispatches"][0]["body"]["client_payload"]["report"]
+			assert (report.get("repeated_failure_reason") == HOST_ONLY_REASON) is host_only, (extra, report)
+
+
+def _host_only_label_state(comment_rows: list[dict], *, pr_head: str = SHA_B) -> dict:
+	state = _report_state(pull_request={"head": {"sha": pr_head}})
+	state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].extend(comment_rows)
+	return state
+
+
+def test_label_reporter_skips_needs_human_after_host_only_conflict() -> None:
+	trusted = {"body": _host_only_cap_comment()["body"], "user": {"login": "workflow-bot"}, "created_at": "2026-09-20T00:00:00Z"}
+	forged = dict(trusted, user={"login": "contributor"})
+	summary = {"body": AUTOFIX_SUMMARY_COMMENT, "user": {"login": "workflow-bot"}, "created_at": "2026-09-21T00:00:00Z"}
+	cases = [
+		(_host_only_label_state([trusted]), "ai:needs-human", True, ""),
+		(_host_only_label_state([forged]), "ai:needs-human", False, ""),
+		(_host_only_label_state([trusted, summary]), "ai:needs-human", False, ""),
+		(dict(_host_only_label_state([trusted]), user_fetch_fail=True), "ai:needs-human", False, "warn host_only_check_identity_unavailable"),
+		(_host_only_label_state([trusted]), "ai:scope-blocked", False, ""),
+		# A host-only marker for an older head does not suppress a later
+		# escalation, and an unreadable PR head dispatches.
+		(_host_only_label_state([trusted], pr_head=SHA_A), "ai:needs-human", False, "info host_only_marker_stale"),
+		(dict(_host_only_label_state([trusted]), pull_fetch_fail=True), "ai:needs-human", False, "warn host_only_check_head_unavailable"),
+	]
+	for state, label, skipped, expected_line in cases:
+		with tempfile.TemporaryDirectory(prefix="heal-report-host-only-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state_file.write_text(json.dumps(state), encoding="utf-8")
+			env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": label, "WORKFLOW_HEAL_IS_PULL_REQUEST": "true"})
+			result = _run(REPORT_SCRIPT, work, env)
+			assert result.returncode == 0, (label, result.stderr, result.stdout)
+			if skipped:
+				assert f"skip reason={HOST_ONLY_SKIP} issue=42 label={label}" in result.stdout, result.stdout
+				assert "dispatches" not in _state(state_file)
+			else:
+				assert "WORKFLOW_HEAL_REPORT dispatched issue=42" in result.stdout, (label, result.stdout, result.stderr)
+			if expected_line:
+				assert expected_line in result.stdout
+
+
+def test_intake_skips_host_only_conflict_reports() -> None:
+	payloads = [
+		_autofix_payload(failure_reason=HOST_ONLY_REASON),
+		_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason=HOST_ONLY_REASON),
+	]
+	# With the #6756 routing off, both are skipped before provenance (#6745).
+	for payload in payloads:
+		result, state, prompt = _run_intake(payload, _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout, result.stdout
+		assert "issues_created" not in state
+		assert prompt == ""
+	# With routing on, a cap report whose trusted markers do not name the
+	# host-only reason is not diagnosed, but still skipped after provenance.
+	result, state, prompt = _run_intake(payloads[1], _nr_state([_nr_failure_comment(reason="editor_empty_noop")]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout and "stage=after_provenance" in result.stdout, result.stdout
+	assert "issues_created" not in state and "comments_posted" not in state and prompt == ""
+
+
+def test_scope_blocked_report_carries_validated_authorship_facts() -> None:
+	# hylifegroup.com#75 (Q81): the heal saw no author and classified a guard
+	# rejection that main already grants as consumer-config.
+	issue = dict(_issue(labels=["ai:scope-blocked"]), user={"login": "shubhodeep1"}, author_association="OWNER")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:scope-blocked", issue=issue, comments=[], runs=[],
+		wrapper_sha=SHA_A, reporter_run_url=None, pipeline_login="shubhodeep1",
+	)
+	normalized = heal.validate_payload(payload)
+	assert normalized["issue_author_login"] == "shubhodeep1"
+	assert normalized["issue_author_association"] == "OWNER"
+	assert normalized["reporter_pipeline_login"] == "shubhodeep1"
+	# Invalid values are dropped, never fatal; an older reporter sends none.
+	bad = dict(issue, user={"login": "x y\n<!--"}, author_association="ROOT")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:scope-blocked", issue=bad, comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None, pipeline_login="--evil",
+	)
+	normalized = heal.validate_payload(payload)
+	assert (normalized["issue_author_login"], normalized["issue_author_association"], normalized["reporter_pipeline_login"]) == (None, None, None)
+	legacy = {key: value for key, value in payload.items() if not key.startswith(("issue_author", "reporter_pipeline"))}
+	assert heal.validate_payload(legacy)["issue_author_login"] is None
+	forged = dict(legacy, issue_author_login="a\nb", reporter_pipeline_login="c" * 50)
+	normalized = heal.validate_payload(forged)
+	assert normalized["issue_author_login"] is None and normalized["reporter_pipeline_login"] is None
+	# Other labels carry no authorship facts.
+	other = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=issue, comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None, pipeline_login="shubhodeep1",
+	)
+	assert "issue_author_login" not in other and "issue_author_login" not in heal.validate_payload(other)
+
+
+def test_scope_blocked_reporter_and_intake_wire_the_authorship_facts() -> None:
+	report = REPORT_SCRIPT.read_text(encoding="utf-8")
+	identity = report.index('if [ "${LABEL}" = "ai:needs-human" ] || [ "${LABEL}" = "ai:scope-blocked" ]; then')
+	assert identity < report.index('build-issue-payload \\')
+	# One shared read; the only other is the retry the non-retryable-marker
+	# check takes when that read came back empty.
+	assert report.count("gh api user") == 2
+	assert 'if [ -z "${HEAL_REPORTER_LOGIN}" ]; then\n\t\tHEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login' in report
+	assert report.index("gh api user") < report.index('build-issue-payload \\')
+	assert '--pipeline-login "${HEAL_REPORTER_LOGIN}" \\' in report
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert "echo \"Issue author: $(_pf '.issue_author_login // \"unknown\"') (association: $(_pf '.issue_author_association // \"unknown\"'))\"" in intake
+	assert "echo \"Pipeline account (the reporter's identity): $(_pf '.reporter_pipeline_login // \"unknown\"')\"" in intake
+	for path in (PROMPT_FILE, REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt"):
+		text = " ".join(path.read_text(encoding="utf-8").split())
+		assert "When the newer guard would grant this author's rejected paths, the cause is `already-fixed`" in text, path
+		assert "Never suggest adding a `files_touched` block that lists only the rejected automation paths to an issue that has none" in text, path
+
+
+def test_build_issue_payload_cli_accepts_pipeline_login(tmp_path: Path) -> None:
+	issue_file = tmp_path / "issue.json"
+	issue_file.write_text(json.dumps(dict(_issue(labels=["ai:scope-blocked"]), user={"login": "bot-user"}, author_association="NONE")), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(LIB_PATH), "build-issue-payload", "--repo", CONSUMER_REPO, "--kind", "issue", "--label", "ai:scope-blocked",
+			"--issue-json", str(issue_file), "--pipeline-login", "pipeline-bot"],
+		capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+	)
+	assert result.returncode == 0, result.stderr
+	payload = json.loads(result.stdout)
+	assert (payload["issue_author_login"], payload["issue_author_association"], payload["reporter_pipeline_login"]) == ("bot-user", "NONE", "pipeline-bot")
+
+
+def test_scope_blocked_intake_prompt_names_the_author_and_pipeline_account() -> None:
+	payload = _consumer_payload(label="ai:scope-blocked", labels=["ai:scope-blocked"], issue_author_login="shubhodeep1",
+		issue_author_association="OWNER", reporter_pipeline_login="shubhodeep1")
+	result, _state, prompt = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "Issue author: shubhodeep1 (association: OWNER)" in prompt
+	assert "Pipeline account (the reporter's identity): shubhodeep1" in prompt
+	legacy = _consumer_payload(label="ai:scope-blocked", labels=["ai:scope-blocked"])
+	result, _state, prompt = _run_intake(legacy, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "Issue author: unknown (association: unknown)" in prompt
+	result, _state, prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "Issue author:" not in prompt

@@ -22,7 +22,11 @@
 #   ingest-logs <dest>   validate a log tar on stdin and write it under <dest> (all or nothing)
 #
 # Exit codes: the harness exit code for `run`; 3 for any sandbox failure.
-# Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|fail reason=<token>
+# Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|retry|fail reason=<token>
+# (`retry` only from provision, when a test container would not start under the
+# systemd cgroup driver, or under a daemon reused from an earlier provision in
+# the job, and the daemon is restarted with cgroupfs: reasons
+# container_start_failed_systemd / container_start_failed_reused; #7063).
 # Values are never logged.
 
 set -euo pipefail
@@ -41,6 +45,14 @@ VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE
 # Empty (the default) keeps <workspace>/validation/logs. validation-refresh
 # sets it so logs stay outside the consumer clone it diffs for drift.
 VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-}"
+# Cgroup setup for the sandbox's rootless dockerd: `auto` (the default) tries a
+# systemd user session first and falls back to cgroupfs; `cgroupfs` skips the
+# systemd attempt. Either way a test container that the daemon refuses to
+# start (or a probe image the daemon refuses to import) fails provision; only
+# a probe the host cannot build, or whose command cannot run inside the
+# container (exit 126/127 without a cgroup error), passes as
+# container_probe_inconclusive.
+VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-auto}"
 SANDBOX_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 sandbox_log()
@@ -183,6 +195,265 @@ rootless_docker_ready()
 	as_sandbox docker info >/dev/null 2>&1
 }
 
+# Rootless dockerd defaults to the systemd cgroup driver on a cgroup v2 host
+# booted with systemd (moby daemon/daemon_unix.go UsingSystemd). That driver
+# needs the sandbox user's user-<uid>.slice and user bus, which only exist
+# inside a systemd user session; without one every container start fails with
+# "open /sys/fs/cgroup/user.slice/user-<uid>.slice/cgroup.controllers: no
+# such file or directory" (#6902, #6664, #7063). With
+# native.cgroupdriver=cgroupfs a rootless daemon uses no cgroups at all:
+# containers start, and resource limits are dropped with a warning. The user
+# namespace isolation and the separate daemon are unchanged either way.
+SANDBOX_SYSTEMD_RUN_DIR="${SANDBOX_SYSTEMD_RUN_DIR:-/run/systemd/system}"
+SANDBOX_CGROUP_ROOT="${SANDBOX_CGROUP_ROOT:-/sys/fs/cgroup}"
+SANDBOX_SESSION_WAIT_SECS="${SANDBOX_SESSION_WAIT_SECS:-15}"
+is_positive_int "${SANDBOX_SESSION_WAIT_SECS}" || SANDBOX_SESSION_WAIT_SECS=15
+SANDBOX_PROBE_IMAGE="ai-validation-probe:local"
+
+# Start a systemd user session for the sandbox user (linger keeps
+# user@<uid>.service running without a login). Returns 0 once the user bus
+# and the user slice both exist.
+sandbox_systemd_session()
+{
+	local user="$1" uid="$2" waited=0
+	[ -d "${SANDBOX_SYSTEMD_RUN_DIR}" ] || return 1
+	command -v loginctl >/dev/null 2>&1 || return 1
+	sudo -n loginctl enable-linger "${user}" >/dev/null 2>&1 || return 1
+	sudo -n systemctl start "user@${uid}.service" >/dev/null 2>&1 || true
+	until sudo -n test -S "/run/user/${uid}/bus" && [ -d "${SANDBOX_CGROUP_ROOT}/user.slice/user-${uid}.slice" ]; do
+		[ "${waited}" -ge "${SANDBOX_SESSION_WAIT_SECS}" ] && return 1
+		sleep 1
+		waited=$((waited + 1))
+	done
+}
+
+# Start the sandbox user's rootless dockerd and wait until it answers.
+# <mode> is `systemd` (inside the user session) or `cgroupfs`.
+start_rootless_dockerd()
+{
+	local mode="$1" home="$2" runtime_dir="$3" waited=0
+	local -a daemon_env=("PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}") daemon_args=()
+	if [ "${mode}" = systemd ]; then
+		daemon_env+=("DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus")
+	else
+		daemon_args+=(--exec-opt native.cgroupdriver=cgroupfs)
+	fi
+	sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${daemon_env[@]}" \
+		setsid dockerd-rootless.sh "${daemon_args[@]}" </dev/null >/dev/null 2>&1 &
+	until rootless_docker_ready; do
+		[ "${waited}" -ge "${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT}" ] && return 1
+		sleep 2
+		waited=$((waited + 2))
+	done
+}
+
+# Stop the sandbox user's daemon. The signals are sent as the sandbox user, so
+# they can only reach processes that user already owns.
+stop_rootless_dockerd()
+{
+	local runtime_dir="$1" waited=0 name
+	for name in dockerd rootlesskit; do
+		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- pkill -TERM -x "${name}" >/dev/null 2>&1 || true
+	done
+	while sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- pgrep -x rootlesskit >/dev/null 2>&1; do
+		if [ "${waited}" -ge 30 ]; then
+			for name in dockerd containerd rootlesskit; do
+				sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- pkill -KILL -x "${name}" >/dev/null 2>&1 || true
+			done
+			break
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- rm -rf -- "${runtime_dir}/docker.pid" "${runtime_dir}/docker.sock" "${runtime_dir}/dockerd-rootless" >/dev/null 2>&1 || true
+}
+
+# Import a one-binary image (the host's /usr/bin/true and the libraries ldd
+# lists for it) into the sandbox daemon, so the probe needs no registry pull.
+# Returns 0 when the image exists, 1 when the host cannot assemble it (no ldd,
+# no files, tar failed), 3 when the daemon refused the import.
+build_probe_image()
+{
+	as_sandbox docker image inspect "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>&1 && return 0
+	command -v ldd >/dev/null 2>&1 || return 1
+	local -a files=()
+	local path
+	while IFS= read -r path; do
+		[ -n "${path}" ] && [ -f "${path}" ] && files+=("${path#/}")
+	done < <(printf '/usr/bin/true\n'; ldd /usr/bin/true 2>/dev/null | grep -oE '(^|[[:space:]])/[^[:space:]]+' | tr -d '[:blank:]')
+	[ "${#files[@]}" -ge 1 ] || return 1
+	set +e
+	local import_err_file
+	import_err_file="$(mktemp 2>/dev/null)" || import_err_file=/dev/null
+	tar -C / -chf - -- "${files[@]}" 2>/dev/null | as_sandbox docker import --change 'CMD ["/usr/bin/true"]' - "${SANDBOX_PROBE_IMAGE}" >/dev/null 2>"${import_err_file}"
+	local -a import_status=("${PIPESTATUS[@]}")
+	set -e
+	# The daemon's refusal text and exit code, for the caller's log line.
+	SANDBOX_PROBE_IMPORT_RC="${import_status[1]}"
+	SANDBOX_PROBE_IMPORT_ERR="$(cat -- "${import_err_file}" 2>/dev/null || true)"
+	[ "${import_err_file}" = /dev/null ] || rm -f -- "${import_err_file}"
+	[ "${import_status[0]}" -eq 0 ] && [ "${import_status[1]}" -eq 0 ] && return 0
+	# tar killed by SIGPIPE (141) means the daemon side closed the stream first.
+	if [ "${import_status[1]}" -ne 0 ] && { [ "${import_status[0]}" -eq 0 ] || [ "${import_status[0]}" -eq 141 ]; }; then
+		return 3
+	fi
+	return 1
+}
+
+# Start (and remove) one container: 0 when it ran, 1 when the daemon refused
+# to start it (`docker run` exit 125, or 126/127 with a cgroup error) or to
+# import the probe image, 2 when the probe is inconclusive (the host could not
+# assemble the image, or the image's command could not run: 126/127 without a
+# cgroup error), so a host-side probe problem is never mistaken for a broken
+# daemon.
+rootless_docker_container_probe()
+{
+	local probe_err="" rc=0 build_rc=0
+	build_probe_image || build_rc=$?
+	if [ "${build_rc}" -eq 3 ]; then
+		printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=%s stage=import detail=%s\n' "${SANDBOX_PROBE_IMPORT_RC:-unknown}" \
+			"$(printf '%s' "${SANDBOX_PROBE_IMPORT_ERR:-docker import refused}" | tr -c '[:print:]' ' ' | cut -c1-300)" >&2
+		return 1
+	fi
+	[ "${build_rc}" -eq 0 ] || return 2
+	probe_err="$(as_sandbox docker run --rm --network none "${SANDBOX_PROBE_IMAGE}" 2>&1 >/dev/null)" || rc=$?
+	[ "${rc}" -eq 0 ] && return 0
+	# The daemon's own error line, for the job log (no credentials reach the sandbox).
+	printf 'VALIDATION_HARNESS_SANDBOX phase=provision probe_exit=%s detail=%s\n' "${rc}" \
+		"$(printf '%s' "${probe_err}" | tr -c '[:print:]' ' ' | cut -c1-300)" >&2
+	[ "${rc}" -eq 125 ] && return 1
+	# The Docker CLI (runStartContainerErr) maps a container-start error whose
+	# text contains "no such file or directory" to 127 and "permission denied"
+	# to 126, so the cgroup failure (#7063) arrives as 126/127, not 125.
+	case "${probe_err}" in
+		*cgroup*) return 1 ;;
+	esac
+	return 2
+}
+
+# Bring up a daemon that can start containers: systemd user session first
+# (unless VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=cgroupfs), cgroupfs when the
+# session cannot be set up or a container would not start under it. Every
+# outcome is logged; a daemon whose test container fails under both drivers
+# fails provisioning closed (container_start_failed).
+sandbox_start_verified_dockerd()
+{
+	local user="$1" uid="$2" home="$3" runtime_dir="$4" mode="" probe_rc=0
+	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
+		auto|cgroupfs) ;;
+		*) sandbox_log provision ok cgroup_mode_unrecognized_using_auto ;;
+	esac
+	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
+		cgroupfs) mode=cgroupfs ;;
+		*)
+			if sandbox_systemd_session "${user}" "${uid}"; then
+				mode=systemd
+				sandbox_log provision ok systemd_user_session
+			else
+				mode=cgroupfs
+				sandbox_log provision ok systemd_user_session_unavailable
+			fi
+			;;
+	esac
+	sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
+	build_sandbox_env "${home}" "${home}/work" "unix://${runtime_dir}/docker.sock"
+	if rootless_docker_ready; then
+		# A daemon from an earlier provision in this job: its driver is unknown,
+		# so it gets the same container test.
+		mode=reused
+	else
+		start_rootless_dockerd "${mode}" "${home}" "${runtime_dir}" || sandbox_fail provision rootless_dockerd_start_timeout
+	fi
+	rootless_docker_container_probe || probe_rc=$?
+	if [ "${probe_rc}" -eq 1 ] && [ "${mode}" != cgroupfs ]; then
+		sandbox_log provision retry "container_start_failed_${mode}"
+		stop_rootless_dockerd "${runtime_dir}"
+		mode=cgroupfs
+		start_rootless_dockerd cgroupfs "${home}" "${runtime_dir}" || sandbox_fail provision rootless_dockerd_start_timeout
+		probe_rc=0
+		rootless_docker_container_probe || probe_rc=$?
+	fi
+	case "${probe_rc}" in
+		0) sandbox_log provision ok "container_probe_${mode}" ;;
+		2) sandbox_log provision ok container_probe_inconclusive ;;
+		*) sandbox_fail provision container_start_failed ;;
+	esac
+}
+
+# Docker's apt repository signing key (https://download.docker.com/linux/<distro>/gpg).
+# The key is checked against this fingerprint before apt trusts it.
+SANDBOX_DOCKER_APT_KEY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+SANDBOX_DOCKER_APT_KEYRING_DIR="${SANDBOX_DOCKER_APT_KEYRING_DIR:-/etc/apt/keyrings}"
+SANDBOX_DOCKER_APT_SOURCES_DIR="${SANDBOX_DOCKER_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+SANDBOX_OS_RELEASE_FILE="${SANDBOX_OS_RELEASE_FILE:-/etc/os-release}"
+
+sandbox_apt()
+{
+	sudo -n env DEBIAN_FRONTEND=noninteractive apt-get "$@" >/dev/null 2>&1
+}
+
+# Install uidmap and docker-ce-rootless-extras. GitHub's Ubuntu runner images
+# install Docker from download.docker.com and then delete that apt source
+# (actions/runner-images install-docker.sh, "Cleanup custom repositories"),
+# so docker-ce-rootless-extras is not installable from the image's sources.
+# When the plain install fails, add Docker's repository for this one install
+# (key fingerprint pinned above), prefer the version of the docker-ce already
+# installed, and remove the source and key again afterwards.
+install_rootless_packages()
+{
+	sandbox_apt install -y -q uidmap docker-ce-rootless-extras && return 0
+	sandbox_apt update -q || true
+	sandbox_apt install -y -q uidmap docker-ce-rootless-extras && return 0
+	sandbox_apt install -y -q uidmap || return 1
+
+	local distro codename arch key_tmp fingerprint keyring source_list docker_version rc=1
+	distro="$(. "${SANDBOX_OS_RELEASE_FILE}" 2>/dev/null && printf '%s' "${ID:-}")"
+	codename="$(. "${SANDBOX_OS_RELEASE_FILE}" 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}")"
+	arch="$(dpkg --print-architecture 2>/dev/null || true)"
+	case "${distro}" in
+		ubuntu|debian) ;;
+		*) sandbox_log provision fail docker_repo_distro_unsupported; return 1 ;;
+	esac
+	[[ "${codename}" =~ ^[a-z]+$ ]] && [[ "${arch}" =~ ^[a-z0-9]+$ ]] || { sandbox_log provision fail docker_repo_platform_unknown; return 1; }
+	key_tmp="$(mktemp)" || { sandbox_log provision fail docker_repo_tmpfile_failed; return 1; }
+	if ! curl -fsSL --retry 3 --max-time 60 -o "${key_tmp}" "https://download.docker.com/linux/${distro}/gpg"; then
+		rm -f -- "${key_tmp}"
+		sandbox_log provision fail docker_repo_key_download_failed
+		return 1
+	fi
+	fingerprint="$(gpg --show-keys --with-colons "${key_tmp}" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')"
+	if [ "${fingerprint}" != "${SANDBOX_DOCKER_APT_KEY_FINGERPRINT}" ]; then
+		rm -f -- "${key_tmp}"
+		sandbox_log provision fail docker_repo_key_fingerprint_mismatch
+		return 1
+	fi
+	keyring="${SANDBOX_DOCKER_APT_KEYRING_DIR}/ai-validation-docker.asc"
+	source_list="${SANDBOX_DOCKER_APT_SOURCES_DIR}/ai-validation-docker.list"
+	if ! { sudo -n install -d -m 0755 "${SANDBOX_DOCKER_APT_KEYRING_DIR}" \
+		&& sudo -n install -m 0644 "${key_tmp}" "${keyring}" \
+		&& printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/%s %s stable\n' "${arch}" "${keyring}" "${distro}" "${codename}" \
+			| sudo -n tee "${source_list}" >/dev/null; }; then
+		sandbox_log provision fail docker_repo_source_write_failed
+	elif ! sandbox_apt update -q; then
+		sandbox_log provision fail docker_repo_update_failed
+	else
+		docker_version="$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null || true)"
+		if [ -n "${docker_version}" ] && sandbox_apt install -y -q "docker-ce-rootless-extras=${docker_version}"; then
+			rc=0
+		elif sandbox_apt install -y -q docker-ce-rootless-extras; then
+			rc=0
+		else
+			sandbox_log provision fail docker_repo_install_failed
+		fi
+	fi
+	rm -f -- "${key_tmp}" || true
+	sudo -n rm -f -- "${source_list}" "${keyring}" >/dev/null 2>&1 || true
+	if [ "${rc}" -eq 0 ]; then
+		sandbox_log provision ok rootless_packages_from_docker_repo
+	fi
+	return "${rc}"
+}
+
 next_subid_start()
 {
 	awk -F: 'BEGIN { max = 524288 } { end = $2 + $3; if (end > max) max = end } END { print max }' /etc/subuid /etc/subgid 2>/dev/null || echo 524288
@@ -217,11 +488,7 @@ cmd_provision()
 	fi
 
 	if ! command -v dockerd-rootless.sh >/dev/null 2>&1 || ! command -v newuidmap >/dev/null 2>&1 || ! command -v rootlesskit >/dev/null 2>&1; then
-		if ! sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap docker-ce-rootless-extras >/dev/null 2>&1; then
-			sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null 2>&1 || true
-			sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap docker-ce-rootless-extras >/dev/null 2>&1 \
-				|| sandbox_fail provision rootless_packages_unavailable
-		fi
+		install_rootless_packages || sandbox_fail provision rootless_packages_unavailable
 		command -v dockerd-rootless.sh >/dev/null 2>&1 || sandbox_fail provision rootless_dockerd_missing
 	fi
 
@@ -233,21 +500,7 @@ cmd_provision()
 	fi
 
 	runtime_dir="/run/user/${uid}"
-	sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
-
-	build_sandbox_env "${home}" "${home}/work" "unix://${runtime_dir}/docker.sock"
-	if ! rootless_docker_ready; then
-		sudo -n -u "${user}" -- env -i "PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}" \
-			setsid dockerd-rootless.sh </dev/null >/dev/null 2>&1 &
-		local waited=0
-		until rootless_docker_ready; do
-			if [ "${waited}" -ge "${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT}" ]; then
-				sandbox_fail provision rootless_dockerd_start_timeout
-			fi
-			sleep 2
-			waited=$((waited + 2))
-		done
-	fi
+	sandbox_start_verified_dockerd "${user}" "${uid}" "${home}" "${runtime_dir}"
 
 	# Keep the credentialed job's own state unreadable to the sandbox user.
 	for dir in "${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}"; do
@@ -591,4 +844,7 @@ main()
 	esac
 }
 
-main "$@"
+# Sourcing (tests) defines the functions without running a subcommand.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

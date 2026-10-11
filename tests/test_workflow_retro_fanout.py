@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -175,6 +176,32 @@ RETRO_BODY = "\n".join(
 )
 
 
+# The retro agent runs through scripts/codex_isolated_exec.sh (a Docker
+# container without credentials, PR #6187). The tests run a copy of the
+# support tree whose isolation wrapper hands the Codex arguments and stdin
+# straight to the mock `codex` on PATH, so no image is built.
+ISOLATED_EXEC_STUB = """#!/usr/bin/env bash
+set -euo pipefail
+[ "${1:-}" = run ] || exit 2
+shift
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+[ "$#" -gt 0 ] || exit 2
+shift
+exec codex "$@"
+"""
+
+
+def _stage_support_tree(root: Path) -> Path:
+	"""Copy scripts/ and prompts/ under root with the isolation wrapper stubbed; return the copied script."""
+	shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
+	shutil.copytree(REPO_ROOT / "prompts", root / "prompts")
+	for name in ("unattended_system_instructions.md",):
+		if (REPO_ROOT / name).exists():
+			shutil.copy2(REPO_ROOT / name, root / name)
+	_write_exec(root / "scripts" / "codex_isolated_exec.sh", ISOLATED_EXEC_STUB)
+	return root / "scripts" / SCRIPT_PATH.name
+
+
 def _recent_iso(days_ago: int) -> str:
 	return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -195,6 +222,14 @@ def _run_fanout(
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		_install_mock_gh(bin_dir)
 		_install_mock_codex(bin_dir)
+		support_root = tmp_path / "support"
+		support_root.mkdir()
+		staged_script = _stage_support_tree(support_root)
+		# workflow_retro.py reads ai-memory run events from the workspace's
+		# origin (a git fetch per repo); a workspace without a remote fails
+		# that read open at once instead of fetching from the real origin.
+		workspace = tmp_path / "workspace"
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
 		# workflow_retro.py needs the same interpreter version the tests run
 		# on (CI pins 3.12); shim `python3` so the script uses it too.
 		(bin_dir / "python3").symlink_to(sys.executable)
@@ -209,7 +244,7 @@ def _run_fanout(
 			{
 				"GH_TOKEN": "test-token",
 				"GITHUB_REPOSITORY": "owner/source",
-				"GITHUB_WORKSPACE": str(REPO_ROOT),
+				"GITHUB_WORKSPACE": str(workspace),
 				"OPENROUTER_API_KEY": "test-openrouter-key",
 				"MOCK_CODEX_OUTPUT": RETRO_BODY,
 				"MOCK_GH_STATE_FILE": str(state_file),
@@ -222,7 +257,7 @@ def _run_fanout(
 		)
 		env.update(extra_env or {})
 		proc = subprocess.run(
-			["bash", str(SCRIPT_PATH)],
+			["bash", str(staged_script)],
 			cwd=tmp_path if run_from_temp_dir else REPO_ROOT,
 			env=env,
 			capture_output=True,

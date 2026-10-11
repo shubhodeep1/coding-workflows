@@ -419,6 +419,32 @@ jobs:
 
           PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" assemble --repo-root .
 
+      - name: Assemble agents.md fragments
+        id: agents_assemble
+        run: |
+          set -euo pipefail
+
+          # Same consumer-side host as the changelog step above, for the
+          # agents.d/ fragments of CLAUDE.md §30: PRs add
+          # agents.d/<issue-or-pr>-<slug>.md instead of editing AGENTS.md, and
+          # this sync folds them in. Runs upstream's script from the @stable
+          # support checkout. Fails open: a fragment that cannot fold stays for
+          # the next sync, and the step never fails the wrapper update.
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          UPSTREAM_SCRIPTS_DIR="$(dirname "${UPSTREAM_DIR}")/scripts"
+          AGENTS_ASSEMBLER="${UPSTREAM_SCRIPTS_DIR}/assemble_agents.py"
+
+          echo "agents_assembled=false" >> "$GITHUB_OUTPUT"
+
+          if [ ! -f "${AGENTS_ASSEMBLER}" ]; then
+            echo "Upstream has no scripts/assemble_agents.py at this ref — skipping assembly."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 "${AGENTS_ASSEMBLER}" assemble --repo-root . \
+            || echo "::warning::agents.md fragment assembly failed; fragments stay in agents.d/ for the next sync."
+
       - name: Compare and update workflow wrappers
         id: update
         run: |
@@ -570,7 +596,7 @@ jobs:
           fi
 
       - name: Commit and push updates
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         run: |
           set -euo pipefail
 
@@ -612,6 +638,10 @@ jobs:
           # fragments, so stage with -A to pick up the removals.
           if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
             git add -A -- CHANGELOG.md changelog.d
+          fi
+          # Same for agents.d/: the agents file is rewritten and fragments deleted.
+          if [ "${{ steps.agents_assemble.outputs.agents_assembled }}" = "true" ]; then
+            git add -A -- "${{ steps.agents_assemble.outputs.agents_file }}" agents.d
           fi
 
           COMMIT_BODY=""
@@ -676,6 +706,9 @@ jobs:
           if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${{ steps.changelog_assemble.outputs.changelog_fragment_count }} fragment(s), layout ${{ steps.changelog_assemble.outputs.changelog_layout }}).\n"
           fi
+          if [ "${{ steps.agents_assemble.outputs.agents_assembled }}" = "true" ]; then
+            COMMIT_BODY="${COMMIT_BODY}agents.d fragments assembled into ${{ steps.agents_assemble.outputs.agents_file }} (${{ steps.agents_assemble.outputs.agents_fragment_count }} fragment(s)).\n"
+          fi
 
           if git diff --cached --quiet; then
             echo "No staged changes detected after update step; skipping commit."
@@ -687,7 +720,7 @@ jobs:
           git push
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -748,6 +781,9 @@ jobs:
           CHANGELOG_ASSEMBLED="${{ steps.changelog_assemble.outputs.changelog_assembled }}"
           CHANGELOG_FRAGMENT_COUNT="${{ steps.changelog_assemble.outputs.changelog_fragment_count }}"
           CHANGELOG_LAYOUT="${{ steps.changelog_assemble.outputs.changelog_layout }}"
+          AGENTS_ASSEMBLED="${{ steps.agents_assemble.outputs.agents_assembled }}"
+          AGENTS_FRAGMENT_COUNT="${{ steps.agents_assemble.outputs.agents_fragment_count }}"
+          AGENTS_FILE="${{ steps.agents_assemble.outputs.agents_file }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           MSG="Workflow wrappers updated in ${REPO}
@@ -785,6 +821,10 @@ jobs:
           if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
             MSG="${MSG}
           Changelog fragments assembled: ${CHANGELOG_FRAGMENT_COUNT} fragment(s), layout ${CHANGELOG_LAYOUT}."
+          fi
+          if [ "${AGENTS_ASSEMBLED}" = "true" ]; then
+            MSG="${MSG}
+          agents.d fragments assembled into ${AGENTS_FILE}: ${AGENTS_FRAGMENT_COUNT} fragment(s)."
           fi
           MSG="${MSG}
           Source: coding-workflows@stable

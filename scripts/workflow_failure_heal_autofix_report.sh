@@ -54,9 +54,17 @@
 #                                          (true/false); names the failure reviewers_failed,
 #                                          after editor_preflight_failed (the preflight step
 #                                          runs first) and ahead of the editor flags
+#   AUTOFIX_SANDBOX_PREPARE_FAILED         the review sandbox prepare failed, so the editor
+#                                          never ran (true/false); names the failure
+#                                          sandbox_prepare_failed, after reviewers_failed
+#                                          and ahead of the editor flags
 #   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
 #                                          identical-failure cap passes identical_failure_cap);
 #                                          wins over the flags when it is a valid reason token
+#   FINGERPRINT_CAP_REASON                 failure_reason the identical-failure cap repeats
+#                                          (default empty; inherited from the fingerprint-cap-block
+#                                          job env); sent as repeated_failure_reason so the intake
+#                                          recognises a cap on the resolver's host-only stop
 #   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
 #                                          marker, sent as failure_fingerprint when 64 hex
 #   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
@@ -144,6 +152,9 @@ elif [ "${EDITOR_PREFLIGHT_FAILED:-false}" = "true" ]; then
 elif [ "${AUTOFIX_REVIEWERS_FAILED:-false}" = "true" ]; then
 	# The reviewer step failed, so the editor never ran.
 	FAILURE_REASON="reviewers_failed"
+elif [ "${AUTOFIX_SANDBOX_PREPARE_FAILED:-false}" = "true" ]; then
+	# The review sandbox could not be prepared, so the editor never ran.
+	FAILURE_REASON="sandbox_prepare_failed"
 elif [ "${AUTOFIX_EDITOR_EMPTY_NOOP:-false}" = "true" ]; then
 	FAILURE_REASON="editor_empty_noop"
 elif [ "${EDITOR_CHANGES_LOST:-false}" = "true" ]; then
@@ -154,6 +165,13 @@ elif [ -n "${FINALIZE_REASON}" ] && [[ "${FINALIZE_REASON}" =~ ^[a-z][a-z0-9_:-]
 	FAILURE_REASON="${FINALIZE_REASON}"
 else
 	FAILURE_REASON="workflow_failure"
+fi
+# A confirmed model-provider outage (scripts/provider_outage.py) is a
+# repo-wide event with its own tracker and alert, not a PR defect: no per-PR
+# heal issue (issue #6633).
+if [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
+	log "skip reason=provider_unavailable pr=${PR}"
+	exit 0
 fi
 
 # --- Streak ------------------------------------------------------------------
@@ -184,7 +202,7 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	echo "failure_reason=${FAILURE_REASON}"
 	echo "finalize_reason=${FINALIZE_REASON:-unknown}"
 	echo "consecutive_failed_runs=${STREAK}"
-	echo "flags: AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
+	echo "flags: EDITOR_PREFLIGHT_FAILED=${EDITOR_PREFLIGHT_FAILED:-} AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_SANDBOX_PREPARE_FAILED=${AUTOFIX_SANDBOX_PREPARE_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
 	# The step's first error ("Assemble failure evidence"), as an ::error:: line
 	# so the intake's error signature ranks it first; the tails below often
 	# carry only model output. Written to the evidence file, never to stdout.
@@ -205,6 +223,14 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/reviewers_failure_evidence.txt" ]; then
 		echo "--- reviewers_failure_evidence.txt ---"
 		head -n 40 "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | cut -c1-400
+	fi
+	# The sandbox prepare's last error and the prepare stderr tail when the
+	# review sandbox could not be prepared ("Post editor summary comment").
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt" ]; then
+		echo "--- sandbox_prepare_failure_evidence.txt ---"
+		head -n 10 "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | cut -c1-400
+		echo "--- sandbox_prepare_stderr.txt (tail) ---"
+		tail -n 40 "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | cut -c1-400
 	fi
 	if [ -s "${SUMMARY_LINE_FILE}" ]; then
 		head -c 6000 "${SUMMARY_LINE_FILE}"
@@ -260,12 +286,40 @@ if grep -q 'classify-crash-ownership' "${HEAL_PY}" 2>/dev/null; then
 		BUILD_ARGS+=(--changed-files-file "${PR_CHANGED_FILES_FILE}")
 	fi
 fi
+# The failure reason an identical-failure cap report repeats, so the intake can
+# recognise a cap that only repeats the resolver's host-only stop (#6738, #6756). Taken
+# from the gate's FINGERPRINT_CAP_REASON (job env of fingerprint-cap-block),
+# else from the trusted head markers already fetched; never from the evidence
+# text, which carries PR-influenced log tails. Empty keeps the old dispatch.
+REPEATED_FAILURE_REASON=""
+if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && grep -q 'repeated-failure-reason' "${HEAL_PY}" 2>/dev/null; then
+	if [[ "${FINGERPRINT_CAP_REASON:-}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
+		REPEATED_FAILURE_REASON="${FINGERPRINT_CAP_REASON}"
+	elif [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ] && [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ]; then
+		CAP_HEAD_SHA="$(jq -r '.head.sha // ""' "${PR_JSON_FILE}" 2>/dev/null || echo "")"
+		if [[ "${CAP_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+			CAP_MARKER_REASON="$(python3 "${HEAL_PY}" autofix-identical-failure-count --comments-json "${COMMENTS_FILE}" \
+				--head-sha "${CAP_HEAD_SHA}" --author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}" 2>/dev/null \
+				| sed -n 's/^reason=//p' | head -1 || true)"
+			if [[ "${CAP_MARKER_REASON}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
+				REPEATED_FAILURE_REASON="${CAP_MARKER_REASON}"
+			fi
+		fi
+	fi
+fi
+if [ -n "${REPEATED_FAILURE_REASON}" ]; then
+	BUILD_ARGS+=(--repeated-failure-reason "${REPEATED_FAILURE_REASON}")
+fi
 if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
 	exit 0
 fi
 
-SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" 2>/dev/null || echo "")"
+# Host-only resolver stops (#6745) are forwarded, not dropped: the intake
+# verifies their provenance and posts one PR diagnosis with ai:needs-human
+# (#6756), falling back to its own host_only_conflict_manual_merge skip, so no
+# heal issue is filed for them either way.
+SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" --defer-host-only-autofix 2>/dev/null || echo "")"
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} pr=${PR} failure=${FAILURE_REASON}"
 	exit 0
