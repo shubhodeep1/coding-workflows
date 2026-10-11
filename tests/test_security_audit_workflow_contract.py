@@ -2866,6 +2866,8 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		# A line-start "[]" inside an unclosed value is not a clean audit either.
 		('Results:\n{"findings":\n[]', "malformed_output"),
 		('Findings so far.\n[\n[]', "malformed_output"),
+		# A "]" inside a JSON string does not close the unclosed value around "[]".
+		('Results:\n{"note": "a]b}",\n"findings":\n[]', "malformed_output"),
 		# Nesting deeper than the JSON decoder's recursion limit falls back cleanly.
 		("[" * 5000, "malformed_output"),
 		# An array nested in a JSON object that parses is not top-level.
@@ -2896,6 +2898,9 @@ def test_security_audit_claude_engine_extracts_the_last_findings_array_from_pros
 		("No issues met the confidence bar.\n```json\n[]\n```", []),
 		("```json\n[]\n```\n```json\n[]\n```", []),
 		("```\n[]\n```", []),
+		# Bracketed prose that is not JSON but closes does not block a clean audit.
+		("Files checked: [foo.py, bar.py].\n```json\n[]\n```", []),
+		("Checked ${RUNTIME_DIR}, a[i] and {file_a}.\n[]", []),
 	)
 	for result_text, expected in cases:
 		with tempfile.TemporaryDirectory(prefix="security-audit-claude-extract-") as td:

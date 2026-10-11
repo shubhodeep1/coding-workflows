@@ -1530,9 +1530,11 @@ else:
 # its end, so an array nested in a JSON value that parsed is never a candidate.
 # An empty array never replaces a non-empty one, and it counts only when it
 # starts a line and nothing but a closing fence follows it, so a "[]" nested
-# in a cut-off reply (`"evidence": []`) is not read as a clean audit. Once an
+# in a cut-off reply (`"evidence": []`) is not read as a clean audit. When an
 # opener fails to parse, a later "[]" may sit inside that unclosed value
-# (`Results:\n{"findings":\n[]`), so no empty array counts after it.
+# (`Results:\n{"findings":\n[]`), so an empty array counts only when every
+# failed opener before it closes first, read both with and without JSON string
+# quoting; bracketed prose such as `Files checked: [a.py, b.py].` closes.
 decoder = json.JSONDecoder()
 opener = re.compile(r"[\[{]")
 
@@ -1542,14 +1544,39 @@ def next_open(start: int) -> int:
 	return match.start() if match else -1
 
 
+def closes_before(start: int, stop: int) -> bool:
+	for quoted in (False, True):
+		depth = 0
+		in_string = escaped = False
+		for ch in text[start:stop]:
+			if quoted and in_string:
+				if escaped:
+					escaped = False
+				elif ch == "\\":
+					escaped = True
+				elif ch == '"':
+					in_string = False
+			elif quoted and ch == '"':
+				in_string = True
+			elif ch in "[{":
+				depth += 1
+			elif ch in "]}":
+				depth -= 1
+				if depth == 0:
+					break
+		else:
+			return False
+	return True
+
+
 candidate = None
-failed_open = False
+failed_opens = []
 position = next_open(0)
 while position != -1:
 	try:
 		value, end = decoder.raw_decode(text, position)
 	except (ValueError, RecursionError):
-		failed_open = True
+		failed_opens.append(position)
 		position = next_open(position + 1)
 		continue
 	if isinstance(value, list) and all(isinstance(item, dict) and "finding_id" in item for item in value):
@@ -1557,9 +1584,9 @@ while position != -1:
 			candidate = (value, position, end)
 		elif (
 			candidate is None
-			and not failed_open
 			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
 			and re.fullmatch(r"\s*(```)?\s*", text[end:])
+			and all(closes_before(failed, position) for failed in failed_opens)
 		):
 			candidate = (value, position, end)
 	position = next_open(end)
