@@ -5399,6 +5399,10 @@ jobs:
           # and restrict matches to issues opened by THIS orchestrate run
           # rather than scanning the whole open-issue list.
           DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # tracking_labels=e2e-smoke-test: the tracking title is model-written
+          # and may drop the smoke marker, so the label is what lets the
+          # scheduled poller (tracking_issue_is_smoke_fixture) keep this
+          # fixture project's Telegram alerts silent.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -5408,7 +5412,8 @@ jobs:
             --completion-timeout-secs 3000 \
             --completion-poll-interval-secs 20 \
             --status-log-prefix "orchestrate-bootstrap" \
-            --field "project_description=${PROJECT_DESC}"
+            --field "project_description=${PROJECT_DESC}" \
+            --field "tracking_labels=e2e-smoke-test"
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
@@ -6370,8 +6375,15 @@ jobs:
           # open (reset to the remote tip) if the commit cannot be pushed.
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
+          # commit. Fail open: a fragment that cannot fold stays in agents.d/
+          # for the next release, and a missing script (an older ref) is a no-op.
+          if [ -f scripts/assemble_agents.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py assemble --repo-root . \
+              || echo "::warning::agents.md fragment assembly failed; fragments stay in agents.d/ for the next release."
+          fi
 
-          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
+          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d agents.md agents.d)" ]; then
             echo "No changelog fragments to fold — nothing to commit."
             exit 0
           fi
@@ -6383,7 +6395,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A -- CHANGELOG.md changelog.d
+          git add -A -- CHANGELOG.md changelog.d agents.md agents.d
           git commit -m "chore: assemble changelog fragments for ${VERSION}"
 
           pushed="false"
@@ -6553,8 +6565,8 @@ jobs:
           HEAD_SHA="$(git rev-parse HEAD)"
           if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
             if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
-              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/)' || true)" ]; then
-              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog assembly; refusing to tag."
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/|agents\.md$|agents\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog/agents.md assembly; refusing to tag."
               exit 1
             fi
           fi

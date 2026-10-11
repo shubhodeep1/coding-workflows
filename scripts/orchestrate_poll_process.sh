@@ -633,13 +633,70 @@ _gh_url() {
   printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
 }
 
+# tracking_issue_is_smoke_fixture <title> [<labels_json>]
+#
+# True for the projects the stable-release smoke gate creates
+# (.github/workflows/test-and-mark-stable.yml): every fixture title carries an
+# `[E2E ` marker (`[E2E Smoke Test] Review-Blocked Simulation (run N)`,
+# `[E2E Smoke Test alt-model] ...`, `[E2E Clarify Negative Test] ...`, and the
+# decomposed `[Orchestrator] [E2E Orchestrate Smoke N] ...`), and fixtures may
+# carry the `e2e-smoke-test` label. Reads only the tracking-issue list the
+# poller already fetched (no API call, CLAUDE.md §15).
+# tests/test_smoke_alert_silencing_contract.py derives the fixture titles from
+# the gate and fails when one of them is not detected.
+tracking_issue_is_smoke_fixture() {
+  local title="${1:-}"
+  local labels_json="${2:-[]}"
+  # Anchored like the workflows' issue-title detector (`^\[E2E `). A bare
+  # `[E2E ` prefix only occurs on issues the gate creates itself, because
+  # orchestrate.yml prefixes every decomposed tracking title with
+  # `[Orchestrator] `. After that prefix the title is model-written from the
+  # project description, so only the decompose fixture's own marker
+  # (`E2E Orchestrate Smoke`, bracketed or not, any case) counts: a real
+  # project such as `[Orchestrator] E2E tests for checkout` or
+  # `[Orchestrator] [E2E tests] for payments` keeps its alerts.
+  local title_lc="${title,,}"
+  case "${title}" in
+    "[E2E "*) return 0 ;;
+  esac
+  case "${title_lc}" in
+    "[orchestrator] [e2e orchestrate smoke "*|"[orchestrator] e2e orchestrate smoke "*) return 0 ;;
+  esac
+  printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "e2e-smoke-test")' >/dev/null 2>&1
+}
+
+# _smoke_fixture_alert_silenced <level>: true (and logged) when TRACKING_NUM
+# names a smoke-gate fixture project of this tick (SMOKE_FIXTURE_TRACKING_NUMS).
+# tg_notify and the project-scoped direct tg_send_msg alerts check it.
+_smoke_fixture_alert_silenced() {
+  local level="${1:-CRITICAL}"
+  [ -n "${TRACKING_NUM:-}" ] || return 1
+  case " ${SMOKE_FIXTURE_TRACKING_NUMS:-} " in
+    *" ${TRACKING_NUM} "*)
+      echo "TG_NOTIFY_SMOKE_SILENCED tracking_issue=${TRACKING_NUM} level=${level}"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
 # Automatically appends tracking issue link and Actions run link.
+# Smoke-gate fixture projects never page (operator decision Q42: A): the gate
+# closes its fixture PRs and issues while a poll it dispatched may still be
+# processing the project, which raised a CRITICAL "wave PR(s) closed without
+# merge" alert for project #7017 (release run 38010697715). The release
+# workflows silence their own sends through ALERT_MSG_LEVEL=SILENT, which the
+# scheduled poller does not inherit.
 tg_notify() {
   local msg="$1"
   local level="${2:-CRITICAL}"
   local tracking_url run_url
+
+  if _smoke_fixture_alert_silenced "${level}"; then
+    return 0
+  fi
 
   if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
     tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
@@ -1352,13 +1409,20 @@ assemble_judge_static_context() {
     echo "=== AI PIPELINE ==="
     cat ai_pipeline.md
     echo
+    local judge_agents_file="" judge_agents_render=""
     if [ -f AGENTS.md ]; then
-      echo "=== AGENTS.MD ==="
-      cat AGENTS.md
-      echo
+      judge_agents_file="AGENTS.md"
     elif [ -f agents.md ]; then
+      judge_agents_file="agents.md"
+    fi
+    if [ -n "${judge_agents_file}" ]; then
       echo "=== AGENTS.MD ==="
-      cat agents.md
+      # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+      if [ -d agents.d ] && [ ! -L agents.d ] && judge_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${judge_agents_file}" 2>/dev/null)"; then
+        printf '%s\n' "${judge_agents_render}"
+      else
+        cat "${judge_agents_file}"
+      fi
       echo
     fi
     cat "${judge_readme_context}"
@@ -2606,6 +2670,16 @@ MAX_VALIDATION_RECOVERY_ATTEMPTS="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
 if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" -lt 0 ]; then
   echo "::warning::MAX_VALIDATION_RECOVERY_ATTEMPTS must be a non-negative integer; defaulting to 2"
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
+fi
+
+# Validation runs dispatched for one validation cycle that may end without a
+# verdict label (ai:validated / ai:validation-failed) before the poller stops
+# re-dispatching every stale hour and fails validation as a harness error
+# (ai:harness-broken, which the heal and unblock paths pick up) (Q50).
+MAX_VALIDATION_DISPATCHES_PER_CYCLE="${MAX_VALIDATION_DISPATCHES_PER_CYCLE:-3}"
+if ! [[ "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" -lt 1 ]; then
+  echo "::warning::MAX_VALIDATION_DISPATCHES_PER_CYCLE must be a positive integer; defaulting to 3"
+  MAX_VALIDATION_DISPATCHES_PER_CYCLE="3"
 fi
 
 # Bounded retry budget for the post-validation final integration→default
@@ -9274,7 +9348,9 @@ EOF
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
 # Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
 #          3 when an existing resolver run already owns this PR,
-#          4 when guidance could not be published for the resolver.
+#          4 when guidance could not be published for the resolver,
+#          5 when the judge ran but its answer was not a valid diagnosis
+#            (the caller retries it within INTEGRATION_CONFLICT_LIFETIME_MAX).
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
@@ -9410,6 +9486,7 @@ invoke_judge_for_integration_conflict() {
     echo "how the isolated resolver should preserve merged sub-issue intent."
     echo 'Return only JSON: {"action":"redispatch_resolver","diagnosis":"...","resolution_guidance":"..."}.'
     echo 'Use action "fail" or "unknown" if a safe resolution cannot be identified.'
+    echo 'Keep "diagnosis" and "resolution_guidance" at 2000 characters or fewer each; longer answers are rejected.'
     echo
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
@@ -9495,10 +9572,33 @@ invoke_judge_for_integration_conflict() {
     if [ "${integration_judge_rc}" -ne 0 ] || ! integration_judge_verdict="$(_robust_parse_json_file "${output_file}")" ||
        ! printf '%s' "${integration_judge_verdict}" | jq -e 'type == "object" and (.action | IN("redispatch_resolver", "fail", "unknown")) and (.diagnosis | type == "string" and length <= 2000) and (.resolution_guidance | type == "string" and length <= 2000)' >/dev/null 2>&1; then
       echo "::warning::Integration judge did not return a valid diagnosis for PR #${final_pr}." >&2
+      # #6902 (run 38107119024): one rejected answer failed the project and
+      # the judge's output and log were deleted unread. Name the rejection
+      # and surface the log tail before the cleanup below.
+      local integration_judge_invalid_reason="schema"
+      local integration_judge_output_bytes=0
+      [ ! -f "${output_file}" ] || integration_judge_output_bytes="$(wc -c < "${output_file}" | tr -d '[:space:]')"
+      if [ "${integration_judge_rc}" -ne 0 ]; then
+        integration_judge_invalid_reason="exit_${integration_judge_rc}"
+      elif [ -z "${integration_judge_verdict:-}" ]; then
+        integration_judge_invalid_reason="unparseable"
+      elif printf '%s' "${integration_judge_verdict}" | jq -e '(.diagnosis | type == "string" and length > 2000) or (.resolution_guidance | type == "string" and length > 2000)' >/dev/null 2>&1; then
+        integration_judge_invalid_reason="too_long"
+      fi
+      echo "INTEGRATION_JUDGE_INVALID pr=${final_pr} reason=${integration_judge_invalid_reason} rc=${integration_judge_rc} output_bytes=${integration_judge_output_bytes:-0}" >&2
+      printf '%s\n' "${integration_judge_invalid_reason}" > "${RUNTIME_DIR}/integration_judge_invalid_reason" 2>/dev/null || true
+      if [ -s "${RUNTIME_DIR}/integration_judge.log" ]; then
+        echo "::group::Integration judge log (last 20 lines)" >&2
+        # The log carries model-influenced text: escape `##[` and prefix every
+        # line so no line can be parsed as a workflow command (::add-mask::,
+        # ::stop-commands::, ...).
+        tail -n 20 "${RUNTIME_DIR}/integration_judge.log" | cut -c1-400 | tr -cd '[:print:]\n' | sed -e 's/##\[/##\\[/g' -e 's/^/| /' >&2 || true
+        echo "::endgroup::" >&2
+      fi
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
       _integration_judge_remove_worktree "${judge_wt}"
       rm -rf -- "${baseline_dir}"
-      return 1
+      return 5
     fi
     _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
     integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
@@ -11345,6 +11445,25 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       echo '::warning::Integration judge guidance unavailable; deferring without consuming conflict dispatch budget.' >&2
       return 0
     fi
+    if [ "${integration_judge_result}" -eq 5 ]; then
+      # An invalid judge answer is retried on a later tick instead of failing
+      # the project (#6902: it failed on the first and only judge call). Each
+      # retry spends one lifetime slot, so the lifetime cap above still ends
+      # a judge that never answers validly.
+      local integration_judge_retry_reason="unknown"
+      [ ! -s "${RUNTIME_DIR}/integration_judge_invalid_reason" ] || integration_judge_retry_reason="$(head -n 1 "${RUNTIME_DIR}/integration_judge_invalid_reason" | tr -cd 'A-Za-z0-9_')"
+      rm -f -- "${RUNTIME_DIR}/integration_judge_invalid_reason"
+      total_dispatches=$((total_dispatches + 1))
+      jq --argjson total "${total_dispatches}" \
+        '.integration_sync_status = "healing" |
+         .integration_conflict_total_dispatches = $total |
+         .integration_sync_last_error = "integration judge returned an invalid diagnosis"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      echo "INTEGRATION_JUDGE_RETRY pr=${final_pr} reason=${integration_judge_retry_reason:-unknown} total_dispatches=${total_dispatches} lifetime_max=${INTEGRATION_CONFLICT_LIFETIME_MAX}" >&2
+      echo "::warning::Integration judge answer for PR #${final_pr} was invalid; retrying on a later tick (${total_dispatches}/${INTEGRATION_CONFLICT_LIFETIME_MAX} lifetime dispatches)." >&2
+      return 0
+    fi
     if [ "${integration_judge_result}" -eq 2 ]; then
       if [ -s "${RUNTIME_DIR}/judge_isolation_reason" ]; then
         _record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
@@ -11644,6 +11763,51 @@ Runbook: [Rebuild integration branch](${runbook_url})"
   if ! heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "${merge_error}"; then
     return 1
   fi
+  return 0
+}
+
+# security_pass_sync_final_pr_if_unmergeable <integration_branch> <default_branch>
+#
+# The tick-level main -> integration sync skips security-pass and
+# security-pass-fixing: the pass is bound to the integration head
+# (security_pass_current_head_is_valid), so merging main on every tick would
+# move that head whenever main moves and the pass might never settle. The
+# finalizer heals an unmergeable final PR, but only after the pass ends, so a
+# conflict that main introduces during the pass sat for hours: project #6664's
+# final PR #6667 stayed dirty from 23:12 on 2026-10-09 through its whole
+# security pass (operator decision Q41: A). This helper syncs during the pass
+# only when the recorded final PR is open and GitHub reports it unmergeable;
+# sync_default_into_integration_branch then merges main or hands a real
+# conflict to heal_integration_branch_conflict, and the next audit re-checks
+# the moved head with the existing delta scope. A mergeable or still-computing
+# PR, a missing final PR, or an unreadable PR does nothing (fail open).
+#
+# API budget (CLAUDE.md §15): one REST read of the final PR per project in a
+# security-pass state per tick; the security-pass path reads no other PR data
+# to extend. The sync itself adds its usual calls only when it runs.
+# Logs: SECURITY_PASS_FINAL_PR_SYNC tracking_issue=<n> pr=<n> outcome=sync|skip reason=<token>
+security_pass_sync_final_pr_if_unmergeable() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr pr_json pr_state pr_mergeable
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=none outcome=skip reason=no_final_pr"
+    return 0
+  fi
+  pr_json="$(_fetch_pr_json "${final_pr}")"
+  pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed')"
+  pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+  if [ "${pr_state}" != "open" ]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=skip reason=pr_${pr_state:-unreadable}"
+    return 0
+  fi
+  if [ "${pr_mergeable}" != "false" ]; then
+    echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=skip reason=mergeable_${pr_mergeable:-unknown}"
+    return 0
+  fi
+  echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
   return 0
 }
 
@@ -11948,7 +12112,9 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     _final_merge_alert_msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
     # Discard only stdout (the echoed message_id); keep stderr so
     # tg_send_msg's "Telegram send failed" warning stays in the logs.
-    tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
+    if ! _smoke_fixture_alert_silenced "CRITICAL"; then
+      tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
+    fi
     return 0
   fi
 
@@ -12920,6 +13086,9 @@ dispatch_validation_if_needed() {
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
   local validation_dispatch_safe_despite_failures
+  local validation_cycle_dispatches
+  local validation_cap_run_url
+  local validation_cap_redispatch_fields=""
 
   # Defensive preflight: refuse to dispatch validate while the current
   # wave's PRs are not all merged into the integration branch
@@ -13014,17 +13183,45 @@ dispatch_validation_if_needed() {
       return 0
     fi
 
+    # Every earlier run of this cycle finished without a verdict label (the
+    # caller handles ai:validated / ai:validation-failed and a successful
+    # run first). Re-dispatching the same ref every hour cannot change that:
+    # binance-blessings#249 re-ran a pinned validate.yml hourly for days.
+    # After MAX_VALIDATION_DISPATCHES_PER_CYCLE runs, fail validation as a
+    # harness error so it reaches heal / escalation instead (Q50). State
+    # from before this counter existed reads as one dispatch.
+    validation_cycle_dispatches="$(jq -r '.validation_cycle_dispatch_count // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+    if ! [[ "${validation_cycle_dispatches}" =~ ^[0-9]+$ ]]; then
+      validation_cycle_dispatches=1
+    fi
+    if [ "${validation_cycle_dispatches}" -ge "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=exhausted issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE} last_conclusion=${LAST_VAL_CONCLUSION:-unknown}"
+      validation_cap_run_url="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '.run_url // ""' 2>/dev/null || true)"
+      LAST_VAL_RAW_STATUS="harness_error" mark_validation_failed "Runtime validation harness error: ${validation_cycle_dispatches} validation run(s) dispatched for cycle ${validation_cycle} ended without a verdict label (last run conclusion: ${LAST_VAL_CONCLUSION:-unknown}${validation_cap_run_url:+, ${validation_cap_run_url}}). Re-dispatching the same ref will not change that (MAX_VALIDATION_DISPATCHES_PER_CYCLE=${MAX_VALIDATION_DISPATCHES_PER_CYCLE})."
+      return 0
+    fi
+    validation_cap_redispatch_fields="issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE}"
+
     echo "No active validation runs found. Redispatching..."
   fi
 
   if ! phase_cap_can_dispatch "ai:validating" "dispatch_validation" "${TRACKING_NUM:-validation}"; then
+    # Log the cap outcome only once the phase-cap guard has decided, so an
+    # outcome=redispatch line always means a dispatch was attempted.
+    if [ -n "${validation_cap_redispatch_fields}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=phase_cap_blocked ${validation_cap_redispatch_fields}"
+    fi
     return 0
+  fi
+  if [ -n "${validation_cap_redispatch_fields}" ]; then
+    echo "VALIDATION_DISPATCH_CAP outcome=redispatch ${validation_cap_redispatch_fields}"
   fi
 
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
     phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
-      '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
+      '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then (((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1) else 1 end)
+       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     if [ -n "${integration_branch}" ]; then
@@ -13351,7 +13548,9 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
-  tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  if ! _smoke_fixture_alert_silenced "DEBUG"; then
+    tg_send_msg "${MSG}" "DEBUG" >/dev/null
+  fi
 }
 
 extract_fix_issues_from_comment() {
@@ -17284,7 +17483,7 @@ unblock_handover_merge_deferral() {
   [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
   ensure_label_exists "ai:needs-human"
   if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
-    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
       || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
   fi
   if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then
@@ -19998,6 +20197,17 @@ fi
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
+# Smoke-gate fixture projects in this tick; tg_notify stays silent for them
+# whatever TRACKING_NUM currently names (Q42: A).
+SMOKE_FIXTURE_TRACKING_NUMS=""
+for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
+  smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
+  [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
+  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+    SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
+    echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+  fi
+done
 prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 write_state_snapshot_actions_runs_export || true
 
@@ -20202,6 +20412,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
 		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+		# The tick-level sync below skips both states; heal a final PR that
+		# main made unmergeable now instead of after the pass (Q41: A).
+		if [ -n "${INTEGRATION_BRANCH_TRACKING}" ]; then
+			if ! security_pass_sync_final_pr_if_unmergeable "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+				continue
+			fi
+			PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+			if [ "${PROJECT_STATUS}" = "failed" ]; then
+				continue
+			fi
+		fi
 	fi
 
   # ---------------------------------------------------------------
@@ -20686,7 +20907,9 @@ The orchestrator detected that the integration PR was squash-merged outside the 
           if [ -n "${GITHUB_RUN_ID:-}" ]; then
             MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
           fi
-          tg_send_msg "${MSG}" >/dev/null
+          if ! _smoke_fixture_alert_silenced "DEBUG"; then
+            tg_send_msg "${MSG}" >/dev/null
+          fi
           PROJECT_STATUS="complete"
           continue
         fi
@@ -20783,7 +21006,9 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     if [ -n "${GITHUB_RUN_ID:-}" ]; then
       MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
     fi
-    tg_send_msg "${MSG}" >/dev/null
+    if ! _smoke_fixture_alert_silenced "DEBUG"; then
+      tg_send_msg "${MSG}" >/dev/null
+    fi
     continue
   fi
 
@@ -25534,7 +25759,9 @@ PRs to revert: ${REVERT_COUNT}"
         if [ -n "${GITHUB_RUN_ID:-}" ]; then
           MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
         fi
-        tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        if ! _smoke_fixture_alert_silenced "DEBUG"; then
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+        fi
         continue
       fi
 

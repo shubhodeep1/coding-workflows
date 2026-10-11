@@ -2,10 +2,16 @@
 name: CI
 
 "on":
+  # Orchestrator integration branches (Q45): a sub-issue PR into
+  # `orchestrator/project-*` is checked before it merges, not only at the
+  # project's final PR into main. Pushes to those branches run too, so
+  # check-failure triage has a base-branch result to compare a failing PR
+  # against (a green base means the failure is the PR's own and is left to
+  # its autofix). Heal intake and budget-watch act on main pushes only.
   pull_request:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
   push:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -212,6 +218,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_job_split_contract.py
 
+      - name: CI test wiring guard
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_wires_every_test_file.py
+
       - name: YAML lint
         run: |
           set -euo pipefail
@@ -229,6 +240,33 @@ jobs:
         run: |
           set -euo pipefail
           make generate-check
+
+      # CLAUDE.md §30: every pending agents.d/ fragment must fold into
+      # agents.md; the release job would otherwise skip it with a warning.
+      - name: agents.d fragment check and tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py check --repo-root .
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py tests/test_check_agents_md_direct_edits.py
+
+      # CLAUDE.md §30 (Q68): a pull request may not add documentation to
+      # agents.md directly. Direct additions are what made orchestrator
+      # integration branches conflict with main there (#6902's final PR).
+      # The merge commit is compared with its first parent (the base tip it
+      # was built on). A project's final PR (head orchestrator/project-*) is
+      # skipped: its sub-issue PRs were checked when they targeted the
+      # integration branch. A forward-merge fallback PR
+      # (auto/forward-merge-stable-*) is skipped too: it carries the release
+      # fold's generated agents.md text. Both skips apply only to a
+      # same-repository head targeting the default branch, so a branch name
+      # alone does not exempt an ordinary PR.
+      - name: agents.md direct-edit check (CLAUDE.md §30)
+        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
+            --base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"
 
       - name: Install actionlint
         env:
@@ -392,13 +430,31 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare template-only PR live copies for parity tests
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        if: >-
+          (github.event_name == 'pull_request' &&
+           (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))) ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD --keep-committed-security-paths
+          # Live copies are synced only after a push to main, so an
+          # orchestrator integration branch can carry template changes that
+          # earlier sub-issue PRs merged. The sync's drift recovery copies
+          # those too (template committed after its live copy), but only
+          # when --before is a reachable commit: the script skips an empty,
+          # all-zero or unreachable one. A push has no PR base, so it passes
+          # its own before; a branch-creation or force push falls back to
+          # the merge-base with main.
+          before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
+          if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            echo "::warning::Template parity preparation: before=${before:-empty} is not a reachable commit; using merge-base with main (${fallback:-unavailable})."
+            before="${fallback}"
+          fi
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${before}" --after HEAD --keep-committed-security-paths
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -544,6 +600,26 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_claude_roles.py
 
+      - name: Claude account-pool review-panel slot tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pool_reviewer.py
+
+      - name: Workflow-heal editor on the Claude engine tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_heal_isolated_claude_editor.py
+
+      - name: Review editor account-pool telemetry tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_pool_telemetry.py
+
+      - name: Prebuilt sandbox image tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
+
       - name: Review sandbox image build retry tests
         run: |
           set -euo pipefail
@@ -568,6 +644,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
+
+      - name: CI budget watch tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_budget_watch.py
 
       - name: Validation harness sandbox tests
         run: |
@@ -605,6 +686,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
+
+      - name: Security-pass final PR sync tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_final_pr_sync.py
 
       - name: Security dependency hold tests (issue 4934)
         run: |
@@ -685,6 +771,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py
+          # Model-provider outage classifier, tracker and resume (issue #6633).
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py
 
       - name: CI failure workflow_run trigger tests
         run: |
@@ -802,6 +890,42 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      - name: Regression tests wired by the CI wiring guard (part 1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_cli.py \
+            tests/test_branch_rebuild.py \
+            tests/test_codex_thread_reuse_review.py \
+            tests/test_family_python_mongo_flask.py \
+            tests/test_family_python_repo_checks.py \
+            tests/test_implement_heal_preflight.py \
+            tests/test_implement_pr_body_tracking_refs.py \
+            tests/test_orchestrate_final_merge_required_checks_gate.py \
+            tests/test_prompt_compaction.py \
+            tests/test_render_validation_templates_node_hardhat_regressions.py \
+            tests/test_render_validation_templates_node_runtime_regressions.py \
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
+            tests/test_review_commit_new_files_preserved.py \
+            tests/test_review_conflict_resolve_sandbox_only.py \
+            tests/test_review_head_gate.py \
+            tests/test_review_parse_consolidator.py \
+            tests/test_review_pipeline_integration.py \
+            tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_install_timeout.py \
+            tests/test_review_static_context_readme.py \
+            tests/test_semble_helpers.py \
+            tests/test_validate_driver_credential_scrub.py \
+            tests/test_validate_lint_graceful_shutdown_hooks.py \
+            tests/test_validate_lint_init_true.py \
+            tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_render_recovery.py \
+            tests/test_validation_import_audit_stdlib.py \
+            tests/test_verify_integration_fingerprints_partial_removal.py \
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -994,10 +1118,20 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
+      - name: Review conflict-resolve sandbox-only tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_sandbox_only.py
+
       - name: Review conflict manifest union contract test
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+
+      - name: Review conflict folded-fragment keep test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_folded_fragment_keep.py
 
       - name: Review judge-interim round-trip contract test
         run: |
@@ -1023,6 +1157,14 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
+          # Issue #7079: the credential-scrub test and the wiring guard that
+          # requires this line land with PR #7012. Until then the file is
+          # absent here and pytest would exit 4, so run it only when present.
+          if [ -f tests/test_validate_driver_credential_scrub.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_driver_credential_scrub.py
+          else
+            echo "::notice::tests/test_validate_driver_credential_scrub.py not present on this ref; skipping (lands with PR #7012)."
+          fi
 
       - name: Review apply-fixes smoke deterministic contract test
         run: |
@@ -1076,6 +1218,48 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
 
+      - name: Regression tests wired by the CI wiring guard (part 2)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_sync_reference_files.py \
+            tests/test_ai_memory_workflow_log_analysis_cache.py \
+            tests/test_assemble_changelog.py \
+            tests/test_changelog_fragment_contract.py \
+            tests/test_codex_heartbeat.py \
+            tests/test_codex_isolated_exec_claude_contract.py \
+            tests/test_cost_audit_serena_metrics.py \
+            tests/test_gh_helpers_list_runs_method.py \
+            tests/test_plan_reuse_audit_contract.py \
+            tests/test_plan_template_owned_path_guard.py \
+            tests/test_pytest_git_env_isolation.py \
+            tests/test_render_validation_templates.py \
+            tests/test_render_validation_templates_repo_checks.py \
+            tests/test_render_validation_templates_shell_quoting.py \
+            tests/test_retrigger_default_branch_dispatch.py \
+            tests/test_review_autofix_reasoning_schedule.py \
+            tests/test_review_autofix_sweep_merge_queued_skip.py \
+            tests/test_review_commit_changelog_fragment_preserved.py \
+            tests/test_review_conflict_prepare_state_author.py \
+            tests/test_review_floor_rules.py \
+            tests/test_review_host_python_safe_path.py \
+            tests/test_review_issue_ledger.py \
+            tests/test_review_ledger_cache_path_stability.py \
+            tests/test_review_rb_judge_reference_staging.py \
+            tests/test_review_resolve_review_threads.py \
+            tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_static_context_symlink_guard.py \
+            tests/test_summarize_unselected_runs.py \
+            tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_validate_lint_bounded_tail_capture.py \
+            tests/test_validate_lint_external_tool_dependencies.py \
+            tests/test_validate_lint_import_audit_safety.py \
+            tests/test_validate_lint_service_tool_scope.py \
+            tests/test_validate_lint_shell_parity.py \
+            tests/test_validate_process_fixup_labels.py \
+            tests/test_verify_integration_fingerprints_baseline.py \
+            tests/test_workflow_untrusted_input_contract.py
+
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1110,7 +1294,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_review_merge_train.py \
             tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py
+            tests/test_gh_retry_stdout_isolation.py \
+            tests/test_gh_api_retry.py \
+            tests/test_gh_api_retry_py.py
 
       - name: Integration-ahead-by gate regression tests
         run: |
@@ -1705,6 +1891,44 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
           fi
+
+  budget-watch:
+    # Early warning for the two budgets CI has hit without notice (workflow
+    # file size near the §27 guard, a CI job near its timeout-minutes). Runs
+    # only on pushes to main, after the test jobs, and opens one deduplicated
+    # `ai:ci-budget` issue per finding so the pipeline fixes it in time.
+    # Never fails, and is not part of the `lint` aggregate.
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - static-checks
+      - tests-hooks-and-orchestrator
+      - tests-heal-plan-and-validation
+      - tests-promote-stall-and-review
+      - tests-release-and-log-analysis
+      - orchestrate-poll
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Check workflow sizes and CI job durations against their budgets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Issues opened with github.token start no workflow, so the issue
+          # would never reach clarify. The issue-only PAT (Issues: write) is
+          # used for the create call alone; unset, the job token is used.
+          CI_BUDGET_ISSUE_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+          CI_BUDGET_WORKFLOW_WARN_BYTES: ${{ vars.CI_BUDGET_WORKFLOW_WARN_BYTES || '440000' }}
+          CI_BUDGET_JOB_WARN_RATIO: ${{ vars.CI_BUDGET_JOB_WARN_RATIO || '0.75' }}
+        run: |
+          set -uo pipefail
+          python3 -m pip install --quiet pyyaml || true
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci_budget_watch.py || echo "::warning::ci_budget_watch.py exited non-zero; ignoring (warning only)."
 
   lint:
     # Aggregate status: the one check that says whether all of CI passed.

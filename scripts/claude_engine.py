@@ -93,11 +93,12 @@ ROLES: tuple[str, ...] = (
 	"MATERIALITY",
 	"SUMMARISER",
 	"BEHAVIOURAL_SMOKE",
+	"PANEL_REVIEWER",
 )
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
 # Roles whose codex call runs `--sandbox read-only` today keep a read-only
 # tool set on Claude; every other role edits its checkout.
-READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE")
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE", "PANEL_REVIEWER")
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"
@@ -115,10 +116,16 @@ URL_RE = re.compile(
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
+# The Claude review-panel slot reviews on Sonnet 5.5; its slug
+# (anthropic/claude-sonnet-5.5) is also the model hint, so this is the
+# fallback when no hint is passed.
+SONNET_DEFAULT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER",)
+
+
 def _role_default(role: str) -> dict[str, str]:
 	return {
 		"engine": "codex",
-		"claude_model": "claude-sonnet-5-5" if role in UTILITY_ROLES else "claude-opus-5-5",
+		"claude_model": "claude-sonnet-5-5" if role in UTILITY_ROLES or role in SONNET_DEFAULT_ROLES else "claude-opus-5-5",
 		"profile": "read" if role in READ_ROLES else "write",
 	}
 

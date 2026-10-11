@@ -60,6 +60,7 @@ CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
 CUTOVER_ROLES |= {"IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE"}  # Phase 5b
 CUTOVER_ROLES |= {"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE"}  # Phase 5c
 CUTOVER_ROLES |= {"SECURITY_AUDIT"}  # security audit on Claude, codex fallback
+CUTOVER_ROLES |= {"PANEL_REVIEWER"}  # Claude account-pool review-panel slot (skipped, not codex, when unavailable)
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
@@ -109,9 +110,13 @@ def test_broker_url_must_be_https_or_loopback(url: str, ok: bool) -> None:
 def test_utility_roles_use_sonnet_and_the_rest_opus() -> None:
 	config, _ = ce.normalize_config(None)
 	for role in ce.ROLES:
-		expected = "claude-sonnet-5-5" if role in ce.UTILITY_ROLES else "claude-opus-5-5"
+		expected = "claude-sonnet-5-5" if role in ce.UTILITY_ROLES or role in ce.SONNET_DEFAULT_ROLES else "claude-opus-5-5"
 		assert config["role_defaults"][role]["claude_model"] == expected, role
 	assert set(config["utility_roles"]) == {"LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE"}
+	# The review-panel slot reviews on Sonnet but is not a utility role.
+	assert ce.SONNET_DEFAULT_ROLES == ("PANEL_REVIEWER",)
+	assert "PANEL_REVIEWER" in ce.READ_ROLES
+	assert config["role_defaults"]["PANEL_REVIEWER"]["profile"] == "read"
 
 
 def test_missing_config_is_every_role_on_codex(tmp_path: Path) -> None:

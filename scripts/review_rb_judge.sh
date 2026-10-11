@@ -957,7 +957,7 @@ _resilient_phase_swap()
 	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
-		gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 			-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
 			|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
 		return 1
@@ -981,7 +981,7 @@ _resilient_phase_swap()
 		return 0
 	fi
 	if [ "${_rps_target}" != "ai:merged" ] && [ "${_rps_target}" != "ai:closed" ]; then
-		if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 			-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
 			echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
 			return 1
@@ -1015,7 +1015,7 @@ _resilient_phase_swap()
 		return 0
 	fi
 	echo "::warning::_resilient_phase_swap: PUT failed for #${_rps_issue} — falling back to POST add." >&2
-	gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+	GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
 		|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
 }

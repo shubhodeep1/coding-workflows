@@ -11,6 +11,11 @@
 #      fix-up issue, checks the fix-up instead: still open, it refreshes the
 #      wait marker and stops; merged, it posts the stop's resume command
 #      (scripts/unblock_actions.py followup) and stops;
+#   2a. for a scope-blocked issue whose newest rejection is from the
+#      automation-path guard, re-runs today's guard on the rejected paths and,
+#      when it grants them all, resumes the issue without a verdict (once per
+#      rejection run); a blocked fix-up the judge filed itself is listed once
+#      in the `ai:operator-step` issue instead of getting another fix-up;
 #   3. fingerprints the failure, asks the ledger what is still allowed
 #      (never repeat a verdict per fingerprint, 2 rounds per item, 6 per
 #      project, the terminal close), and, unless only the close is left, asks
@@ -445,6 +450,90 @@ unblock_rejection_snapshot()
 	fi
 }
 
+# An automation-path latch set by an older guard (Q54). Re-run today's guard on
+# the paths the newest trusted rejection names; when it grants every one, post
+# the re-grant marker and the stop's resume command instead of asking the
+# judge. The implementation run checks the grant again before it commits.
+# Returns 0 when it acted (this run ends), 1 to let the judge decide.
+unblock_try_regrant()
+{
+	local rejection_file="${RUNTIME_DIR}/automation_rejection.json" grant_file="${RUNTIME_DIR}/automation_grant.json"
+	local staged_file="${RUNTIME_DIR}/automation_staged.txt" ops_file="${RUNTIME_DIR}/regrant_ops.json" run_id reason guard_rc
+	if [ "${UNBLOCK_JUDGE_REGRANT_ENABLED:-true}" != "true" ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=disabled"
+		return 1
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" automation-rejection --item "${ITEM}" \
+		--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${rejection_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=rejection_unreadable"
+		return 1
+	fi
+	if [ "$(jq -r '.status // ""' "${rejection_file}" 2>/dev/null)" != "ok" ]; then
+		reason="$(jq -r '.reason // "unknown"' "${rejection_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=${reason:-unknown}"
+		return 1
+	fi
+	run_id="$(jq -r '.run' "${rejection_file}")"
+	if ! [[ "${run_id}" =~ ^[0-9]+$ ]] || ! jq -r '.paths[]' "${rejection_file}" > "${staged_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=rejection_unreadable"
+		return 1
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/files_touched_scope_guard.py" --emit-automation-grant "${grant_file}" \
+		--issue-meta-file "${RUNTIME_DIR}/item.json" --pipeline-login "${UNBLOCK_LOGIN}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=skip reason=grant_unavailable"
+		return 1
+	fi
+	unblock_py "${SUPPORT_DIR}/scripts/files_touched_scope_guard.py" --check-automation-paths \
+		--automation-grant-file "${grant_file}" --staged-file "${staged_file}" \
+		--allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ITEM}" >/dev/null 2>&1
+	guard_rc=$?
+	if [ "${guard_rc}" -ne 0 ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=skip reason=still_denied rc=${guard_rc}"
+		return 1
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" regrant --context-file "${RUNTIME_DIR}/context.json" \
+		--rejection-file "${rejection_file}" > "${ops_file}" || ! unblock_run_ops "${ops_file}"; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=failed reason=actuation_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} paths=$(wc -l < "${staged_file}" | tr -d ' ') outcome=regranted"
+	return 0
+}
+
+# A blocked fix-up the judge filed for another item (Q56): the trusted fix-up
+# marker on the first non-blank line of an issue the pipeline login authored
+# (a project fix-up the poller files from a request comment starts with a
+# blank line). Prints the original item number.
+unblock_fixup_origin()
+{
+	jq -r --arg login "${UNBLOCK_LOGIN}" '
+		select((.user.login // "") == $login)
+		| (.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // ""
+		| capture("^<!-- ai:unblock-fixup:v1 item=(?<item>[1-9][0-9]*) round=[1-9][0-9]* -->$")? | .item
+	' "${RUNTIME_DIR}/item.json" 2>/dev/null || true
+}
+
+# Escalate a blocked fix-up once: an `ai:operator-step` entry, a marker
+# comment, one WARNING. A later run finds the marker and stops quietly.
+unblock_escalate_fixup()
+{
+	local origin="$1" ops_file="${RUNTIME_DIR}/fixup_escalate_ops.json"
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
+		any(.[]; (.user.login // "") == $login
+			and ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
+				== "<!-- ai:unblock-fixup-escalated:v1 item=\($item) -->")
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} origin=${origin} outcome=skip reason=fixup_escalated"
+		return 0
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" fixup-escalate --context-file "${RUNTIME_DIR}/context.json" \
+		--origin "${origin}" > "${ops_file}" || ! unblock_run_ops "${ops_file}"; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} origin=${origin} outcome=failed reason=fixup_escalation_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} origin=${origin} outcome=escalated reason=fixup_blocked"
+}
+
 # A project may only claim an issue that its authenticated V2 state lists.
 unblock_state_lists_issue()
 {
@@ -622,6 +711,20 @@ unblock_main()
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 			last_activity="${now}"
+		fi
+	fi
+
+	# Deterministic exits before the judge: a latch the current guard would not
+	# set (Q54), then a blocked fix-up, which never gets a fix-up of its own (Q56).
+	if [ "${ITEM_KIND}" = "issue" ]; then
+		if [ "${ITEM_STOP}" = "scope-blocked" ] && unblock_try_regrant; then
+			return 0
+		fi
+		local fixup_origin
+		fixup_origin="$(unblock_fixup_origin)"
+		if [[ "${fixup_origin}" =~ ^[1-9][0-9]*$ ]]; then
+			unblock_escalate_fixup "${fixup_origin}"
+			return 0
 		fi
 	fi
 

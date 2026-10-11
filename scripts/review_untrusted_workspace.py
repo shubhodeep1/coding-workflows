@@ -18,6 +18,10 @@ from pathlib import Path, PurePosixPath
 
 MAX_FILE = 2 * 1024 * 1024
 MAX_README_PROMPT_BYTES = 200000
+# The README's "#### Variables" section is a long env-var reference table; it is
+# left out of prompts and replaced by README_VARIABLES_POINTER (issue #6902).
+README_VARIABLES_HEADING = b"#### Variables"
+README_VARIABLES_POINTER = b"(The variable reference table under this heading is left out of this prompt. Read the \"#### Variables\" section of README.md in the repository for a variable's default and description.)"
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
@@ -206,10 +210,18 @@ def readme_trimmed(host: Path) -> bytes:
 		return b""
 	lines = []
 	# awk prints each input record with a newline, including an unterminated last line.
+	skipping_variables = False
 	for line in data.split(b"\n")[: -1 if data.endswith(b"\n") else None]:
 		if line.startswith(b"### 2. Create wrapper workflows"):
 			break
+		if skipping_variables:
+			if not line.startswith(b"#"):
+				continue
+			skipping_variables = False
 		lines.append(line + b"\n")
+		if line == README_VARIABLES_HEADING:
+			lines.append(README_VARIABLES_POINTER + b"\n")
+			skipping_variables = True
 	if sum(len(line) + len(b"UNTRUSTED_DATA: ") for line in lines) > MAX_README_PROMPT_BYTES:
 		raise ValueError("README exceeds prompt budget")
 	return b"".join(lines)
