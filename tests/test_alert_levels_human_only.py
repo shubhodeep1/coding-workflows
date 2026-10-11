@@ -168,9 +168,12 @@ def test_reported_auto_handled_alerts_are_debug():
 	assert line.rstrip().endswith('"DEBUG" >/dev/null 2>&1 || true'), line
 	stall = [l for l in script.splitlines() if 'tg_notify "Stall recovery:' in l or 'tg_notify_issue "${issue_num}" "Standalone stall recovery:' in l]
 	assert stall
-	# The standalone ancestor-chain no-op cap closes the issue with no judge
-	# behind it, so it stays a WARNING for a person to confirm.
-	paging = [l for l in stall if '"WARNING"' in l and "ancestor-chain no-op cap" not in l]
+	# Human-action stall notices stay WARNING: the standalone ancestor-chain
+	# no-op cap closes the issue with no judge behind it, and the plan
+	# auto-approval hold (sent once per hold marker) waits for a trusted
+	# files_touched grant or a human /approved.
+	human_action = ("ancestor-chain no-op cap", "plan auto-approval withheld")
+	paging = [l for l in stall if '"WARNING"' in l and not any(h in l for h in human_action)]
 	assert not paging, paging
 
 
@@ -286,8 +289,9 @@ def test_conflict_newer_untrusted_marker_does_not_shadow_trusted_one():
 	marker = f"60|intruder|{HEAD_A}|0|0\n55|bot|{HEAD_A}|2|0"
 	sends, calls, out = _conflict_harness(marker=marker)
 	assert len(sends) == 1 and sends[0][0] == "WARNING"
-	assert calls[0].startswith("api repos/o/r/issues/comments/55 -X PATCH")
-	assert f"head={HEAD_A} attempts=3 alerted=1 -->" in calls[0]
+	assert len(calls) == 2 and all(call.startswith("api repos/o/r/issues/comments/55 -X PATCH") for call in calls)
+	assert f"head={HEAD_A} attempts=3 alerted=0 -->" in calls[0]
+	assert f"head={HEAD_A} attempts=3 alerted=1 -->" in calls[1]
 	assert "outcome=alerted" in out
 
 
