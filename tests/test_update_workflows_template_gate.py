@@ -323,7 +323,20 @@ def test_review_editor_never_commits_to_updater_branches() -> None:
 	script = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
 	guard = script.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]')
 	assert "reason=updater_pr_verify_job_owns_branch" in script[guard:guard + 400]
+	assert "AUTOFIX_UPDATER_COMMIT_WITHHELD=true" in script[guard:guard + 1200]
 	assert guard < script.index("git commit")
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert "env.AUTOFIX_UPDATER_COMMIT_WITHHELD != 'true'" in workflow
+
+
+def test_review_never_pushes_or_resolves_on_updater_branches() -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	push = text.index("- name: Push all pending commits")
+	guard = text.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]', push)
+	assert "AUTOFIX_PUSH_SKIPPED" in text[guard:guard + 300]
+	assert guard < text.index("git push", push)
+	detect = (REPO_ROOT / "scripts" / "review_autofix_step_detect_merge_conflicts.sh").read_text(encoding="utf-8")
+	assert "AUTOFIX_MERGE_CONFLICT_SKIPPED" in detect
 
 
 def test_telegram_helpers_come_from_the_attested_checkout() -> None:

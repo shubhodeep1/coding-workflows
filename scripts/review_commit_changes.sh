@@ -122,6 +122,12 @@ fi
 # An editor commit would land an unverified head under that job's auto-merge.
 if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
   echo "AUTOFIX_COMMIT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+  # Discard the withheld edits and tell the editor-changes-lost detector they
+  # were withheld on purpose (otherwise every run is reported as lost edits).
+  git reset --hard HEAD >/dev/null 2>&1 || true
+  git clean -ffd -e .ai -e .serena -e scripts -e prompts -e .github/ai -e .github/scripts \
+    -e .github/prompts -e .codex-workflow-src -e .codex-workflow-src-main >/dev/null 2>&1 || true
+  echo "AUTOFIX_UPDATER_COMMIT_WITHHELD=true" >> "$GITHUB_ENV"
   echo "- commit skipped (consumer-updater branch; only the updater writes it)" > "${COMMITTED_FILES_FILE}"
   exit 0
 fi

@@ -10,6 +10,14 @@ echo "Checking for merge conflicts"
 echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
 echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 
+# Consumer-updater PRs (#7004): the updater rebuilds its own branch, and a
+# review push could not land anyway ("Push all pending commits" skips these
+# branches), so do not spend a resolver run on a conflicted updater PR.
+if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  echo "AUTOFIX_MERGE_CONFLICT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+  return 0 2>/dev/null || exit 0
+fi
+
 # git merge requires a clean working tree.  Save untracked dirs
 # (like scripts/, prompts/) so they survive into the
 # conflict-resolver step instead of being destroyed by git clean.
