@@ -587,8 +587,27 @@ def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comment
 	return decision(True, "ok")
 
 
-def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int = MAX_RUN_REFS, since: datetime | None = None) -> list[dict[str, Any]]:
-	"""Pick recent failed runs whose display title matches the issue title."""
+# Validate wrappers' run-name: `AI Validate [tracking:<N>]` (internal:
+# `Internal: AI Validate [tracking:<N>]`), see select_failed_runs.
+_TRACKING_RUN_TITLE_RE = re.compile(r"\[tracking:([1-9][0-9]{0,9})\]$")
+
+
+def select_failed_runs(
+	runs: Iterable[dict[str, Any]],
+	*,
+	title: str,
+	limit: int = MAX_RUN_REFS,
+	since: datetime | None = None,
+	tracking_issue: int | None = None,
+) -> list[dict[str, Any]]:
+	"""Pick recent failed runs whose display title matches the issue title.
+
+	With ``tracking_issue``, a failed run titled ``… [tracking:<tracking_issue>]``
+	also matches: the validate wrappers name their runs that way
+	(``AI Validate [tracking:N]``), never after the project's title, so an
+	orchestrator project's validation failure (binance-blessings#249) was
+	reported with no runs and fell back to the label-only fingerprint.
+	"""
 	wanted = single_line(title, 500)
 	picked: list[dict[str, Any]] = []
 	for run in runs:
@@ -596,7 +615,9 @@ def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int
 			continue
 		if str(run.get("conclusion") or "") not in ("failure", "timed_out", "cancelled"):
 			continue
-		if single_line(run.get("display_title"), 500) != wanted:
+		display_title = single_line(run.get("display_title"), 500)
+		tracking_match = _TRACKING_RUN_TITLE_RE.search(display_title) if tracking_issue else None
+		if display_title != wanted and not (tracking_match and int(tracking_match.group(1)) == tracking_issue):
 			continue
 		created = _parse_iso(run.get("created_at"))
 		if since is not None and created is not None and created < since:
@@ -683,7 +704,7 @@ def build_issue_payload(
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
+	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""), tracking_issue=_positive_int(issue.get("number")))
 	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
 	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
 	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)

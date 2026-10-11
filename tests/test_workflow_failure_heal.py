@@ -343,6 +343,27 @@ def test_select_failed_runs_matches_title_and_conclusion() -> None:
 	assert [run["run_id"] for run in picked] == ["2", "4"]
 
 
+def test_select_failed_runs_picks_the_tracking_issues_validation_runs() -> None:
+	"""binance-blessings#249: its validation run is titled `AI Validate
+	[tracking:249]`, never the project title, so the report carried no runs."""
+	runs = [
+		{"id": 7, "conclusion": "failure", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:04:45Z", "html_url": "u7", "name": "AI Validate"},
+		{"id": 8, "conclusion": "failure", "display_title": "Internal: AI Validate [tracking:249]", "created_at": "2026-10-11T03:05:45Z", "html_url": "u8", "name": "Internal: AI Validate"},
+		{"id": 9, "conclusion": "failure", "display_title": "AI Validate [tracking:2490]", "created_at": "2026-10-11T03:06:45Z", "html_url": "u9", "name": "AI Validate"},
+		{"id": 10, "conclusion": "success", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:07:45Z", "html_url": "u10", "name": "AI Validate"},
+		{"id": 11, "conclusion": "failure", "display_title": "AI Validate [tracking:249] extra", "created_at": "2026-10-11T03:08:45Z", "html_url": "u11", "name": "AI Validate"},
+	]
+	title = "[Orchestrator] Support/Resistance TWAP Flips and Sell Guardrails"
+	assert [run["run_id"] for run in heal.select_failed_runs(runs, title=title, tracking_issue=249)] == ["7", "8"]
+	assert heal.select_failed_runs(runs, title=title) == []
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:harness-broken",
+		issue={**_issue(249, title=title, labels=["ai:orchestrator-tracking", "ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["7", "8"]
+
+
 def _issue(number: int = 42, *, title: str = "Add retries to the poller", body: str = "body", labels: list[str] | None = None, state: str = "open") -> dict:
 	return {
 		"number": number,
@@ -2164,6 +2185,24 @@ def test_intake_without_linked_runs_still_files_from_label_context() -> None:
 	assert "no failed run could be linked" in prompt
 	created = state["issues_created"][0]
 	assert created["title"] == f"Workflow heal: ai:needs-human on {CONSUMER_REPO}#42"
+
+
+def test_intake_label_only_fingerprint_is_per_escalated_item() -> None:
+	"""A run-less label report used to fingerprint as `label:<label>` alone, so
+	every repository's run-less reports of that label shared one lineage:
+	binance-blessings#249's first ai:harness-broken report escalated at
+	generation 4 because three unrelated heals (the last #7063, from
+	coding-workflows#6902) carried that fingerprint."""
+	shared_fp = heal.fingerprint("label:ai:needs-human", "", "label:ai:needs-human")
+	unrelated = _sourced_heal_issue(7063, state="closed", fp=shared_fp, source=f"{SELF_REPO}#6902", gen=3)
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [unrelated], CONSUMER_REPO: []})
+	result, state_after, _ = _run_intake(_consumer_payload(run_refs=[]), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	expected_fp = heal.fingerprint("label:ai:needs-human", "", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=label:ai:needs-human" in result.stdout
+	assert "reason=lineage_cap" not in result.stdout
+	created = state_after["issues_created"][0]
+	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@
 #   1. Reads the escalated issue / PR, its comments, and the repository's recent
 #      workflow runs, and picks the failed runs that belong to it (run links in
 #      the failure comments the pipeline posts, plus failed runs whose display
-#      title equals the issue title).
+#      title equals the issue title or ends in `[tracking:<issue>]`).
 #   2. Records the coding-workflows release SHA the consumer wrappers are pinned
 #      to, so the intake can diagnose against exactly the code that ran.
 #   3. Sends one thin `repository_dispatch` (event type `workflow-failure-heal`)
