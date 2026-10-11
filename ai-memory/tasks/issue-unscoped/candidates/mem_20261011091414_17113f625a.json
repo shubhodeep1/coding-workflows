@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:689 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: If `base.repo.default_branch` is missing, the fallback comparison treats any non-empty `base.ref` as non-default and may incorrectly route the re-issued issue to that branch.\n  WHY: Gemini rated this MAJOR and Minimax rated it NIT; other reviewers say the REST pull-request payload always includes `default_branch`, making the case theoretical.\n- scripts/review_conflict_resolve.sh:818 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The return code from `_resolver_reissue_for_host_only_scope` is explicitly ignored (`|| true`) before calling `_resolver_fail_closed`.\n  WHY: Gemini says a partial re-issue failure can leave a replacement issue while the original PR remains open; other reviewers conclude the subsequent fail-closed call still exits with the documented non-retryable reason.\n- scripts/review_conflict_resolve.sh: lines 743-747 and 785-791 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: If closing the PR fails after posting the trusted re-issue marker, the next run skips re-issuing without retrying the close, leaving the original PR open.\n  WHY: The marker causes subsequent runs to stop at `reason=already_reissued`, requiring manual follow-up to close the original PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_conflict_resolve.sh, `_resolver_reissue_for_host_only_scope`, the `if [ \"${reissue_comment_posted}\" != \"true\" ]` branch\n  PROBLEM: If the single-attempt comment POST fails and the later close also fails, the PR remains open without a trusted marker, so the next run can create a second replacement issue.\n  WHY: The reviewer suggests logging `REISSUE_DUPLICATE_RISK=true` and sending a Telegram WARNING naming the replacement issue so an operator sees the duplicate risk.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_resolve.sh:689 | severity=MAJOR | confidence=4\n  PROBLEM: The `pr_base_branch` logic incorrectly handles cases where `default_branch` is missing from the PR payload.\n  WHY: The filter resolves a missing `default_branch` to an empty string, so a non-empty base branch is treated as non-default and the re-issued issue may be routed to the wrong target branch.\n- scripts/review_conflict_resolve.sh:818 | severity=MAJOR | confidence=4\n  PROBLEM: The return code from `_resolver_reissue_for_host_only_scope` is explicitly ignored (`|| true`) before calling `_resolver_fail_closed`.\n  WHY: A partial failure, such as creating an issue but failing to close the PR, can leave a replacement issue while the original PR remains open.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_resolve.sh, `_resolver_reissue_for_host_only_scope`, context.json jq expression (the line `pr_base_branch: (($p.base.ref // \"\") as $b | if $b != \"\" and $b != ($p.base.repo.default_branch // \"\") then $b else null end)` introduced in this run) | severity=NIT | confidence=2\n  PROBLEM: When `$p.base.repo.default_branch` is absent or null, the comparison treats any non-empty `base.ref` as non-default.\n  WHY: In a malformed or cross-repo payload, a default-branch base ref could be attached to the replacement issue as `Integration branch`, causing downstream routing to use the wrong branch. The suggested fix is to require `default_branch` to be present before comparing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_conflict_resolve.sh, lines 743-747 and 785-791; `_resolver_fail_closed_for_conflict_paths`, lines 815-819 | severity=MAJOR | confidence=4\n  PROBLEM: The PR comment containing the trusted re-issue marker is posted before the PR is closed. If closing fails, the function logs `outcome=close_failed` but returns success; the caller then fails the resolver. On the next run, the marker causes the helper to skip re-issuing, without retrying the close.\n  WHY: A transient GitHub close failure leaves the original PR open alongside its replacement issue. Subsequent runs stop at `reason=already_reissued`, so the PR is not automatically closed and requires manual follow-up.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e5060b7274f1b83794911e386f4b9b8970f1ac98122ce1a1ca9fe85c4dce64ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6752,
+    "run_id": "38122846160",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38122846160",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011091414_17113f625a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6752,
+    "run_id": "38122846160"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T09:14:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
