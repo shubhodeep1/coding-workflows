@@ -1421,6 +1421,33 @@ case "${CLASSIFICATION}" in
 				TARGET_BRANCH_SOURCE=support_ref
 			fi
 		fi
+		# A consumer pinned to a release commit that the default heal target
+		# (stable) does not contain ran code only the default branch has: this
+		# repository's own projects validate on main. A stable hotfix then has
+		# nothing to edit and the plan blocks (#6902 -> #7063). The branch-progress
+		# compare above (`compare/<pin>...<target>`, no extra API call) already
+		# says whether the target contains the pin: `ahead`/`identical` do,
+		# `behind`/`diverged` do not. An unavailable compare keeps the target.
+		if [ "${TARGET_BRANCH_SOURCE}" = default ] && [ -n "${WRAPPER_SHA}" ] \
+			&& [ "${PROGRESS_SHA}" = "${WRAPPER_SHA}" ] && [ "${PROGRESS_BRANCH}" = "${TARGET_BRANCH}" ]; then
+			HEAL_PIN_STATUS="$(jq -r 'if .available == true then (.status // "") else "" end' "${PROGRESS_FILE}" 2>/dev/null || true)"
+			case "${HEAL_PIN_STATUS}" in
+				behind|diverged)
+					# The provenance block only resolves the default branch for
+					# phase/autofix/workflow_run reports; consumer issue and PR
+					# reports skip it, so resolve it here the same way (no API call).
+					HEAL_RETARGET_BRANCH="${PROVENANCE_DEFAULT_BRANCH:-${WORKFLOW_HEAL_DEFAULT_BRANCH:-}}"
+					if [ -z "${HEAL_RETARGET_BRANCH}" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+						HEAL_RETARGET_BRANCH="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+					fi
+					HEAL_RETARGET_BRANCH="$(printf '%s' "${HEAL_RETARGET_BRANCH}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+					HEAL_RETARGET_BRANCH="${HEAL_RETARGET_BRANCH:-main}"
+					log "target_branch_retarget from=${TARGET_BRANCH} to=${HEAL_RETARGET_BRANCH} reason=wrapper_pin_not_on_target pin=${WRAPPER_SHA} compare_status=${HEAL_PIN_STATUS}"
+					TARGET_BRANCH="${HEAL_RETARGET_BRANCH}"
+					TARGET_BRANCH_SOURCE=wrapper_pin_not_on_target
+					;;
+			esac
+		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
 				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
