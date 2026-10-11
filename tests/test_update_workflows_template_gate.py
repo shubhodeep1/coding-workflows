@@ -300,6 +300,29 @@ def test_review_auto_merge_skips_updater_prs() -> None:
 	assert guard < script.index("gh_retry gh pr merge")
 
 
+def test_deterministic_skip_merge_skips_updater_prs() -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	guard = text.index('elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then')
+	assert "reason=updater_pr_verify_job_owns_merge" in text[guard:guard + 600]
+	assert guard < text.index("gh_retry gh pr merge", guard)
+
+
+def test_review_blocked_judge_never_merges_updater_prs() -> None:
+	script = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	guard = script.index('=~ ^auto/update-workflows-[0-9a-f]{12}$ ]]')
+	assert "judge_skip_reason=updater_pr_verify_job_owns_merge" in script[guard:guard + 600]
+	assert script.index('RB_MERGE_ACTION="false"') < guard < script.index("rb_security_merge_gate; then")
+	assert guard < script.index('if gh pr merge "${PR_NUMBER}"')
+
+
+def test_telegram_helpers_come_from_the_attested_checkout() -> None:
+	steps = _workflow()["jobs"]["update-wrappers"]["steps"]
+	notify = [step for step in steps if step.get("name") == "Send Telegram notification"][0]
+	assert notify["env"]["UPSTREAM_DIR"] == "${{ steps.fetch.outputs.upstream_dir }}"
+	assert "contents/scripts/tg_helpers.sh" not in notify["run"]
+	assert '"${UPSTREAM_DIR:-/nonexistent}/../scripts/tg_helpers.sh"' in notify["run"]
+
+
 def test_verify_job_reproduces_agents_fragment_assembly() -> None:
 	run = _verify_step("verify_reproduce")["run"]
 	assert '"${RELEASE_ROOT}/scripts/assemble_agents.py" assemble' in run

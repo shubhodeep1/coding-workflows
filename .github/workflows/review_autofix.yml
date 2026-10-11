@@ -2380,6 +2380,10 @@ jobs:
             auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
             echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
+          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+            # Consumer-updater PRs (#7004): only update_workflows.yml's verify job enables auto-merge.
+            auto_merge_summary="SUPPRESSED (consumer-updater PR head ref '${PR_HEAD_REF}'; the update_workflows.yml verify job owns the merge)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=updater_pr_verify_job_owns_merge"
           elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             if deterministic_skip_head_is_current; then
               auto_merge_ready_labels_allowed="true"

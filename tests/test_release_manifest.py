@@ -102,7 +102,7 @@ def test_files_sorted_unique_and_scoped(tmp_path: Path) -> None:
 	assert len(paths) == len(set(paths))
 	assert "workflow-templates/validation-harness/ignored.txt" not in paths
 	assert "scripts/unrelated.py" not in paths
-	assert "scripts/tg_helpers.sh" not in paths
+	assert "scripts/tg_helpers.sh" in paths
 	assert "workflow-templates/audit-gate/contract.json" in paths
 	assert paths.count("workflow-templates/ai-update-workflows.yml") == 1
 
@@ -283,10 +283,11 @@ def test_real_repo_tree(tmp_path: Path) -> None:
 		"scripts/verify_release_manifest.py",
 		"scripts/release_manifest.py",
 		"scripts/lint_pr_body_auto_close.py",
+		"scripts/tg_helpers.sh",
 		"workflow-templates/audit-gate/contract.json",
 	):
 		assert required in paths, required
-	assert "scripts/tg_helpers.sh" not in paths
+	assert "scripts/tg_helpers.sh" in paths
 
 
 def test_surface_rules_track_the_updater() -> None:
@@ -302,6 +303,7 @@ def test_surface_rules_track_the_updater() -> None:
 		"Assemble changelog fragments",
 		"Assemble agents.md fragments",
 		"Verify attested release manifest",
+		"Send Telegram notification",
 	):
 		assert f"name: {step}" in text, step
 	for needle in (
@@ -319,5 +321,6 @@ def test_surface_rules_track_the_updater() -> None:
 		"scripts/verify_release_manifest.py",
 		"scripts/release_manifest.py",
 		"scripts/lint_pr_body_auto_close.py",
+		"scripts/tg_helpers.sh",
 	):
 		assert needle in text, needle

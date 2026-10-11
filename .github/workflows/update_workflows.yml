@@ -282,7 +282,8 @@ jobs:
               scripts/assemble_agents.py \
               scripts/verify_release_manifest.py \
               scripts/release_manifest.py \
-              scripts/lint_pr_body_auto_close.py
+              scripts/lint_pr_body_auto_close.py \
+              scripts/tg_helpers.sh
             for listed_dir in workflow-templates/.claude workflow-templates/audit-gate; do
               if [ -e "${listed_dir}" ] || [ -L "${listed_dir}" ]; then
                 find "${listed_dir}" ! -type d -print
@@ -1264,7 +1265,7 @@ jobs:
           COMMIT_PR_URL: ${{ steps.commit_push.outputs.pr_url }}
           COMMIT_PR_ACTION: ${{ steps.commit_push.outputs.pr_action }}
           COMMIT_AUTO_MERGE: ${{ steps.commit_push.outputs.auto_merge }}
-          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
         run: |
           set -euo pipefail
 
@@ -1277,13 +1278,12 @@ jobs:
           wf_source="${{ github.repository_owner }}/coding-workflows"
           mkdir -p scripts
           helpers_tmp="$(mktemp)"
-          # Pin to the release commit this run fetched, not the moving stable tag.
-          helpers_ref="stable"
-          if [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-            helpers_ref="${UPSTREAM_SHA}"
-          fi
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${helpers_ref}" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
+          # Load it from the release checkout this run fetched (attested in the
+          # release manifest and, with UPDATER_VERIFY_RELEASE_MANIFEST=true,
+          # hash-checked by "Verify attested release manifest"), never via a
+          # separate contents-API fetch whose bytes nothing verifies.
+          helpers_src="${UPSTREAM_DIR:-/nonexistent}/../scripts/tg_helpers.sh"
+          if [ -f "${helpers_src}" ] && [ ! -L "${helpers_src}" ] && cp -- "${helpers_src}" "${helpers_tmp}" && [ -s "${helpers_tmp}" ]; then
             mv "${helpers_tmp}" "scripts/tg_helpers.sh"
             # Block fetched scripts from being committed in consumer repos.
             if [ "${{ github.repository }}" != "${wf_source}" ]; then
@@ -1783,7 +1783,8 @@ jobs:
               scripts/assemble_agents.py \
               scripts/verify_release_manifest.py \
               scripts/release_manifest.py \
-              scripts/lint_pr_body_auto_close.py
+              scripts/lint_pr_body_auto_close.py \
+              scripts/tg_helpers.sh
             for listed_dir in workflow-templates/.claude workflow-templates/audit-gate; do
               if [ -e "${listed_dir}" ] || [ -L "${listed_dir}" ]; then
                 find "${listed_dir}" ! -type d -print

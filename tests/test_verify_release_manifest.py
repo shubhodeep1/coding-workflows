@@ -77,7 +77,7 @@ def _fixture(tmp_path: Path) -> Path:
 	_write(root, "workflow-templates/.claude/hooks/hook.sh", "#!/bin/sh\n", 0o755)
 	_write(root, "workflow-templates/audit-gate/contract.json", "{}\n")
 	(root / "workflow-templates" / "CLAUDE.md").symlink_to("../CLAUDE.md")
-	for name in ("workflow_wrapper_refs.py", "apply_audit_gate_assets.py", "assemble_changelog.py", "assemble_agents.py", "verify_release_manifest.py", "release_manifest.py", "lint_pr_body_auto_close.py"):
+	for name in ("workflow_wrapper_refs.py", "apply_audit_gate_assets.py", "assemble_changelog.py", "assemble_agents.py", "verify_release_manifest.py", "release_manifest.py", "lint_pr_body_auto_close.py", "tg_helpers.sh"):
 		_write(root, f"scripts/{name}", f"# {name}\n", 0o755)
 	_write(root, "scripts/unrelated.py", "# not attested\n")
 	return root

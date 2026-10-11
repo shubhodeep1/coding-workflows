@@ -27,9 +27,8 @@ Surface (one rule per updater step, see SURFACE_RULES):
   scripts/workflow_wrapper_refs.py, before running the verifier).
 - "Commit and push updates" (pull-request path, #6989):
   scripts/lint_pr_body_auto_close.py checks the composed PR body.
-- Not attested: scripts/tg_helpers.sh. The "Send Telegram notification" step
-  fetches it through the contents API at ref=stable, not from the release
-  checkout, so it is outside the release-to-consumer copy surface.
+- "Send Telegram notification": scripts/tg_helpers.sh, sourced from the
+  release checkout with the Telegram and GitHub credentials in scope.
 
 Assumption: the authoritative plan
 (docs/plans/safeguarded-consumer-updater-plan.md on branch
@@ -94,6 +93,8 @@ SURFACE_RULES = (
 	# "Commit and push updates" runs the auto-close lint from the release
 	# checkout on its pull-request path (#6989).
 	("file", "scripts/lint_pr_body_auto_close.py", True),
+	# "Send Telegram notification" sources this from the release checkout.
+	("file", "scripts/tg_helpers.sh", True),
 )
 
 # Directories (and the root file) the output must never be written into, so a
