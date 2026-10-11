@@ -75,8 +75,12 @@ def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list
 			removed = int(match.group(2) if match.group(2) is not None else "1")
 			added = int(match.group(4) if match.group(4) is not None else "1")
 			start = int(match.group(3))
-			section = _section_of_line(new_lines, start if added else start + 1)
-			if section == GENERATED_SECTION:
+			# An added hunk belongs to the section of the line before it, and a
+			# hunk that adds a `## ` heading is never exempt: otherwise a hunk
+			# that re-creates the Repo-tree heading would exempt the prose after it.
+			section = _section_of_line(new_lines, start - 1 if added else start + 1)
+			adds_heading = any(text.startswith("## ") for text in new_lines[max(start - 1, 0):start - 1 + added])
+			if section == GENERATED_SECTION and not adds_heading:
 				continue
 			net_added += added - removed
 			surplus += max(added - removed, 0)

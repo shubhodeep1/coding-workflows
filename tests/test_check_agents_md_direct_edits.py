@@ -118,6 +118,16 @@ def test_generated_repo_tree_section_is_exempt(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stdout
 
 
+def test_recreated_repo_tree_heading_does_not_exempt_new_prose(tmp_path: Path) -> None:
+	repo, base = _repo(tmp_path)
+	head = _commit(repo, "agents.md", BASE_DOC.replace(
+		"## Stable log prefixes (contractual)\n",
+		"## Repo-tree (auto-generated)\n\nNew prose.\n\n## Stable log prefixes (contractual)\n"))
+	result = _check(repo, base, head)
+	assert result.returncode == 1, result.stdout
+	assert "AGENTS_MD_DIRECT_EDIT outcome=violation" in result.stdout
+
+
 def test_fragment_only_change_passes(tmp_path: Path) -> None:
 	repo, base = _repo(tmp_path)
 	head = _commit(repo, "agents.d/1-new.md", '<!-- agents: section="Workflow architecture" -->\nNew.\n')
@@ -163,7 +173,9 @@ def test_prompts_the_pipeline_sends_name_the_fragment_rule() -> None:
 	`mode-implement-inline.txt` heredoc, which never mentioned agents.d/;
 	`prompts/mode-implement.txt` did, but is not what the workflow sends."""
 	workflow = (ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
-	inline_prompt = workflow.split('cat > "${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', 1)[1].split("\n          EOF\n", 1)[0]
+	inline_parts = workflow.split('cat > "${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', 1)[1].split("\n          EOF\n", 1)
+	assert len(inline_parts) == 2, "inline implement prompt heredoc terminator not found"
+	inline_prompt = inline_parts[0]
 	editor = (ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
 	editor_rule = editor.split("AGENTS.MD DISCIPLINE", 1)[1].split("EDITOR EXECUTION GUARDRAILS", 1)[0]
 	unattended = (ROOT / "unattended_system_instructions.md").read_text(encoding="utf-8")
