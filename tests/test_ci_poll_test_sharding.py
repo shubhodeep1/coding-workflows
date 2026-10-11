@@ -746,6 +746,21 @@ class ShardFailureSummaryTest(unittest.TestCase):
 					[self.FAILING + "shard 1: no log recorded, its tests did not run"],
 				)
 
+	def test_nul_byte_in_log_still_names_the_failing_test(self) -> None:
+		"""A NUL byte must not turn the matches into grep's "Binary file" line."""
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = self.judge(step_run, {
+					"txt": "test_n\n",
+					"log": "noise\x00here\n  FAIL  test_n: boom\n",
+					"rc": "1\n",
+				})
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertEqual(
+					self.summary_lines(result.stdout),
+					[self.FAILING + "shard 1: FAIL  test_n: boom"],
+				)
+
 	def test_percent_is_escaped_and_carriage_return_removed(self) -> None:
 		for workflow_name, step_run in self.step_runs().items():
 			with self.subTest(workflow=workflow_name):
