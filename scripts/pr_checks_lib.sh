@@ -132,9 +132,17 @@ _pr_required_check_names_for_base()
 
 # Helper: Check whether all check-runs on a PR's head commit have
 # completed AND none of the check-runs that count as "required"
-# are in an unacceptable conclusion (success/neutral/skipped/cancelled
-# are acceptable). Returns 0 when nothing is blocking, 1 otherwise
+# are in an unacceptable conclusion (success/neutral/skipped are
+# acceptable; cancelled, timed_out, action_required, failure and
+# startup_failure block). Returns 0 when nothing is blocking, 1 otherwise
 # (including API errors). Sets PR_CHECKS_LAST_REASON on every return.
+#
+# Only the newest check-run per name (highest id, then latest started_at)
+# is evaluated: re-running a job creates a new check-run with the same
+# name on the same SHA, so a cancelled run that a newer run superseded
+# does not block. Dedupe happens before the self-run exclusion, so an
+# older attempt of the caller's own job never resurfaces. A cancelled
+# required check with nothing newer is a settled failure (pending=0).
 #
 # The gate's "required" set is resolved per call as:
 #   1. Branch protection's `required_status_checks.contexts` on the
@@ -221,13 +229,20 @@ _pr_checks_completed()
 		# Legacy fail-closed-on-any-failure behaviour (with self-run exclusion).
 		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");
-			if (type == "array") then
-				[.[]? | (.check_runs // [])[] | select(_is_pending and (_is_self_check_run | not))] | length
-			elif (type == "object" and (.check_runs | type == "array")) then
-				[.check_runs[] | select(_is_pending and (_is_self_check_run | not))] | length
+			def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
+			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped");
+			(
+				if (type == "array") then
+					[.[]? | (.check_runs // [])[]]
+				elif (type == "object" and (.check_runs | type == "array")) then
+					.check_runs
+				else
+					null
+				end
+			) as $runs |
+			if ($runs == null) then empty
 			else
-				empty
+				[$runs | _newest_per_name | .[] | select(_is_pending and (_is_self_check_run | not))] | length
 			end
 		' 2>/dev/null | tail -n1)"
 	else
@@ -241,6 +256,7 @@ _pr_checks_completed()
 		# can format the env var with spaces after commas.
 		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg self_run "${self_run}" '
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+			def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
 			($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 			(
 				if (type == "array") then
@@ -253,11 +269,11 @@ _pr_checks_completed()
 			) as $runs |
 			if ($runs == null) then empty
 			else
-				[$runs[] | select(
+				[$runs | _newest_per_name | .[] | select(
 					(
 						(.status != "completed")
 						or (
-							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")
+							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")
 							and (.name as $n | $required | index($n))
 						)
 					)
@@ -274,13 +290,16 @@ _pr_checks_completed()
 	# Side channel for callers that wait: how many of the blocking runs are
 	# still running (status != completed, self-run excluded). A blocking
 	# result with zero pending runs is a settled failure, not a wait.
+	# Counted over the same newest-per-name set as the blocking count, so a
+	# superseded in-progress run does not count and a newer re-run does.
 	PR_CHECKS_LAST_PENDING="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
 		def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+		def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
 		(
 			if (type == "array") then [.[]? | (.check_runs // [])[]]
 			elif (type == "object" and (.check_runs | type == "array")) then .check_runs
 			else [] end
-		) | [.[] | select(.status != "completed" and (_is_self_check_run | not))] | length
+		) | _newest_per_name | [.[] | select(.status != "completed" and (_is_self_check_run | not))] | length
 	' 2>/dev/null | tail -n1)"
 	[[ "${PR_CHECKS_LAST_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_LAST_PENDING=0
 	# Total non-self check-runs on the head: 0 on a fresh push means CI has

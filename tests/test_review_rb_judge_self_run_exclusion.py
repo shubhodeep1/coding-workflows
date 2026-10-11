@@ -179,14 +179,15 @@ def test_script_excludes_self_in_both_jq_branches() -> None:
 	legacy (block-on-any) filter and the required-set filter. Dropping the
 	predicate from either would leave a path where the gate self-deadlocks."""
 	src = _pr_checks_lib_text()
-	# Legacy "*" branch: AND _is_pending with the negated self-check
-	# (paginated array + legacy single-object shapes => >=2 occurrences).
+	# Legacy "*" branch: AND _is_pending with the negated self-check.
+	# Both check-runs shapes (paginated array + legacy single object) are
+	# normalised into one $runs list (#7127), so one select covers both.
 	legacy = "select(_is_pending and (_is_self_check_run | not))"
 	legacy_occurrences = src.count(legacy)
-	assert legacy_occurrences >= 2, (
+	assert legacy_occurrences >= 1, (
 		f"scripts/pr_checks_lib.sh's legacy filter must apply the self-run "
-		f"exclusion in both shapes. Found {legacy_occurrences} occurrence(s) "
-		f"of `{legacy}`; expected at least 2."
+		f"exclusion. Found {legacy_occurrences} occurrence(s) "
+		f"of `{legacy}`; expected at least 1."
 	)
 	# Required-set branch: the select must AND the required-failure test
 	# with the negated self-check.
@@ -502,13 +503,20 @@ def test_workflow_merge_conflict_comment_is_branch_agnostic() -> None:
 # sync with scripts/pr_checks_lib.sh when the live filter changes.
 JQ_FILTER = '''
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");
-if (type == "array") then
-  [.[]? | (.check_runs // [])[] | select(_is_pending and (_is_self_check_run | not))] | length
-elif (type == "object" and (.check_runs | type == "array")) then
-  [.check_runs[] | select(_is_pending and (_is_self_check_run | not))] | length
+def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
+def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped");
+(
+  if (type == "array") then
+    [.[]? | (.check_runs // [])[]]
+  elif (type == "object" and (.check_runs | type == "array")) then
+    .check_runs
+  else
+    null
+  end
+) as $runs |
+if ($runs == null) then empty
 else
-  empty
+  [$runs | _newest_per_name | .[] | select(_is_pending and (_is_self_check_run | not))] | length
 end
 '''
 

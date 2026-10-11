@@ -494,16 +494,41 @@ def test_sweep_force_merge_gate_skips_when_no_productive_commit():
 	assert "no prior [ai-autofix] / [judge-fix] commit" in sweep
 
 
-def test_sweep_force_merge_gate_d_checks_required_checks():
-	"""Gate D blocks force-merge when any completed required check is
-	failure/cancelled/timed_out/action_required. Mirrors the workflow's
-	own auto-merge safety (it would not auto-merge a PR with failing
-	checks either)."""
+def _gate_d_block() -> str:
+	"""Return the sweep slice from the Gate D marker to the force-merge."""
 	sweep = _sweep_block()
-	for conclusion in ("failure", "cancelled", "timed_out", "action_required"):
-		assert conclusion in sweep, (
-			f"Gate D must treat conclusion={conclusion} as a blocker."
-		)
+	start = sweep.find("# Gate D")
+	end = sweep.find("# All gates passed", start)
+	assert start != -1 and end != -1, "Gate D block markers missing"
+	return sweep[start:end]
+
+
+def test_sweep_force_merge_gate_d_checks_required_checks():
+	"""Gate D blocks force-merge through the shared required-checks gate
+	(scripts/pr_checks_lib.sh), which treats any required check-run whose
+	newest run is not success/neutral/skipped (failure, cancelled,
+	timed_out, action_required) as a blocker, and fails closed when the
+	gate is unavailable."""
+	gate_d = _gate_d_block()
+	assert "_pr_checks_completed" in gate_d
+	assert "command -v _pr_checks_completed" in gate_d
+	assert "reason=helper_unavailable" in gate_d
+
+
+def test_sweep_force_merge_gate_d_uses_shared_checks_gate():
+	"""Gate D must call the shared gate with three arguments (opting into
+	the required-set filter) and must not carry its own check-runs query,
+	so pr_checks_lib.sh stays the single source of truth."""
+	gate_d = _gate_d_block()
+	gate_d_code = _strip_shell_comments(gate_d)
+	assert '_pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}"' in gate_d_code
+	assert "check-runs?per_page=100" not in gate_d_code
+	assert "PR_CHECKS_LAST_REASON" in gate_d_code
+	assert "NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))" in gate_d_code
+	assert "Noop-suspicious force-merge gate D failed" in gate_d_code
+	# Base ref comes from the Gate A PR read, with the cached base as fallback.
+	assert "N_BASE_REF=\"$(echo \"${N_PR_JSON}\" | jq -r '.base.ref" in gate_d_code
+	assert 'N_BASE_REF="${N_BASE:-}"' in gate_d_code
 
 
 def test_sweep_skips_orchestrator_project_branches():

@@ -1569,7 +1569,7 @@ _check_final_merge_ineligibility_alert()
 		comment_body+="**Blocking check-runs:** unknown — see PR check-runs."$'\n\n'
 	fi
 	comment_body+="**Resolution options:**"$'\n'
-	comment_body+="- Re-run, dismiss, or fix the blocking check-run(s) so they return \`success\`/\`neutral\`/\`skipped\`/\`cancelled\`."$'\n'
+	comment_body+="- Re-run, dismiss, or fix the blocking check-run(s) so they return \`success\`/\`neutral\`/\`skipped\`."$'\n'
 	comment_body+="- Merge PR #${final_pr} manually via the GitHub UI (works when the base branch isn't protected)."$'\n'
 	comment_body+="- Override the gate per-repo via \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` to exclude advisory checks."$'\n\n'
 	comment_body+="This alert fires once per head SHA. A fresh push to PR #${final_pr} resets the clock and requires another ${alert_hours}h before re-alerting."$'\n\n'
@@ -1615,6 +1615,7 @@ _summarize_final_merge_blockers()
 
 	if [ "${required_names_csv}" = "*" ]; then
 		printf '%s' "${check_runs_json}" | jq -r '
+			def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
 			(
 				if (type == "array") then
 					[.[]? | (.check_runs // [])[]]
@@ -1624,7 +1625,8 @@ _summarize_final_merge_blockers()
 					[]
 				end
 			)
-			| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")))
+			| _newest_per_name
+			| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")))
 			| map("\(.name) (\(.conclusion // .status))")
 			| unique
 			| join(", ")
@@ -1633,6 +1635,7 @@ _summarize_final_merge_blockers()
 	fi
 
 	printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" '
+		def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 		(
 			if (type == "array") then
@@ -1643,10 +1646,11 @@ _summarize_final_merge_blockers()
 				[]
 			end
 		)
+		| _newest_per_name
 		| map(select(
 			(.status != "completed")
 			or (
-				(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")
+				(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")
 				and (.name as $n | $required | index($n))
 			)
 		))
@@ -26560,9 +26564,12 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #       C) At least one prior `[ai-autofix]` / `[judge-fix]` commit
 #          exists on the PR (a brand-new editor that has never
 #          produced work is not eligible for force-merge).
-#       D) All completed required checks on the head SHA are
-#          conclusion=success / neutral / skipped — any failure /
-#          cancelled / timed_out / action_required aborts the gate.
+#       D) Gate D delegates to `_pr_checks_completed` (shared gate in
+#          scripts/pr_checks_lib.sh, required-set filter): any pending
+#          check-run blocks (advisory ones too), and a required check-run
+#          whose newest run is not success / neutral / skipped (failure /
+#          cancelled / timed_out / action_required) blocks; a completed
+#          advisory check's conclusion does not.
 #     If every gate passes: `gh pr merge --squash --auto`, Telegram
 #     WARNING, and one audit-trail comment posted to the PR so the
 #     decision is visible on the thread (not only in Telegram).
@@ -26961,45 +26968,30 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-	N_CHECKS_JSON="$(gh_retry _safe_gh_jq --paginate --slurp \
-		"repos/${GITHUB_REPOSITORY}/commits/${N_HEAD_SHA}/check-runs?per_page=100" \
-		|| echo '{}')"
+	# Base ref for the required-set filter, from the Gate A PR read
+	# (N_PR_JSON), falling back to the STANDALONE_PRS cache (N_BASE).
+	N_BASE_REF="$(echo "${N_PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+	if [ -z "${N_BASE_REF}" ] || [ "${N_BASE_REF}" = "null" ]; then
+		N_BASE_REF="${N_BASE:-}"
+	fi
+	[ "${N_BASE_REF}" != "null" ] || N_BASE_REF=""
 
-	_failing_check_count="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
-		def _is_blocking: .status == "completed" and (
-			.conclusion == "failure" or .conclusion == "cancelled" or
-			.conclusion == "timed_out" or .conclusion == "action_required"
-		);
-		if (type == "array") then
-			[.[]? | (.check_runs // [])[] | select(_is_blocking)] | length
-		elif (type == "object" and (.check_runs | type == "array")) then
-			[.check_runs[] | select(_is_blocking)] | length
-		else
-			empty
-		end
-	' 2>/dev/null | tail -n1)"
-	if ! [[ "${_failing_check_count}" =~ ^[0-9]+$ ]]; then
-		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: could not query check-runs for head SHA ${N_HEAD_SHA}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+	# Shared gate missing (pr_checks_lib.sh not sourced): fail closed.
+	if ! command -v _pr_checks_completed >/dev/null 2>&1; then
+		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required-checks gate unavailable (reason=helper_unavailable). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
 
-	_failing_check="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
-		def _is_blocking: .status == "completed" and (
-			.conclusion == "failure" or .conclusion == "cancelled" or
-			.conclusion == "timed_out" or .conclusion == "action_required"
-		);
-		if (type == "array") then
-			([.[]? | (.check_runs // [])[] | select(_is_blocking) | .name] | .[0]) // empty
-		elif (type == "object" and (.check_runs | type == "array")) then
-			([.check_runs[] | select(_is_blocking) | .name] | .[0]) // empty
-		else
-			empty
-		end
-	' 2>/dev/null | tail -n1)"
-
-	if [ -n "${_failing_check}" ]; then
-		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: check '${_failing_check}' is failing/cancelled. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+	# §14 audit: the PR JSON from Gate A is reused (no PR re-fetch); the
+	# paginated check-runs read moved into the shared gate, so it is still
+	# one call. The gate adds one branch-protection GET
+	# (_pr_required_check_names_for_base, fail-fast on 404) so Gate D
+	# honours server-side required contexts; no earlier call in this sweep
+	# returns protection data. Runs only on the noop retry-cap path.
+	# Three arguments always opt into the required-set filter.
+	if ! _pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}"; then
+		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required check-runs on ${N_HEAD_SHA} are not all passing (reason=${PR_CHECKS_LAST_REASON:-unknown}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
