@@ -5,6 +5,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FIXTURE_DIR="${REPO_ROOT}/tests/fixtures/integration_ref_resolver"
 
+# Rate-limit-aware reads (issue #5873 / #6634): use gh_api_retry from the
+# sibling gh_helpers.sh (the same trusted staged copy as this script) when it
+# is present; otherwise fall back to a plain `gh api` call. A read that stays
+# rate-limited exits 75 so callers fail loudly instead of resolving to the
+# default branch.
+if [ -f "${SCRIPT_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SCRIPT_DIR}/gh_helpers.sh" || true
+fi
+
+_resolver_rate_limited() {
+	echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited what=$1" >&2
+	exit 75
+}
+
 extract_integration_branch() {
 	local body="${1:-}"
 	printf '%s\n' "${body}" | python3 -c '
@@ -49,8 +64,22 @@ print(match.group(1))
 }
 
 get_issue_body() {
-	local issue_num="$1"
-	gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'
+	local issue_num="$1" body rc=0
+	if ! type gh_api_retry >/dev/null 2>&1; then
+		gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'
+		return $?
+	fi
+	body="$(gh_api_retry "repos/${REPO}/issues/${issue_num}" --jq '.body // ""')" || rc=$?
+	if [ "${rc}" -eq 75 ]; then
+		_resolver_rate_limited "issue-${issue_num}"
+	fi
+	if [ "${rc}" -ne 0 ]; then
+		# Exit 2 = API failure (transient retries exhausted or a permanent
+		# error), like branch_exists; exit 1 stays "declared branch missing".
+		echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable what=issue-${issue_num} rc=${rc}" >&2
+		exit 2
+	fi
+	printf '%s\n' "${body}"
 }
 
 branch_exists() {
@@ -58,6 +87,25 @@ branch_exists() {
 	local encoded_ref
 	local err
 	encoded_ref="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref_name}")"
+	if type gh_api_retry >/dev/null 2>&1; then
+		# Called outside a subshell so GH_API_RETRY_LAST_STATUS is visible.
+		local err_file rc=0
+		err_file="$(mktemp)"
+		gh_api_retry "repos/${REPO}/git/ref/heads/${encoded_ref}" >/dev/null 2>"${err_file}" || rc=$?
+		err="$(cat "${err_file}" 2>/dev/null || true)"
+		rm -f "${err_file}"
+		if [ "${rc}" -eq 0 ]; then
+			return 0
+		fi
+		if [ "${GH_API_RETRY_LAST_STATUS:-}" = "404" ]; then
+			return 1
+		fi
+		if [ "${rc}" -eq 75 ]; then
+			_resolver_rate_limited "branch"
+		fi
+		echo "::error::Failed to verify integration branch '${ref_name}': ${err}" >&2
+		exit 2
+	fi
 	if err="$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1)"; then
 		return 0
 	fi
@@ -189,7 +237,7 @@ def _parse_issue(endpoint: str):
 
 
 def main() -> int:
-	args = sys.argv[1:]
+	args = [a for a in sys.argv[1:] if a != "-i"]
 	if len(args) < 2 or args[0] != "api":
 		print("mock gh only supports: gh api ...", file=sys.stderr)
 		return 2
