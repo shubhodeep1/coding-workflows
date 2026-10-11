@@ -439,6 +439,11 @@ BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
 BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
 if [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
 	log "base_gate outcome=disabled pr=${PR_NUMBER}"
+elif [ -n "${INTEGRATION_BRANCH}" ]; then
+	# Issue #6726: this issue is routed to the failing PR's own verified
+	# orchestrator/project-<N> head, so its fix lands on that PR's branch and a
+	# green base branch does not make the failure unfixable. No API reads.
+	log "base_gate outcome=file reason=integration_branch branch=${INTEGRATION_BRANCH} pr=${PR_NUMBER}"
 elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
 	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
 else

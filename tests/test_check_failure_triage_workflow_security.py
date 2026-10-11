@@ -1540,6 +1540,32 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 				self.assertNotIn("outcome=added", proc.stdout)
 				self.assertTrue(self._ref_calls(calls))
 
+	def test_green_base_does_not_drop_integration_branch_failure(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			head_ref="orchestrator/project-6664", branch_flag="true", gh_calls=calls,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("integration_branch"), "orchestrator/project-6664")
+		self.assertNotIn("pr_specific_failure", proc.stdout)
+		self.assertIn(
+			"CHECK_TRIAGE base_gate outcome=file reason=integration_branch branch=orchestrator/project-6664 pr=17",
+			proc.stdout,
+		)
+		self.assertFalse([call for call in calls if "/actions/" in call])
+
+	def test_green_base_still_skips_project_head_with_flag_off(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			head_ref="orchestrator/project-6664", branch_flag=None,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+
 	def test_flag_off_makes_no_lookup(self) -> None:
 		for flag in (None, "false", "FALSE", "yes"):
 			with self.subTest(flag=flag):
