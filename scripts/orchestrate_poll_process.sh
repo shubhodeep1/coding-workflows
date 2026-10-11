@@ -9,6 +9,15 @@
 #   MODEL_EDITOR, MODEL_REASONING_EFFORT_JUDGE,
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE
 
+# shellcheck extended-analysis=false
+# File-wide directive (must precede the first command). Issue #6680: on
+# this ~27,700-line poller, ShellCheck's extended dataflow analysis ran until
+# the CI static-checks runner shut down, with no diagnostic, on consecutive
+# PR heads. Turning it off for this file only keeps the parse and per-command
+# checks that `shellcheck --severity=error` relies on. ShellCheck releases
+# older than 0.10.0 ignore an unknown directive with a warning (SC1107), which
+# that error-level CI step does not fail on.
+
 set -euo pipefail
 
 # ---------------------------------------------------------------
