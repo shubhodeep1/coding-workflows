@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update the assertion in `test_review_autofix_passes_support_sha_to_every_marker_site` to expect three gate-output exports. Keep the existing marker-site assertions and the workflow's SHA verification intact; rerun the failing test and CI.\"\n  expected_change_site: `tests/test_workflow_failure_heal.py`, function `test_review_autofix_passes_support_sha_to_every_marker_site`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: No REVIEW_SUPPORT_SHA reference appears near line 3625 in the current tree. The test at `tests/test_workflow_failure_heal.py:4140-4179` no longer relies on a count assertion. The test function at lines 4140-4178 already uses structural iteration (lines 4174-4176 iterate over every `REVIEW_SUPPORT_SHA:` line and assert each matches one of two allowed values) rather than a brittle count assertion. The workflow has 4 `REVIEW_SUPPORT_SHA:` exports (lines 646, 2312, 2650, 2988 of `.github/workflows/review_autofix.yml`), and the structural test accepts all of them. The issue's cited line numbers (3625, 2145, 2479, 2814) do not match the current file.\n- requirement: The cross-pollination ledger reports a BLOCKER from two reviewers, and a MAJOR and NIT from others, stating that the test change is missing from the PR.\n  expected_change_site: tests/test_workflow_failure_heal.py\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: That claim is not verified by any PR diff, which is unavailable (NO_PR_DIFF_AVAILABLE, empty pr_changed_files.txt). The current tree already contains the structural test, so the \"not implemented\" claim is contradicted by the file contents.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP 1\n  Requirement: Issue #6968 asks that the exact-count assertion of 2 REVIEW_SUPPORT_SHA exports in tests/test_workflow_failure_heal.py (cited at line 3625) be changed to 3 gate-output exports, while keeping the marker-site and SHA verification assertions.\n  Expected change site: tests/test_workflow_failure_heal.py near line 3625, if that assertion exists.\n  Evidence of absence: No REVIEW_SUPPORT_SHA reference appears near line 3625 in the current tree. The test that checks exports (line 4140) is structural and has no count. The workflow has 4 exports (646, 2312, 2650, 2988), so a literal change to 3 would make any exact-count check fail. The issue's cited line numbers (3625, 2145, 2479, 2814) do not match the current file. The requested fix therefore appears already satisfied or stale. It should not be applied as written.\n  SEVERITY: MAJOR (if implemented literally, the change would introduce a wrong count of 3 against 4 actual exports)\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP 2\n  Requirement: The cross-pollination ledger reports a BLOCKER from two reviewers, and a MAJOR and NIT from others, stating that the test change is missing from the PR.\n  Expected change site: tests/test_workflow_failure_heal.py.\n  Evidence of absence: That claim is not verified by any PR diff, which is unavailable (NO_PR_DIFF_AVAILABLE, empty pr_changed_files.txt). The current tree already contains the structural test, so the \"not implemented\" claim is contradicted by the file contents. Downgrade or dismiss the BLOCKER. Do not cite a file:line for it.\n  SEVERITY: NIT (the ledger claim is unsupported, not a code defect)\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Update the assertion in `test_review_autofix_passes_support_sha_to_every_marker_site` to expect three gate-output exports. Keep the existing marker-site assertions and the workflow's SHA verification intact; rerun the failing test and CI.\"\n  Expected change site: `tests/test_workflow_failure_heal.py`, function `test_review_autofix_passes_support_sha_to_every_marker_site`\n  Evidence of absence: The requirement IS satisfied at the current ref. The test at `tests/test_workflow_failure_heal.py:4140-4179` no longer relies on a count assertion. It instead verifies every marker site and every `REVIEW_SUPPORT_SHA:` export against the allowed gate-output bindings. The current workflow's four `REVIEW_SUPPORT_SHA:` exports at `review_autofix.yml:646,2312,2650,2988` are all correctly bound.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Update the assertion in `test_review_autofix_passes_support_sha_to_every_marker_site` to expect three gate-output exports. Keep the existing marker-site assertions and the workflow's SHA verification intact.\"\n  Expected change site: `tests/test_workflow_failure_heal.py`, function `test_review_autofix_passes_support_sha_to_every_marker_site` (currently at line 4140)\n  Evidence of absence: The PR diff is `[NO_PR_DIFF_AVAILABLE]` and `pr_changed_files.txt` is empty \u2014 the PR contributes zero file changes relative to its base branch. However, the test function at lines 4140-4178 already uses structural iteration (lines 4174-4176 iterate over every `REVIEW_SUPPORT_SHA:` line and assert each matches one of two allowed values) rather than a brittle count assertion. The workflow has 4 `REVIEW_SUPPORT_SHA:` exports (lines 646, 2312, 2650, 2988 of `.github/workflows/review_autofix.yml`), and the structural test accepts all of them. The original failing assertion at line 3625 no longer exists \u2014 that line is now a `subprocess.run` call in a different test. The fix appears to have been applied through a main-branch merge (the last commit is `[ai-merge-resolve]` merge commit `5d528e4e`), not through this PR's own changes. The PR is effectively empty: it has no diff to review and no changes to contribute. The CI task is satisfied by existing code, but the PR itself did not implement the fix.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b26a024ecec2ef8db6da85dee98d7fcb05d4dd45d1178175862241983f60c8ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6970,
+    "run_id": "38182289581",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38182289581",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011231914_1d598b8506",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6970,
+    "run_id": "38182289581"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T23:19:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
