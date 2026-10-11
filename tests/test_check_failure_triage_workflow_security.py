@@ -1303,7 +1303,6 @@ esac
 			"GITHUB_OUTPUT": str(output_path),
 			"GITHUB_REPOSITORY": "owner/repo",
 			"GITHUB_RUN_ID": "1",
-			"MOCK_GH_CALL_LOG": str(temp_path / "gh_calls.txt"),
 			"MOCK_PARENT_BODY_FILE": str(temp_path / "parent_body.txt"),
 			"MOCK_PR_PAYLOAD": pr_payload,
 			"MOCK_REF_STATUS": str(ref_status),
@@ -1452,7 +1451,7 @@ class CheckFailureTriageLineageTests(unittest.TestCase):
 				self.assertEqual(metadata, {})
 
 
-COLLECTOR_PATH =REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
+COLLECTOR_PATH = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
 
 
 def _run_collector(*, payload_head_sha: str, override: str | None) -> tuple[subprocess.CompletedProcess[str], str, str]:
