@@ -1296,7 +1296,6 @@ esac
 			"GITHUB_RUN_ID": "1",
 			"MOCK_PARENT_BODY_FILE": str(temp_path / "parent_body.txt"),
 			"MOCK_PR_PAYLOAD": pr_payload,
-			"MOCK_GH_CALLS": str(temp_path / "gh_calls.txt"),
 			"MOCK_REF_STATUS": str(ref_status),
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 			"RUNTIME_DIR": str(runtime_dir),

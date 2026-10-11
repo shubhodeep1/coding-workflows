@@ -1668,7 +1668,11 @@ the way to a fix PR without human action.
   files nothing, leaving the failure to the PR's review/autofix loop. Any
   other result, a pending or missing base run, or a failed read files the issue
   as before (`base_gate outcome=file base_conclusion=<c|unknown> reason=…`).
-  `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED=false` turns the gate off.
+  `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED=false` turns the gate off. A failure
+  whose issue carries a verified `Integration branch:` line (see above) skips
+  the gate and is always filed (`base_gate outcome=file
+  reason=integration_branch`), because its fix lands on the failing PR's own
+  head branch, not on the base branch.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
@@ -2293,7 +2297,7 @@ through `clarify → plan → implement → review`.
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
 | `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` | `false` | Add an API-verified `Integration branch:` line to a check-failure triage issue when the failing PR's head is an existing `orchestrator/project-<N>` branch of this repository (issue #6726). Off until the operator enables it. |
-| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress counts as unknown, never as an older success), a non-Actions check with that check's newest run on the base branch tip. When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. `false` files every failure. |
+| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress counts as unknown, never as an older success), a non-Actions check with that check's newest run on the base branch tip. When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. A failure routed to a verified `orchestrator/project-<N>` head (`TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true`) skips the gate and is filed (`reason=integration_branch`). `false` files every failure. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
