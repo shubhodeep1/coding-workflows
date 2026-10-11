@@ -15193,7 +15193,9 @@ _automation_path_plan_gate_check()
   # and the login comes from the tick-cached unblock_trusted_login. This one
   # issue read is new: no existing call in this path returns the live issue
   # author, author_association and body the grant check needs. It runs only
-  # while the gate is active and the plan lists automation paths.
+  # while the gate is active and the plan lists automation paths. The guard's
+  # --origin-repo source-chain walk (Q82, #7174) adds at most 8 issue reads,
+  # only for a pipeline-authored issue that names a source issue.
   AUTOMATION_PATH_GATE_DETAIL="issue_lookup_failed"
   issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null)" || issue_json=""
   [ -n "${issue_json}" ] || return 1
@@ -15201,7 +15203,8 @@ _automation_path_plan_gate_check()
   unblock_trusted_login >/dev/null 2>&1 || true
   AUTOMATION_PATH_GATE_DETAIL="grant_error"
   python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --emit-automation-grant "${gate_dir}/grant.json" \
-    --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${UNBLOCK_TRUSTED_LOGIN:-}" >/dev/null 2>&1 || return 1
+    --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${UNBLOCK_TRUSTED_LOGIN:-}" \
+    --origin-repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || return 1
   if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
     allow_edits="true"
   fi
@@ -20495,6 +20498,15 @@ fi
 # complementary has_work gates keep it exclusive with the post-loop scan.
 if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  exit 0
+fi
+
+# With no tracking issue the workflow skips the full poller; this is the
+# only path that runs standalone stall recovery (and the automation-path
+# plan-hold recheck) on those ticks. The workflow's complementary has_work
+# gates keep it exclusive with the full poller (#7174).
+if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
+  run_standalone_stall_recovery
   exit 0
 fi
 

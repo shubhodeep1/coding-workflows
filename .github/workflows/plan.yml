@@ -2278,8 +2278,12 @@ jobs:
             [ -n "${guard}" ] || return 1
             printf '%s' "${CURRENT_ISSUE_JSON}" > "${gate_dir}/issue.json" || return 1
             login="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+            # --origin-repo (Q82, #7174): a pipeline-authored issue that names
+            # a source issue gets its source chain verified (at most 8 issue
+            # reads, as in implement.yml) instead of origin_unverified.
             if ! python3 -I -B "${guard}" --emit-automation-grant "${gate_dir}/grant.json" \
-              --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${login}" >/dev/null 2>&1; then
+              --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${login}" \
+              --origin-repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then
               AUTOMATION_PATH_GATE_DETAIL="grant_error"
               return 1
             fi

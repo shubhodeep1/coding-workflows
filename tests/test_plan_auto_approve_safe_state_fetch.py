@@ -208,14 +208,42 @@ def _issue_with_grant(paths: list[str], association: str = "OWNER") -> dict:
 	}
 
 
+# The guard reads source issues (--origin-repo) through a real `gh` subprocess,
+# which cannot see the bash gh() function above, so a PATH-level stub serves
+# them from SOURCES_DIR/<n>.json and answers HTTP 404 for anything else.
+_SOURCE_GH_EXECUTABLE = (
+	'#!/bin/bash\n'
+	'if [ "$1" = "api" ]; then\n'
+	'  case "$2" in\n'
+	'    repos/owner/repo/issues/*)\n'
+	'      n="${2##*/}"\n'
+	'      printf "source-%s\\n" "${n}" >> "${CALL_LOG}"\n'
+	'      if [ -f "${SOURCES_DIR}/${n}.json" ]; then cat "${SOURCES_DIR}/${n}.json"; exit 0; fi\n'
+	'      ;;\n'
+	'  esac\n'
+	'fi\n'
+	'echo "HTTP 404: Not Found" >&2\n'
+	'exit 1\n'
+)
+
+
 def _run_gate_case(
 	*, plan: str | None, issue: dict, flag: str | None, guard: bool = True, comments: list | None = None,
+	sources: dict[int, dict] | None = None,
 ) -> dict:
 	script = _auto_approve_run_script()
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp_path = Path(workdir)
 		(tmp_path / "scripts").mkdir()
 		(tmp_path / "scripts" / "gh_helpers.sh").write_text(_GATE_GH_STUB, encoding="utf-8")
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		(bin_dir / "gh").write_text(_SOURCE_GH_EXECUTABLE, encoding="utf-8")
+		(bin_dir / "gh").chmod(0o755)
+		sources_dir = tmp_path / "sources"
+		sources_dir.mkdir()
+		for number, meta in (sources or {}).items():
+			(sources_dir / f"{number}.json").write_text(json.dumps(meta), encoding="utf-8")
 		if guard:
 			support = tmp_path / ".codex-workflow-src" / "scripts"
 			support.mkdir(parents=True)
@@ -239,6 +267,10 @@ def _run_gate_case(
 			"CODEX_OUTPUT_FILE": str(plan_file),
 			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
 			"RUNNER_TEMP": str(tmp_path),
+			# CI exports the real repository; the stubs serve owner/repo.
+			"GITHUB_REPOSITORY": "owner/repo",
+			"SOURCES_DIR": str(sources_dir),
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 		})
 		if flag is not None:
 			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = flag
@@ -271,8 +303,12 @@ def test_automation_path_gate_is_off_by_default() -> None:
 
 def test_automation_path_gate_flag_is_forwarded_to_poller() -> None:
 	poller_workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8"))
-	step = next(step for step in poller_workflow["jobs"]["poll"]["steps"] if step.get("name") == "Process each tracking issue")
-	assert step["env"]["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] == "${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}"
+	steps = poller_workflow["jobs"]["poll"]["steps"]
+	for name in ("Process each tracking issue", "Run standalone stall recovery without active projects"):
+		step = next(step for step in steps if step.get("name") == name)
+		assert step["env"]["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] == "${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}", name
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert '--origin-repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || return 1' in poller
 
 
 def test_automation_path_gate_approves_fully_granted_plan() -> None:
@@ -280,6 +316,49 @@ def test_automation_path_gate_approves_fully_granted_plan() -> None:
 	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true")
 	assert _approved(result), result
 	assert "user" in result["calls"]
+
+
+def _pipeline_followup(paths: list[str]) -> dict:
+	body = "Re-issued from #77.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in paths)
+	return {
+		"number": 123, "state": "open", "body": body,
+		"user": {"type": "User", "login": "pipeline-bot"}, "author_association": "OWNER",
+	}
+
+
+def _source_issue(association: str) -> dict:
+	login = "maintainer" if association == "OWNER" else "stranger"
+	return {"number": 77, "state": "closed", "body": "Please change the workflow.",
+		"user": {"type": "User", "login": login}, "author_association": association}
+
+
+def test_automation_path_gate_passes_origin_repo_to_grant() -> None:
+	block = _step_block(_workflow_text(), "Auto-approve clear plan")
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then' in block
+
+
+def test_automation_path_gate_approves_pipeline_followup_with_trusted_source() -> None:
+	issue = _pipeline_followup([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
+	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true", sources={77: _source_issue("OWNER")})
+	assert _approved(result), result
+	assert "source-77" in result["calls"]
+
+
+def test_automation_path_gate_holds_pipeline_followup_with_untrusted_source() -> None:
+	issue = _pipeline_followup([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
+	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true", sources={77: _source_issue("NONE")})
+	assert not _approved(result), result
+	assert "automation_path_hold=true" in result["output"]
+	assert "detail=untrusted_origin" in result["stdout"]
+	assert "source-77" in result["calls"]
+
+
+def test_automation_path_gate_holds_pipeline_followup_with_unreadable_source() -> None:
+	issue = _pipeline_followup([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
+	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true", sources={})
+	assert not _approved(result), result
+	assert "automation_path_hold=true" in result["output"]
+	assert "detail=origin_unverified" in result["stdout"]
 
 
 def test_automation_path_gate_withholds_ungranted_plan() -> None:

@@ -854,6 +854,9 @@ def _run_poller(
 	# Copy files_touched_scope_guard.py into the sandbox's verified support
 	# checkout (.codex-workflow-src/scripts/), where the poller resolves it.
 	support_guard_copy: bool = False,
+	# Replaces RUNTIME_DIR/tracking_issues.json; [] mirrors a cron tick with
+	# no open tracking issue (the idle-tick sweep steps, #7174).
+	tracking_issues_override: list | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1374,7 +1377,10 @@ esac
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
-			json.dumps([{"number": tracking_num, "title": "Test tracking"}]),
+			json.dumps(
+				[{"number": tracking_num, "title": "Test tracking"}]
+				if tracking_issues_override is None else tracking_issues_override
+			),
 			encoding="utf-8",
 		)
 
@@ -5780,6 +5786,105 @@ def test_standalone_auto_approve_honours_trusted_plan_hold_marker() -> None:
 
 	stale = run([_automation_gate_marker_comment(700), _automation_gate_plan_comment()], [])
 	assert _automation_gate_approved(stale, 700)
+
+
+_STANDALONE_STALL_STATE_AWAITING = (
+	"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+	+ json.dumps({
+		"schema_version": 1,
+		"last_seen_phase": "ai:awaiting-approval",
+		"status_since_ts": 1,
+		"stall_recovery_count": 0,
+	})
+	+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+)
+
+
+def _run_standalone_automation_gate(
+	*, body: str, author: dict, sources: dict | None = None, env: dict[str, str] | None = None,
+	tracking_issues_override: list | None = None, comments: list | None = None, pipeline_login: str | None = None,
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	labels = {10: ["ai:merged"], 700: ["ai:awaiting-approval"]}
+	bodies = {700: body}
+	authors = {"700": author}
+	for number, meta in (sources or {}).items():
+		labels[number] = ["ai:merged"]
+		bodies[number] = meta.get("body", "")
+		authors[str(number)] = {"user": meta["user"], "author_association": meta["author_association"]}
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels=labels,
+		issue_comments={700: [_STANDALONE_STALL_STATE_AWAITING, *(comments if comments is not None else [_automation_gate_plan_comment()])]},
+		issue_bodies=bodies,
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true", **(env or {})},
+		support_guard_copy=True,
+		mock_store_extra={"issue_authors": authors, **({"authenticated_login": pipeline_login} if pipeline_login else {})},
+		tracking_issues_override=tracking_issues_override,
+	)
+
+
+def test_standalone_auto_approve_verifies_pipeline_followup_source_chain() -> None:
+	# Gap 1 of #7174: the poller passes --origin-repo, so a pipeline-authored
+	# follow-up that names a trusted source is granted instead of
+	# origin_unverified, and one whose source is untrusted stays held.
+	pipeline_author = {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}
+	body = "Re-issued from #77.\n\n" + _automation_gate_body([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
+
+	def source(association: str) -> dict:
+		login = "maintainer" if association == "OWNER" else "stranger"
+		return {77: {"body": "Please change the workflow.", "user": {"login": login, "type": "User"}, "author_association": association}}
+
+	trusted = _run_standalone_automation_gate(body=body, author=pipeline_author, sources=source("OWNER"), pipeline_login="workflow-owner")
+	assert _automation_gate_approved(trusted, 700), trusted["stdout"] + trusted["stderr"]
+	assert "repos/shubhodeep1/coding-workflows/issues/77" in trusted["api_calls"]
+
+	untrusted = _run_standalone_automation_gate(body=body, author=pipeline_author, sources=source("NONE"), pipeline_login="workflow-owner")
+	combined_log = untrusted["stdout"] + untrusted["stderr"]
+	assert not _automation_gate_approved(untrusted, 700)
+	assert "STALL_SKIP issue=700 reason=automation_path_" in combined_log
+
+
+def test_standalone_recovery_sweep_only_mode_runs_without_tracking_work() -> None:
+	# Gap 2 of #7174: with no open tracking issue the workflow runs only this
+	# sweep, which must re-check a held standalone plan and approve it once the
+	# issue body grants every listed automation path.
+	owner = {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}
+	sweep_env = {"STANDALONE_RECOVERY_SWEEP_ONLY": "true"}
+	held_comments = [_automation_gate_plan_comment(), _automation_gate_marker_comment(700)]
+
+	held = _run_standalone_automation_gate(
+		body=_automation_gate_body([".github/workflows/plan.yml"]), author=owner, env=sweep_env,
+		tracking_issues_override=[], comments=held_comments,
+	)
+	combined_log = held["stdout"] + held["stderr"]
+	assert "Standalone issue stall recovery" in combined_log
+	assert "Processing tracking issue" not in combined_log
+	assert "UNBLOCK_SCAN" not in combined_log
+	assert "Staged-support needs-human latch release" not in combined_log
+	assert "STALL_SKIP issue=700 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in combined_log
+	assert not _automation_gate_approved(held, 700)
+
+	granted = _run_standalone_automation_gate(
+		body=_automation_gate_body([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"]),
+		author=owner, env=sweep_env, tracking_issues_override=[], comments=held_comments,
+	)
+	assert _automation_gate_approved(granted, 700), granted["stdout"] + granted["stderr"]
+	assert "Processing tracking issue" not in granted["stdout"] + granted["stderr"]
+
+	disabled = _run_standalone_automation_gate(
+		body=_automation_gate_body([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"]),
+		author=owner, env={**sweep_env, "ENABLE_STANDALONE_STALL_RECOVERY": "false"},
+		tracking_issues_override=[], comments=held_comments,
+	)
+	combined_log = disabled["stdout"] + disabled["stderr"]
+	assert "Standalone stall recovery disabled" in combined_log
+	assert "Processing tracking issue" not in combined_log
+	assert not _automation_gate_approved(disabled, 700)
 
 
 def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -> None:

@@ -204,6 +204,53 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 	yaml.safe_load(wf)
 
 
+STANDALONE_SWEEP_STEP = "Run standalone stall recovery without active projects"
+STANDALONE_SWEEP_POLLER_GUARD = 'if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then'
+
+
+def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	steps = yaml.safe_load(wf)["jobs"]["poll"]["steps"]
+	names = [step.get("name") for step in steps]
+	sweep = steps[names.index(STANDALONE_SWEEP_STEP)]
+	full = steps[names.index("Process each tracking issue")]
+	# Exactly one of the two runs per tick, in every repository.
+	assert full["if"] == "steps.find_tracking.outputs.has_work == 'true'"
+	assert sweep["if"] == "steps.find_tracking.outputs.has_work != 'true'"
+	assert "github.repository" not in sweep["if"]
+	# Same order as the full poller: recovery, latch release, unblock scan.
+	assert (
+		names.index("Process each tracking issue")
+		< names.index(STANDALONE_SWEEP_STEP)
+		< names.index("Release staged-support latches without active projects")
+		< names.index("Run unblock scan without active projects")
+	)
+	# Env parity: the full poller's env plus the sweep flag, nothing else.
+	sweep_env = dict(sweep["env"])
+	assert sweep_env.pop("STANDALONE_RECOVERY_SWEEP_ONLY") == "true"
+	assert sweep_env == full["env"]
+	for name in ("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", "ENABLE_STANDALONE_STALL_RECOVERY", "ENABLE_STALL_JUDGE", "CLAUDE_POOL_REASON"):
+		assert name in sweep_env
+	# Older support copies without the mode never launch the full poller.
+	run = sweep["run"]
+	assert f"grep -qF '{STANDALONE_SWEEP_POLLER_GUARD}' scripts/orchestrate_poll_process.sh" in run
+	assert run.index("exit 0") < run.index("bash scripts/orchestrate_poll_process.sh")
+	# The poller mode runs recovery only and sits after the other sweep modes.
+	block = STANDALONE_SWEEP_POLLER_GUARD + "\n  run_standalone_stall_recovery\n  exit 0\nfi"
+	assert poller.count(block) == 1
+	assert poller.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then') < poller.index(block)
+	assert poller.index(block) < poller.index("# Process each tracking issue")
+
+
+def test_engine_and_claude_steps_run_on_idle_ticks_when_needed() -> None:
+	steps = yaml.safe_load(_workflow(ORCHESTRATE_POLL_WF))["jobs"]["poll"]["steps"]
+	by_name = {step.get("name"): step for step in steps}
+	assert "if" not in by_name["Resolve AI engine"]
+	for name in ("Install Claude Code CLI", "Resolve Claude credential", "Alert on Claude pool accounts at the usage gate"):
+		assert by_name[name]["if"] == "steps.ai_engine.outputs.any_claude == 'true'", name
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -226,6 +273,8 @@ def main() -> int:
 	test_security_pass_recovery_log_prefixes_are_registered()
 	test_staged_support_latch_sweep_runs_without_tracking_issues()
 	test_unblock_scan_runs_without_tracking_issues()
+	test_standalone_recovery_sweep_runs_without_tracking_issues()
+	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 

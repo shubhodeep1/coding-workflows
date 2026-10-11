@@ -922,6 +922,9 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	assert "security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh" in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
+	# Runs on every tick so the idle-tick standalone recovery step (#7174)
+	# gets the same stall-judge engine as the full poller.
+	assert "if" not in resolve
 	assert resolve["env"]["AI_ENGINE_LABELS"] == ""
 	assert '--json number,title,labels' in steps[names.index("Find active tracking issues")]["run"]
 	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' in resolve["run"]
@@ -934,8 +937,9 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		step = steps[names.index(name)]
 		assert step["uses"] == uses
 		assert step["continue-on-error"] is True
-		assert step["if"] == "steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'"
+		assert step["if"] == "steps.ai_engine.outputs.any_claude == 'true'"
 		assert names.index(name) < names.index("Process each tracking issue")
+		assert names.index(name) < names.index("Run standalone stall recovery without active projects")
 	process_env = steps[names.index("Process each tracking issue")]["env"]
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE", "SECURITY_AUDIT"):
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
