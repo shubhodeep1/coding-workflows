@@ -332,7 +332,9 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # -I (issue #7159): scripts/ is the branch checkout, so keep its
+          # modules and any PYTHONPATH off this GH_PAT / GITHUB_ENV step's imports.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/load_workflow_overlay.py \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"

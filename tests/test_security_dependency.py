@@ -147,7 +147,7 @@ def test_isolated_helper_ignores_poisoned_branch_modules(tmp_path: Path):
 
 	control = subprocess.run([sys.executable, "-B", str(helper), *args], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
 	assert sentinel.exists(), "control run must import the poisoned module"
-	assert '"none"' not in control.stdout
+	assert control.stdout.strip() == "", control.stdout
 	sentinel.unlink()
 
 	isolated = subprocess.run([sys.executable, "-I", "-B", str(helper), *args], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)

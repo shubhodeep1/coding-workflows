@@ -629,7 +629,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 			assert "WORKFLOW.md overlay is opt-in by file presence" in workflow_text, workflow_path
 			assert '--github-env "${GITHUB_ENV}"' in workflow_text, workflow_path
 
-	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
+	assert 'python3 -I -B scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
 	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
 	# Isolated mode (issue #7159): the in-tree copy sits in the branch checkout's scripts/.
 	assert 'python3 -I -B scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
