@@ -815,7 +815,7 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert workflow["on"]["workflow_call"]["secrets"]["TG_BOT_SECRET"]["required"] is False
 	assert steps("Run security audit")["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
 	assert steps("Run security audit")["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
-	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
+	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
