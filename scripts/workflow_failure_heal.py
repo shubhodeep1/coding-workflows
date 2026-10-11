@@ -204,6 +204,17 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"conflict_resolver_sandbox_support_missing",
 	}
 )
+# The resolver's host-only conflict stop is an intentional fail-closed state
+# that needs a human merge: review_conflict_resolve.sh already prints the
+# "host-only conflicted path(s) need a manual merge" ::error:: line and the
+# identical-failure cap posts its comment, so a heal issue adds nothing and
+# only files more heal issues (#6738). skip_reason() drops the per-run report,
+# the cap report repeating this reason, and the ai:needs-human report on an
+# item whose newest trusted autofix marker names it. The other non-retryable
+# resolver reasons can be real pipeline defects and are still healed.
+HOST_ONLY_CONFLICT_FAILURE_REASON = "conflict_resolver_sandbox_path_host_only"
+HOST_ONLY_CONFLICT_SKIP_REASON = "host_only_conflict_manual_merge"
+IDENTICAL_FAILURE_CAP_REASON = "identical_failure_cap"
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -279,6 +290,9 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+# Own-line variant of _FAILURE_MARKER_RE for latest_trusted_autofix_marker_is_host_only:
+# a marker quoted inline in PR-influenced text (the "First error" code span) is not one.
+_FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -790,6 +804,7 @@ def build_autofix_failure_payload(
 	script_ref: str | None = None,
 	changed_files: Iterable[str] | None = None,
 	failure_marker_author: str | None = None,
+	repeated_failure_reason: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
@@ -807,6 +822,11 @@ def build_autofix_failure_payload(
 	ownership facts the intake's self-inflicted routing uses; each is sent only
 	when it validates. ``crash_file`` is extracted from the full (untruncated)
 	evidence before it is bounded.
+
+	``repeated_failure_reason`` is the failure reason an identical-failure cap
+	report repeats (the gate's trusted ``fingerprint_cap_reason`` or the
+	trusted head markers). It is sent only for ``identical_failure_cap``
+	reports and only when it is a well-formed reason token.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -861,6 +881,9 @@ def build_autofix_failure_payload(
 	crash = extract_crash_file(failure_evidence)
 	if crash:
 		payload["crash_file"] = crash
+	repeated = str(repeated_failure_reason or "").strip()
+	if failure_reason == IDENTICAL_FAILURE_CAP_REASON and _FAILURE_REASON_RE.match(repeated):
+		payload["repeated_failure_reason"] = repeated
 	return payload
 
 
@@ -1260,6 +1283,13 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	changed_files = normalize_changed_files(changed_raw) if isinstance(changed_raw, list) else []
 	crash_file = payload.get("crash_file") if kind == "autofix_failure" else None
 	crash_file = crash_file if is_valid_repo_path(crash_file) else None
+	repeated_failure_reason = payload.get("repeated_failure_reason") if kind == "autofix_failure" else None
+	if not (
+		failure_reason == IDENTICAL_FAILURE_CAP_REASON
+		and isinstance(repeated_failure_reason, str)
+		and _FAILURE_REASON_RE.match(repeated_failure_reason)
+	):
+		repeated_failure_reason = None
 	normalized = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -1294,6 +1324,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"script_ref": script_ref,
 			"changed_files": changed_files,
 			"crash_file": crash_file,
+			"repeated_failure_reason": repeated_failure_reason,
 		})
 	return normalized
 
@@ -1332,10 +1363,24 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
-	"""Return a stable skip reason when a validated payload must not be healed."""
+def skip_reason(
+	payload: dict[str, Any],
+	*,
+	registered_repos: Iterable[str],
+	self_repo: str,
+	heal_scope_unverified: bool = False,
+	host_only_conflict: bool = False,
+) -> str:
+	"""Return a stable skip reason when a validated payload must not be healed.
+
+	``host_only_conflict`` is set by the label reporter only after the newest
+	trusted autofix marker on the labeled item named the host-only resolver
+	stop (``latest_trusted_autofix_marker_is_host_only``).
+	"""
 	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
 		return "heal_scope_unverified"
+	if is_host_only_conflict_report(payload, host_only_conflict=host_only_conflict):
+		return HOST_ONLY_CONFLICT_SKIP_REASON
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -1348,6 +1393,22 @@ def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], sel
 	if SELF_WORKFLOW_FRAGMENT.lower() in workflow_name.lower():
 		return "self_workflow"
 	return ""
+
+
+def is_host_only_conflict_report(payload: dict[str, Any], *, host_only_conflict: bool = False) -> bool:
+	"""True when the report is the resolver's host-only conflict stop.
+
+	Covers the per-run autofix report, the identical-failure cap report that
+	repeats that reason, and (with ``host_only_conflict``, verified by the
+	caller against trusted markers) the ``ai:needs-human`` label report.
+	"""
+	if payload.get("source_kind") == "autofix_failure":
+		reason = payload.get("failure_reason")
+		if reason == HOST_ONLY_CONFLICT_FAILURE_REASON:
+			return True
+		if reason == IDENTICAL_FAILURE_CAP_REASON and payload.get("repeated_failure_reason") == HOST_ONLY_CONFLICT_FAILURE_REASON:
+			return True
+	return bool(host_only_conflict) and payload.get("label") == "ai:needs-human"
 
 
 # ---------------------------------------------------------------------------
@@ -2423,6 +2484,67 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
+def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_login: str, head_sha: str | None = None) -> bool:
+	"""True when the newest trusted autofix marker names the host-only stop.
+
+	``comments`` is oldest first. Only comments by ``author_login`` (the
+	pipeline account) count; the author is read from ``author_login``,
+	``user.login`` or ``author`` (the label reporter's rows). Scanning newest
+	first, the first trusted ``review-autofix-failure:v1`` or
+	``review-autofix-failure-cap:v1`` marker decides; a trusted editor summary
+	seen first means the host-only stop is no longer current. Markers from any
+	other author are ignored, so a forged marker cannot suppress a heal.
+	Provider-outage markers (``reason=provider_unavailable``) and markerless
+	pause comments (header line only) are repo-wide events (#6633): they are
+	skipped and never decide or end the scan.
+
+	``head_sha`` (the labeled PR's current head, when known) binds the
+	deciding marker to that head, so a host-only marker left from an older head
+	cannot suppress a later, unrelated escalation.
+	"""
+	author = str(author_login or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
+	if not author:
+		return False
+	for comment in reversed([item for item in comments if isinstance(item, dict)]):
+		login = _comment_author(comment) or str(comment.get("author") or "").strip().lower()
+		if login != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		# Own-line markers only: the pipeline writes its marker on its own line,
+		# while PR-influenced "First error" text can quote a forged one inline.
+		for pattern in (_FAILURE_MARKER_LINE_RE, _FAILURE_CAP_MARKER_LINE_RE):
+			match = pattern.search(body)
+			if match is not None:
+				break
+		else:
+			match = None
+		if match is not None:
+			fields = _marker_fields(match)
+			# Provider-outage markers are repo-wide events (#6633): like
+			# count_identical_failures, they never decide or end the scan.
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
+			if head and fields.get("head", "").lower() != head:
+				return False
+			return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+		# A markerless outage pause is recognised by its header line only: a
+		# failure comment can quote the pause phrase in its PR-influenced
+		# "First error" line and must still end the scan below.
+		header = next((line.strip().strip("*").strip() for line in body.splitlines() if line.strip()), "")
+		if header.startswith(PROVIDER_UNAVAILABLE_COMMENT_MARKER):
+			continue
+		# A newer trusted failure comment posted without a marker (the marker
+		# failed to render) is a different, later failure: it ends the scan,
+		# as in count_identical_failures, so an older host-only marker cannot
+		# decide for it.
+		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
+			return False
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			return False
+	return False
+
+
 def _run_workflow_file(run: dict[str, Any]) -> str | None:
 	path = run.get("path")
 	if not isinstance(path, str):
@@ -2667,6 +2789,33 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	return result
+
+
+def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> str:
+	"""Return the reason of the newest trusted failure marker for ``head_sha``.
+
+	Same trust rules as ``count_identical_failures`` (author, head, valid
+	``fp``, and ``support`` when given), but ``provider_unavailable`` markers
+	are not skipped. The force_rb_judge host-only conflict skip (issue #6743)
+	uses it so a newer failure with any other reason keeps the conflict steps.
+	Returns "" when no trusted marker exists.
+	"""
+	support = _normalized_support_sha(support_sha)
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	if not head or not author:
+		return ""
+	for comment in reversed([comment for comment in comments if isinstance(comment, dict)]):
+		match = _FAILURE_MARKER_RE.search(sanitize_text(comment.get("body")))
+		if match is None or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(match)
+		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
+		return fields.get("reason") or "unknown"
+	return ""
 
 
 # ---------------------------------------------------------------------------
@@ -3350,6 +3499,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		script_ref=args.script_ref or None,
 		changed_files=_read_path_list(args.changed_files_file),
 		failure_marker_author=args.failure_marker_author or None,
+		repeated_failure_reason=args.repeated_failure_reason or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -3485,6 +3635,8 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
+	newest_reason = newest_trusted_failure_reason(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
+	sys.stdout.write(f"newest_reason={safe_token(newest_reason) if newest_reason else ''}\n")
 	return 0
 
 
@@ -3528,7 +3680,26 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	sys.stdout.write(
+		skip_reason(
+			payload,
+			registered_repos=registered,
+			self_repo=args.self_repo,
+			heal_scope_unverified=args.heal_scope_unverified,
+			host_only_conflict=args.host_only_conflict,
+		)
+		+ "\n"
+	)
+	return 0
+
+
+def _cmd_host_only_conflict_marker(args: argparse.Namespace) -> int:
+	try:
+		comments = _load_json_file(args.comments_json)
+	except (OSError, ValueError):
+		comments = None
+	result = isinstance(comments, list) and latest_trusted_autofix_marker_is_host_only(comments, args.author_login, args.head_sha or None)
+	sys.stdout.write(("true" if result else "false") + "\n")
 	return 0
 
 
@@ -3989,6 +4160,11 @@ def build_parser() -> argparse.ArgumentParser:
 		default="",
 		help="list the runs of this author's review-autofix-failure:v1 markers for the PR head in run_refs",
 	)
+	p.add_argument(
+		"--repeated-failure-reason",
+		default="",
+		help="for identical_failure_cap reports: the failure reason the cap repeats",
+	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
 	p = sub.add_parser("build-phase-payload", help="Build the payload for a failed clarify / plan / implement run on an issue")
@@ -4030,7 +4206,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
+	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / newest_reason= for the trailing identical failures on a head")
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
@@ -4060,7 +4236,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.add_argument("--heal-scope-unverified", action="store_true")
+	p.add_argument("--host-only-conflict", action="store_true", help="the newest trusted autofix marker on the labeled item names the host-only resolver stop")
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("host-only-conflict-marker", help="Print true when the newest trusted autofix marker names the host-only resolver stop")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--author-login", required=True)
+	p.add_argument("--head-sha", default="", help="require the deciding marker to name this head")
+	p.set_defaults(func=_cmd_host_only_conflict_marker)
 
 	p = sub.add_parser("redact-stream")
 	p.add_argument("--secret-env", default="GH_PAT,GH_TOKEN,GITHUB_TOKEN,OPENROUTER_API_KEY")

@@ -3015,13 +3015,13 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support="]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support=", "newest_reason=editor_empty_noop"]
 		# Issue #6625: --support-sha ignores markers of other support versions.
 		result = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-1] == f"support={SUPPORT_NEW}"
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-2:] == [f"support={SUPPORT_NEW}", "newest_reason="]
 		result = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
 				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
@@ -3582,6 +3582,72 @@ def test_gate_stops_a_head_on_its_first_non_retryable_failure() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-nonretryable-off-") as tmp_name:
 		_result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env={"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"})
 		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true"
+
+
+def test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host_only_marker() -> None:
+	"""Issue #6743 (#6733): a force_rb_judge run re-ran the resolver that had
+	already refused host-only paths, so the review-blocked judge never ran."""
+	force = {"FORCE_RB_JUDGE": "true"}
+	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-skip-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env=force)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert outputs["force_rb_judge_conflict_skip"] == "true", result.stdout
+		assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false"
+		assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=skip reason=host_only_marker marker_reason={HOST_ONLY_REASON}" in result.stdout
+	newer_other_reason = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="502", reason="workflow_failure")
+	unsupported = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="503", reason="conflict_resolver_sandbox_path_unsupported")
+	newer_outage = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="506", reason="provider_unavailable")
+	cases = [
+		("newer_provider_outage", [_host_only_failure_comment(), newer_outage], {}, {}, True, "newest_reason_mismatch"),
+		("untrusted_author", [_host_only_failure_comment(author="attacker")], {}, {}, True, "no_trusted_marker"),
+		("different_head", [_host_only_failure_comment(head=SHA_B)], {}, {}, True, "no_trusted_marker"),
+		("newer_other_reason", [_host_only_failure_comment(), newer_other_reason], {}, {}, True, "reason_mismatch"),
+		("unsupported_reason", [unsupported], {}, {}, True, "reason_mismatch"),
+		("user_fail", [_host_only_failure_comment()], {}, {"user_fail": True}, True, "marker_author_unavailable"),
+		("comments_fail", [_host_only_failure_comment()], {}, {"comments_fail": True}, True, "api_error"),
+		("disabled", [_host_only_failure_comment()], {"REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED": "false"}, {}, True, "disabled"),
+		("helper_missing", [_host_only_failure_comment()], {}, {}, False, "helper_missing"),
+	]
+	for name, comments, extra_env, overrides, with_helper, reason in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env}, state_overrides=overrides, with_helper=with_helper)
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == "false", (name, result.stdout)
+			assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false", (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=run reason={reason} " in result.stdout, (name, result.stdout)
+	# The skip runs with the fingerprint cap disabled (it has its own switch),
+	# and only on a marker from the current support version.
+	current_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="504", support=SUPPORT_NEW, reason=HOST_ONLY_REASON)
+	old_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="505", support=SUPPORT_OLD, reason=HOST_ONLY_REASON)
+	for name, comments, extra_env, expected in (
+		("cap_disabled", [_host_only_failure_comment()], {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, "outcome=skip reason=host_only_marker"),
+		("current_support", [current_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=skip reason=host_only_marker"),
+		("old_support", [old_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=run reason=no_trusted_marker"),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env})
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == ("true" if "outcome=skip" in expected else "false"), (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} {expected} " in result.stdout, (name, result.stdout)
+	# Without force_rb_judge the host-only marker still trips the cap and no skip is exported.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-noforce-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()])
+		assert outputs["fingerprint_cap"] == "true" and outputs["force_rb_judge_conflict_skip"] == "false"
+		assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP" not in result.stdout
+
+
+def test_newest_trusted_failure_reason_does_not_pass_over_outage_markers() -> None:
+	"""Issue #6743: the force_rb_judge skip needs the newest trusted marker's
+	reason, including provider_unavailable, which the cap counter skips."""
+	host_only = _host_only_failure_comment()
+	outage = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="506", reason="provider_unavailable")
+	newest = heal.newest_trusted_failure_reason
+	assert newest([host_only], head_sha=SHA_A, author_login=CAP_AUTHOR) == HOST_ONLY_REASON
+	assert newest([host_only, outage], head_sha=SHA_A, author_login=CAP_AUTHOR) == "provider_unavailable"
+	assert heal.count_identical_failures([host_only, outage], head_sha=SHA_A, author_login=CAP_AUTHOR)["reason"] == HOST_ONLY_REASON
+	assert newest([host_only, {**outage, "author_login": "attacker"}], head_sha=SHA_A, author_login=CAP_AUTHOR) == HOST_ONLY_REASON
+	assert newest([host_only], head_sha=SHA_B, author_login=CAP_AUTHOR) == ""
+	assert newest([host_only], head_sha=SHA_A, author_login="") == ""
 
 
 def test_fingerprint_cap_block_names_the_non_retryable_first_error() -> None:
@@ -5677,3 +5743,220 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# ---------------------------------------------------------------------------
+# Host-only resolver conflict: a manual merge, never a heal issue (#6738)
+# ---------------------------------------------------------------------------
+
+HOST_ONLY_SKIP = "host_only_conflict_manual_merge"
+
+
+def _host_only_cap_comment(*, author: str = CAP_AUTHOR, reason: str = HOST_ONLY_REASON, head: str = SHA_B) -> dict:
+	return {"author_login": author, "body": f"**AI review/autofix stopped: non-retryable failure**\n\n<!-- review-autofix-failure-cap:v1 head={head} fp={FP_HEX} reason={reason} count=1 -->"}
+
+
+def test_skip_reason_drops_host_only_conflict_reports() -> None:
+	per_run = heal.validate_payload(_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	assert heal.skip_reason(per_run, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == HOST_ONLY_SKIP
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason=HOST_ONLY_REASON))
+	assert heal.skip_reason(cap, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == HOST_ONLY_SKIP
+	label = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="pull_request", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None))
+	assert heal.skip_reason(label, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, host_only_conflict=True) == HOST_ONLY_SKIP
+	# Not suppressed: the other non-retryable resolver reasons, a cap that
+	# repeats another reason, the label path without the verified marker, and
+	# the verified marker on another escalation label.
+	unsupported = heal.validate_payload(_autofix_payload(failure_reason="conflict_resolver_sandbox_path_unsupported"))
+	assert heal.skip_reason(unsupported, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	missing = heal.validate_payload(_autofix_payload(failure_reason="conflict_resolver_sandbox_support_missing"))
+	assert heal.skip_reason(missing, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	other_cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason="editor_empty_noop"))
+	assert heal.skip_reason(other_cap, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	assert heal.skip_reason(label, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == ""
+	scope_label = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="pull_request", label="ai:scope-blocked", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None))
+	assert heal.skip_reason(scope_label, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, host_only_conflict=True) == ""
+
+
+def test_validate_payload_keeps_only_a_wellformed_repeated_failure_reason() -> None:
+	built = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="identical_failure_cap",
+		failure_evidence="", failure_streak=1, run_id="500", run_url=None, wrapper_sha=None, reporter_run_url=None,
+		repeated_failure_reason=HOST_ONLY_REASON,
+	)
+	assert built["repeated_failure_reason"] == HOST_ONLY_REASON
+	assert heal.validate_payload(built)["repeated_failure_reason"] == HOST_ONLY_REASON
+	# The builder sends it only on a cap report, and only well-formed.
+	not_cap = heal.build_autofix_failure_payload(
+		repo=CONSUMER_REPO, pr=_pr(), comments=[], workflow_name="AI Review", failure_reason="editor_empty_noop",
+		failure_evidence="", failure_streak=1, run_id="500", run_url=None, wrapper_sha=None, reporter_run_url=None,
+		repeated_failure_reason=HOST_ONLY_REASON,
+	)
+	assert "repeated_failure_reason" not in not_cap
+	assert heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason="Bad Reason!"))["repeated_failure_reason"] is None
+	assert heal.validate_payload(_autofix_payload(repeated_failure_reason=HOST_ONLY_REASON))["repeated_failure_reason"] is None
+	# A legacy report without the key still validates, unchanged.
+	legacy = _autofix_payload(failure_reason="identical_failure_cap")
+	assert "repeated_failure_reason" not in legacy
+	assert heal.validate_payload(legacy)["repeated_failure_reason"] is None
+	issue_kind = heal.validate_payload(dict(_consumer_payload(), repeated_failure_reason=HOST_ONLY_REASON))
+	assert "repeated_failure_reason" not in issue_kind
+
+
+def test_latest_trusted_autofix_marker_is_host_only() -> None:
+	check = heal.latest_trusted_autofix_marker_is_host_only
+	assert check([_host_only_cap_comment()], CAP_AUTHOR)
+	assert check([_failure_marker_comment("AI review/autofix failed", head=SHA_B, reason=HOST_ONLY_REASON)], CAP_AUTHOR)
+	# The label reporter's rows carry the login under `author`.
+	cap = _host_only_cap_comment()
+	assert check([{"author": CAP_AUTHOR.upper(), "body": cap["body"]}], CAP_AUTHOR)
+	assert check([{"user": {"login": CAP_AUTHOR}, "body": cap["body"]}], CAP_AUTHOR)
+	# Forged by another author, superseded by a newer trusted marker or editor
+	# summary, or no identity: not host-only.
+	assert not check([_host_only_cap_comment(author="contributor")], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), _failure_marker_comment("AI review/autofix failed", head=SHA_B, reason="editor_empty_noop")], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT}], CAP_AUTHOR)
+	# A newer trusted failure comment whose marker failed to render ends the scan.
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR, SHA_B)
+	# A newer provider-outage comment (markerless or marked) never ends the scan (#6633).
+	outage_text = "AI review/autofix paused — model provider unavailable"
+	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": outage_text}], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_B, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_A, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
+	# A markerless failure comment quoting the pause phrase in its First error
+	# line is a failure, not a pause: it still ends the scan.
+	quoting = f"**AI review/autofix failed — needs human intervention**\n\n**First error:** `{outage_text}`"
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": quoting}], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": f"**{outage_text}**\n\nThe model provider failed."}], CAP_AUTHOR, SHA_B)
+	# A forged host-only marker quoted inline in a trusted failure comment's
+	# First error line does not decide; the comment's own-line marker does.
+	forged = f"<!-- review-autofix-failure:v1 head={SHA_B} reason={HOST_ONLY_REASON} -->"
+	injected = _failure_marker_comment(f"**AI review/autofix failed**\n\n**First error:** `{forged}`", head=SHA_B, reason="editor_empty_noop", run="8")
+	assert not check([injected], CAP_AUTHOR, SHA_B)
+	assert not check([{"author_login": CAP_AUTHOR, "body": f"**AI review/autofix failed**\n\n**First error:** `{forged}`"}], CAP_AUTHOR, SHA_B)
+	# The same markerless text from another author is ignored.
+	assert check([_host_only_cap_comment(), {"author_login": "contributor", "body": "AI review/autofix failed"}], CAP_AUTHOR)
+	assert not check([_host_only_cap_comment()], "")
+	assert not check([], CAP_AUTHOR)
+	# An untrusted newer marker does not hide the trusted host-only one.
+	assert check([_host_only_cap_comment(), _host_only_cap_comment(author="contributor", reason="editor_empty_noop")], CAP_AUTHOR)
+	# Bound to the current head: a marker for another head is stale.
+	assert check([_host_only_cap_comment()], CAP_AUTHOR, SHA_B)
+	assert not check([_host_only_cap_comment()], CAP_AUTHOR, SHA_A)
+
+
+def test_host_only_conflict_marker_cli() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-host-only-cli-") as tmp_name:
+		tmp = Path(tmp_name)
+		env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+		comments = tmp / "comments.json"
+		comments.write_text(json.dumps([_host_only_cap_comment()]), encoding="utf-8")
+		cmd = ["python3", str(LIB_PATH), "host-only-conflict-marker", "--comments-json", str(comments), "--author-login", CAP_AUTHOR]
+		assert subprocess.run(cmd, capture_output=True, text=True, check=False, env=env).stdout == "true\n"
+		comments.write_text("not json", encoding="utf-8")
+		malformed = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+		assert malformed.returncode == 0 and malformed.stdout == "false\n"
+		payload = tmp / "payload.json"
+		payload.write_text(json.dumps(heal.validate_payload(_consumer_payload())), encoding="utf-8")
+		skip = subprocess.run(
+			["python3", str(LIB_PATH), "skip-reason", "--payload-json", str(payload), "--self-repo", CONSUMER_REPO, "--host-only-conflict"],
+			capture_output=True, text=True, check=False, env=env,
+		)
+		assert skip.stdout == HOST_ONLY_SKIP + "\n"
+
+
+def test_autofix_report_skips_host_only_conflict_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-host-only-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_REASON": HOST_ONLY_REASON})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"skip reason={HOST_ONLY_SKIP} pr=4174 failure={HOST_ONLY_REASON}" in result.stdout
+		assert "dispatches" not in _state(state_file)
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-unsupported-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_REASON": "conflict_resolver_sandbox_path_unsupported"})
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=conflict_resolver_sandbox_path_unsupported" in result.stdout, result.stdout + result.stderr
+		assert len(_state(state_file)["dispatches"]) == 1
+
+
+def test_autofix_report_skips_cap_repeating_host_only_conflict() -> None:
+	cap_flags = {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_FAILURE_FP": FP_HEX}
+	host_only_markers = [_failure_marker_comment("AI review/autofix failed", head=SHA_B, reason=HOST_ONLY_REASON, run="7")]
+	cases = [
+		# The gate's reason, inherited from the fingerprint-cap-block job env.
+		([], {"FINGERPRINT_CAP_REASON": HOST_ONLY_REASON}, True),
+		# No gate env: the trusted head markers name the reason.
+		(host_only_markers, {"AUTOFIX_FAILURE_MARKER_AUTHOR": CAP_AUTHOR}, True),
+		# Markers from another author, a different repeated reason, or an
+		# invalid gate value keep the old dispatch.
+		(host_only_markers, {"AUTOFIX_FAILURE_MARKER_AUTHOR": "someone-else"}, False),
+		([], {"FINGERPRINT_CAP_REASON": "editor_empty_noop"}, False),
+		([], {"FINGERPRINT_CAP_REASON": "Not A Reason"}, False),
+	]
+	for comments, extra, skipped in cases:
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-host-only-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=comments, flags={**cap_flags, **extra})
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			state = _state(state_file)
+			if skipped:
+				assert f"skip reason={HOST_ONLY_SKIP} pr=4174 failure=identical_failure_cap" in result.stdout, (extra, result.stdout)
+				assert "dispatches" not in state
+			else:
+				assert "dispatched pr=4174 failure=identical_failure_cap" in result.stdout, (extra, result.stdout + result.stderr)
+				report = state["dispatches"][0]["body"]["client_payload"]["report"]
+				assert report.get("repeated_failure_reason") != HOST_ONLY_REASON
+
+
+def _host_only_label_state(comment_rows: list[dict], *, pr_head: str = SHA_B) -> dict:
+	state = _report_state(pull_request={"head": {"sha": pr_head}})
+	state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].extend(comment_rows)
+	return state
+
+
+def test_label_reporter_skips_needs_human_after_host_only_conflict() -> None:
+	trusted = {"body": _host_only_cap_comment()["body"], "user": {"login": "workflow-bot"}, "created_at": "2026-09-20T00:00:00Z"}
+	forged = dict(trusted, user={"login": "contributor"})
+	summary = {"body": AUTOFIX_SUMMARY_COMMENT, "user": {"login": "workflow-bot"}, "created_at": "2026-09-21T00:00:00Z"}
+	cases = [
+		(_host_only_label_state([trusted]), "ai:needs-human", True, ""),
+		(_host_only_label_state([forged]), "ai:needs-human", False, ""),
+		(_host_only_label_state([trusted, summary]), "ai:needs-human", False, ""),
+		(dict(_host_only_label_state([trusted]), user_fetch_fail=True), "ai:needs-human", False, "warn host_only_check_identity_unavailable"),
+		(_host_only_label_state([trusted]), "ai:scope-blocked", False, ""),
+		# A host-only marker for an older head does not suppress a later
+		# escalation, and an unreadable PR head dispatches.
+		(_host_only_label_state([trusted], pr_head=SHA_A), "ai:needs-human", False, "info host_only_marker_stale"),
+		(dict(_host_only_label_state([trusted]), pull_fetch_fail=True), "ai:needs-human", False, "warn host_only_check_head_unavailable"),
+	]
+	for state, label, skipped, expected_line in cases:
+		with tempfile.TemporaryDirectory(prefix="heal-report-host-only-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state_file.write_text(json.dumps(state), encoding="utf-8")
+			env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": label, "WORKFLOW_HEAL_IS_PULL_REQUEST": "true"})
+			result = _run(REPORT_SCRIPT, work, env)
+			assert result.returncode == 0, (label, result.stderr, result.stdout)
+			if skipped:
+				assert f"skip reason={HOST_ONLY_SKIP} issue=42 label={label}" in result.stdout, result.stdout
+				assert "dispatches" not in _state(state_file)
+			else:
+				assert "WORKFLOW_HEAL_REPORT dispatched issue=42" in result.stdout, (label, result.stdout, result.stderr)
+			if expected_line:
+				assert expected_line in result.stdout
+
+
+def test_intake_skips_host_only_conflict_reports() -> None:
+	payloads = [
+		_autofix_payload(failure_reason=HOST_ONLY_REASON),
+		_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason=HOST_ONLY_REASON),
+	]
+	for payload in payloads:
+		result, state, prompt = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout, result.stdout
+		assert "issues_created" not in state
+		assert prompt == ""
