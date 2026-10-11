@@ -21,6 +21,14 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+_DRIFT_SPEC = importlib.util.spec_from_file_location(
+	"claude_template_drift", Path(__file__).resolve().parent / "claude_template_drift.py"
+)
+assert _DRIFT_SPEC is not None and _DRIFT_SPEC.loader is not None
+claude_template_drift = importlib.util.module_from_spec(_DRIFT_SPEC)
+_DRIFT_SPEC.loader.exec_module(claude_template_drift)
 GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
@@ -2305,10 +2313,15 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-		encoding="utf-8"
-	)
+	# On PR CI only, a template the PR changed (or whose drift its base already
+	# has) waits for the post-merge live-copy sync; CLAUDE.md stays strict.
+	pending = claude_template_drift.pending_template_paths(REPO_ROOT)
+	if "hooks/pr_merge_status_guard.py" not in pending:
+		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	if "settings.json" not in pending:
+		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
+			encoding="utf-8"
+		)
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 

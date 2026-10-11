@@ -3821,6 +3821,43 @@ makes that unattended:
   when the only-missing pre-write listing fails, and
   `CONSUMER_SECRETS_PROPAGATE summary targets=N set=N skipped=N failed=N`.
 
+## Pre-push affected-test gate
+
+Interactive Claude Code sessions run the tests a change affects before they
+push (issue #7137). After committing, run:
+
+```bash
+python3 .claude/hooks/prepush_affected_tests.py stamp
+```
+
+The gate selects:
+- the changed test files;
+- tests named after a changed file (for example `scripts/foo.sh` → `tests/test_foo.py`);
+- test files that mention a changed file's path, name or stem, including
+  through a shared test helper module;
+- the registry guards that exist in the repository;
+- `ruff` and ShellCheck on the changed files.
+
+It runs them with a 15-minute budget and re-runs any failure on the
+merge-base: failures that also happen there are reported as inherited, not
+caused by the change. The result is written as a stamp for `HEAD` under
+`${TMPDIR:-/tmp}/claude-prepush-gate/`, outside the repository. Fix failures
+the change caused and stamp again; do not weaken an assertion unless the task
+names that behaviour change.
+
+The `PreToolUse` hook registered in `.claude/settings.json` reads that stamp
+on every `git push`. A passing (or unverified, or skipped) stamp lets the push
+through without a prompt. A missing stamp, or one that records failures the
+change caused, asks for confirmation. The hook never runs tests itself, and it
+fails open with a warning on internal errors. Set
+`CLAUDE_PREPUSH_TEST_GATE=off` to turn it off.
+
+`scripts/prepush_test_gate_run.sh` runs the same gate inside a credential-free
+container (no network, read-only root, no runner environment, the gate module
+taken from the trusted support checkout). The AI pipelines (implement, review
+autofix, conflict resolver, heal, integration-branch repair) start using it in
+later phases of `docs/plans/prepush-affected-test-gate-plan.md`.
+
 ## Repository Structure
 
 ```
