@@ -564,7 +564,9 @@ class HeadBoundPollerMerge(unittest.TestCase):
 			code = line.strip()
 			if code.startswith("#") or "gh pr merge" not in code or "--disable-auto" in code:
 				continue
-			if code.startswith(("echo", "tg_send_msg", "tg_notify")) or code.lstrip("\"'").startswith("echo"):
+			# _noop_gate_failure_alert only posts a comment and a Telegram
+			# message; its text can name the merge command (#7156).
+			if code.startswith(("echo", "tg_send_msg", "tg_notify", "_noop_gate_failure_alert")) or code.lstrip("\"'").startswith("echo"):
 				continue
 			if "--match-head-commit" in code or "_rb_mwf_match_arg" in code:
 				continue
