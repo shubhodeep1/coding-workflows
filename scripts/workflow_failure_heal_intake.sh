@@ -572,9 +572,11 @@ while IFS=$'\t' read -r run_id run_url; do
 			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
 				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 				: > "${FILTERED_LOG}"
+			else
+				# A log whose filtering failed was emptied above and is not readable evidence.
+				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
 			rm -f "${RAW_LOG}"
-			READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
 			fi
