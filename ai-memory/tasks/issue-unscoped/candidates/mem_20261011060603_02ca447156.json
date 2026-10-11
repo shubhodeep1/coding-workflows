@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:209-241 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The folded-fragment keep matcher can include `README.md` files that the assemblers exclude from fragment discovery, allowing a modify/delete conflict to restore the PR's README copy.\n  WHY: The keep logic may commit that copy as the resolution and reverse a deliberate deletion that was outside the release fold.\n- tests/test_conflict_manifest_union_contract.py: `_run_integration_sync_manifest_only`, script lines 683-702 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The integration-sync test harness does not initialize `_ff_defer_commit` before a deferred-commit condition that may expand it under `set -euo pipefail`.\n  WHY: If `_mu_defer_commit` is not `true` when the condition runs, the unset-variable expansion aborts the harness before it reaches `DEFERRED_BLOCK_FELL_THROUGH`.\n- scripts/review_conflict_prepare.sh: lines 225-226 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fragment-keep case pattern is described as unanchored and potentially able to match path collisions, including `changelog.d.foo.md`.\n  WHY: The review says a colliding path could pass the first case and have its stage-2 blob compared or staged.\n- scripts/review_conflict_prepare.sh: lines 793-808 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The shared deferred-commit error annotation may identify a folded-fragment deferred commit as a manifest-only resolution.\n  WHY: The review says this can mislead operator triage by showing a manifest-related error for a fragment-only failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_conflict_prepare.sh | severity=NIT | confidence=3\n  PROBLEM: The glob also matches `agents.d/README.md` and `changelog.d/README.md`, which the assemblers exclude from fragment discovery.\n  WHY: If someone deliberately deletes `agents.d/README.md` on main and a PR edits it, the index shows stages 1 2; the new block then re-adds the PR's copy and commits `[ai-merge-resolve]` without a model run or human look. That reverses a deliberate deletion.\n- tests/test_conflict_manifest_union_contract.py | severity=NIT | confidence=2\n  PROBLEM: The harness never initialises `_ff_defer_commit`, but the live deferred-commit condition expands it under `set -euo pipefail`.\n  WHY: A future test that reaches the block with `_mu_defer_commit=false` would fail with an unrelated error instead of reaching `DEFERRED_BLOCK_FELL_THROUGH`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh | confidence=2\n  PROBLEM: The pattern agents.d/*.md matches agents.d/README.md if such a file were added.\n  WHY: An unintended file could be staged and committed by the automated fragment-keep logic, violating the intent of only keeping fragments.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh | severity=NIT | confidence=2\n  PROBLEM: The bash case pattern `changelog.d/*.md|agents.d/*.md` is unanchored, so it also matches strings like `xchangelog.d/foo.md` or `scripts/.../agents.d/foo.md`; the downstream `case \"${_ff_path#*/}\" in */*)` filter still excludes nested paths, but a path like `changelog.d.foo.md` (no slash) would slip through the first case and have its stage-2 blob compared/staged.\n  WHY: In practice `git diff --name-only --diff-filter=U` only emits repo-root-relative paths, so the corner cases are theoretical \u2014 but the first case should anchor at the start to keep the intent obvious and avoid any future path-collision regression.\n- scripts/review_conflict_prepare.sh | severity=NIT | confidence=3\n  PROBLEM: The error annotation is now shared between the manifest-only path and the folded-fragment path, but the literal text still says `Manifest union-merge: unhandled reason=integration_sync \u2026 refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}`. The new code prints `refusing to commit the deterministic resolution (manifest or folded fragments)` and drops the `${MANIFEST_UNION_PATH}` interpolation; if the deferred commit is a fragment-only deferred (`_ff_defer_commit=true` only), the reason label is still \"Manifest union-merge\", which misleads operator triage.\n  WHY: When a folded-fragment deferred commit fails, the GitHub Actions log will show `::error::Manifest union-merge: \u2026 folded fragments` instead of a fragment-specific error, so an operator triaging via the error text may look for a manifest issue that does not exist.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_conflict_prepare.sh | severity=NIT | confidence=4\n  PROBLEM: The fragment matcher includes `changelog.d/README.md` and `agents.d/README.md`, but both assemblers explicitly exclude `README.md` from fragment discovery (`scripts/assemble_changelog.py:80, 132`; `scripts/assemble_agents.py:91, 132`).\n  WHY: If either README has a modify/delete conflict with index stages 1 and 2, this block stages the PR\u2019s copy and can commit it as the resolution, undoing the base branch\u2019s deletion even though the release fold did not delete that file.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_prepare.sh | severity=NIT | confidence=4\n  PROBLEM: The fragment-keep path matches any top-level `.md` file under `changelog.d/` or `agents.d/`, including `README.md`, which the release assemblers exclude.\n  WHY: A PR that edits `agents.d/README.md` while `main` deletes it produces a modify/delete conflict (stages 1 2); the fragment-keep block matches the path, stages the PR's copy, and commits it as `[ai-merge-resolve]`. The README is restored without the reviewer panel or a human seeing the deletion.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3345dae82b1c4992a512fa3a0024236a16868265e6acaf754b0cd4dcedd8ec13",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7150,
+    "run_id": "38114088606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38114088606",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011060603_02ca447156",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7150,
+    "run_id": "38114088606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:06:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
