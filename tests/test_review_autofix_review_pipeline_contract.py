@@ -7933,12 +7933,13 @@ def test_fingerprint_cap_support_sha_rearm_wiring() -> None:
 	rearm = gate.index("AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER}")
 	assert rearm < gate.index('SKIP_REASON="fingerprint_cap"')
 	assert "prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}" in gate
+	assert """awk -F= '$1 == "prior_support" { print $2 }'""" in gate
 	agent = _job_block("codex-agent")
 	assert "AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in agent
 	cap_job = _job_block("fingerprint-cap-block")
-	assert "FINGERPRINT_CAP_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in cap_job
-	assert 'if [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in cap_job
-	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support} -->" in cap_job
+	assert "REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in cap_job
+	assert 'if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in cap_job
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in cap_job
 	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in _job_block("gate")
 
 

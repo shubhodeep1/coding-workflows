@@ -1323,7 +1323,7 @@ jobs:
                     FINGERPRINT_CAP_NON_RETRYABLE="true"
                   fi
                   fingerprint_cap_rearm="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "rearm" { print $2 }' | tail -n 1)"
-                  fingerprint_cap_prior_support="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "support" { print $2 }' | tail -n 1)"
+                  fingerprint_cap_prior_support="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "prior_support" { print $2 }' | tail -n 1)"
                   if [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ] && [ "${fingerprint_cap_rearm}" = "true" ] \
                     && [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
                     echo "AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}"
@@ -2643,7 +2643,6 @@ jobs:
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
       FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
-      FINGERPRINT_CAP_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}

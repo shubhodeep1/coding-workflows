@@ -3194,6 +3194,20 @@ def test_count_identical_failures_rearms_a_non_retryable_cap_once_per_support_sh
 	# 9. A marker for another head is ignored.
 	other_head = [_supported_failure_comment(run="13", support=SUPPORT_S2, head=SHA_B), *legacy]
 	assert decide(other_head, SUPPORT_S2)["rearm"] is True
+	# 10. Production wiring: the gate also filters by the same support SHA.
+	def gate_decide(comments: list[dict]) -> dict:
+		return heal.count_identical_failures(comments, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_S2, current_support_sha=SUPPORT_S2)
+
+	result = gate_decide(legacy)
+	assert result["count"] == 1 and result["non_retryable"] is True and result["rearm"] is True and result["support"] == ""
+	result = gate_decide([_supported_failure_comment(run="15", support=SUPPORT_S1)])
+	assert result["rearm"] is True and result["support"] == SUPPORT_S1
+	result = gate_decide([_supported_failure_comment(run="16", support=SUPPORT_S1), _supported_failure_comment(run="17", support=SUPPORT_S2)])
+	assert result["non_retryable"] is True and result["rearm"] is False and result["support"] == SUPPORT_S2
+	result = gate_decide(bounded)
+	assert result["non_retryable"] is True and result["rearm"] is False
+	assert gate_decide(retryable)["count"] == 0
+	assert gate_decide([*legacy, {"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT}])["non_retryable"] is False
 	with tempfile.TemporaryDirectory(prefix="heal-rearm-cli-") as tmp_name:
 		tmp = Path(tmp_name)
 		(tmp / "comments.json").write_text(json.dumps([_supported_failure_comment(run="14", support=SUPPORT_S1)]), encoding="utf-8")
@@ -3203,7 +3217,13 @@ def test_count_identical_failures_rearms_a_non_retryable_cap_once_per_support_sh
 		)
 		lines = result.stdout.splitlines()
 		assert lines[:5] == ["count=1", f"fp={_cap_fp('conflict_resolver_sandbox_path_host_only')}", "reason=conflict_resolver_sandbox_path_host_only", "cap_applied=false", "non_retryable=true"]
-		assert lines[5:] == [f"support={SUPPORT_S1}", "rearm=true", "newest_reason=conflict_resolver_sandbox_path_host_only"]
+		assert lines[5:] == ["support=", "rearm=true", f"prior_support={SUPPORT_S1}", "newest_reason=conflict_resolver_sandbox_path_host_only"]
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_S2, "--current-support-sha", SUPPORT_S2],
+			capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		lines = result.stdout.splitlines()
+		assert lines[0] == "count=1" and lines[4:8] == ["non_retryable=true", f"support={SUPPORT_S2}", "rearm=true", f"prior_support={SUPPORT_S1}"]
 
 
 SUPPORT_NEW = "5" * 40
@@ -3289,13 +3309,13 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support=", "rearm=false", "newest_reason=editor_empty_noop"]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support=", "rearm=false", "prior_support=", "newest_reason=editor_empty_noop"]
 		# Issue #6625: --support-sha ignores markers of other support versions.
 		result = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-3:] == [f"support={SUPPORT_NEW}", "rearm=false", "newest_reason="]
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-4:] == [f"support={SUPPORT_NEW}", "rearm=false", "prior_support=", "newest_reason="]
 		result = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
 				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
@@ -3861,7 +3881,8 @@ def test_gate_stops_a_head_on_its_first_non_retryable_failure() -> None:
 def test_gate_rearms_a_non_retryable_cap_for_a_new_support_sha() -> None:
 	"""#6911: a newer verified support commit re-runs a capped head once."""
 	fp = _cap_fp(HOST_ONLY_REASON)
-	support_env = {"FINGERPRINT_CAP_SUPPORT_SHA": SUPPORT_S2}
+	# Production sets both to the gate's verified support SHA.
+	support_env = {"FINGERPRINT_CAP_SUPPORT_SHA": SUPPORT_S2, "REVIEW_SUPPORT_SHA": SUPPORT_S2}
 	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-rearm-") as tmp_name:
 		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env=support_env)
 		assert result.returncode == 0, result.stderr + result.stdout
@@ -3872,6 +3893,12 @@ def test_gate_rearms_a_non_retryable_cap_for_a_new_support_sha() -> None:
 	# The re-armed run's own marker carries the SHA: another failure restores the cap.
 	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-rearm-spent-") as tmp_name:
 		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment(), _supported_failure_comment(run="502", support=SUPPORT_S2, reason=HOST_ONLY_REASON)], extra_env=support_env)
+		assert "AUTOFIX_FINGERPRINT_CAP_REARMED" not in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+	# Three older support SHAs already re-ran the head: the bound keeps the cap.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-rearm-bound-") as tmp_name:
+		spent = [_supported_failure_comment(run=str(run), support=sha, reason=HOST_ONLY_REASON) for run, sha in (("503", SUPPORT_S1), ("504", SUPPORT_S3), ("505", "4" * 40))]
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=spent, extra_env=support_env)
 		assert "AUTOFIX_FINGERPRINT_CAP_REARMED" not in result.stdout
 		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
 	# A malformed current support SHA never re-arms.

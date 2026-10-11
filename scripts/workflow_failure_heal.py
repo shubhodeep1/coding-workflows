@@ -2818,7 +2818,10 @@ def count_identical_failures(
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
 
-	``support`` is the newest counted marker's ``support=`` value. ``rearm``
+	``support`` is the newest counted marker's ``support=`` value. When the
+	support filter leaves no counted marker but the newest trusted markers of
+	any support version are a non-retryable stop, that older stop is reported
+	instead (with ``current_support_sha`` only), so the bound applies. ``rearm``
 	(#6911) is true only for a non-retryable result when ``current_support_sha``
 	is a valid SHA that no trusted marker for the head records yet and fewer
 	than ``max_rearms`` distinct support SHAs are recorded for the head; an
@@ -2856,10 +2859,9 @@ def count_identical_failures(
 			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body))
 		):
 			result["cap_applied"] = True
-		failure_fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
-		if failure_fields.get("head", "").lower() == head:
+		for failure_fields in (_marker_fields(match) for match in _FAILURE_MARKER_RE.finditer(body)):
 			recorded = failure_fields.get("support", "").lower()
-			if is_valid_sha(recorded):
+			if failure_fields.get("head", "").lower() == head and is_valid_sha(recorded):
 				recorded_supports.add(recorded)
 	seen_runs: set[str] = set()
 	skip_paired_summary = False
@@ -2904,6 +2906,15 @@ def count_identical_failures(
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	current_support = str(current_support_sha or "").strip().lower()
+	if support and is_valid_sha(current_support) and result["count"] == 0:
+		# #6911: the support filter above hides a non-retryable stop recorded
+		# under an older (or no) support version. For the re-arm decision the
+		# newest trusted markers of any support version are read, so the
+		# per-head bound below applies instead of an unbounded fresh count.
+		older = count_identical_failures(ordered, head_sha=head, author_login=author)
+		if older["non_retryable"]:
+			for key in ("count", "fp", "reason", "support", "non_retryable"):
+				result[key] = older[key]
 	try:
 		rearm_limit = int(max_rearms)
 	except (TypeError, ValueError):
@@ -3951,8 +3962,9 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
-	sys.stdout.write(f"support={safe_token(result['support'], 40) or _normalized_support_sha(args.support_sha)}\n")
+	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
 	sys.stdout.write(f"rearm={'true' if result['rearm'] else 'false'}\n")
+	sys.stdout.write(f"prior_support={safe_token(result['support'], 40)}\n")
 	newest_reason = newest_trusted_failure_reason(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
 	sys.stdout.write(f"newest_reason={safe_token(newest_reason) if newest_reason else ''}\n")
 	return 0
@@ -4556,7 +4568,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser(
 		"autofix-identical-failure-count",
-		help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / rearm= / newest_reason= for the trailing identical failures on a head",
+		help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / rearm= / prior_support= / newest_reason= for the trailing identical failures on a head",
 	)
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
