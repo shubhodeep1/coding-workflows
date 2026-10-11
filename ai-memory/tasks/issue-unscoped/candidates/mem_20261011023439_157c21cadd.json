@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:442, 455, 1218\u20131221 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The force-judge host-only conflict-skip check remains gated on fingerprint-cap support verification, but the helper checkout and verification steps are skipped when the fingerprint cap is disabled.\n  WHY: With the cap disabled, `FINGERPRINT_CAP_SUPPORT_VERIFIED` remains unset, so the skip does not run and resolver steps run again; the cited regression test masks this workflow setup path.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Create a fresh heal issue from authenticated failure-run evidence. Have intake derive a new scope marker from verified run metadata and the target checkout; verify it before implementation.\n  expected_change_site: scripts/workflow_failure_heal_intake.sh and scripts/workflow_failure_heal.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR only adds the skip logic in .github/workflows/review_autofix.yml; no changes are made to the workflow failure heal intake files to implement fresh issue creation or scope marker derivation as specified in the linked issue.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: steps \"Checkout fingerprint cap helper\" (line 442) and \"Verify fingerprint cap support identity\" (line 455), both `if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}`. The new gate condition at lines 1220-1221 requires `FINGERPRINT_CAP_SUPPORT_VERIFIED = true`, and that variable is exported only at line 473.\n  severity=high | confidence=5\n  PROBLEM: The last autofix run changed the outer gate condition so that `force_rb_judge` runs enter the block even when `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false`, but left the two setup steps gated on the cap.\n  WHY: With the cap disabled, the helper checkout and verification step are skipped, so `FINGERPRINT_CAP_SUPPORT_VERIFIED` is never written to `GITHUB_ENV`, the host-only skip does not run, and resolver steps run again. The `cap_disabled` test passes only because `_run_gate` pre-supplies the helper and verified-support state. The reviewer recommends adding `|| inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true'` to both steps, or dropping the claim from docs and tests.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: lines 1218\u20131221\n  severity=high | confidence=5\n  PROBLEM: The force-judge conflict skip branch is conditionally unreachable when the fingerprint cap is disabled.\n  WHY: If REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED is false, FINGERPRINT_CAP_SUPPORT_VERIFIED remains unset (false), causing the condition at line 1221 to fail. As a result, the entire block containing the force-judge skip logic is skipped, effectively disabling the host-only skip even when REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED is true.\n- Requirement: Create a fresh heal issue from authenticated failure-run evidence. Have intake derive a new scope marker from verified run metadata and the target checkout; verify it before implementation.\n  Expected change site: scripts/workflow_failure_heal_intake.sh and scripts/workflow_failure_heal.py\n  Evidence of absence: The PR only adds the skip logic in .github/workflows/review_autofix.yml; no changes are made to the workflow failure heal intake files to implement fresh issue creation or scope marker derivation as specified in the linked issue.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: Lines 442, 455, and 1218\u20131221.\n  severity=high | confidence=5\n  PROBLEM: The force-judge conflict-skip check is still gated on `FINGERPRINT_CAP_SUPPORT_VERIFIED=true`, but the helper checkout and verification steps that set that value are skipped when `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false`.\n  WHY: With the cap disabled, a `force_rb_judge` run leaves `FORCE_RB_JUDGE_CONFLICT_SKIP` at `false` and never evaluates the trusted marker. The resolver steps then run despite the separate conflict-skip switch being enabled. The regression test masks this path by setting `FINGERPRINT_CAP_SUPPORT_VERIFIED=true` in its default environment (`tests/test_workflow_failure_heal.py:3267\u20133268`).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0c19dad4713dda61bf0a3c94d82dd28d10817d44e3b938b762d7a3f9bfb8b98f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6746,
+    "run_id": "38104590443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38104590443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011023439_157c21cadd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6746,
+    "run_id": "38104590443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T02:34:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
