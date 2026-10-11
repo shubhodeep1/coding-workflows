@@ -1818,14 +1818,6 @@ jobs:
           done
 
           shard_failures=0
-          # Issue #6883 (run 37906796258): a failed shard used to raise only
-          # `shard N failed (exit N)`, so triage could not name the failing test.
-          # Each failed shard's runner FAIL lines (up to 20, 500 chars each, with
-          # % and CR escaped) become annotations, at most 5 per step so the
-          # existing error lines are not crowded out; every collected line is also
-          # listed in plain text before the tally at the end of the log.
-          fail_annotations=0
-          failed_test_lines=()
           # One line per failed shard, printed after the loop (outside every
           # ::group::) so the failing test names reach the log tail and the
           # job annotations (#6889). Only names matching [A-Za-z0-9_] are
@@ -1875,15 +1867,6 @@ jobs:
                 done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
               fi
               shard_failures=$((shard_failures + 1))
-              shard_fail_lines="$(LC_ALL=C awk '/^  FAIL  / && c < 20 { c++; line = substr($0, 3, 500); gsub(/%/, "%25", line); gsub(/\r/, "%0D", line); print line }' "/tmp/poll_shard_${shard}.log")"
-              [ -n "${shard_fail_lines}" ] || shard_fail_lines="no FAIL line in log (runner or fixture error); see the shard log group"
-              while IFS= read -r fail_line; do
-                failed_test_lines+=("orchestrate-poll shard ${shard}: ${fail_line}")
-                if [ "${fail_annotations}" -lt 5 ]; then
-                  echo "::error::orchestrate-poll shard ${shard}: ${fail_line}"
-                  fail_annotations=$((fail_annotations + 1))
-                fi
-              done <<< "${shard_fail_lines}"
               # `|| true`: under pipefail a grep with no match would abort the
               # step before the tally below.
               shard_failed_names="$(grep -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
@@ -1902,10 +1885,6 @@ jobs:
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
-            if [ "${#failed_test_lines[@]}" -gt 0 ]; then
-              echo "orchestrate-poll failing tests:"
-              printf '  %s\n' "${failed_test_lines[@]}"
-            fi
             # Issue #6946 (triage of PR #6940): each shard log above sits in a
             # collapsed group, so the log tail showed only the last shard's
             # passing summary and never the failing test. Repeat each failed
