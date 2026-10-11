@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- No files touched. Read `scripts/resolve_integration_ref.sh`: the implement phase picks its checkout and PR base only from `Integration branch:` / `Target branch:` lines in the issue body, and this issue has neither line.\n- Confirmed the old exact-count assertion at `tests/test_review_autofix_review_pipeline_contract.py:4966`.\n\nDECISIONS:\nQ1: C\nQ2: A\n\nRATIONALE:\nQ1: The PR's head branch (`ai/issue-7128`) is the right place for the fix, but choosing A here would not get it there. `scripts/resolve_integration_ref.sh` (lines 30 and 43) reads the target branch only from `Integration branch:` / `Target branch:` lines in the issue body. This issue has neither, and a clarification answer cannot change the issue body. So implement would check out `main` and open its PR against `main`, which is option B, and that breaks `main` CI. The tests would expect 3 skip markers and two `/files` calls that `main`'s `review_autofix.yml` does not have. agents.md also says a base-branch fix cannot repair a PR-specific failure, which the PR's autofix loop owns. PR #7135 is open, and its review/autofix loop already sends failed check-runs to the editor first (`CHECK_RUNS_AUTOFIX_ENABLED`), so it can update both tests on its own head.\nQ2: If the tests are updated anywhere, the assertion should name each branch: exactly one `/files` call in the consumer-sync branch and one in the deterministic-skip branch. The runtime checks at lines 5006/5038, which confirm ordinary PRs fetch files once, stay as they are. Only raising the total from 1 to 2 would still pass if a third call moved between branches or one branch lost its validation. This is guidance for whichever loop makes the edit.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - scripts/resolve_integration_ref.sh (lines 30, 43: branch comes from the issue body only)\n    - GITHUB FACTS: PR #7135 is open, base `main`, head `ai/issue-7128` @ 4426aa3b832c; CI run 38108375782 failed on that head\n    - tests/test_skip_ai_marker_rule.py:151 (expects 2 skip-log markers)\n    - tests/test_review_autofix_review_pipeline_contract.py:4966 (expects 1 `/files` call)\n    - .github/workflows/review_autofix.yml:1294, 1300, 1399 (on the PR branch)\n  steps:\n    - Make no code change on `main` from this issue. A planner or implementer run must not edit `tests/test_skip_ai_marker_rule.py` or `tests/test_review_autofix_review_pipeline_contract.py` against `main`.\n    - Close this issue as not planned, with a comment linking PR #7135 and CI run 38108375782. The comment says the fix belongs in PR #7135's own review/autofix loop and gives the Q2:A assertion shape as guidance for it: in `test_every_skip_is_logged_before_the_outputs`, expect and name all three skip-log paths; in `test_agents_md_materiality_classifier_and_workflow_wiring`, require one `/files` call per named gate branch.\n    - Do not weaken or remove the consumer-sync branch's file-list validation, and do not suppress either test.\n  replaces_acceptance_criterion: \"Fix lands as a separate PR from this issue and CI on PR #7135 goes green\" becomes \"No change lands on `main`; PR #7135's own autofix loop updates the two contract tests on `ai/issue-7128` and its CI goes green.\"\n  equivalence_argument: The failing assertions only exist together with code that lives on `ai/issue-7128`. The PR's autofix loop edits that branch directly and gets the failing check-run evidence, so it makes the same test change in the right place. A change from this issue would land on `main`, where the expected counts are wrong.\n  reversibility: If a human prefers a standalone fix, they can reopen this issue, add `Target branch: ai/issue-7128` to its body (the resolver accepts it as an alias at line 43), and post `/reclarify`. Implement would then target the PR branch. Nothing on `main` needs reverting.",
+  "fingerprint": "b3cbbf8bf2ea61d7159d769e3ad3a17e486d263ff7b5bb503952f70f78a08ebe",
+  "lineage": {
+    "issue_number": 7140,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38110086125",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38110086125",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7140"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011040708_628035f495",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7140,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38110086125"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7140",
+  "timestamps": {
+    "created_at": "2026-10-11T04:07:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
