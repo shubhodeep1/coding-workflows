@@ -4747,7 +4747,7 @@ jobs:
           # A failed install keeps the runner's copy with a warning.
           sc=shellcheck
           if python3 -m pip install --quiet 'shellcheck-py==0.10.0.1'; then
-            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" || sc_dir=""
             if [ -x "${sc_dir}/shellcheck" ]; then
               sc="${sc_dir}/shellcheck"
             else
