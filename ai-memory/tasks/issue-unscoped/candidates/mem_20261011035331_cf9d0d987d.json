@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5319-5326 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `REVIEWER_POOL_REJECTED_OUTPUT` log reports the full output size, but the saved artifact is capped at 65536 bytes and neither identifies that it was truncated.\n  WHY: For outputs larger than 64 KiB, operators may mistake the incomplete artifact for the full rejected answer; all reviewers classified this as a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_run_reviewers.sh: lines 5320-5326 | severity=low | confidence=4\n  PROBLEM: `bytes=` in the `REVIEWER_POOL_REJECTED_OUTPUT` line is the full size of the attempt output. The kept file is cut at 65536 bytes, and neither the log line nor the filename says so.\n  WHY: For an output over 64 KiB, an operator sees e.g. `bytes=200000`, opens a 64 KiB artifact and can take the clipped file for the whole rejected answer. This is a diagnostics-accuracy issue only. A `malformed_output` rejection is normally short, so it is unlikely to occur.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh: lines 5319-5326 | severity=low | confidence=4\n  PROBLEM: The `bytes=` field on the `REVIEWER_POOL_REJECTED_OUTPUT` log line reports the full size of the attempt output via `wc -c`, while the kept file is capped at 65536 bytes via `head -c 65536`.\n  WHY: For any rejected attempt whose output exceeds 64 KiB, the log line overstates the artifact size and neither the log line nor the filename marks the file as truncated. The retained evidence can be misread as the complete rejected answer, and the shipped test exercises 26-byte output, so this path is not covered.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh: 5321-5322 | severity=low | confidence=4\n  PROBLEM: The log records the full rejected-output size in `bytes=`, but the saved artifact is capped at 65,536 bytes and neither the log nor filename identifies that truncation.\n  WHY: For a rejected response larger than 64 KiB, the artifact contains only a prefix. During diagnosis, the log does not explicitly say that the artifact is incomplete, making it harder to distinguish a truncated capture from the full rejected response.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_run_reviewers.sh: lines 5321-5322 | severity=low | confidence=4\n  PROBLEM: The `bytes=` field on the `REVIEWER_POOL_REJECTED_OUTPUT` line reports the full size of the attempt output, while the kept file is capped at 65536 bytes; for any output larger than 64 KiB the log line overstates the artifact, and neither the log line nor the filename marks the file as truncated.\n  WHY: An operator diagnosing a rejected answer may misread the 64 KiB artifact as the complete answer when judging whether it was malformed or merely clipped by the capture cap.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "83c45bfd5d8b8af18547f502328f0328fceb79fd87ad93459b8fb9dcd735e8aa",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7132,
+    "run_id": "38108285208",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38108285208",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011035331_cf9d0d987d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7132,
+    "run_id": "38108285208"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T03:53:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
