@@ -301,7 +301,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
 					decoded_state = json.loads(decoded)
 				except (ValueError, UnicodeDecodeError):
 					decoded_state = None
-				if not isinstance(decoded_state, dict) or decoded_state.get("status") in skip_statuses:
+				# A non-string status (list, dict, ...) is unhashable and never a
+				# usable prior status, so it is skipped like a listed one.
+				decoded_status = decoded_state.get("status") if isinstance(decoded_state, dict) else None
+				if not isinstance(decoded_status, str) or decoded_status in skip_statuses:
 					active_chain_by_key.pop(chain_key, None)
 					continue
 			if digest == manifest:

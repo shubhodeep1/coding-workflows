@@ -2493,6 +2493,7 @@ if args[0] == 'api':
 				'body': pr.get('body', ''),
 				'base': {
 					'ref': pr.get('baseRefName', ''),
+					'repo': {'default_branch': store.get('default_branch', 'main')},
 				},
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
@@ -24978,6 +24979,8 @@ def test_failed_integration_project_stays_failed_until_the_final_pr_is_mergeable
 		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(mergeable=None), "not_mergeable"),
 		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(state="closed"), "final_pr_not_open"),
 		(_integration_failed_state(integration_failed_from_status="complete"), _mergeable_final_pr(), "prior_status_unknown"),
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(baseRefName="release"), "final_pr_wrong_base"),
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(state="closed", merged=True, baseRefName="release"), "final_pr_wrong_base"),
 		(_integration_failed_state(), _mergeable_final_pr(), "prior_status_unknown"),
 	)
 	for state, prs, reason in cases:
@@ -25002,8 +25005,11 @@ def test_failed_integration_project_recovers_when_the_final_pr_was_merged_elsewh
 		prs=_mergeable_final_pr(state="closed", merged=True, mergeable=None),
 	)
 	output = result["stdout"] + result["stderr"]
-	assert "INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=recovered reason=final_pr_merged restored_status=validating" in output, output[-2000:]
-	assert result["latest_state"]["status"] == "validating"
+	# A merged final PR always comes back as in_progress: only that status
+	# reaches the external-finalize path that records the merged PR; the
+	# validating arm would try to validate an already-merged branch.
+	assert "INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=recovered reason=final_pr_merged restored_status=in_progress" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "in_progress"
 	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("has been merged" in body for body in comments if body.startswith("## 🔁 Integration recovered"))
 
@@ -25020,6 +25026,20 @@ def test_failed_integration_project_stays_failed_when_main_conflicts_locally():
 	output = result["stdout"] + result["stderr"]
 	assert "outcome=skip reason=merge_not_clean" in output, output[-2000:]
 	assert result["latest_state"]["status"] == "failed"
+
+
+def test_failed_integration_project_recovers_from_merge_conflict():
+	"""finalize_integration_merge_if_needed (run from the merge_conflict arm)
+	also calls heal_integration_branch_conflict, so merge_conflict is a status
+	a project can fail from and must be restorable."""
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="merge_conflict"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=recovered reason=final_pr_mergeable restored_status=merge_conflict" in output, output[-2000:]
 
 
 def test_other_failed_projects_are_not_recovered():
@@ -25055,6 +25075,23 @@ def test_v2_extract_skip_status_returns_the_newest_other_state():
 	assert plain.returncode == 0 and json.loads(plain.stdout)["status"] == "failed"
 	assert none_left.returncode == 1
 	assert combined.returncode == 2
+
+
+def test_v2_extract_skip_status_skips_non_string_status():
+	"""An unhashable status (list/dict) is skipped, not a TypeError crash."""
+	older = _base_state(status="validating")
+	odd = {**_base_state(status="failed"), "status": ["failed"]}
+	comments = []
+	for state in (older, odd):
+		payload = json.dumps(state)
+		comments += _build_v2_state_comment_chain(payload, chunk_size=len(base64.b64encode(payload.encode("utf-8"))) + 1)
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		script = str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py")
+		skipped = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed"], capture_output=True, text=True, timeout=30)
+	assert skipped.returncode == 0, skipped.stderr
+	assert json.loads(skipped.stdout)["status"] == "validating"
 
 
 if __name__ == "__main__":

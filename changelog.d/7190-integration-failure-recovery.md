@@ -6,7 +6,7 @@
 | The numbers that matter | Value |
 | --- | --- |
 | Lifetime cap | 10 dispatches per unresolved conflict run, unchanged default |
-| Statuses a recovery restores | `in_progress`, `validating`, `validation-fixing`, `security-pass`, `security-pass-fixing` |
+| Statuses a recovery restores | `in_progress`, `merge_conflict`, `validating`, `validation-fixing`, `security-pass`, `security-pass-fixing` (a merged final PR restores `in_progress`) |
 | Extra GitHub API calls | 1 REST read of the final PR per tick, only for a project in that failed state |
 
 What this means for operators: an `❌ Integration self-healing capped` or `exhausted` alert no longer needs a hand edit of the tracking issue's state once the final PR is mergeable; watch for the `🔁 Integration recovered` comment instead.

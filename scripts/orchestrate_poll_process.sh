@@ -11333,29 +11333,38 @@ integration_conflict_reset_on_progress() {
 # poller then skips the project for good, even after its final PR becomes
 # mergeable (#6664 and #6902 on 2026-10-11). Each tick, a failed project
 # whose integration_sync_status is "failed" is checked again: when its final
-# PR has been merged, or is open, reported mergeable by GitHub and merges
-# cleanly with the default branch locally, the status it had before the
-# failure comes back with fresh conflict counters, and the next tick carries
-# on from there (Q84). A final PR closed without merging leaves the project
-# failed. That status is integration_failed_from_status, written when the
-# project failed; a project that failed before the field existed uses the
-# newest trusted state snapshot whose status is not "failed". Only in-flight
-# statuses (in_progress, validating, validation-fixing, security-pass,
-# security-pass-fixing) are restored; anything else stays failed.
+# PR targets the repository's default branch and has been merged, or is
+# open, reported mergeable by GitHub and merges cleanly with the default
+# branch locally, the status it had before the failure comes back with fresh
+# conflict counters, and the next tick carries on from there (Q84). A final
+# PR closed without merging leaves the project failed. That status is
+# integration_failed_from_status, written when the project failed; a project
+# that failed before the field existed uses the newest trusted state snapshot
+# (V2, then legacy V1) whose status is not "failed". Only in-flight statuses
+# (in_progress, merge_conflict, validating, validation-fixing,
+# security-pass, security-pass-fixing) are restored; anything else stays
+# failed. A merged final PR always restores in_progress, because only that
+# status reaches the external-finalize path that records an already-merged
+# final PR (with its completeness and security-pass gates) and completes the
+# project; the validation and security-pass arms would instead try to
+# validate a branch that has already been merged (and is often deleted).
 #
 # API budget (CLAUDE.md §15): one REST read of the final PR, and only for a
-# project in this failed state. The prior-status lookup reads the comments
-# this tick already fetched (COMMENTS). Every check that cannot be verified
-# leaves the project failed.
+# project in this failed state; the default branch comes from the same
+# payload (base.repo.default_branch). The prior-status lookup reads the
+# comments this tick already fetched (COMMENTS). Every check that cannot be
+# verified leaves the project failed.
 #
 # Returns 10 after a recovery (the caller ends this project's tick), else 0.
 # Logs: INTEGRATION_FAILED_RECOVERY tracking_issue=<n> pr=<n> outcome=recovered|skip reason=<token> restored_status=<status>
 #   reason: final_pr_mergeable|final_pr_merged (recovered), no_final_pr,
-#   no_integration_branch, final_pr_not_open, not_mergeable, pr_unreadable,
-#   merge_not_clean, prior_status_unknown (skip)
+#   no_integration_branch, pr_unreadable, final_pr_wrong_base,
+#   final_pr_not_open, not_mergeable, fetch_failed, merge_not_clean,
+#   prior_status_unknown, state_write_failed (skip)
 recover_failed_integration_if_mergeable() {
-  local final_pr integration_branch pr_json pr_state pr_merged pr_mergeable base_ref
-  local prior_status="" trusted_comments_file prior_state_json recovery_skip_reason="" recovery_reason="final_pr_mergeable"
+  local final_pr integration_branch pr_json pr_state pr_merged pr_mergeable base_ref pr_default_branch
+  local prior_status="" restored_status="" trusted_comments_file prior_state_json recovery_skip_reason="" recovery_reason="final_pr_mergeable"
+  local recovery_v1_comment recovery_v1_status
 
   [ "$(jq -r '.integration_sync_status // ""' "${STATE_FILE}" 2>/dev/null)" = "failed" ] || return 0
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
@@ -11371,21 +11380,29 @@ recover_failed_integration_if_mergeable() {
     pr_merged="$(_jq_field "${pr_json}" '.merged' 'true|false')"
     pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
     base_ref="$(_jq_field "${pr_json}" '.base.ref')"
-    if [ "${pr_merged}" = "true" ]; then
-      # Merged outside the poller (#6905 on 2026-10-11): the restored status
-      # reaches finalize_integration_merge_if_needed, which records the
-      # merged final PR and lets the project complete.
+    pr_default_branch="$(_jq_field "${pr_json}" '.base.repo.default_branch')"
+    if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ] || [ -z "${base_ref}" ] || [ -z "${pr_default_branch}" ]; then
+      # _fetch_pr_json returns {} on a failed read; never mistake that for a
+      # closed PR.
+      recovery_skip_reason="pr_unreadable"
+    elif [ "${base_ref}" != "${pr_default_branch}" ]; then
+      # A retargeted final PR must not recover the project against another
+      # branch: finalize would then deliver it there.
+      recovery_skip_reason="final_pr_wrong_base"
+    elif [ "${pr_merged}" = "true" ]; then
+      # Merged outside the poller (#6905 on 2026-10-11): restored as
+      # in_progress (below) so the external-finalize path records the merged
+      # final PR and lets the project complete.
       recovery_reason="final_pr_merged"
     elif [ "${pr_state}" != "open" ]; then
       recovery_skip_reason="final_pr_not_open"
     elif [ "${pr_mergeable}" != "true" ]; then
       recovery_skip_reason="not_mergeable"
-    elif [ -z "${base_ref}" ]; then
-      recovery_skip_reason="pr_unreadable"
     elif ! git fetch --no-tags origin \
          "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
-         "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" >/dev/null 2>&1 \
-       || ! git merge-tree --write-tree --name-only --no-messages \
+         "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" >/dev/null 2>&1; then
+      recovery_skip_reason="fetch_failed"
+    elif ! git merge-tree --write-tree --name-only --no-messages \
          "refs/remotes/origin/${base_ref}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
       recovery_skip_reason="merge_not_clean"
     fi
@@ -11394,45 +11411,67 @@ recover_failed_integration_if_mergeable() {
     prior_status="$(jq -r '.integration_failed_from_status // ""' "${STATE_FILE}" 2>/dev/null || true)"
     if [ -z "${prior_status}" ] && [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
       trusted_comments_file="$(mktemp "${TMPDIR:-/tmp}/integration_recovery_comments.XXXXXX")"
-      if printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' > "${trusted_comments_file}" 2>/dev/null \
-        && prior_state_json="$(python3 scripts/orchestrate_state_v2.py extract --comments-json "${trusted_comments_file}" --skip-status failed 2>/dev/null)"; then
-        prior_status="$(printf '%s' "${prior_state_json}" | jq -r '.status // ""' 2>/dev/null || true)"
+      if printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' > "${trusted_comments_file}" 2>/dev/null; then
+        if prior_state_json="$(python3 scripts/orchestrate_state_v2.py extract --comments-json "${trusted_comments_file}" --skip-status failed 2>/dev/null)"; then
+          prior_status="$(printf '%s' "${prior_state_json}" | jq -r 'if type == "object" and (.status | type) == "string" then .status else "" end' 2>/dev/null || true)"
+        fi
+        if [ -z "${prior_status}" ]; then
+          # Legacy V1 single-comment state, newest first, as
+          # extract_latest_valid_orchestrator_state falls back to.
+          while IFS= read -r recovery_v1_comment; do
+            [ -n "${recovery_v1_comment}" ] || continue
+            recovery_v1_status="$(extract_orchestrator_state_payload "$(printf '%s' "${recovery_v1_comment}" | jq -r '.body // ""' 2>/dev/null)" \
+              | jq -r 'if type == "object" and (.status | type) == "string" then .status else "" end' 2>/dev/null || true)"
+            if [ -n "${recovery_v1_status}" ] && [ "${recovery_v1_status}" != "failed" ]; then
+              prior_status="${recovery_v1_status}"
+              break
+            fi
+          done < <(jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' "${trusted_comments_file}" 2>/dev/null || true)
+        fi
       fi
       rm -f "${trusted_comments_file}"
     fi
     case "${prior_status}" in
-      in_progress|validating|validation-fixing|security-pass|security-pass-fixing) ;;
+      in_progress|merge_conflict|validating|validation-fixing|security-pass|security-pass-fixing) ;;
       *) recovery_skip_reason="prior_status_unknown" ;;
     esac
+  fi
+  restored_status="${prior_status}"
+  [ "${recovery_reason}" != "final_pr_merged" ] || restored_status="in_progress"
+  if [ -z "${recovery_skip_reason}" ]; then
+    if ! jq --arg restored "${restored_status}" \
+      '.status = $restored |
+       .final_merge_status = "pending" |
+       .integration_sync_status = "clean" |
+       .integration_sync_last_error = "" |
+       .integration_conflict_total_dispatches = 0 |
+       .integration_conflict_dispatch_count = 0 |
+       .integration_conflict_dispatch_ts = 0 |
+       .integration_conflict_unresolved_ticks = 0 |
+       .integration_conflict_episode_base_sha = "" |
+       del(.integration_failed_from_status)' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      # Announce nothing while the durable state is still failed.
+      rm -f "${STATE_FILE}.tmp" || true
+      recovery_skip_reason="state_write_failed"
+    fi
   fi
   if [ -n "${recovery_skip_reason}" ]; then
     echo "INTEGRATION_FAILED_RECOVERY tracking_issue=${TRACKING_NUM:-?} pr=${final_pr:-none} outcome=skip reason=${recovery_skip_reason} restored_status=none"
     return 0
   fi
 
-  jq --arg prior "${prior_status}" \
-    '.status = $prior |
-     .final_merge_status = "pending" |
-     .integration_sync_status = "clean" |
-     .integration_sync_last_error = "" |
-     .integration_conflict_total_dispatches = 0 |
-     .integration_conflict_dispatch_count = 0 |
-     .integration_conflict_dispatch_ts = 0 |
-     .integration_conflict_unresolved_ticks = 0 |
-     .integration_conflict_episode_base_sha = "" |
-     del(.integration_failed_from_status)' \
-    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   local recovery_detail="is mergeable again"
   [ "${recovery_reason}" != "final_pr_merged" ] || recovery_detail="has been merged"
   post_tracking_comment "## 🔁 Integration recovered
 
-Final PR #${final_pr} (\`${integration_branch}\` -> \`${base_ref}\`) ${recovery_detail}, so the project is back in \`${prior_status}\` with fresh conflict-healing counters. The next poll tick continues from there."
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${base_ref}\`) ${recovery_detail}, so the project is back in \`${restored_status}\` with fresh conflict-healing counters. The next poll tick continues from there."
   update_completion_status_comment "in-progress" \
-    "## Completion status"$'\n\n'"**State:** \`in-progress\`"$'\n\n'"Recovered from an integration self-healing failure: final PR #${final_pr} ${recovery_detail}, and the project continues from \`${prior_status}\`." \
+    "## Completion status"$'\n\n'"**State:** \`in-progress\`"$'\n\n'"Recovered from an integration self-healing failure: final PR #${final_pr} ${recovery_detail}, and the project continues from \`${restored_status}\`." \
     || true
-  tg_notify "🔁 Project #${TRACKING_NUM} recovered from an integration self-healing failure: final PR #${final_pr} ${recovery_detail}; continuing from ${prior_status}." "DEBUG"
-  echo "INTEGRATION_FAILED_RECOVERY tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=recovered reason=${recovery_reason} restored_status=${prior_status}"
+  tg_notify "🔁 Project #${TRACKING_NUM} recovered from an integration self-healing failure: final PR #${final_pr} ${recovery_detail}; continuing from ${restored_status}." "DEBUG"
+  echo "INTEGRATION_FAILED_RECOVERY tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=recovered reason=${recovery_reason} restored_status=${restored_status}"
   return 10
 }
 
