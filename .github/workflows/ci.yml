@@ -403,8 +403,23 @@ jobs:
       - name: ShellCheck static analysis
         run: |
           set -euo pipefail
+          # Issue #6680: ShellCheck 0.9.x (the runner image's copy) always runs
+          # its dataflow analysis, which takes the runner down on
+          # scripts/orchestrate_poll_process.sh. ShellCheck 0.10+ honours that
+          # file's `# shellcheck extended-analysis=false` directive, so pin it.
+          # A failed install keeps the runner's copy with a warning.
+          sc=shellcheck
+          if python3 -m pip install --quiet 'shellcheck-py==0.10.0.1'; then
+            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+            if [ -x "${sc_dir}/shellcheck" ]; then
+              sc="${sc_dir}/shellcheck"
+            fi
+          else
+            echo "::warning::Could not install ShellCheck 0.10.0.1; using $(command -v shellcheck || echo 'no shellcheck')."
+          fi
+          "${sc}" --version
           for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
-            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+            "${sc}" --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
       - name: Script-workflow cross-reference
