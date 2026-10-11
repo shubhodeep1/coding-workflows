@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Validate the output of the AI conflict-resolver step before committing.
 #
-# Enforces three invariants on the resolver's edits:
+# Enforces four invariants on the resolver's edits:
 #
 #   1. Touched-set ⊆ conflicted-set.  The resolver may only modify files
 #      that contained merge conflicts (paths from `git ls-files --unmerged`
@@ -19,6 +19,10 @@
 #      to verify all script paths it references exist in scripts/.  This
 #      is what would have caught the build_repo_overview.sh /
 #      protected_paths.txt hallucination on PR #912.
+#
+#   4. No conflicted path left behind.  A conflicted path the resolver did
+#      not touch that is still unmerged in the index fails here, named with
+#      its index stages (PR #6844: a modify/delete fragment).
 #
 # Exit code 0 on success.  Exit code 1 with a diagnostic on the first
 # failure — the caller (review_autofix.yml) treats this as a hard error
@@ -173,6 +177,34 @@ if [ "${#workflow_files[@]}" -gt 0 ]; then
 			--repo-root "${REPO_ROOT}" \
 			--files "${workflow_files[@]}"; then
 		echo "::error::Modified workflow file references nonexistent script(s). Aborting." >&2
+		exit 1
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# (4) No conflicted path left behind
+# ---------------------------------------------------------------------------
+# The resolver's commit stages only the paths it touched, so a conflicted
+# path it never touched stays unmerged and the commit is refused later.
+# PR #6844 passed this script ("touched=1 conflicted=2 ... OK") and then
+# failed at the index guard on a modify/delete changelog fragment.  Name
+# such paths here, with their index stages, instead of reporting OK.
+# Outside a merge (no unmerged entries) this check passes.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+	untouched_unmerged=""
+	while IFS= read -r conflicted; do
+		[ -z "${conflicted}" ] && continue
+		if grep -Fxq -- "${conflicted}" "${TOUCHED_SET}"; then
+			continue
+		fi
+		stages="$(git ls-files -u -- "${conflicted}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+		[ -n "${stages}" ] || continue
+		untouched_unmerged="${untouched_unmerged}${conflicted} (index stages: ${stages% })"$'\n'
+	done < "${CONFLICTED_SET}"
+	if [ -n "${untouched_unmerged}" ]; then
+		echo "::error::Conflict resolver left conflicted path(s) untouched; they would stay unmerged and block the [ai-merge-resolve] commit:" >&2
+		printf '%s' "${untouched_unmerged}" | sed '/^$/d; s/^/  - /' >&2
+		echo "::error::Stages 1 2 or 1 3 mean one side deleted the file: keep or delete it explicitly." >&2
 		exit 1
 	fi
 fi
