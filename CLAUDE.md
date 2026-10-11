@@ -114,8 +114,9 @@ same message, under an **Assumed** heading, before any work starts:
 
 If open questions remain, wait for the answers as usual; an override arrives
 with them. If every decision was a clear winner, give the Assumed list at the
-top of the reply and proceed. This subsection is the only exception to §0 and
-to the Forbidden list below; everything else in §0 and §2 still applies.
+top of the reply and proceed. This subsection is the only exception §2 itself
+makes to §0 and to the Forbidden list below (§12 keeps the precedence it
+declares for PR Review Mode); everything else in §0 and §2 still applies.
 
 ### When to Ask
 
