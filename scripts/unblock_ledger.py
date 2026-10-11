@@ -523,7 +523,18 @@ def decide(
 	# able to abandon a blocked item. `close` is offered only below, once a
 	# deterministic terminal condition holds.
 	options = [verdict for verdict in allowed if verdict != TERMINAL_VERDICT]
-	last_times = [_parse_time(entry["created_at"]) for entry in pool if entry["item"] == item and entry["created_at"]]
+	# The 24-hour clock measures how long *this* block has outlived its last
+	# round, so only rounds on the same stop and fingerprint count. A round on
+	# an earlier, cleared block must not make a new block terminal on sight:
+	# binance-blessings#249 was closed on the first round of a new
+	# harness-broken block because its previous round, on another
+	# fingerprint, was three days old. The item and project caps still bound
+	# an item whose fingerprint keeps changing.
+	last_times = [
+		_parse_time(entry["created_at"])
+		for entry in pool
+		if entry["item"] == item and entry["created_at"] and entry["stop"] == stop and entry["fingerprint"] == fp
+	]
 	# A fix-up's follow-up (the reset posted after it merged) restarts the
 	# 24-hour clock, so the reset gets its chance before the terminal close.
 	if last_times and last_activity is not None:

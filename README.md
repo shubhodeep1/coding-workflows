@@ -3523,7 +3523,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   applies only when every staged deletion is one of the approved paths;
   missing or malformed path evidence leaves the normal threshold in force.
 - **Terminal.** When the caps are spent, or the item is still blocked 24
-  hours after the last round, the judge closes it as not planned with a
+  hours after the last round on the same block (same stop and fingerprint;
+  a round on an earlier, different block does not start the clock), the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
   poller then sets the state to `abandoned` and closes the tracking issue
   only when its newest pipeline-authored verdict marker for that project is
