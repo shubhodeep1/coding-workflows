@@ -90,8 +90,8 @@ def test_codex_dependency_gates_and_scheduled_release_are_wired():
 	clarify = (ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8")
 	implement = (ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
 	poller = (ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
-	for text in (clarify, poller):
-		assert "scripts/security_dependency.py security-dependency" in text
+	assert "scripts/security_dependency.py security-dependency" in poller
+	assert '${CLARIFY_HOST_PYTHON_DIR}/security_dependency.py" security-dependency' in clarify
 	assert '${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency' in implement
 	for text in (clarify, implement, poller):
 		assert "claude_issue_route.py" not in text
@@ -117,6 +117,10 @@ def test_host_dependency_gates_run_in_isolated_mode():
 	assert len(implement_lines) == 2
 	for line in clarify_lines + implement_lines:
 		assert "python3 -I -B " in line, line
+	assert '"${CLARIFY_HOST_PYTHON_DIR}/security_dependency.py"' in clarify_lines[0]
+	assert 'CLARIFY_HOST_PYTHON_DIR="${RUNNER_TEMP}/clarify-host-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in clarify
+	assert 'install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}"' in clarify
+	assert 'load_workflow_overlay.py|security_dependency.py)' in clarify
 	for line in implement_lines:
 		assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py"' in line, line
 		assert "scripts/security_dependency.py" not in line, line

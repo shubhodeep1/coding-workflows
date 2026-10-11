@@ -1118,6 +1118,7 @@ jobs:
           _staged_support_installed_paths=()
 
           mkdir -p scripts
+          mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
           for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
@@ -1129,6 +1130,9 @@ jobs:
               exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            if [ "${f}" = load_workflow_overlay.py ]; then
+              install -m 0755 "${src}" "${RUNTIME_DIR}/host_python/${f}"
+            fi
             _fetched_scripts+=("${f}")
             _staged_support_installed_paths+=("scripts/${f}")
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
@@ -1288,11 +1292,9 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          # -I (issue #7159): this copy was installed from the verified support
-          # checkout above, but scripts/ is the branch checkout, so without
-          # isolated mode a branch-added scripts/json.py (or any stdlib-shadowing
-          # module, or a PYTHONPATH) would run here with GITHUB_ENV write access.
-          PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/load_workflow_overlay.py \
+          # Use the runner-temp copy from verified support, outside the branch
+          # checkout; isolated mode also excludes PYTHONPATH and the cwd.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${RUNTIME_DIR}/host_python/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
