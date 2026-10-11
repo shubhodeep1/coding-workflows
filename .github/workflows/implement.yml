@@ -1477,6 +1477,14 @@ jobs:
           _staged_support_hooks_src=".github/ai/workspace_hooks/implement"
           _staged_support_hooks_dest="${RUNTIME_DIR}/staged_support_run/.github/ai/workspace_hooks/implement"
           rm -rf -- "${RUNTIME_DIR}/staged_support_run/.github"
+          for _staged_support_hook_file in .github .github/ai .github/ai/workspace_hooks "${_staged_support_hooks_src}" \
+            "${_staged_support_hooks_src}/after_create.sh" "${_staged_support_hooks_src}/before_run.sh" \
+            "${_staged_support_hooks_src}/after_run.sh" "${_staged_support_hooks_src}/before_remove.sh"; do
+            if [ -L "${_staged_support_hook_file}" ]; then
+              echo "::error::Implement workspace hook staging refused symlink: ${_staged_support_hook_file}" >&2
+              exit 125
+            fi
+          done
           if [ -d "${_staged_support_hooks_src}" ] && [ ! -L "${_staged_support_hooks_src}" ]; then
             while IFS= read -r -d '' _staged_support_hook_file; do
               _staged_support_hook_file="${_staged_support_hook_file#./}"
@@ -1592,7 +1600,8 @@ jobs:
         id: workspace_after_create_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement after_create
+          # Run the trusted pre-editor copy (#7158), like after_run / before_remove.
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement after_create
 
       - name: Detect preexisting Serena project config
         if: env.SKIP_IMPLEMENT != 'true'
@@ -2346,7 +2355,8 @@ jobs:
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement before_run
+          # Run the trusted pre-editor copy (#7158), like after_run / before_remove.
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement before_run
 
       # Claude engine (replace-claude-sessions plan Phase 5b): IMPLEMENT,
       # IMPLEMENT_REPAIR and IMPLEMENT_DIAGNOSE each resolve their engine from
@@ -3653,10 +3663,10 @@ jobs:
           fi
 
       - name: Run workspace after_run hook
-        if: always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'
+        if: always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''
         run: |
           set -euo pipefail
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement after_run
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement after_run
 
       - name: Write run summary
         if: env.SKIP_IMPLEMENT != 'true' && always()
@@ -6255,10 +6265,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Run workspace before_remove hook
-        if: always() && env.SKIP_IMPLEMENT != 'true'
+        if: always() && env.SKIP_IMPLEMENT != 'true' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''
         run: |
           set -euo pipefail
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement before_remove
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement before_remove
 
       - name: Cleanup temporary artifacts
         if: always()
