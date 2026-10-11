@@ -10,8 +10,10 @@ path is ungranted, or the check cannot run, the issue stays in
 `ai:awaiting-approval` with one `<!-- ai:automation-path-plan-hold:v1 ... -->`
 comment and a WARNING. The poller logs `STALL_SKIP ...
 reason=automation_path_ungranted|automation_path_check_unavailable` without
-counting a recovery attempt. The poller also turns the gate on for an issue
-whenever a trusted hold marker is newer than the latest trusted plan comment,
-because `orchestrate_poll.yml` does not forward the variable. The extractor
+counting a recovery attempt. `orchestrate_poll.yml` forwards the flag to the
+poller with a `false` default, so it checks when enabled even if the plan-step
+hold marker fails to post; explicitly disabling it ignores old markers.
+Direct script callers with an unset flag can still activate the gate with a
+trusted hold marker newer than the latest trusted plan comment. The extractor
 block is byte-identical in both files, and
 `tests/test_plan_auto_approve_safe_state_fetch.py` pins that.

@@ -269,6 +269,12 @@ def test_automation_path_gate_is_off_by_default() -> None:
 	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}" in _workflow_text()
 
 
+def test_automation_path_gate_flag_is_forwarded_to_poller() -> None:
+	poller_workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8"))
+	step = next(step for step in poller_workflow["jobs"]["poll"]["steps"] if step.get("name") == "Process each tracking issue")
+	assert step["env"]["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] == "${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}"
+
+
 def test_automation_path_gate_approves_fully_granted_plan() -> None:
 	issue = _issue_with_grant([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
 	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true")
