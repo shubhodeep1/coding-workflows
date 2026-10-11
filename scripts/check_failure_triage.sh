@@ -271,6 +271,10 @@ HEAD_REF="$(printf '%s' "${PR_JSON}" | jq -r '.head.ref // ""')"
 PR_TITLE="$(printf '%s' "${PR_JSON}" | jq -r '.title // ""')"
 PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.html_url // ""')"
 HEAD_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.head.repo.full_name // ""')"
+PR_HEAD_SHA_CURRENT="$(printf '%s' "${PR_JSON}" | jq -r '.head.sha // ""')"
+if ! [[ "${PR_HEAD_SHA_CURRENT}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+	PR_HEAD_SHA_CURRENT=""
+fi
 [ -n "${PR_URL}" ] || PR_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/pull/${PR_NUMBER}"
 if ! PR_URL_DISPLAY="$(triage_single_line_metadata "${PR_URL}")"; then
 	log "error metadata_flatten_failed"
@@ -432,9 +436,10 @@ fi
 # event costs one (that check's newest runs on the base branch tip, counted as
 # success only when every returned run has completed with success and the page
 # holds every run total_count reports, so an omitted failure cannot hide behind
-# a full page of successes). Fails open:
-# any read failure, a pending or missing base result, or a conclusion other
-# than success files the issue as before.
+# a full page of successes). A base run or check that is still in progress
+# defers the issue (skip reason=base_pending). Fails open: any read failure,
+# a missing base result, or a conclusion other than success files the issue
+# as before.
 BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
 BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
 if [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
@@ -458,7 +463,7 @@ else
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
-				--jq '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""' 2>/dev/null || true)"
+				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end' 2>/dev/null || true)"
 			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
 		elif [ -z "${CHECK_DETAILS_URL}" ]; then
 			base_gate_reason="details_url_unavailable"
@@ -473,12 +478,23 @@ else
 		base_gate_ref_path="${BASE_REF//\//%2F}"
 		base_gate_conclusion="$(gh_retry gh api -X GET "repos/${REPO}/commits/${base_gate_ref_path}/check-runs" \
 			-f check_name="${CHECK_NAME}" -f filter=latest -f per_page=100 \
-			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) or any($r[]; .status != "completed") then "" elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
+			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) or any($r[]; .status != "completed") then (if ($r | length) > 0 and (.total_count // 0) <= ($r | length) then "pending" else "" end) elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
 		[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_check"
 	fi
 	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
 	if [ "${base_gate_conclusion}" = "success" ]; then
 		log "skip reason=pr_specific_failure base=${BASE_REF} base_conclusion=success pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+	# The base branch's newest run of this check is still in progress: its
+	# result is not known yet, so filing now could hand a PR-specific failure
+	# to a base-branch fix that has nothing to change (#7140 was filed for
+	# PR #7135 while main's CI run was in progress). Defer instead. The PR's
+	# own review/autofix loop owns a PR-specific failure, and a real
+	# base-branch breakage is filed by the next triage once the base run
+	# completes, because every PR then fails the same way.
+	if [ "${base_gate_conclusion}" = "pending" ]; then
+		log "skip reason=base_pending base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
 		exit 0
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
@@ -510,9 +526,31 @@ fi
 
 PR_PAYLOAD_FILE="${PR_JSON_FILE}"
 : > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+# Collect check runs for the failing check's SHA, not the PR's current head:
+# a push after the failure must not swap a later commit's checks into the
+# diagnosis (#6918). An empty HEAD_SHA keeps the PR-payload head fallback.
+pr_head_advanced="unknown"
+context_head_sha_label="pr_payload"
+if [ -n "${HEAD_SHA}" ]; then
+	if [[ "${HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		context_head_sha_label="${HEAD_SHA,,}"
+	else
+		# The collector rejects it as unavailable; never echo the raw value.
+		context_head_sha_label="invalid"
+	fi
+fi
+if [ "${context_head_sha_label}" != "pr_payload" ] && [ "${context_head_sha_label}" != "invalid" ] && [ -n "${PR_HEAD_SHA_CURRENT}" ]; then
+	if [ "${HEAD_SHA,,}" = "${PR_HEAD_SHA_CURRENT,,}" ]; then
+		pr_head_advanced="false"
+	else
+		pr_head_advanced="true"
+	fi
+fi
+log "context_head_sha=${context_head_sha_label} pr_head_sha=${PR_HEAD_SHA_CURRENT:-unknown} pr_head_advanced=${pr_head_advanced}"
 if [ -f scripts/collect_pr_check_runs_context.py ]; then
 	if PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" \
 		PR_CHECK_RUNS_CONTEXT_FILE="${PR_CHECK_RUNS_CONTEXT_FILE}" \
+		PR_CHECK_RUNS_HEAD_SHA_OVERRIDE="${HEAD_SHA}" \
 		CHECK_RUNS_WAIT_TIMEOUT_SECS="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-60}" \
 		PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/collect_pr_check_runs_context.py; then
 		:

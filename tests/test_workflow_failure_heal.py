@@ -3056,13 +3056,13 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support="]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support=", "newest_reason=editor_empty_noop"]
 		# Issue #6625: --support-sha ignores markers of other support versions.
 		result = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-1] == f"support={SUPPORT_NEW}"
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-2:] == [f"support={SUPPORT_NEW}", "newest_reason="]
 		result = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
 				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
@@ -3623,6 +3623,72 @@ def test_gate_stops_a_head_on_its_first_non_retryable_failure() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-nonretryable-off-") as tmp_name:
 		_result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env={"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"})
 		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true"
+
+
+def test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host_only_marker() -> None:
+	"""Issue #6743 (#6733): a force_rb_judge run re-ran the resolver that had
+	already refused host-only paths, so the review-blocked judge never ran."""
+	force = {"FORCE_RB_JUDGE": "true"}
+	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-skip-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env=force)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert outputs["force_rb_judge_conflict_skip"] == "true", result.stdout
+		assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false"
+		assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=skip reason=host_only_marker marker_reason={HOST_ONLY_REASON}" in result.stdout
+	newer_other_reason = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="502", reason="workflow_failure")
+	unsupported = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="503", reason="conflict_resolver_sandbox_path_unsupported")
+	newer_outage = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="506", reason="provider_unavailable")
+	cases = [
+		("newer_provider_outage", [_host_only_failure_comment(), newer_outage], {}, {}, True, "newest_reason_mismatch"),
+		("untrusted_author", [_host_only_failure_comment(author="attacker")], {}, {}, True, "no_trusted_marker"),
+		("different_head", [_host_only_failure_comment(head=SHA_B)], {}, {}, True, "no_trusted_marker"),
+		("newer_other_reason", [_host_only_failure_comment(), newer_other_reason], {}, {}, True, "reason_mismatch"),
+		("unsupported_reason", [unsupported], {}, {}, True, "reason_mismatch"),
+		("user_fail", [_host_only_failure_comment()], {}, {"user_fail": True}, True, "marker_author_unavailable"),
+		("comments_fail", [_host_only_failure_comment()], {}, {"comments_fail": True}, True, "api_error"),
+		("disabled", [_host_only_failure_comment()], {"REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED": "false"}, {}, True, "disabled"),
+		("helper_missing", [_host_only_failure_comment()], {}, {}, False, "helper_missing"),
+	]
+	for name, comments, extra_env, overrides, with_helper, reason in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env}, state_overrides=overrides, with_helper=with_helper)
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == "false", (name, result.stdout)
+			assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false", (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=run reason={reason} " in result.stdout, (name, result.stdout)
+	# The skip runs with the fingerprint cap disabled (it has its own switch),
+	# and only on a marker from the current support version.
+	current_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="504", support=SUPPORT_NEW, reason=HOST_ONLY_REASON)
+	old_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="505", support=SUPPORT_OLD, reason=HOST_ONLY_REASON)
+	for name, comments, extra_env, expected in (
+		("cap_disabled", [_host_only_failure_comment()], {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, "outcome=skip reason=host_only_marker"),
+		("current_support", [current_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=skip reason=host_only_marker"),
+		("old_support", [old_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=run reason=no_trusted_marker"),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env})
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == ("true" if "outcome=skip" in expected else "false"), (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} {expected} " in result.stdout, (name, result.stdout)
+	# Without force_rb_judge the host-only marker still trips the cap and no skip is exported.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-noforce-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()])
+		assert outputs["fingerprint_cap"] == "true" and outputs["force_rb_judge_conflict_skip"] == "false"
+		assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP" not in result.stdout
+
+
+def test_newest_trusted_failure_reason_does_not_pass_over_outage_markers() -> None:
+	"""Issue #6743: the force_rb_judge skip needs the newest trusted marker's
+	reason, including provider_unavailable, which the cap counter skips."""
+	host_only = _host_only_failure_comment()
+	outage = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="506", reason="provider_unavailable")
+	newest = heal.newest_trusted_failure_reason
+	assert newest([host_only], head_sha=SHA_A, author_login=CAP_AUTHOR) == HOST_ONLY_REASON
+	assert newest([host_only, outage], head_sha=SHA_A, author_login=CAP_AUTHOR) == "provider_unavailable"
+	assert heal.count_identical_failures([host_only, outage], head_sha=SHA_A, author_login=CAP_AUTHOR)["reason"] == HOST_ONLY_REASON
+	assert newest([host_only, {**outage, "author_login": "attacker"}], head_sha=SHA_A, author_login=CAP_AUTHOR) == HOST_ONLY_REASON
+	assert newest([host_only], head_sha=SHA_B, author_login=CAP_AUTHOR) == ""
+	assert newest([host_only], head_sha=SHA_A, author_login="") == ""
 
 
 def test_fingerprint_cap_block_names_the_non_retryable_first_error() -> None:
