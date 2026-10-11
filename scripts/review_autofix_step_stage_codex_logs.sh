@@ -76,7 +76,8 @@ if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
            "${PREVIOUS_REVIEWS_DIR}"/status_*.txt \
            "${PREVIOUS_REVIEWS_DIR}"/consensus_pass1.txt \
            "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.txt \
-           "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.log; do
+           "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.log \
+           "${PREVIOUS_REVIEWS_DIR}"/rejected_*.txt; do
     [ -f "${f}" ] && cp -f "${f}" "${STAGE_DIR}/previous_reviews/" || true
   done
 fi

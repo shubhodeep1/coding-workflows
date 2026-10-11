@@ -52,6 +52,10 @@
 #                            the head (self-run excluded). Read by
 #                            _pr_wait_for_required_checks to tell a
 #                            settled failure from a pending one.
+#   AUTO_MERGE_WAIT_WORKFLOWS — workflow names (comma-separated, default
+#                            "CI"; none/off disables) whose not-yet-completed
+#                            runs on the head keep _pr_wait_for_required_checks
+#                            waiting (_pr_head_ci_runs_pending).
 #   PR_CHECKS_LAST_TOTAL   — set by _pr_checks_completed when it reads the
 #                            check-runs: total non-self check-runs on the
 #                            head (0 = none registered yet).
@@ -339,6 +343,56 @@ _pr_checks_completed()
 # Env: AUTO_MERGE_CHECKS_WAIT_MINUTES (default 45; 0 = one check, no wait),
 # AUTO_MERGE_CHECKS_POLL_SECONDS (default 60). One check-runs listing (plus
 # the branch-protection read) per poll.
+# `_pr_head_ci_runs_pending <head_sha>` sets PR_CHECKS_RUNS_PENDING to the
+# number of workflow runs on <head_sha> whose workflow name is listed in
+# AUTO_MERGE_WAIT_WORKFLOWS (comma-separated, default "CI"; "none" disables)
+# (matched case-insensitively, as the "none"/"off" check is) and whose
+# status is not completed, the caller's own run excluded.
+# Why: a workflow run exists (queued) as soon as the push event fires, but
+# its jobs' check-runs appear only when they start. A fast check that
+# already passed (the PR-body lint) made the head look green while CI was
+# still queued, so the required-checks wait could return before CI ran.
+# It also sets PR_CHECKS_RUNS_UNRUN to the number of listed workflows whose
+# every run on <head_sha> completed as cancelled or startup_failure: such a
+# run (for example cancelled while still queued) leaves no check-runs, so
+# the check-run gate alone would read the head as green although CI never
+# produced a result. The wait refuses with reason=ci_run_cancelled; a
+# later re-run returns the workflow to pending.
+# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
+# (integers), return 0.
+# API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
+# when disabled or the SHA/repository is unusable. Fail-open: a failed or
+# malformed read counts as 0 pending (the check-run gate still applies).
+_pr_head_ci_runs_pending()
+{
+	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
+	PR_CHECKS_RUNS_PENDING=0
+	PR_CHECKS_RUNS_UNRUN=0
+	names_csv="${AUTO_MERGE_WAIT_WORKFLOWS-CI}"
+	case "$(printf '%s' "${names_csv}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		""|none|off) return 0 ;;
+	esac
+	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+	self_run="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}"
+	runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?head_sha=${head_sha}&per_page=100" 2>/dev/null || echo "")"
+	local counts
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
+		| [(.workflow_runs // [])[]
+			| select((.id | tostring) != $self_run)
+			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+		| ($runs | map(select(.status != "completed")) | length) as $pending
+		| ($runs | group_by(.name // "" | ascii_downcase)
+			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
+			| length) as $unrun
+		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
+	PR_CHECKS_RUNS_PENDING="${counts%% *}"
+	PR_CHECKS_RUNS_UNRUN="${counts##* }"
+	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
+	[[ "${PR_CHECKS_RUNS_UNRUN}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_UNRUN=0
+	return 0
+}
+
 _pr_wait_for_required_checks()
 {
 	local pr_number="$1"
@@ -357,6 +411,31 @@ _pr_wait_for_required_checks()
 			_pr_checks_completed "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null || rc=$?
 		case "${PR_CHECKS_LAST_REASON}" in
 			ok|allow_all)
+				# A listed CI workflow run on this head is still queued or
+				# running: its check-runs may not exist yet, so keep waiting.
+				# Not under allow_all: that sentinel ignores every check-run's
+				# outcome (branch protection decides), so CI's result would be
+				# ignored after the wait too.
+				if [ "${PR_CHECKS_LAST_REASON}" = "ok" ]; then
+					_pr_head_ci_runs_pending "${head_sha}"
+					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
+						echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_RUNS_PENDING} CI workflow run(s) on ${head_sha:0:7} not completed yet; waiting ${poll_seconds}s."
+						sleep "${poll_seconds}"
+						waited=$((waited + poll_seconds))
+						PR_CHECKS_WAIT_WAITED_S="${waited}"
+						continue
+					fi
+					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ]; then
+						PR_CHECKS_WAIT_OUTCOME="timeout"
+						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_RUNS_PENDING} reason=ci_run_pending"
+						return 1
+					fi
+					if [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; then
+						PR_CHECKS_WAIT_OUTCOME="failed"
+						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=failed waited_s=${waited} pending=0 reason=ci_run_cancelled"
+						return 1
+					fi
+				fi
 				# No check-run registered yet (fresh push, CI not queued): poll up
 				# to two more intervals before reading "none" as green. A repo
 				# with no CI at all still proceeds once that grace is spent.
@@ -466,6 +545,7 @@ _pr_base_freshness()
 	PR_BASE_FRESHNESS_HEAD_SHA=""
 	PR_BASE_FRESHNESS_BEHIND_BY=""
 	PR_BASE_FRESHNESS_OVERLAP=""
+	PR_BASE_FRESHNESS_BASE_REF=""
 	case "$(printf '%s' "${MERGE_BASE_FRESHNESS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
 		*)
@@ -492,6 +572,7 @@ _pr_base_freshness()
 		return 0
 	fi
 	PR_BASE_FRESHNESS_HEAD_SHA="${head_sha}"
+	PR_BASE_FRESHNESS_BASE_REF="${base_ref}"
 
 	# `compare/{head}...{base}`: `ahead_by` counts the commits the base
 	# gained since the merge-base and `files` is the base-side diff. GitHub
@@ -604,6 +685,78 @@ _pr_base_sync_for_fresh_ci()
 	return 1
 }
 
+# Freshness-update markers and the update cap (#7084, Q60: A).
+#
+# Only merge paths call _pr_base_fresh_for_merge, so a head it updates has
+# already been approved for merge. Each accepted update posts one PR comment
+# ending in
+#   <!-- ai:merge-base-sync:v1 pr=<n> from=<40-hex head> sync=<k> -->
+# where `from` is that approved head. The review gate
+# (scripts/review_head_gate.sh freshness-sync) lets the GitHub-made merge of
+# exactly that head with the base skip the reviewer panel: the
+# deterministic-skip-merge job only waits for CI, then merges. Without this,
+# each update restarted the whole review cycle (about 20-25 minutes) and the
+# base moved again before it finished, so #6654 was updated four times in
+# two hours and never merged.
+#
+# MERGE_BASE_FRESHNESS_MAX_SYNCS (default 2, 0-9; anything else uses 2) caps
+# the updates per PR: once that many markers exist, an overlap no longer
+# updates the branch and the caller merges after its required-checks wait.
+# 0 never updates (the overlap is logged and the merge proceeds).
+#
+# `_pr_base_sync_count <pr>` sets PR_BASE_SYNC_COUNT to the number of markers
+# for <pr> posted by the token's own login; returns 1 (count unknown, caller
+# updates as before) when either read fails.
+# API budget (§15): one `user` read and one paginated issue-comments read,
+# only on the overlap path. No earlier call in this file reads comments or
+# the token's login; the review gate's own comments read happens in another
+# job and cannot be shared.
+_pr_base_sync_count()
+{
+	local pr_number="$1"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local sync_login sync_comments_json
+	PR_BASE_SYNC_COUNT=""
+	sync_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+	[[ "${sync_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 1
+	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
+		[ .[]? | if type == "array" then .[] else . end
+		  | select(type == "object" and ((.user.login // "") == $login))
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+ -->\\s*$")) ]
+		| length' 2>/dev/null | tail -n1)"
+	if ! [[ "${PR_BASE_SYNC_COUNT}" =~ ^[0-9]+$ ]]; then
+		PR_BASE_SYNC_COUNT=""
+		return 1
+	fi
+}
+
+# Post the marker for an accepted update. A head that is not a full 40-hex
+# SHA gets no marker, so the synchronize run reviews normally (fail safe).
+_pr_base_sync_marker_post()
+{
+	local pr_number="$1" head_sha="$2" sync_number="$3" sync_max="$4"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body
+	local overlap_label="${PR_BASE_FRESHNESS_OVERLAP:-shared paths}"
+	# Keep the comment far below GitHub's 65,536-character body limit.
+	[ "${#overlap_label}" -le 2000 ] || overlap_label="${overlap_label:0:2000}, ..."
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha:-unknown} outcome=skipped reason=short_head_sha"
+		return 0
+	fi
+	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s of at most %s).\n\n`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first. This head was already approved for merge: the next review run only waits for CI on the updated head and then merges, without running the reviewers again. Once %s updates have happened, a green CI run on the latest head merges without another update.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s -->' \
+		"${base_label}" "${sync_number}" "${sync_max}" "${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}" "${sync_max}" "${pr_number}" "${head_sha}" "${sync_number}")"
+	# One attempt only: a retried POST whose first response was lost would
+	# post a duplicate marker and exhaust the update cap early.
+	if _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
+		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=posted"
+	else
+		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"
+	fi
+	return 0
+}
+
 _pr_base_fresh_for_merge()
 {
 	local pr_number="$1"
@@ -615,8 +768,22 @@ _pr_base_fresh_for_merge()
 	case "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" in
 		overlap)
 			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} base=${base_ref:-unknown} outcome=overlap reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} overlap=${PR_BASE_FRESHNESS_OVERLAP:--}"
-			echo "  [base-freshness] PR #${pr_number}: the base gained ${PR_BASE_FRESHNESS_BEHIND_BY:-?} commit(s) touching ${PR_BASE_FRESHNESS_OVERLAP:-shared paths}; updating the branch so CI and review run on the combined tree before merging."
-			_pr_base_sync_for_fresh_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" || true
+			local sync_max="${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" sync_done=""
+			[[ "${sync_max}" =~ ^[0-9]$ ]] || sync_max=2
+			if [ "${sync_max}" -eq 0 ]; then
+				sync_done=0
+			elif _pr_base_sync_count "${pr_number}"; then
+				sync_done="${PR_BASE_SYNC_COUNT}"
+			fi
+			if [ -n "${sync_done}" ] && [ "${sync_done}" -ge "${sync_max}" ]; then
+				echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} outcome=overlap action=proceed reason=max_syncs syncs=${sync_done} max=${sync_max}"
+				echo "  [base-freshness] PR #${pr_number}: already updated from the base ${sync_done} time(s) (max ${sync_max}); merging after the required checks instead of updating again."
+				return 0
+			fi
+			echo "  [base-freshness] PR #${pr_number}: the base gained ${PR_BASE_FRESHNESS_BEHIND_BY:-?} commit(s) touching ${PR_BASE_FRESHNESS_OVERLAP:-shared paths}; updating the branch so CI runs on the combined tree before merging (update $(( ${sync_done:-0} + 1 )) of at most ${sync_max})."
+			if _pr_base_sync_for_fresh_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}"; then
+				_pr_base_sync_marker_post "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" "$(( ${sync_done:-0} + 1 ))" "${sync_max}"
+			fi
 			return 1
 			;;
 		unknown)
