@@ -34,7 +34,14 @@ def request(path, head):
 	with socket.socket(socket.AF_UNIX) as client:
 		client.settimeout(2)
 		client.connect(path)
-		client.sendall(head)
+		try:
+			client.sendall(head)
+		except (BrokenPipeError, ConnectionResetError):
+			# The busy path writes its 503 and closes without reading the
+			# request; the reply is already buffered, so read it below.
+			# Closing with our unread bytes queued sets ECONNRESET on this
+			# socket, which send can report instead of EPIPE.
+			pass
 		return client.recv(512)
 
 
@@ -71,7 +78,7 @@ def test_empty_probe_does_not_log_a_refusal(broker, capfd):
 	assert "outcome=refused" not in capfd.readouterr().err
 
 
-def test_broker_limits_threads_before_accepting_a_handler(tmp_path, monkeypatch):
+def test_broker_limits_threads_before_accepting_a_handler(tmp_path, monkeypatch, capfd):
 	started = threading.Event()
 	release = threading.Event()
 	handler_calls = []
@@ -91,8 +98,21 @@ def test_broker_limits_threads_before_accepting_a_handler(tmp_path, monkeypatch)
 			with socket.socket(socket.AF_UNIX) as first:
 				first.connect(path)
 				assert started.wait(timeout=2)
-				assert b"503" in request(path, b"CONNECT pypi.org:443 HTTP/1.1\r\n\r\n")
+				# The busy path answers 503 and closes without reading the
+				# request, so sending one first races the close (BrokenPipeError
+				# or ECONNRESET; PR #6845 CI run 38082950546). Connect and read.
+				with socket.socket(socket.AF_UNIX) as second:
+					second.settimeout(2)
+					second.connect(path)
+					data = b""
+					while len(data) < 512:
+						chunk = second.recv(512 - len(data))
+						if not chunk:
+							break
+						data += chunk
+				assert data.startswith(b"HTTP/1.1 503")
 				assert len(handler_calls) == 1
+				assert "reason=busy" in capfd.readouterr().err
 		finally:
 			release.set()
 			server.shutdown()

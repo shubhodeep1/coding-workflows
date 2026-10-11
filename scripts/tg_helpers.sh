@@ -37,7 +37,12 @@ _tg_chat_id()
 # ---------------------------------------------------------------
 # Alert level support
 # Levels: DEBUG < WARNING < ERROR < CRITICAL < SILENT
-# ALERT_MSG_LEVEL env var controls minimum level sent (default: DEBUG).
+# ALERT_MSG_LEVEL env var controls minimum level sent (default: WARNING).
+# Level convention: DEBUG means the pipeline is already handling the
+# event (a dispatch, retry, re-issue, recovery step or success ping);
+# WARNING and above mean a human has to act. With the default WARNING
+# threshold only events that need a person reach Telegram; set
+# ALERT_MSG_LEVEL=DEBUG to receive the full stream again.
 # New alerts default to CRITICAL until explicitly recategorised.
 # Setting ALERT_MSG_LEVEL=SILENT suppresses all existing helper-based
 # sends because no existing call site emits at SILENT — every caller
@@ -78,7 +83,7 @@ _tg_level_icon()
 _tg_should_send()
 {
 	local msg_level="$1"
-	local threshold="${ALERT_MSG_LEVEL:-DEBUG}"
+	local threshold="${ALERT_MSG_LEVEL:-WARNING}"
 	local msg_num threshold_num
 	msg_num=$(_tg_level_num "${msg_level}")
 	threshold_num=$(_tg_level_num "${threshold}")

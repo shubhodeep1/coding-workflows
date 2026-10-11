@@ -17,6 +17,9 @@
 #      `autofix_failure` report carries its own evidence text), then applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
+#      A verified autofix_failure with a non-retryable reason
+#      (NON_RETRYABLE_FAILURE_REASONS) stops here: one diagnosis comment on the
+#      PR, ai:needs-human, a WARNING, `skip reason=non_retryable_<suffix>`.
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
 #      runs (bounded: WORKFLOW_HEAL_MAX_RUNS runs, WORKFLOW_HEAL_MAX_FAILED_JOBS
 #      jobs per run, WORKFLOW_HEAL_MAX_RUN_LOG_BYTES per job).
@@ -104,6 +107,15 @@
 #                                         set by the workflow's materialize step
 #   WORKFLOW_HEAL_OIDC_JWKS_FILE          test hook: read the JWKS from this file instead of
 #                                         fetching it (default empty)
+#   HEAL_INTAKE_SCOPE_GUARD_ENABLED       default "false": the intake composes the heal issue,
+#                                         logs `skip reason=scope_guard_disabled` and creates
+#                                         no issue or outcome comment (#6798 / #6871 operator
+#                                         step pending; SELF_REPO heal labels are still ensured). Only
+#                                         "true" (any letter case) enables issue creation, and
+#                                         then only after the composed body's
+#                                         ai:workflow-heal-scope:v1 marker verifies; a missing
+#                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
+#                                         sends a CRITICAL alert and exits nonzero.
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -142,6 +154,9 @@ REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json
 TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
 SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
 SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
+# Heal issue creation gate (#6871): off by default, fail closed. See
+# _heal_intake_scope_guard_permits_create.
+SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -284,12 +299,10 @@ case "${REPORT_ORIGIN}" in
 				REPORT_AUTH="verified"
 				;;
 			*)
-				# phase_failure reports come from the heal-report job of the
-				# clarify / plan / implement workflows, which runs with
-				# `permissions: {}` and so carries no identity; the provenance
-				# gate below binds them to a run of that workflow in source_repo
-				# linked from the issue by a trusted author.
-				if [ "${REQUIRE_REPORT_AUTH}" = "true" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
+				# Every repository_dispatch report, phase_failure included (its
+				# heal-report job is granted id-token: write), needs a verified
+				# identity when enforcement is on (issue #6834).
+				if [ "${REQUIRE_REPORT_AUTH}" = "true" ]; then
 					_report_auth_reject "unauthenticated_report"
 				fi
 				REPORT_AUTH="absent"
@@ -300,6 +313,16 @@ esac
 rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
 
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
+# A host-only autofix_failure report (#6745) is not skipped here while the
+# non-retryable routing below is on: it must pass binding and provenance first,
+# then gets the PR diagnosis (#6756). Every path that does not diagnose it
+# still ends in this skip reason after provenance, so no heal issue is filed.
+NON_RETRYABLE_ROUTING_ENABLED="${WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED:-true}"
+HOST_ONLY_DEFERRED=false
+if [ "${SKIP_REASON}" = "host_only_conflict_manual_merge" ] && [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLED,,}" != "false" ]; then
+	HOST_ONLY_DEFERRED=true
+	SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" --defer-host-only-autofix 2>/dev/null || echo "host_only_conflict_manual_merge")"
+fi
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
 	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
@@ -403,7 +426,9 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 	ISSUE_URL="$(_pf '.issue_url // ""')"
 	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
 	if [ "${REPORT_AUTH}" = "absent" ]; then
-		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# DEBUG: the report is processed normally and the daily wrapper sync
+		# (update_workflows.yml) brings the consumer's wrappers up to date.
+		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
 	fi
 else
 	log "report_auth=event reason=workflow_run_event source=${SOURCE_REPO} kind=${SOURCE_KIND}"
@@ -483,11 +508,96 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	log "provenance_verified source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=$(jq '.run_refs | length' "${PAYLOAD_FILE}")"
 fi
 
+# --- Non-retryable review/autofix failures (after provenance) --------------
+#
+# A verified autofix_failure whose reason is in NON_RETRYABLE_FAILURE_REASONS
+# (scripts/workflow_failure_heal.py; directly, or as the repeated reason of an
+# identical_failure_cap report, read from the trusted account's own failure
+# markers) cannot be fixed by another run or by a heal issue: the resolver
+# sandbox refuses host-executed paths by design (#6750 / PR #6535). Post one
+# diagnosis on the PR (marker ai:workflow-heal-non-retryable:v1, keyed on
+# pr / head / reason), label it ai:needs-human, send a WARNING, and stop.
+# §14 API audit: reuses the comment snapshot and login the provenance gate
+# already read; no new GET. A duplicate report makes no API call unless the
+# PR read by claim binding lacks ai:needs-human (one label add).
+# Fail open: a helper error falls through to the existing heal path (or, for
+# a deferred host-only report, to the #6745 skip right after this block).
+if [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLED,,}" != "false" ] \
+	&& [ -n "${PROVENANCE_COMMENTS:-}" ] && [ -n "${PROVENANCE_LOGIN:-}" ]; then
+	NON_RETRYABLE_FILE="${RUNTIME_DIR}/non_retryable_route.json"
+	NON_RETRYABLE_ERR_FILE="${RUNTIME_DIR}/non_retryable_route.err"
+	if python3 "${HEAL_PY}" non-retryable-route --payload-json "${PAYLOAD_FILE}" --comments-json "${PROVENANCE_COMMENTS}" \
+		--trusted-login "${PROVENANCE_LOGIN}" --intake-run-url "${RUN_URL}" > "${NON_RETRYABLE_FILE}" 2> "${NON_RETRYABLE_ERR_FILE}" \
+		&& jq -e 'type == "object" and (.route | type == "boolean") and (.already_diagnosed | type == "boolean") and (.comment | type == "string")' "${NON_RETRYABLE_FILE}" >/dev/null 2>&1; then
+		if [ "$(jq -r '.route' "${NON_RETRYABLE_FILE}")" = "true" ]; then
+			NON_RETRYABLE_REASON="$(jq -r '.reason' "${NON_RETRYABLE_FILE}")"
+			NON_RETRYABLE_SUFFIX="$(jq -r '.suffix' "${NON_RETRYABLE_FILE}")"
+			NON_RETRYABLE_PATH_COUNT="$(jq -r '.paths | length' "${NON_RETRYABLE_FILE}")"
+			NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
+			if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
+				NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
+			elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
+				NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
+			else
+				NON_RETRYABLE_ACTION="the conflicted path(s) need a manual merge"
+			fi
+			if [ "$(jq -r '.already_diagnosed' "${NON_RETRYABLE_FILE}")" = "true" ]; then
+				# The diagnosis is already posted. Re-add ai:needs-human only when
+				# the PR read by claim binding shows it missing (a failed label
+				# write earlier); otherwise this costs no API call.
+				NON_RETRYABLE_DUP_LABEL="present"
+				if [ -f "${BIND_PULL_FILE:-}" ] && jq -e '.labels | type == "array"' "${BIND_PULL_FILE}" >/dev/null 2>&1 \
+					&& ! jq -e '[.labels[]? | if type == "object" then .name else . end] | index("ai:needs-human") != null' "${BIND_PULL_FILE}" >/dev/null 2>&1; then
+					ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
+					if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+						NON_RETRYABLE_DUP_LABEL="reapplied"
+					else
+						NON_RETRYABLE_DUP_LABEL="failed"
+					fi
+				fi
+				log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=duplicate source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} label=${NON_RETRYABLE_DUP_LABEL}"
+				exit 0
+			fi
+			NON_RETRYABLE_COMMENT_FILE="${RUNTIME_DIR}/non_retryable_comment.md"
+			jq -r '.comment' "${NON_RETRYABLE_FILE}" > "${NON_RETRYABLE_COMMENT_FILE}"
+			# The comment goes first: its marker is what stops the label event
+			# below from producing another heal report.
+			if ! gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${NON_RETRYABLE_COMMENT_FILE}" >/dev/null 2>&1; then
+				log "error non_retryable_comment_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} reason=${NON_RETRYABLE_REASON}"
+				tg_send_msg "Workflow failure heal could not post the non-retryable diagnosis (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}; no heal issue was opened and the next report retries."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+				exit 0
+			fi
+			ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
+			NON_RETRYABLE_LABEL_STATUS="ai:needs-human applied"
+			NON_RETRYABLE_LABEL_TOKEN="applied"
+			if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+				log "warn non_retryable_label_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER}"
+				NON_RETRYABLE_LABEL_STATUS="adding ai:needs-human FAILED (the next report for this head retries it)"
+				NON_RETRYABLE_LABEL_TOKEN="failed"
+			fi
+			tg_send_msg "Workflow failure heal: non-retryable review/autofix failure (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}: ${NON_RETRYABLE_ACTION}. Diagnosis posted, ${NON_RETRYABLE_LABEL_STATUS}; no heal issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=diagnosed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} paths=${NON_RETRYABLE_PATH_COUNT} label=${NON_RETRYABLE_LABEL_TOKEN}"
+			exit 0
+		fi
+	else
+		log "warn non_retryable_route_unavailable source=${SOURCE_LABEL} detail=$(head -c 200 "${NON_RETRYABLE_ERR_FILE}" 2>/dev/null | tr -c 'A-Za-z0-9_.:=-' ' ' | tr -s ' ' || true)"
+	fi
+fi
+if [ "${HOST_ONLY_DEFERRED}" = "true" ]; then
+	# Not diagnosed (no trusted comment snapshot or login, a helper error, or a
+	# cap report whose trusted markers do not name the host-only reason): keep
+	# #6745's outcome, a manual merge and no heal issue.
+	log "skip reason=host_only_conflict_manual_merge source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} stage=after_provenance"
+	exit 0
+fi
+
 # --- Collect failed jobs + logs --------------------------------------------
 
 SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
 printf '[]' > "${SUMMARIES_FILE}"
 LOG_FILES=()
+# Job logs actually fetched (placeholders for unreadable logs do not count).
+READ_JOB_LOG_COUNT=0
 RUN_COUNT=0
 
 while IFS=$'\t' read -r run_id run_url; do
@@ -570,6 +680,9 @@ while IFS=$'\t' read -r run_id run_url; do
 			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
 				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 				: > "${FILTERED_LOG}"
+			else
+				# A log whose filtering failed was emptied above and is not readable evidence.
+				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
@@ -648,6 +761,38 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 	esac
 fi
 
+# A release / default-branch run of this repository that failed only because
+# the model provider was unavailable (evidence in its logs confirmed by a live
+# probe, scripts/provider_outage.py) is recorded on the repo-wide provider
+# outage tracker instead of filing a heal issue; the scheduled sweep reports
+# or (opt-in, PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED) re-runs it on recovery
+# (issue #6633). Fail-open: without the helper the run is triaged as before.
+PROVIDER_OUTAGE_PY="$(dirname "${HEAL_PY}")/provider_outage.py"
+# Only stable-release / promotion runs (RELEASE_WORKFLOW_NAMES) go to the
+# tracker; CI and scheduled-check runs keep the normal triage path.
+OUTAGE_RELEASE_RUN="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import workflow_failure_heal as h; print("true" if sys.argv[2] in h.RELEASE_WORKFLOW_NAMES else "false")' "$(dirname "${HEAL_PY}")" "${PAYLOAD_WORKFLOW_NAME:-}" 2>/dev/null || echo false)"
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ "${OUTAGE_RELEASE_RUN}" = "true" ] && [ "${#LOG_FILES[@]}" -gt 0 ] && [ -f "${PROVIDER_OUTAGE_PY}" ]; then
+	OUTAGE_ARGS=()
+	for f in "${LOG_FILES[@]}"; do
+		OUTAGE_ARGS+=(--log-file "${f}")
+	done
+	OUTAGE_CLASS="$(PYTHONDONTWRITEBYTECODE=1 python3 "${PROVIDER_OUTAGE_PY}" classify "${OUTAGE_ARGS[@]}" 2>/dev/null | head -n 1 || true)"
+	if [[ "${OUTAGE_CLASS}" == reason=provider_unavailable* ]]; then
+		OUTAGE_STATUS="$(printf '%s\n' "${OUTAGE_CLASS}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p')"
+		OUTAGE_RUN_ID="$(jq -r '.run_refs[0].run_id // ""' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+		OUTAGE_WORKFLOW="$(printf '%s' "${PAYLOAD_WORKFLOW_NAME:-unknown}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-80)"
+		OUTAGE_ALERT_FILE="$(mktemp)"
+		OUTAGE_OPEN="$(PYTHONDONTWRITEBYTECODE=1 python3 "${PROVIDER_OUTAGE_PY}" open --repo "${SELF_REPO}" --kind outage --provider openrouter \
+			--status "${OUTAGE_STATUS:-unknown}" --release-run "${OUTAGE_RUN_ID}" --release-workflow "${OUTAGE_WORKFLOW}" --alert-out "${OUTAGE_ALERT_FILE}" 2>/dev/null | tail -n 1 || true)"
+		if [ -s "${OUTAGE_ALERT_FILE}" ]; then
+			tg_send_msg "$(cat "${OUTAGE_ALERT_FILE}")" "CRITICAL" >/dev/null 2>&1 || true
+		fi
+		rm -f -- "${OUTAGE_ALERT_FILE}"
+		log "skip reason=provider_unavailable workflow=${OUTAGE_WORKFLOW} run=${OUTAGE_RUN_ID:-none} status=${OUTAGE_STATUS:-unknown} ${OUTAGE_OPEN}"
+		exit 0
+	fi
+fi
+
 # --- Fingerprint -------------------------------------------------------------
 
 if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
@@ -670,7 +815,11 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi
-elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
+# An issue / PR report whose linked runs' logs were all unreadable carries only
+# "(job log unavailable)" placeholders, whose `no-error-lines` signature is the
+# same for every item; key it on the escalated item like a run-less report.
+elif [ "${#LOG_FILES[@]}" -gt 0 ] && { [ "${READ_JOB_LOG_COUNT}" -gt 0 ] \
+	|| { [ "${SOURCE_KIND}" != "issue" ] && [ "${SOURCE_KIND}" != "pull_request" ]; }; }; then
 	SIG_ARGS=()
 	for f in "${LOG_FILES[@]}"; do
 		SIG_ARGS+=(--log-file "${f}")
@@ -681,7 +830,12 @@ elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	# the (absent) escalation label.
 	SIGNATURE="phase:${FAILURE_REASON:-unknown}"
 else
-	SIGNATURE="label:${LABEL:-unknown}"
+	# No run (or no readable run log) to read: key on the escalated item as well as the label. A bare
+	# `label:<label>` signature gave every run-less report of that label, in
+	# every repository, one fingerprint and one lineage, so three unrelated
+	# harness fixes capped binance-blessings#249's first report at
+	# generation 4.
+	SIGNATURE="label:${LABEL:-unknown}|source:${SOURCE_REPO}#${ISSUE_NUMBER:-none}"
 fi
 FP="$(python3 "${HEAL_PY}" fingerprint --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" --signature "${SIGNATURE}")"
 log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_STEP:-none} runs=${SUMMARY_COUNT}"
@@ -1081,6 +1235,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "URL: ${ISSUE_URL}"
 		echo "Escalation label: ${LABEL}"
 		echo "Other labels: $(_pf '.labels | join(", ")')"
+		if [ "${LABEL}" = "ai:scope-blocked" ]; then
+			# Validated logins and association only (Q81): the automation-path
+			# guard grants a pipeline-authored issue without files_touched
+			# differently from any other author.
+			echo "Issue author: $(_pf '.issue_author_login // "unknown"') (association: $(_pf '.issue_author_association // "unknown"'))"
+			echo "Pipeline account (the reporter's identity): $(_pf '.reporter_pipeline_login // "unknown"')"
+		fi
 	else
 		echo "Failed workflow: ${PAYLOAD_WORKFLOW_NAME} (conclusion: $(_pf '.conclusion // "unknown"'))"
 		echo "Branch: ${HEAD_BRANCH:-unknown}  Head SHA: ${HEAD_SHA:-unknown}"
@@ -1279,6 +1440,49 @@ _git_fetch_consumer_scope_ref()
 		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
 }
 
+# Gate in front of the only heal issue-create call (#6871). With
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED off (the default) it ends the intake with
+# exit 0 before the issue-create writes, so no heal issue, target-repo label,
+# outcome comment or "created" alert happens (the ai:workflow-heal /
+# ai:workflow-heal-escalated labels in SELF_REPO are still ensured earlier,
+# as for every report). With it on it re-verifies the composed body's
+# ai:workflow-heal-scope:v1 marker through the same `heal-scope verify` the
+# implement preflight uses (author / label / edit checks are satisfied
+# synthetically: the issue does not exist yet, so only the marker shape is
+# checked) and refuses creation, fail closed, on anything but `verified`.
+_heal_intake_scope_guard_permits_create()
+{
+	local scope_guard_repo="$1" scope_guard_body_file="$2" scope_guard_labels="$3" scope_guard_target_branch="${4:-}"
+	local scope_guard_input="${RUNTIME_DIR}/scope_guard_input.json" scope_guard_status=""
+	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
+		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+		fi
+		exit 0
+	fi
+	if [ ! -s "${scope_guard_body_file}" ]; then
+		# Name the cause: a missing/empty composed body is not a marker problem.
+		scope_guard_status="body_missing"
+	elif jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
+		'{body: $body, author_login: "heal-intake-precreate", pipeline_login: "heal-intake-precreate", labels: [$label], last_edited_at: null}' \
+		> "${scope_guard_input}" 2>/dev/null; then
+		scope_guard_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_PY}" heal-scope verify --input-json "${scope_guard_input}" 2>/dev/null \
+			| jq -r '.status // empty' 2>/dev/null || true)"
+	fi
+	rm -f "${scope_guard_input}"
+	if [ "${scope_guard_status}" = "verified" ]; then
+		log "scope_guard outcome=verified repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+		return 0
+	fi
+	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
+	echo "::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}" >&2
+	log "error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+	tg_send_msg "Workflow failure heal refused to open an issue in ${scope_guard_repo} for ${SOURCE_LABEL}: the scope marker could not be verified (${scope_guard_status})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+	return 1
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
@@ -1344,14 +1548,20 @@ _open_issue()
 	fi
 	local title
 	title="$(head -1 "${title_file}")"
+	local issue_label_names="${HEAL_LABEL}"
+	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
+		# Same lineage convention as the review-blocked judge's
+		# merge_with_followup issues: the orchestrator treats it as a child.
+		label_args+=(--label "ai:orchestrator-managed")
+		issue_label_names="${issue_label_names},ai:orchestrator-managed"
+	fi
+	# Nothing below this gate may run unless it permits creation (#6871).
+	_heal_intake_scope_guard_permits_create "${repo}" "${body_file}" "${issue_label_names}" "${target_branch}" || return 1
 	if [ "${repo}" != "${SELF_REPO}" ]; then
 		ensure_label_exists "${HEAL_LABEL}" "${repo}" || true
 	fi
 	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
-		# Same lineage convention as the review-blocked judge's
-		# merge_with_followup issues: the orchestrator treats it as a child.
 		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
-		label_args+=(--label "ai:orchestrator-managed")
 	fi
 	local issue_url
 	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>/dev/null || echo '')"
@@ -1388,6 +1598,33 @@ case "${CLASSIFICATION}" in
 				TARGET_BRANCH=main
 				TARGET_BRANCH_SOURCE=support_ref
 			fi
+		fi
+		# A consumer pinned to a release commit that the default heal target
+		# (stable) does not contain ran code only the default branch has: this
+		# repository's own projects validate on main. A stable hotfix then has
+		# nothing to edit and the plan blocks (#6902 -> #7063). The branch-progress
+		# compare above (`compare/<pin>...<target>`, no extra API call) already
+		# says whether the target contains the pin: `ahead`/`identical` do,
+		# `behind`/`diverged` do not. An unavailable compare keeps the target.
+		if [ "${TARGET_BRANCH_SOURCE}" = default ] && [ -n "${WRAPPER_SHA}" ] \
+			&& [ "${PROGRESS_SHA}" = "${WRAPPER_SHA}" ] && [ "${PROGRESS_BRANCH}" = "${TARGET_BRANCH}" ]; then
+			HEAL_PIN_STATUS="$(jq -r 'if .available == true then (.status // "") else "" end' "${PROGRESS_FILE}" 2>/dev/null || true)"
+			case "${HEAL_PIN_STATUS}" in
+				behind|diverged)
+					# The provenance block only resolves the default branch for
+					# phase/autofix/workflow_run reports; consumer issue and PR
+					# reports skip it, so resolve it here the same way (no API call).
+					HEAL_RETARGET_BRANCH="${PROVENANCE_DEFAULT_BRANCH:-${WORKFLOW_HEAL_DEFAULT_BRANCH:-}}"
+					if [ -z "${HEAL_RETARGET_BRANCH}" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+						HEAL_RETARGET_BRANCH="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+					fi
+					HEAL_RETARGET_BRANCH="$(printf '%s' "${HEAL_RETARGET_BRANCH}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+					HEAL_RETARGET_BRANCH="${HEAL_RETARGET_BRANCH:-main}"
+					log "target_branch_retarget from=${TARGET_BRANCH} to=${HEAL_RETARGET_BRANCH} reason=wrapper_pin_not_on_target pin=${WRAPPER_SHA} compare_status=${HEAL_PIN_STATUS}"
+					TARGET_BRANCH="${HEAL_RETARGET_BRANCH}"
+					TARGET_BRANCH_SOURCE=wrapper_pin_not_on_target
+					;;
+			esac
 		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
