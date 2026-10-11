@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# claude_pool_health_alert.sh — hourly Telegram WARNING when a Claude pool
-# account is at or above the usage gate (#6951).
+# claude_pool_health_alert.sh — hourly Telegram note when a Claude pool
+# account is at or above the usage gate (#6951): DEBUG when accounts are only
+# gated, WARNING when a token is rejected or a probe fails.
 #
 # Runs in orchestrate_poll.yml right after .github/actions/claude-pool-token,
 # whose `probes` output (the probe records: account, 5-hour and 7-day

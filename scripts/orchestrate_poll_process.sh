@@ -12103,9 +12103,9 @@ Unable to create or locate the final integration PR from \`${integration_branch}
 Integration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
     # Operator-facing Telegram alert for every final integration merge.
     # CRITICAL so no DEBUG/WARNING/ERROR/CRITICAL ALERT_MSG_LEVEL
-    # threshold suppresses it (unlike the DEBUG "completed after
-    # validation pass" summary in mark_validation_complete, which stays
-    # as-is); ALERT_MSG_LEVEL=SILENT still silences every helper-based
+    # threshold suppresses it (the "completed after validation pass"
+    # summary in mark_validation_complete is CRITICAL too, so completion
+    # stays visible); ALERT_MSG_LEVEL=SILENT still silences every helper-based
     # send, per tg_helpers.sh. The title comes from the pr_json snapshot
     # already fetched in this tick — no extra API call (§15);
     # project_title is the fallback when the field is empty.
@@ -26409,7 +26409,8 @@ _standalone_conflict_count_attempt() {
 		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=skip reason=disabled"
 		return 0
 	fi
-	if [ "${_STANDALONE_CONFLICT_STATE_LOADED["${pr}"]:-}" != "1" ] || ! [[ "${head}" =~ ^[0-9a-f]{40}$ ]]; then
+	local loaded="${_STANDALONE_CONFLICT_STATE_LOADED["${pr}"]:-}"
+	if { [ "${loaded}" != "1" ] && [ "${loaded}" != "partial" ]; } || ! [[ "${head}" =~ ^[0-9a-f]{40}$ ]]; then
 		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=skip reason=state_unavailable"
 		return 0
 	fi
@@ -26418,13 +26419,27 @@ _standalone_conflict_count_attempt() {
 		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=skip reason=identity_unavailable"
 		return 0
 	fi
+	# Candidates are newest first; only the pipeline's own marker counts, so a
+	# newer marker posted by anyone else cannot reset or shadow the count.
 	raw="${_STANDALONE_CONFLICT_ATTEMPTS_STATE["${pr}"]:-}"
-	if [ -n "${raw}" ]; then
-		IFS='|' read -r comment_id author marker_head attempts alerted <<< "${raw}"
-	fi
-	if [ "${author}" != "${UNBLOCK_TRUSTED_LOGIN}" ]; then
-		comment_id=""
-		marker_head=""
+	local found="false" c_id c_author c_head c_attempts c_alerted
+	while IFS='|' read -r c_id c_author c_head c_attempts c_alerted; do
+		[ -n "${c_id}${c_author}" ] || continue
+		if [ "${c_author}" = "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+			comment_id="${c_id}"
+			author="${c_author}"
+			marker_head="${c_head}"
+			attempts="${c_attempts}"
+			alerted="${c_alerted}"
+			found="true"
+			break
+		fi
+	done <<< "${raw}"
+	if [ "${found}" != "true" ] && [ "${loaded}" = "partial" ]; then
+		# The comment window is truncated and holds no trusted marker; it may be
+		# older than the window, so restarting the count could page again.
+		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=skip reason=marker_outside_window"
+		return 0
 	fi
 	[[ "${comment_id}" =~ ^[0-9]+$ ]] || comment_id=""
 	[[ "${attempts}" =~ ^[0-9]+$ ]] || attempts="0"
@@ -26489,10 +26504,12 @@ DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.defau
 # payload before update-branch/dispatch (including expected-head guard).
 declare -A _STANDALONE_CLEAN_PRS=()
 declare -A _STANDALONE_NOOP_CLEAR_PRS=()
-# Conflict-attempt marker per PR, read from the same batch (no extra call):
-# "<comment id>|<author>|<head sha>|<attempts>|<alerted>" of the newest
-# marker comment among the last 100; _LOADED marks PRs whose comments were
-# read, so a missing marker means "no attempts yet" rather than "unknown".
+# Conflict-attempt markers per PR, read from the same batch (no extra call):
+# one "<comment id>|<author>|<head sha>|<attempts>|<alerted>" line per marker
+# comment among the last 100, newest first (the counter keeps only the
+# pipeline's own). _LOADED is "1" when that window is the whole thread, so a
+# missing marker means "no attempts yet", and "partial" when older comments
+# exist, so only a marker found in the window counts.
 declare -A _STANDALONE_CONFLICT_ATTEMPTS_STATE=()
 declare -A _STANDALONE_CONFLICT_STATE_LOADED=()
 if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -26535,13 +26552,15 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 					_STANDALONE_NOOP_CLEAR_PRS["${_standalone_num}"]="${_standalone_list_oid}"
 				fi
 				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" '(.data.repository[$key].comments.nodes | type) == "array"' >/dev/null 2>&1; then
-					_STANDALONE_CONFLICT_STATE_LOADED["${_standalone_num}"]="1"
+					if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" '.data.repository[$key].comments.pageInfo.hasPreviousPage == false' >/dev/null 2>&1; then
+						_STANDALONE_CONFLICT_STATE_LOADED["${_standalone_num}"]="1"
+					else
+						_STANDALONE_CONFLICT_STATE_LOADED["${_standalone_num}"]="partial"
+					fi
 					_STANDALONE_CONFLICT_ATTEMPTS_STATE["${_standalone_num}"]="$(printf '%s' "${_standalone_response}" | jq -r --arg key "p${_standalone_num}" --arg marker "${STANDALONE_CONFLICT_ATTEMPTS_MARKER}" '
-						[.data.repository[$key].comments.nodes[] | select((.body // "") | contains($marker))] | last
-						| if . == null then "" else
-							((.body // "") | capture("head=(?<h>[0-9a-f]{40}) attempts=(?<a>[0-9]+) alerted=(?<al>[01])") // {h: "", a: "0", al: "0"}) as $m
-							| "\(.databaseId // "")|\(.author.login // "")|\($m.h)|\($m.a)|\($m.al)"
-						end' 2>/dev/null || true)"
+						[.data.repository[$key].comments.nodes[] | select((.body // "") | contains($marker))] | reverse | .[]
+						| ((.body // "") | capture("head=(?<h>[0-9a-f]{40}) attempts=(?<a>[0-9]+) alerted=(?<al>[01])") // {h: "", a: "0", al: "0"}) as $m
+						| "\(.databaseId // "")|\(.author.login // "")|\($m.h)|\($m.a)|\($m.al)"' 2>/dev/null || true)"
 				fi
 			done < <(printf '%s' "${_standalone_response}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
 		fi
@@ -26666,7 +26685,7 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #     workflow_dispatch (reuses _dispatch_review_for_conflicts, which
 #     carries the cycle-local _CONFLICT_DISPATCH_TRACKER guard, so a
 #     conflict-sweep dispatch already this tick will not be
-#     duplicated). Telegram WARNING.
+#     duplicated). Telegram DEBUG notice (the pipeline is still working).
 #     Exception: when the PR's current head already carries a
 #     `<!-- review-autofix-failure-cap:v1 head=<sha> ... -->` marker
 #     posted by this token's identity, review_autofix.yml's gate trips
@@ -26682,7 +26701,8 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #   - If the count is >= NOOP_MAX_RETRIES: enter the force-merge
 #     fallback. Force-merge fails CLOSED — every precondition is
 #     audited individually, and any single gate failure aborts with an
-#     ERROR alert (the PR stays open for human review). Gates:
+#     ERROR alert, sent once per PR head and gate by
+#     _noop_gate_failure_alert (the PR stays open for human review). Gates:
 #       A) PR is open, not draft, mergeable=true, mergeable_state is
 #          neither dirty nor unknown, and does NOT carry
 #          `e2e-smoke-test` or `force-review` labels (operator
@@ -26697,8 +26717,8 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #       D) All completed required checks on the head SHA are
 #          conclusion=success / neutral / skipped — any failure /
 #          cancelled / timed_out / action_required aborts the gate.
-#     If every gate passes: `gh pr merge --squash --auto`, Telegram
-#     WARNING, and one audit-trail comment posted to the PR so the
+#     If every gate passes: `gh pr merge --squash --auto`, a Telegram
+#     DEBUG notice, and one audit-trail comment posted to the PR so the
 #     decision is visible on the thread (not only in Telegram).
 #
 # Retry counter design. The count of noop-suspicious warning comments

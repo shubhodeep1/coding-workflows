@@ -179,7 +179,7 @@ def test_reported_auto_handled_alerts_are_debug():
 # ---------------------------------------------------------------------------
 
 
-def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool = True, login: str = "bot") -> tuple:
+def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool | str = True, login: str = "bot") -> tuple:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	function = _extract_bash_function(script, "_standalone_conflict_count_attempt() {")
 	marker_constant = next(l for l in script.splitlines() if l.startswith("STANDALONE_CONFLICT_ATTEMPTS_MARKER="))
@@ -190,8 +190,9 @@ def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, 
 		"unblock_trusted_login() { printf '%s' \"${UNBLOCK_TRUSTED_LOGIN}\"; }\n"
 		"declare -A _STANDALONE_CONFLICT_ATTEMPTS_STATE=()\n"
 		"declare -A _STANDALONE_CONFLICT_STATE_LOADED=()\n"
-		+ ('_STANDALONE_CONFLICT_STATE_LOADED["7"]="1"\n' if loaded else "")
-		+ f'_STANDALONE_CONFLICT_ATTEMPTS_STATE["7"]={marker!r}\n'
+		+ (f'_STANDALONE_CONFLICT_STATE_LOADED["7"]="{loaded if isinstance(loaded, str) else "1"}"\n' if loaded else "")
+		# ANSI-C quoting so a multi-line candidate list keeps its newlines.
+		+ "_STANDALONE_CONFLICT_ATTEMPTS_STATE[\"7\"]=$'" + marker.replace("\n", "\\n") + "'\n"
 		+ function + "\n"
 		f'_standalone_conflict_count_attempt 7 "{head}" 0\n'
 	)
@@ -242,6 +243,29 @@ def test_conflict_marker_from_other_author_is_ignored():
 	assert f"head={HEAD_A} attempts=1 alerted=0 -->" in calls[0]
 
 
+def test_conflict_newer_untrusted_marker_does_not_shadow_trusted_one():
+	"""A newer marker posted by someone else cannot reset the trusted count."""
+	_require_jq()
+	marker = f"60|intruder|{HEAD_A}|0|0\n55|bot|{HEAD_A}|2|0"
+	sends, calls, out = _conflict_harness(marker=marker)
+	assert len(sends) == 1 and sends[0][0] == "WARNING"
+	assert calls[0].startswith("api repos/o/r/issues/comments/55 -X PATCH")
+	assert f"head={HEAD_A} attempts=3 alerted=1 -->" in calls[0]
+	assert "outcome=alerted" in out
+
+
+def test_conflict_truncated_window_without_trusted_marker_skips():
+	"""Older comments exist and the window holds no trusted marker: the count
+	is unknown, so it is neither restarted nor reposted."""
+	_require_jq()
+	sends, calls, out = _conflict_harness(marker=f"60|intruder|{HEAD_A}|0|0", loaded="partial")
+	assert (sends, calls) == ([], [])
+	assert "reason=marker_outside_window" in out
+	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", loaded="partial")
+	assert len(sends) == 1 and sends[0][0] == "WARNING"
+	assert calls[0].startswith("api repos/o/r/issues/comments/55 -X PATCH")
+
+
 def test_conflict_alert_disabled_and_fail_open_paths():
 	_require_jq()
 	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", threshold="0")
@@ -264,18 +288,18 @@ def test_conflict_sweep_reads_marker_from_existing_graphql_batch():
 	assert "STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}" in workflow
 
 
-def test_conflict_marker_parser_reads_newest_marker():
+def test_conflict_marker_parser_lists_markers_newest_first():
 	"""The jq program the sweep runs over its GraphQL batch."""
 	_require_jq()
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	start = script.index("[.data.repository[$key].comments.nodes[] | select((.body // \"\") | contains($marker))] | last")
-	program = script[start:script.index("end' 2>/dev/null", start) + 3]
+	start = script.index("[.data.repository[$key].comments.nodes[] | select((.body // \"\") | contains($marker))] | reverse | .[]")
+	program = script[start:script.index("' 2>/dev/null", start)]
 	response = {"data": {"repository": {"p7": {"comments": {"nodes": [
 		{"body": f"old\n<!-- ai:standalone-conflict-attempts:v1 head={HEAD_B} attempts=1 alerted=0 -->", "databaseId": 1, "author": {"login": "bot"}},
 		{"body": "unrelated", "databaseId": 2, "author": {"login": "bot"}},
 		{"body": f"new\n<!-- ai:standalone-conflict-attempts:v1 head={HEAD_A} attempts=2 alerted=0 -->", "databaseId": 3, "author": {"login": "bot"}},
 	]}}, "p8": {"comments": {"nodes": []}}}}}
-	for key, expected in (("p7", f"3|bot|{HEAD_A}|2|0"), ("p8", "")):
+	for key, expected in (("p7", f"3|bot|{HEAD_A}|2|0\n1|bot|{HEAD_B}|1|0"), ("p8", "")):
 		result = subprocess.run(
 			["jq", "-r", "--arg", "key", key, "--arg", "marker", "<!-- ai:standalone-conflict-attempts:v1 ", program],
 			input=json.dumps(response), capture_output=True, text=True, check=False,
@@ -375,3 +399,12 @@ def test_activation_dormant_pages_only_when_a_person_must_act():
 	) in text
 	assert 'tg_level="DEBUG"' in text
 	assert 'the fix issue could not be opened; nothing will implement them until verification is re-run." "WARNING"' in text
+
+
+def test_review_blocked_judge_successes_are_debug():
+	"""Every finished judge outcome, merge_with_followup included, is DEBUG."""
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	for action in ("merge", "fix", "close_and_reissue", "merge_with_followup"):
+		start = workflow.index(f"              {action})\n", workflow.index('JUDGE_ALERT_LEVEL="CRITICAL"'))
+		arm = workflow[start:workflow.index(";;", start)]
+		assert 'JUDGE_ALERT_LEVEL="DEBUG"' in arm, action

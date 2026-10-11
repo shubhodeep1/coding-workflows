@@ -470,7 +470,8 @@ jobs:
           # failure, etc.). Without this, a red run only surfaces via
           # GitHub's default email — and forward-merge silently failing
           # means stable bug fixes don't reach main, which the next
-          # main-source release would then re-introduce. Fire CRITICAL.
+          # main-source release would then re-introduce. Sent at DEBUG:
+          # the heal intake files an issue for this failure (see below).
           # Best-effort: missing tg_helpers.sh (e.g. an early checkout
           # failure) degrades to a warning rather than masking the
           # original failure.

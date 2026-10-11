@@ -5557,7 +5557,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # CONFLICT_RESOLVED_ALERT_LEVEL is a step-scoped override for this
           # one ping (same pattern as PR_PROCESSED_ALERT_LEVEL); it falls back
-          # to the global ALERT_MSG_LEVEL, then DEBUG.
+          # to the global ALERT_MSG_LEVEL, then WARNING (which filters this
+          # DEBUG ping by default).
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
@@ -6763,6 +6764,11 @@ jobs:
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
               close_and_reissue)
                 MSG="Review-blocked judge closed PR and created replacement issue"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              merge_with_followup)
+                # Merged, and the follow-up issue was created for the
+                # pipeline to implement: nothing left for a person.
+                MSG="Review-blocked judge merged PR and created a follow-up issue"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
               *)
                 MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
