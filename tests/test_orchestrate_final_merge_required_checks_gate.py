@@ -215,6 +215,10 @@ def _run_shell(
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
 	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
+	# Sourcing the poller reads the actions-runs cache from the ai-memory
+	# branch (a git fetch from origin, ~35 s per test); the gate under test
+	# never reads it, so keep the harness off the network.
+	env["AI_MEMORY_ENABLED"] = "false"
 	# Capture tg_notify / post_tracking_comment side-effects via tmp files.
 	env["TG_NOTIFY_OUT"] = str(tmp / "tg_notify.log")
 	env["POST_TRACKING_OUT"] = str(tmp / "tracking_comments.log")
