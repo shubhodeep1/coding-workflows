@@ -6257,7 +6257,11 @@ def test_scope_blocked_reporter_and_intake_wire_the_authorship_facts() -> None:
 	report = REPORT_SCRIPT.read_text(encoding="utf-8")
 	identity = report.index('if [ "${LABEL}" = "ai:needs-human" ] || [ "${LABEL}" = "ai:scope-blocked" ]; then')
 	assert identity < report.index('build-issue-payload \\')
-	assert report.count("gh api user") == 1
+	# One shared read; the only other is the retry the non-retryable-marker
+	# check takes when that read came back empty.
+	assert report.count("gh api user") == 2
+	assert 'if [ -z "${HEAL_REPORTER_LOGIN}" ]; then\n\t\tHEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login' in report
+	assert report.index("gh api user") < report.index('build-issue-payload \\')
 	assert '--pipeline-login "${HEAL_REPORTER_LOGIN}" \\' in report
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
 	assert "echo \"Issue author: $(_pf '.issue_author_login // \"unknown\"') (association: $(_pf '.issue_author_association // \"unknown\"'))\"" in intake
