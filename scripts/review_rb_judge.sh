@@ -3309,13 +3309,16 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to review-blocked reissue."
       fi
 
-      NEW_URL="$(gh_retry gh issue create \
+      if NEW_URL="$(gh_retry gh issue create \
         --repo "${REPOSITORY}" \
         --title "${NEW_ISSUE_TITLE}" \
         --body "${FULL_NEW_BODY}" \
-        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
-      echo "Created replacement issue: ${NEW_URL}"
-      RB_REISSUE_CREATED="true"
+        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})" && [ -n "${NEW_URL}" ]; then
+        echo "Created replacement issue: ${NEW_URL}"
+        RB_REISSUE_CREATED="true"
+      else
+        echo "::error::Failed to create replacement issue for closed PR #${PR_NUMBER}; remaining work needs a tracking issue."
+      fi
     else
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
         RB_EFFECTIVE_REISSUE_MODE="redo"

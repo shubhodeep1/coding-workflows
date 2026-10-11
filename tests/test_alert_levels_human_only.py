@@ -179,7 +179,7 @@ def test_reported_auto_handled_alerts_are_debug():
 # ---------------------------------------------------------------------------
 
 
-def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool | str = True, login: str = "bot") -> tuple:
+def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool | str = True, login: str = "bot", write_fails: bool = False) -> tuple:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	function = _extract_bash_function(script, "_standalone_conflict_count_attempt() {")
 	marker_constant = next(l for l in script.splitlines() if l.startswith("STANDALONE_CONFLICT_ATTEMPTS_MARKER="))
@@ -193,6 +193,7 @@ def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, 
 		+ (f'_STANDALONE_CONFLICT_STATE_LOADED["7"]="{loaded if isinstance(loaded, str) else "1"}"\n' if loaded else "")
 		# ANSI-C quoting so a multi-line candidate list keeps its newlines.
 		+ "_STANDALONE_CONFLICT_ATTEMPTS_STATE[\"7\"]=$'" + marker.replace("\n", "\\n") + "'\n"
+		+ ("gh() { return 1; }\n" if write_fails else "")
 		+ function + "\n"
 		f'_standalone_conflict_count_attempt 7 "{head}" 0\n'
 	)
@@ -225,6 +226,12 @@ def test_conflict_after_alert_keeps_counting_silently():
 	sends, calls, _ = _conflict_harness(marker=f"55|bot|{HEAD_A}|3|1")
 	assert sends == []
 	assert f"head={HEAD_A} attempts=4 alerted=1 -->" in calls[0]
+
+
+def test_conflict_does_not_page_until_alert_marker_is_saved():
+	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", write_fails=True)
+	assert sends == [] and calls == []
+	assert "outcome=write_failed" in out
 
 
 def test_conflict_new_head_restarts_count():

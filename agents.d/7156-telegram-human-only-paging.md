@@ -25,7 +25,7 @@ pins the default, the helpers, and the ban on invalid level strings
 (`WARN`, `INFO`, …).
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
-- `STANDALONE_CONFLICT_STUCK` (`scripts/orchestrate_poll_process.sh`: `pr= head= attempts= threshold= dispatch_rc= outcome=counted|alerted|restart|skip reason=`)
+- `STANDALONE_CONFLICT_STUCK` (`scripts/orchestrate_poll_process.sh`: `pr= head= attempts= threshold= dispatch_rc= outcome=counted|alerted|restart|skip|write_failed reason=`; a failed marker write does not page, so the next tick can retry)
 - `NOOP_FORCE_MERGE_GATE_ALERT` (`scripts/orchestrate_poll_process.sh`: `pr= head= gate= outcome=alerted|skip reason=`)
 - `COMPREHENSIVE_RELEASE_DISPATCH_FAILED` (`scripts/orchestrate_poll_process.sh`: `tracking_issue= alerted=`)
 LOG_PREFIX.name=STANDALONE_CONFLICT_STUCK
