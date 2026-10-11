@@ -21,7 +21,9 @@ the network; the shell only executes.
        `source_issue_labels` (a trusted PR's single linked issue, sent only by
        the conflict resolver's host-only re-issue, issue #6748; the unblock
        judge never sends them) carry that issue's security finding marker,
-       `Integration branch` and `Depends on` lines onto a PR re-issue. Trusted PR-derived issue bodies
+       `Integration branch` and `Depends on` lines onto a PR re-issue; optional
+       `pr_base_branch` (same caller) is the Integration branch when the
+       linked issue declares none. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
@@ -204,6 +206,16 @@ def _context(raw: object) -> dict:
 				pr_source_finding_id = candidate
 			else:
 				pr_source_metadata_unsafe = True
+	# Optional trusted-PR base branch (sent only by the host-only re-issue,
+	# issue #6748): the replacement's Integration branch when the linked issue
+	# declares none. An invalid value is dropped, never trusted.
+	base_branch = raw.get("pr_base_branch")
+	pr_base_branch = (
+		base_branch
+		if pr_trusted and isinstance(base_branch, str) and SECURITY_BRANCH_REF_RE.fullmatch(base_branch)
+		and ".." not in base_branch and "//" not in base_branch and not base_branch.endswith(("/", ".", ".lock"))
+		else None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -228,6 +240,7 @@ def _context(raw: object) -> dict:
 		"pr_source_depends_on": pr_source_depends_on,
 		"pr_source_target_branch": pr_source_target_branch,
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
+		"pr_base_branch": pr_base_branch,
 	}
 
 
@@ -435,6 +448,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
 			pr_labels: list[str] = []
+			pr_target_branch = None
 			if ctx.get("pr_source_present"):
 				if ctx.get("pr_source_metadata_unsafe"):
 					return [
@@ -444,10 +458,12 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 				if ctx.get("pr_source_finding_id"):
 					body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['pr_source_finding_id']} -->\n{body}"
 					pr_labels = [SECURITY_LABEL]
-				if ctx.get("pr_source_target_branch"):
-					body += f"\n\n- Integration branch: `{ctx['pr_source_target_branch']}`"
-				if ctx.get("pr_source_depends_on") is not None:
-					body += f"\n- Depends on: #{ctx['pr_source_depends_on']}"
+				pr_target_branch = ctx.get("pr_source_target_branch")
+			pr_target_branch = pr_target_branch or ctx.get("pr_base_branch")
+			if pr_target_branch:
+				body += f"\n\n- Integration branch: `{pr_target_branch}`"
+			if ctx.get("pr_source_present") and ctx.get("pr_source_depends_on") is not None:
+				body += f"\n- Depends on: #{ctx['pr_source_depends_on']}"
 			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": pr_labels, "wait_on": None})
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
 		elif ctx["tracking"]:

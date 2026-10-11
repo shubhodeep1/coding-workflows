@@ -682,6 +682,18 @@ def test_pr_reissue_carries_linked_issue_metadata_when_sent() -> None:
 	assert "ai:security-finding" not in plain[0]["body"]
 
 
+def test_pr_reissue_uses_the_pr_base_when_the_linked_issue_has_no_branch() -> None:
+	ctx = _ctx("pr", linked_issue=31, source_issue_body="Fix it", source_issue_labels=[], pr_base_branch="claude/x")
+	ops = actions.plan(_verdict("reissue", instructions="redo"), ctx)
+	assert "- Integration branch: `claude/x`" in ops[0]["body"]
+	declared = _ctx("pr", linked_issue=31, source_issue_body="- Integration branch: `claude/y`", source_issue_labels=[], pr_base_branch="claude/x")
+	body = actions.plan(_verdict("reissue", instructions="redo"), declared)[0]["body"]
+	assert "`claude/y`" in body and "`claude/x`" not in body
+	for bad in ("a..b", "x//y", "-x", 5):
+		assert _ctx("pr", pr_base_branch=bad)["pr_base_branch"] is None
+	assert _ctx("pr", pr_trusted=False, pr_base_branch="claude/x")["pr_base_branch"] is None
+
+
 def test_pr_reissue_without_source_keys_is_unchanged() -> None:
 	baseline = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31))
 	empty = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body="Nothing", source_issue_labels=[]))

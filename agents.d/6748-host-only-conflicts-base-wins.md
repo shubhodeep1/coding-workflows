@@ -11,6 +11,8 @@ of the remaining host-only paths is covered by the linked issues'
 `<!-- ai:host-only-take-base:v1 -->`; with no other conflict the merge is
 committed without a model). When any is covered, the resolver re-issues the
 PR through `unblock_actions.py`'s `reissue` ops and `unblock_run_ops`
+(a non-default PR base is passed as `pr_base_branch` and becomes the
+replacement's `Integration branch` when the linked issue declares none)
 (create, PR comment with `<!-- ai:host-only-conflict-reissue:v1 -->`, which
 counts for deduplication only from an OWNER/MEMBER/COLLABORATOR author, then
 close; `CONFLICT_RESOLVER_HOST_ONLY_REISSUE`) before failing with

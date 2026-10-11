@@ -675,6 +675,9 @@ raise SystemExit(0 if found else 1)
   else
     printf '[]\n' > "${reissue_dir}/linked.json"
   fi
+  # pr_base_branch: a non-default PR base becomes the replacement's
+  # Integration branch when the linked issue declares none (validated again
+  # in unblock_actions.py), so the re-issue lands on the PR's current base.
   if ! jq -n --slurpfile pr "${PR_PAYLOAD_FILE}" --slurpfile linked "${reissue_dir}/linked.json" \
       --arg repo "${GITHUB_REPOSITORY}" --argjson item "${PR_NUMBER}" '
       ($pr[0] // {}) as $p | ($linked[0] // []) as $l
@@ -689,7 +692,9 @@ raise SystemExit(0 if found else 1)
           ),
           pr_author: ($p.user.login // ""),
           pr_head_repo: ($p.head.repo.full_name // ""),
-          pr_head_sha: ($p.head.sha // "")
+          pr_head_sha: ($p.head.sha // ""),
+          pr_base_branch: (($p.base.ref // "") as $b
+            | if $b != "" and $b != ($p.base.repo.default_branch // "") then $b else null end)
         }
       + (if ($l | length) == 1 then {source_issue_body: ($l[0].body // ""), source_issue_labels: ($l[0].labels // [])} else {} end)
     ' > "${reissue_dir}/context.json" 2>/dev/null; then
@@ -741,10 +746,11 @@ raise SystemExit(0 if found else 1)
     printf '%s\n\n' "This pull request is closed as not planned and its change is re-issued on the current \`${reissue_base}\` branch as #${reissue_issue}. Failure reason: \`conflict_resolver_sandbox_path_host_only\` (non-retryable)."
     printf '%s\n' "<!-- ai:host-only-conflict-reissue:v1 pr=${PR_NUMBER} issue=${reissue_issue} head=${reissue_head} -->"
   } > "${reissue_dir}/pr_comment.md"
-  # Retried: a repeated comment is harmless (the marker only deduplicates).
+  # A create: gh_retry makes one attempt (no idempotency marker), so a lost
+  # response can never post a second copy of the comment.
   local reissue_comment_posted=false
   if type gh_retry >/dev/null 2>&1; then
-    GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
   else
     gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
   fi
