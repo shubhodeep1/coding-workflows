@@ -706,3 +706,32 @@ broke the stable release gate (run 35903885958).
   documents the `review_autofix.yml` pattern: `review_autofix_step_<slug>.sh`
   under `scripts/`, the resolving wrapper that sources it, the
   `REQUIRED_BOOTSTRAP_SCRIPTS` entry, and the test registry.
+
+---
+
+## §25. agents.md Fragments
+
+Never add text to `agents.md` (or `AGENTS.md` in a consumer repo) directly,
+even when a plan, issue, or review finding says "document this in agents.md".
+Concurrent pull requests, and long-running orchestrator integration branches,
+collide on the same few sections of that file. Incident: #6902's final PR
+#6905 conflicted on two direct additions to the same section, and the
+integration self-heal gave up.
+
+- Write one fragment at `agents.d/<issue-or-pr>-<slug>.md`. Each block starts
+  with `<!-- agents: section="<exact ## heading>" -->`, and its text is
+  appended to the end of that section.
+- A new log prefix goes under
+  `<!-- agents: section="Stable log prefixes (contractual)" -->` as the
+  `` - `PREFIX` `` registry bullet plus the `LOG_PREFIX.name=PREFIX` line.
+- Add ` new` inside the marker only to create a section that does not exist
+  yet; an unknown heading without it fails CI. Never target
+  `## Repo-tree (auto-generated)`.
+- Edit the agents file directly only to correct or remove existing text.
+- A scope (`files_touched`, `ai:scope:`) that covers `agents.md` or
+  `AGENTS.md` covers its top-level `agents.d/*.md` fragments.
+- Automation folds fragments into the agents file at release or sync time.
+  Do not fold them yourself.
+
+In coding-workflows, `scripts/check_agents_md_direct_edits.py` fails a pull
+request's CI when it adds to the agents file directly.

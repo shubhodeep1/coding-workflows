@@ -2523,6 +2523,20 @@ jobs:
           differs), proceed with the codebase truth and note the conflict in
           your output.
 
+          agents.md discipline: never add text to `agents.md` (or `AGENTS.md`)
+          directly, even when the plan says "document in agents.md";
+          concurrent PRs collide on the same few sections. Write one fragment
+          at `agents.d/<issue-or-pr>-<slug>.md` instead. Each block starts
+          with `<!-- agents: section="<exact ## heading>" -->` and its text
+          is appended to that section; for a new log prefix use
+          `<!-- agents: section="Stable log prefixes (contractual)" -->`
+          followed by the `` - `PREFIX` `` bullet and the
+          `LOG_PREFIX.name=PREFIX` line. Add ` new` inside the marker only to
+          create a section that does not exist yet. Edit the agents file
+          directly only to correct or remove existing text. A scope that
+          lists `agents.md` covers its `agents.d/` fragments. CI fails a pull
+          request that adds to the agents file directly.
+
           ## Pre-commit security checklist
 
           - Validate external input at every trust boundary.
