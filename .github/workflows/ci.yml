@@ -2,10 +2,16 @@
 name: CI
 
 "on":
+  # Orchestrator integration branches (Q45): a sub-issue PR into
+  # `orchestrator/project-*` is checked before it merges, not only at the
+  # project's final PR into main. Pushes to those branches run too, so
+  # check-failure triage has a base-branch result to compare a failing PR
+  # against (a green base means the failure is the PR's own and is left to
+  # its autofix). Heal intake and budget-watch act on main pushes only.
   pull_request:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
   push:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -241,7 +247,26 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py check --repo-root .
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py tests/test_check_agents_md_direct_edits.py
+
+      # CLAUDE.md §30 (Q68): a pull request may not add documentation to
+      # agents.md directly. Direct additions are what made orchestrator
+      # integration branches conflict with main there (#6902's final PR).
+      # The merge commit is compared with its first parent (the base tip it
+      # was built on). A project's final PR (head orchestrator/project-*) is
+      # skipped: its sub-issue PRs were checked when they targeted the
+      # integration branch. A forward-merge fallback PR
+      # (auto/forward-merge-stable-*) is skipped too: it carries the release
+      # fold's generated agents.md text. Both skips apply only to a
+      # same-repository head targeting the default branch, so a branch name
+      # alone does not exempt an ordinary PR.
+      - name: agents.md direct-edit check (CLAUDE.md §30)
+        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
+            --base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"
 
       - name: Install actionlint
         env:
@@ -405,13 +430,31 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare template-only PR live copies for parity tests
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        if: >-
+          (github.event_name == 'pull_request' &&
+           (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))) ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD --keep-committed-security-paths
+          # Live copies are synced only after a push to main, so an
+          # orchestrator integration branch can carry template changes that
+          # earlier sub-issue PRs merged. The sync's drift recovery copies
+          # those too (template committed after its live copy), but only
+          # when --before is a reachable commit: the script skips an empty,
+          # all-zero or unreachable one. A push has no PR base, so it passes
+          # its own before; a branch-creation or force push falls back to
+          # the merge-base with main.
+          before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
+          if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            echo "::warning::Template parity preparation: before=${before:-empty} is not a reachable commit; using merge-base with main (${fallback:-unavailable})."
+            before="${fallback}"
+          fi
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${before}" --after HEAD --keep-committed-security-paths
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -878,9 +921,11 @@ jobs:
             tests/test_validate_lint_init_true.py \
             tests/test_validate_preflight_canary_tools_scope.py \
             tests/test_validate_process_render_recovery.py \
+            tests/test_validation_import_audit_stdlib.py \
             tests/test_verify_integration_fingerprints_partial_removal.py \
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1082,6 +1127,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+
+      - name: Review conflict folded-fragment keep test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_folded_fragment_keep.py
 
       - name: Review judge-interim round-trip contract test
         run: |

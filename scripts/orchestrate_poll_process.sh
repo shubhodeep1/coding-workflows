@@ -2699,6 +2699,16 @@ if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDAT
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
 fi
 
+# Validation runs dispatched for one validation cycle that may end without a
+# verdict label (ai:validated / ai:validation-failed) before the poller stops
+# re-dispatching every stale hour and fails validation as a harness error
+# (ai:harness-broken, which the heal and unblock paths pick up) (Q50).
+MAX_VALIDATION_DISPATCHES_PER_CYCLE="${MAX_VALIDATION_DISPATCHES_PER_CYCLE:-3}"
+if ! [[ "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" -lt 1 ]; then
+  echo "::warning::MAX_VALIDATION_DISPATCHES_PER_CYCLE must be a positive integer; defaulting to 3"
+  MAX_VALIDATION_DISPATCHES_PER_CYCLE="3"
+fi
+
 # Bounded retry budget for the post-validation final integration→default
 # squash merge inside mark_validation_complete. Each poll tick that runs
 # mark_validation_complete increments .final_merge_attempt_count when
@@ -9365,7 +9375,9 @@ EOF
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
 # Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
 #          3 when an existing resolver run already owns this PR,
-#          4 when guidance could not be published for the resolver.
+#          4 when guidance could not be published for the resolver,
+#          5 when the judge ran but its answer was not a valid diagnosis
+#            (the caller retries it within INTEGRATION_CONFLICT_LIFETIME_MAX).
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
@@ -9501,6 +9513,7 @@ invoke_judge_for_integration_conflict() {
     echo "how the isolated resolver should preserve merged sub-issue intent."
     echo 'Return only JSON: {"action":"redispatch_resolver","diagnosis":"...","resolution_guidance":"..."}.'
     echo 'Use action "fail" or "unknown" if a safe resolution cannot be identified.'
+    echo 'Keep "diagnosis" and "resolution_guidance" at 2000 characters or fewer each; longer answers are rejected.'
     echo
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
@@ -9586,10 +9599,33 @@ invoke_judge_for_integration_conflict() {
     if [ "${integration_judge_rc}" -ne 0 ] || ! integration_judge_verdict="$(_robust_parse_json_file "${output_file}")" ||
        ! printf '%s' "${integration_judge_verdict}" | jq -e 'type == "object" and (.action | IN("redispatch_resolver", "fail", "unknown")) and (.diagnosis | type == "string" and length <= 2000) and (.resolution_guidance | type == "string" and length <= 2000)' >/dev/null 2>&1; then
       echo "::warning::Integration judge did not return a valid diagnosis for PR #${final_pr}." >&2
+      # #6902 (run 38107119024): one rejected answer failed the project and
+      # the judge's output and log were deleted unread. Name the rejection
+      # and surface the log tail before the cleanup below.
+      local integration_judge_invalid_reason="schema"
+      local integration_judge_output_bytes=0
+      [ ! -f "${output_file}" ] || integration_judge_output_bytes="$(wc -c < "${output_file}" | tr -d '[:space:]')"
+      if [ "${integration_judge_rc}" -ne 0 ]; then
+        integration_judge_invalid_reason="exit_${integration_judge_rc}"
+      elif [ -z "${integration_judge_verdict:-}" ]; then
+        integration_judge_invalid_reason="unparseable"
+      elif printf '%s' "${integration_judge_verdict}" | jq -e '(.diagnosis | type == "string" and length > 2000) or (.resolution_guidance | type == "string" and length > 2000)' >/dev/null 2>&1; then
+        integration_judge_invalid_reason="too_long"
+      fi
+      echo "INTEGRATION_JUDGE_INVALID pr=${final_pr} reason=${integration_judge_invalid_reason} rc=${integration_judge_rc} output_bytes=${integration_judge_output_bytes:-0}" >&2
+      printf '%s\n' "${integration_judge_invalid_reason}" > "${RUNTIME_DIR}/integration_judge_invalid_reason" 2>/dev/null || true
+      if [ -s "${RUNTIME_DIR}/integration_judge.log" ]; then
+        echo "::group::Integration judge log (last 20 lines)" >&2
+        # The log carries model-influenced text: escape `##[` and prefix every
+        # line so no line can be parsed as a workflow command (::add-mask::,
+        # ::stop-commands::, ...).
+        tail -n 20 "${RUNTIME_DIR}/integration_judge.log" | cut -c1-400 | tr -cd '[:print:]\n' | sed -e 's/##\[/##\\[/g' -e 's/^/| /' >&2 || true
+        echo "::endgroup::" >&2
+      fi
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
       _integration_judge_remove_worktree "${judge_wt}"
       rm -rf -- "${baseline_dir}"
-      return 1
+      return 5
     fi
     _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
     integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
@@ -11436,6 +11472,25 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       echo '::warning::Integration judge guidance unavailable; deferring without consuming conflict dispatch budget.' >&2
       return 0
     fi
+    if [ "${integration_judge_result}" -eq 5 ]; then
+      # An invalid judge answer is retried on a later tick instead of failing
+      # the project (#6902: it failed on the first and only judge call). Each
+      # retry spends one lifetime slot, so the lifetime cap above still ends
+      # a judge that never answers validly.
+      local integration_judge_retry_reason="unknown"
+      [ ! -s "${RUNTIME_DIR}/integration_judge_invalid_reason" ] || integration_judge_retry_reason="$(head -n 1 "${RUNTIME_DIR}/integration_judge_invalid_reason" | tr -cd 'A-Za-z0-9_')"
+      rm -f -- "${RUNTIME_DIR}/integration_judge_invalid_reason"
+      total_dispatches=$((total_dispatches + 1))
+      jq --argjson total "${total_dispatches}" \
+        '.integration_sync_status = "healing" |
+         .integration_conflict_total_dispatches = $total |
+         .integration_sync_last_error = "integration judge returned an invalid diagnosis"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      echo "INTEGRATION_JUDGE_RETRY pr=${final_pr} reason=${integration_judge_retry_reason:-unknown} total_dispatches=${total_dispatches} lifetime_max=${INTEGRATION_CONFLICT_LIFETIME_MAX}" >&2
+      echo "::warning::Integration judge answer for PR #${final_pr} was invalid; retrying on a later tick (${total_dispatches}/${INTEGRATION_CONFLICT_LIFETIME_MAX} lifetime dispatches)." >&2
+      return 0
+    fi
     if [ "${integration_judge_result}" -eq 2 ]; then
       if [ -s "${RUNTIME_DIR}/judge_isolation_reason" ]; then
         _record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
@@ -13058,6 +13113,9 @@ dispatch_validation_if_needed() {
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
   local validation_dispatch_safe_despite_failures
+  local validation_cycle_dispatches
+  local validation_cap_run_url
+  local validation_cap_redispatch_fields=""
 
   # Defensive preflight: refuse to dispatch validate while the current
   # wave's PRs are not all merged into the integration branch
@@ -13152,17 +13210,45 @@ dispatch_validation_if_needed() {
       return 0
     fi
 
+    # Every earlier run of this cycle finished without a verdict label (the
+    # caller handles ai:validated / ai:validation-failed and a successful
+    # run first). Re-dispatching the same ref every hour cannot change that:
+    # binance-blessings#249 re-ran a pinned validate.yml hourly for days.
+    # After MAX_VALIDATION_DISPATCHES_PER_CYCLE runs, fail validation as a
+    # harness error so it reaches heal / escalation instead (Q50). State
+    # from before this counter existed reads as one dispatch.
+    validation_cycle_dispatches="$(jq -r '.validation_cycle_dispatch_count // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+    if ! [[ "${validation_cycle_dispatches}" =~ ^[0-9]+$ ]]; then
+      validation_cycle_dispatches=1
+    fi
+    if [ "${validation_cycle_dispatches}" -ge "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=exhausted issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE} last_conclusion=${LAST_VAL_CONCLUSION:-unknown}"
+      validation_cap_run_url="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '.run_url // ""' 2>/dev/null || true)"
+      LAST_VAL_RAW_STATUS="harness_error" mark_validation_failed "Runtime validation harness error: ${validation_cycle_dispatches} validation run(s) dispatched for cycle ${validation_cycle} ended without a verdict label (last run conclusion: ${LAST_VAL_CONCLUSION:-unknown}${validation_cap_run_url:+, ${validation_cap_run_url}}). Re-dispatching the same ref will not change that (MAX_VALIDATION_DISPATCHES_PER_CYCLE=${MAX_VALIDATION_DISPATCHES_PER_CYCLE})."
+      return 0
+    fi
+    validation_cap_redispatch_fields="issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE}"
+
     echo "No active validation runs found. Redispatching..."
   fi
 
   if ! phase_cap_can_dispatch "ai:validating" "dispatch_validation" "${TRACKING_NUM:-validation}"; then
+    # Log the cap outcome only once the phase-cap guard has decided, so an
+    # outcome=redispatch line always means a dispatch was attempted.
+    if [ -n "${validation_cap_redispatch_fields}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=phase_cap_blocked ${validation_cap_redispatch_fields}"
+    fi
     return 0
+  fi
+  if [ -n "${validation_cap_redispatch_fields}" ]; then
+    echo "VALIDATION_DISPATCH_CAP outcome=redispatch ${validation_cap_redispatch_fields}"
   fi
 
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
     phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
-      '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
+      '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then (((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1) else 1 end)
+       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     if [ -n "${integration_branch}" ]; then

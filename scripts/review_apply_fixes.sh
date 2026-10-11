@@ -1523,6 +1523,18 @@ documentation. Every file you create must be listed by path under
 "Changes made:" and "Files changed / commit status:" so the commit step can
 account for it.
 
+AGENTS.MD DISCIPLINE
+Never add text to agents.md (or AGENTS.md) directly, even when a finding asks
+to "document this in agents.md": write one fragment at
+agents.d/<issue-or-pr>-<slug>.md instead (reuse the PR's fragment when it
+already has one). Each block starts with
+<!-- agents: section="<exact ## heading>" --> and its text is appended to that
+section; a new log prefix goes under
+<!-- agents: section="Stable log prefixes (contractual)" --> as a
+"- PREFIX" registry bullet plus the LOG_PREFIX.name=PREFIX line. Edit the agents file
+directly only to correct or remove existing text. CI fails a pull request that
+adds to the agents file directly.
+
 EDITOR EXECUTION GUARDRAILS
 you may read and modify repository files directly as needed
 do not modify workflow files unless explicitly required by a valid repository fix and the run explicitly allows workflow edits
