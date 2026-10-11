@@ -351,10 +351,13 @@ def test_hook_only_commit_uses_shared_helper() -> None:
 
 def test_workflows_register_conflict_resolve_tests() -> None:
 	for name in ("test_review_conflict_resolve_sandbox_only.py", "test_conflict_guard_hook_template_merge.py"):
-		expected = f"PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/{name}"
+		expected = (
+			f"PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/{name}",
+			f"PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/{name}",
+		)
 		for workflow in ("ci.yml", "test-and-mark-stable.yml"):
 			text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
-			assert expected in text, f"{workflow} must run {name}"
+			assert any(line in text for line in expected), f"{workflow} must run {name}"
 
 
 def main() -> int:

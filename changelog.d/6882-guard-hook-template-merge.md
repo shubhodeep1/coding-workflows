@@ -12,4 +12,4 @@ What this means for operators: nothing to configure. The kill switch is defaulte
 
 ### For contributors
 
-`tests/test_conflict_guard_hook_template_merge.py` runs the live shell regions against real conflicted merges: a hook-only conflict is committed, a mixed conflict leaves only the other file for the resolver, an integration-sync conflict commits after the fingerprint check, and seven refusal cases leave the hook unmerged. CI and the release gate now also run `tests/test_review_conflict_resolve_sandbox_only.py`, which no workflow ran before.
+`tests/test_conflict_guard_hook_template_merge.py` runs the live shell regions against real conflicted merges: a hook-only conflict is committed, a mixed conflict leaves only the other file for the resolver, an integration-sync conflict commits after the fingerprint check, and seven refusal cases leave the hook unmerged. CI and the release gate run the new test file, and the release gate now also runs `tests/test_review_conflict_resolve_sandbox_only.py`, which only CI ran before.
