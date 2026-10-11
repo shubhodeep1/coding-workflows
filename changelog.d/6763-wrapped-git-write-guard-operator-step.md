@@ -1,4 +1,2 @@
-<!-- changelog: security -->
-- **The merged-PR guard still does not inspect Git writes wrapped in nested shell text.** Commits and pushes inside `bash -c`, `eval`, `$(…)`, backticks or process substitution are not checked yet.
-
-The fix is recorded as an operator step, `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP`, for a person to make in a trusted checkout, because the pipeline cannot edit the live `.claude/hooks/` copy. No hook behaviour changes, nothing reads the placeholder, and finding #6755 stays open. Refs #6755.
+<!-- changelog: removed -->
+- **The `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` operator step is withdrawn; no operator action is needed.** An earlier note said the merged-PR guard did not inspect Git writes wrapped in `bash -c`, `eval`, `$(…)`, backticks or process substitution, and that a person had to change the hook. The guard already inspects them in both copies (see the shell-wrapper entry for #6755). Nothing ever read the placeholder, and this correction does not change hook behaviour. Refs #6755.

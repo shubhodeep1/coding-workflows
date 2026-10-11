@@ -233,6 +233,14 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
             echo "Preserving editor-created changelog fragment: ${created_file}"
             continue
           fi ;;
+        agents.d/*.md)
+          if [[ "${created_file#agents.d/}" != */* ]]; then
+            # Same for agents.d/ fragments (CLAUDE.md §30): the editor
+            # documents agents.md through a top-level fragment, and nothing
+            # in the pipeline machinery writes into agents.d/.
+            echo "Preserving editor-created agents.md fragment: ${created_file}"
+            continue
+          fi ;;
       esac
       removal_reason=""
       # Pipeline-owned paths: the workflow writes these into the worktree
