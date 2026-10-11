@@ -89,7 +89,9 @@ def check(repo_root: Path, base: str, head: str, net_add_max: int) -> tuple[list
 		net_added = 0
 		surplus = 0
 		spans = _generated_spans(new_lines)
-		for header in diff.splitlines():
+		# Split on real newlines only: str.splitlines() also splits on Unicode
+		# separators inside content, which could fake a hunk header.
+		for header in diff.split("\n"):
 			match = HUNK_RE.match(header)
 			if not match:
 				continue
