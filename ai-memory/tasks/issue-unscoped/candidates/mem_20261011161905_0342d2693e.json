@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:1433-1444 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The guard's `exit 0` when creation is disabled is interpreted by `_open_issue` as success, so it proceeds to create the issue.\n  WHY: Gemini says the caller proceeds after `exit 0`; other reviewers report that the gate stops before issue creation, so the reported runtime behavior is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep HEAL_INTAKE_SCOPE_GUARD_ENABLED off by default and fail closed: do not create a heal issue while it is off.\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The guard function returns success (exit 0) when the guard is off instead of an exit status that triggers a skip in the caller or prevents the issue creation call in `_open_issue`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:1433-1444 | severity=critical | confidence=5\n  PROBLEM: The guard function uses `exit 0` to indicate that creation should be skipped.\n  WHY: The calling function `_open_issue` interprets `exit 0` as success and proceeds to `gh issue create`. As a result, even when `HEAL_INTAKE_SCOPE_GUARD_ENABLED` is false, the intake process still creates the issue, failing to fulfill the requirement that it should *not* create the issue.\n\n- Requirement: \"Keep HEAL_INTAKE_SCOPE_GUARD_ENABLED off by default and fail closed: do not create a heal issue while it is off.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: The guard function returns success (exit 0) when the guard is off instead of an exit status that triggers a skip in the caller or prevents the issue creation call in `_open_issue`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c7234cf37f510e74509ee2cecfd5716ed40b4223592e73ab7f6eb7a0a41fcedd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6874,
+    "run_id": "38152522608",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38152522608",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011161905_0342d2693e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6874,
+    "run_id": "38152522608"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T16:19:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
