@@ -720,7 +720,8 @@ def test_untrusted_pr_issue_creating_verdicts_fail_closed(name: str, untrusted: 
 	assert [op["op"] for op in ops] == ["comment", "close", "add_labels", "telegram"]
 	assert ops[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": True}
 	assert ops[2]["labels"] == ["ai:unblock-closed"]
-	assert ops[3]["level"] == "WARNING"
+	assert ops[3]["level"] == "DEBUG"
+	assert ops[3]["text"].startswith("Unblock judge closed untrusted PR #7 ")
 	assert all(op.get("issue", 7) == 7 for op in ops)
 	assert all("model spec" not in str(op) and "model instructions" not in str(op) and "because" not in str(op) for op in ops)
 	assert all(not line.startswith("/") for line in ops[0]["body"].splitlines())
@@ -1649,8 +1650,11 @@ def test_untrusted_pr_write_failure_still_warns(tmp_path: Path, failure: str, cl
 	assert state["created"] == []
 	assert any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"]) == closed
 	assert [label for _, label in state["labels_added"]] == (["ai:unblock-closed"] if closed else [])
-	assert alerts.read_text(encoding="utf-8").startswith("WARNING|Unblock judge ")
-	assert ("could not close" in alerts.read_text(encoding="utf-8")) != closed
+	# A landed close is finished work (DEBUG); a failed close leaves the
+	# untrusted PR open and pages a person (WARNING).
+	sent = alerts.read_text(encoding="utf-8")
+	assert sent.startswith("DEBUG|Unblock judge closed untrusted PR #7 " if closed else "WARNING|Unblock judge could not close untrusted PR #7")
+	assert ("could not close" in sent) != closed
 
 
 def test_untrusted_project_pr_does_not_dispatch_review(tmp_path: Path) -> None:
