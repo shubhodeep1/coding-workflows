@@ -5,11 +5,11 @@ The review gate stops a head on its first non-retryable resolver failure (`confl
 - Every failure marker and cap marker records the support commit as `support=<sha>`. Older markers without the field count as a different commit.
 - The gate logs `AUTOFIX_FINGERPRINT_CAP_REARMED pr=<n> head=<sha> fp=<fp> reason=<r> prior_support=<sha|none> support=<sha>` and lets the scheduled sweep's dispatch run.
 - If that run fails again, its own marker carries the commit, so the next dispatch is stopped again.
-- At most 3 different support commits can re-run one head. A missing or malformed support commit never re-runs it.
+- At most 3 different support commits are recorded per head, counting the one the original stop ran with (so a stop that recorded its commit gets at most 2 re-runs). Provider-outage failures do not use up a commit. A missing or malformed support commit never re-runs it.
 
 | The numbers that matter | Value |
 | --- | --- |
 | Extra runs per head per new support commit | 1 |
-| Support commits that can re-run one head | at most 3 |
+| Support commits recorded per head, including the original stop's | at most 3 |
 | Failure reasons that can be re-run | 3 (the non-retryable resolver reasons; the 3-strikes cap is unchanged) |
 | New GitHub API calls | 0 |

@@ -2861,6 +2861,10 @@ def count_identical_failures(
 			result["cap_applied"] = True
 		for failure_fields in (_marker_fields(match) for match in _FAILURE_MARKER_RE.finditer(body)):
 			recorded = failure_fields.get("support", "").lower()
+			# Outage markers never count (#6633), so they must not spend a
+			# re-arm slot either: the resolver never ran under that support.
+			if failure_fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
 			if failure_fields.get("head", "").lower() == head and is_valid_sha(recorded):
 				recorded_supports.add(recorded)
 	seen_runs: set[str] = set()

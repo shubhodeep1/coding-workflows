@@ -3208,6 +3208,11 @@ def test_count_identical_failures_rearms_a_non_retryable_cap_once_per_support_sh
 	assert result["non_retryable"] is True and result["rearm"] is False
 	assert gate_decide(retryable)["count"] == 0
 	assert gate_decide([*legacy, {"author_login": CAP_AUTHOR, "body": AUTOFIX_SUMMARY_COMMENT}])["non_retryable"] is False
+	# 11. A provider-outage marker under the current SHA does not spend the re-arm.
+	outage = _supported_failure_comment(run="18", support=SUPPORT_S2, reason="provider_unavailable")
+	result = gate_decide([_supported_failure_comment(run="19", support=SUPPORT_S1), outage])
+	assert result["non_retryable"] is True and result["rearm"] is True and result["support"] == SUPPORT_S1
+	assert decide([*bounded[:2], outage, _supported_failure_comment(run="20", support="5" * 40, reason="provider_unavailable")], SUPPORT_S2)["rearm"] is True
 	with tempfile.TemporaryDirectory(prefix="heal-rearm-cli-") as tmp_name:
 		tmp = Path(tmp_name)
 		(tmp / "comments.json").write_text(json.dumps([_supported_failure_comment(run="14", support=SUPPORT_S1)]), encoding="utf-8")

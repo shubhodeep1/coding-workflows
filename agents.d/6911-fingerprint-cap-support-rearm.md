@@ -2,8 +2,10 @@
 Non-retryable cap re-arm on a new support commit (#6911): a non-retryable
 review/autofix cap (`NON_RETRYABLE_FAILURE_REASONS`) gets one more run on the
 same head when the gate's verified review-support SHA is on no trusted
-`review-autofix-failure:v1` marker for that head yet, for at most 3 distinct
-support SHAs per head (`DEFAULT_FAILURE_CAP_MAX_REARMS`); the gate logs
+`review-autofix-failure:v1` marker for that head yet, while fewer than 3
+distinct support SHAs are recorded on the head's markers, the original stop's
+included (`DEFAULT_FAILURE_CAP_MAX_REARMS`; `provider_unavailable` markers
+are not recorded); the gate logs
 `AUTOFIX_FINGERPRINT_CAP_REARMED pr= head= fp= reason= prior_support= support=`.
 `count_identical_failures` still filters markers by support version (#6625),
 but when that leaves no counted marker it reads the head's trusted markers of
