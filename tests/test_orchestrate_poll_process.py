@@ -6703,6 +6703,8 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 		in judge_comments[0]
 	)
 	assert "| SEC-TEST-1 | low | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+	assert "need a human" not in judge_comments[0]
+	assert "cannot be accepted" not in judge_comments[0]
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
