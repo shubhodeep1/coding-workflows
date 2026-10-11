@@ -6706,8 +6706,9 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
-	# Issue #6729 / #6539: the low finding's keep_fixing is converted to fail at the
-	# cap, and the high keep_fixing row still terminalizes the round with no waiver recorded.
+	# Issue #6729 / #6906: the low finding's keep_fixing is converted to
+	# accept_with_followup at the cap, but the high keep_fixing row still
+	# terminalizes the round first, so no waiver or follow-up is recorded.
 	low_finding = _security_pass_second_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6726,7 +6727,8 @@ def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -
 	assert "ai:security-pass-failed" in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "reason=blocking_findings_after_cap" in combined_log
-	# The low row is converted to fail before the blocking high row terminalizes the round.
+	# The low row is converted to an advisory, but the blocking high row
+	# terminalizes the round before any waiver is written.
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_WAIVED" not in combined_log
 	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
