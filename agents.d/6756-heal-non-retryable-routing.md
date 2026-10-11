@@ -20,7 +20,8 @@ or by the intake's early skip while routing is on; every intake path that
 does not diagnose it still ends in `skip reason=host_only_conflict_manual_merge
 stage=after_provenance`, so it never becomes a heal issue. The label reporter
 skips the label event the diagnosis causes (`skip reason=non_retryable_diagnosed`)
-while the account's newest failure-or-diagnosis comment is that marker. Kill
+while the account's newest failure, editor-summary or diagnosis comment is
+that marker. Kill
 switch: `WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED` (default `true`, wired in
 `workflow-failure-heal-intake.yml`); `false` restores #6745's early host-only
 skip and heal issues for the other two reasons.

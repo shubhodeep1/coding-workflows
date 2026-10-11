@@ -2972,7 +2972,9 @@ def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, truste
 	The heal intake posts that marker immediately before it applies
 	``ai:needs-human``, so the resulting label event must not produce another
 	heal report. A newer trusted ``review-autofix-failure:v1`` comment means
-	the PR failed again since, and normal escalation resumes.
+	the PR failed again since, and a newer trusted editor summary means a
+	later review ran; either way normal escalation resumes, so an old
+	diagnosis cannot suppress a later, unrelated escalation.
 	"""
 	author = str(trusted_login or "").strip().lower()
 	if not author:
@@ -2984,7 +2986,7 @@ def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, truste
 		body = sanitize_text(comment.get("body"))
 		if _NON_RETRYABLE_MARKER_RE.search(body):
 			return True
-		if _FAILURE_MARKER_RE.search(body):
+		if _FAILURE_MARKER_RE.search(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
 			return False
 	return False
 

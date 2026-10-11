@@ -5705,7 +5705,11 @@ def _nr_diagnosis_comment(*, head: str = SHA_B, author: str = NR_LOGIN, reason: 
 def _nr_tg_setup(tg_log: Path):
 	def _setup(_tmp: Path, work: Path) -> None:
 		(work / "scripts" / "tg_helpers.sh").write_text(
-			f"tg_send_msg() {{ printf '%s\\t%s\\n' \"${{2:-}}\" \"${{1//$'\\n'/ }}\" >> '{tg_log}'; }}\n", encoding="utf-8"
+			# The fixtures carry no report identity, so the intake also sends its
+			# pre-existing #6559 "unauthenticated report" WARNING; drop it here so
+			# these tests see only the non-retryable routing alerts.
+			"tg_send_msg() { case \"${1:-}\" in *'unauthenticated report'*) return 0 ;; esac; "
+			f"printf '%s\\t%s\\n' \"${{2:-}}\" \"${{1//$'\\n'/ }}\" >> '{tg_log}'; }}\n", encoding="utf-8"
 		)
 	return _setup
 
@@ -5780,6 +5784,8 @@ def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None
 	assert heal.non_retryable_label_suppressed([reporter_marker, newer_failure], trusted_login=NR_LOGIN) is False
 	assert heal.non_retryable_label_suppressed([newer_failure, reporter_marker], trusted_login=NR_LOGIN) is True
 	assert heal.non_retryable_label_suppressed([reporter_marker], trusted_login="") is False
+	newer_success = {"author": NR_LOGIN, "body": "AI autofix editor summary\n\nChanges made:\n- none"}
+	assert heal.non_retryable_label_suppressed([reporter_marker, newer_success], trusted_login=NR_LOGIN) is False
 
 
 def test_intake_routes_verified_host_only_failure_to_manual_merge(tmp_path: Path) -> None:
@@ -5863,7 +5869,7 @@ def test_intake_non_retryable_comment_failure_adds_no_label_or_issue(tmp_path: P
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "WORKFLOW_HEAL error non_retryable_comment_failed" in result.stdout
 	assert not _nr_label_edits(state) and "issues_created" not in state
-	assert tg_log.read_text().startswith("WARNING\t")
+	assert tg_log.read_text().startswith("WARNING\t") and "could not post the non-retryable diagnosis" in tg_log.read_text()
 
 
 def test_intake_non_retryable_label_failure_is_reported_and_retried(tmp_path: Path) -> None:
