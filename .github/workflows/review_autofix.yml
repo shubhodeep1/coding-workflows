@@ -4572,6 +4572,7 @@ jobs:
             ${{ env.PREVIOUS_REVIEWS_DIR }}/status_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/review_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/rejected_*.txt
           if-no-files-found: ignore
           retention-days: 7
 
