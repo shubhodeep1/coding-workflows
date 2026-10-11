@@ -2,4 +2,4 @@
 set -euo pipefail
 
 echo "1..1"
-echo "ok 1 - python-repo-checks family for demo-project"
+printf 'ok 1 - %s family for %s\n' python-repo-checks demo-project
