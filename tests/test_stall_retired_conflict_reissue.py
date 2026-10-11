@@ -215,6 +215,27 @@ def test_both_reissue_bodies_append_issue_bound_guidance() -> None:
 	assert POLLER_TEXT.count('[ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]') == 2
 	assert 'close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}"' in POLLER_TEXT
 	assert 'close_linked_pr "${issue_num}" "${_std_reissue_close_msg}"' in POLLER_TEXT
+	assert POLLER_TEXT.count('orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"') == 2
+
+
+@pytest.mark.parametrize(
+	("base", "expected_header"),
+	[("main", ""), ("orchestrator/project-7", "- **Target branch:** `orchestrator/project-7`")],
+)
+def test_retired_reissue_retargets_stale_issue_header(base: str, expected_header: str) -> None:
+	function = _extract_function("_stall_retired_conflict_reissue_body")
+	body = "<!-- workflow-failure-heal:fp=old -->\n- **Target branch:** `ai/issue-7`\nTarget branch: stable\n\nKeep this work."
+	result = subprocess.run(
+		["bash", "-c", function + '\n_stall_retired_conflict_reissue_body "$1" "$2"', "bash", body, base],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "ai/issue-7" not in result.stdout and "Target branch: stable" not in result.stdout
+	assert result.stdout.count("Target branch:") == (1 if expected_header else 0)
+	assert result.stdout.startswith("<!-- workflow-failure-heal:fp=old -->")
+	if expected_header:
+		assert result.stdout.rstrip().endswith(expected_header)
+	assert "Keep this work." in result.stdout
 
 
 # --- poller helper against a scratch git origin ---------------------------------

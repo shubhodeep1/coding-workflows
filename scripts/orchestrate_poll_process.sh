@@ -15624,6 +15624,7 @@ STALL_EOF
       if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
         _stall_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
         _stall_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
+        orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
       fi
       STALL_REISSUE_EXTRA_GUIDANCE=""
       STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
@@ -19036,6 +19037,7 @@ REISSUE_EOF
         if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
           _std_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
           _std_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
+          orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
         fi
         STALL_REISSUE_EXTRA_GUIDANCE=""
         STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""

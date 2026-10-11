@@ -29,6 +29,16 @@ _stall_retired_conflict_branch_ok() {
   git check-ref-format "refs/heads/${branch}" >/dev/null 2>&1
 }
 
+# Keep a retired-conflict replacement on the PR's base, not on an old issue
+# target (which may be the closed PR's head). Main needs no routing header.
+_stall_retired_conflict_reissue_body() {
+  local original_body="$1" base_ref="$2"
+  printf '%s\n' "${original_body}" | sed -E '/^[[:space:]]*(-[[:space:]]*)?(\*\*Target branch:\*\*|Target branch:)[[:space:]]*/d'
+  if [ "${base_ref}" != "${DEFAULT_BRANCH:-main}" ]; then
+    printf -- '- **Target branch:** `%s`\n' "${base_ref}"
+  fi
+}
+
 # _stall_pr_json_may_conflict <pr_json>: returns 1 only when the REST PR
 # payload says the PR merges cleanly (mergeable true and not dirty), so a
 # clean PR skips the local merge-tree probe. Unknown mergeability returns 0
