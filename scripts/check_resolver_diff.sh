@@ -52,7 +52,7 @@ while [ "$#" -gt 0 ]; do
 		--repo-root)
 			REPO_ROOT="$2"; shift 2 ;;
 		-h|--help)
-			sed -n '2,30p' "$0"; exit 0 ;;
+			sed -n '2,38p' "$0"; exit 0 ;;
 		*)
 			echo "::error::check_resolver_diff.sh: unknown argument: $1" >&2
 			exit 2 ;;
