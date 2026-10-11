@@ -1,0 +1,10 @@
+<!-- agents: section="Integration-sync verifier + bootstrap contract" -->
+- The security audit's Claude reply check (`security_audit_try_claude` in `scripts/security_audit.sh`) first takes the reply as one JSON array, or one outer ```` ```json ```` fence around it. Otherwise it uses the last top-level JSON array whose items are all objects with a `finding_id`, scanning with `json.JSONDecoder.raw_decode` from each `[` and skipping arrays nested in one that parsed; an empty array qualifies only when nothing but a closing fence follows it. A reply with no such array falls back as `malformed_output`, so a `[]` in prose or a cut-off reply never reads as a clean audit. Orchestrator run 38113094454 and others fell back to codex with `malformed_output`. Each fallback prints `SECURITY_AUDIT_CLAUDE_FALLBACK reason=` on stdout, because the poller sends the audit's stderr to `security_pass_audit_<N>.err`; a reason from inside `claude_run` comes from `AI_ENGINE_LAST_FALLBACK_REASON`, which `ai_engine_fallback` now sets. A rejected reply also prints `SECURITY_AUDIT_CLAUDE_REJECTED` and its first and last 300 characters (printable ASCII, whitespace collapsed, credentials redacted with the `security_audit_sanitize_log_value` rules), and keeps its first 64 KiB at `SECURITY_AUDIT_CLAUDE_REJECTED_OUT` when set; the security pass sets `${RUNTIME_DIR}/security_pass_claude_rejected_<tracking>.txt`. Tests: `tests/test_security_audit_workflow_contract.py`.
+
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `SECURITY_AUDIT_CLAUDE_FALLBACK` (`scripts/security_audit.sh`: `reason=`; stdout copy of the `AI_ENGINE_FALLBACK role=SECURITY_AUDIT` reason)
+- `SECURITY_AUDIT_CLAUDE_EXTRACTED` (`scripts/security_audit.sh`: `items= leading_chars= trailing_chars=`; Claude's findings array was taken from a reply with text around it)
+- `SECURITY_AUDIT_CLAUDE_REJECTED` (`scripts/security_audit.sh`: `reason= bytes= chars= kept=<path|none|write_failed>`)
+LOG_PREFIX.name=SECURITY_AUDIT_CLAUDE_FALLBACK
+LOG_PREFIX.name=SECURITY_AUDIT_CLAUDE_EXTRACTED
+LOG_PREFIX.name=SECURITY_AUDIT_CLAUDE_REJECTED

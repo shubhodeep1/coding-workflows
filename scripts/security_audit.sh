@@ -1444,62 +1444,167 @@ else
 fi
 [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
 
+# The fallback reason also goes to stdout (the poller sends this script's
+# stderr to a file, so the AI_ENGINE_FALLBACK line never reached the job log).
+security_audit_claude_fallback()
+{
+	local fallback_reason="${1:?fallback reason required}"
+	if [ "${fallback_reason}" = "claude_run" ]; then
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-unknown}"
+	else
+		ai_engine_fallback SECURITY_AUDIT "${fallback_reason}"
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-${fallback_reason}}"
+	fi
+	echo "SECURITY_AUDIT_CLAUDE_FALLBACK reason=${fallback_reason}"
+}
+
 # Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
 # post-filter reads), or 1 after logging the fallback reason.
 security_audit_try_claude()
 {
-	local claude_rc=0 claude_include="" claude_check_reason=""
+	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason=""
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
-		ai_engine_fallback SECURITY_AUDIT all_gated
+		security_audit_claude_fallback all_gated
 		return 1
 	fi
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
 		claude_include="${OVERSIZED_EXPORT_DIR}"
 	fi
+	AI_ENGINE_LAST_FALLBACK_REASON=""
 	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
 		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
 		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
 	case "${claude_rc}" in
 		0) ;;
 		# claude_run already logged AI_ENGINE_FALLBACK with its reason.
-		75) return 1 ;;
-		124) ai_engine_fallback SECURITY_AUDIT timeout; return 1 ;;
-		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}"; return 1 ;;
+		75) security_audit_claude_fallback claude_run; return 1 ;;
+		124) security_audit_claude_fallback timeout; return 1 ;;
+		*) security_audit_claude_fallback "crashed_rc_${claude_rc}"; return 1 ;;
 	esac
 	# Same top-level contract the post-filter enforces on codex output: a JSON
-	# array. One outer ```json fence is stripped; anything else falls back.
-	if ! claude_check_reason="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
+	# array. A reply that is one JSON array, or one outer ```json fence around
+	# it, is used as is. Otherwise the last top-level JSON array in the reply
+	# whose items are all objects with a finding_id is used (orchestrator run
+	# 38113094454 and others fell back to codex with malformed_output, so a
+	# sentence around the array cost the Claude result). An empty array
+	# counts there only when nothing but a closing fence follows it, so a
+	# "[]" inside prose or a cut-off reply is never read as a clean audit.
+	# The post-filter's field checks apply to whatever is accepted. Anything
+	# else falls back.
+	if ! claude_check_result="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 try:
-	text = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+	text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").strip()
 except OSError:
 	text = ""
 if not text:
 	print("missing_output")
 	sys.exit(1)
+
+
+def accept(findings, note: str) -> None:
+	Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
+	print(note)
+	sys.exit(0)
+
+
+strict_text = text
 fenced = re.fullmatch(r"```json[ \t]*\n(.*)\n```", text, re.S)
 if fenced:
-	text = fenced.group(1).strip()
+	strict_text = fenced.group(1).strip()
 try:
-	findings = json.loads(text)
+	findings = json.loads(strict_text)
 except ValueError:
+	findings = None
+else:
+	if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
+		print("schema_mismatch")
+		sys.exit(1)
+	accept(findings, "ok")
+
+# Top-level arrays only: after a parsed array the scan resumes past its end,
+# so an array nested in one that parsed is never a candidate.
+decoder = json.JSONDecoder()
+candidate = None
+position = text.find("[")
+while position != -1:
+	try:
+		value, end = decoder.raw_decode(text, position)
+	except ValueError:
+		position = text.find("[", position + 1)
+		continue
+	if isinstance(value, list) and all(isinstance(item, dict) and "finding_id" in item for item in value):
+		if value or re.fullmatch(r"\s*(```)?\s*", text[end:]):
+			candidate = (value, position, end)
+	position = text.find("[", end)
+if candidate is None:
 	print("malformed_output")
 	sys.exit(1)
-if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
-	print("schema_mismatch")
-	sys.exit(1)
-Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
-print("ok")
+value, start, end = candidate
+accept(value, f"extracted items={len(value)} leading_chars={start} trailing_chars={len(text) - end}")
 PY
 )"; then
-		ai_engine_fallback SECURITY_AUDIT "${claude_check_reason:-malformed_output}"
+		claude_check_reason="${claude_check_result:-malformed_output}"
+		security_audit_claude_fallback "${claude_check_reason}"
+		security_audit_log_rejected_claude_reply "${claude_check_reason}"
 		return 1
 	fi
+	case "${claude_check_result}" in
+		extracted\ *) echo "SECURITY_AUDIT_CLAUDE_EXTRACTED ${claude_check_result#extracted }" ;;
+	esac
 	return 0
+}
+
+# A rejected reply is logged to stdout as one line from its start and one from
+# its end (printable ASCII, whitespace collapsed, credentials redacted as in
+# security_audit_sanitize_log_value), so the next failure shows its shape.
+# SECURITY_AUDIT_CLAUDE_REJECTED_OUT (default unset) keeps the first 64 KiB of
+# the reply there. Diagnostics only: any error here is ignored.
+security_audit_log_rejected_claude_reply()
+{
+	python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${1:-unknown}" "${SECURITY_AUDIT_CLAUDE_REJECTED_OUT:-}" <<'PY' || true
+import re
+import sys
+from pathlib import Path
+
+reply_path, reason, kept_path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+	raw = Path(reply_path).read_bytes()
+except OSError:
+	raw = b""
+kept = "none"
+if kept_path and raw:
+	try:
+		Path(kept_path).parent.mkdir(parents=True, exist_ok=True)
+		Path(kept_path).write_bytes(raw[:65536])
+		kept = kept_path
+	except OSError:
+		kept = "write_failed"
+excerpt_source = raw.decode("utf-8", errors="replace")
+excerpt_source = re.sub(r"\s+", " ", excerpt_source)
+excerpt_source = "".join(ch for ch in excerpt_source if " " <= ch <= "~")
+excerpt_source = re.sub(r" {2,}", " ", excerpt_source).strip()
+
+
+def redact(value: str) -> str:
+	value = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@", r"\1[redacted]@", value)
+	value = re.sub(r"([Aa]uthorization:\s*)(([Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+", r"\1[redacted]", value)
+	value = re.sub(r"([Bb]earer\s+)\S+", r"\1[redacted]", value)
+	value = re.sub(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+", r"\1[redacted]", value)
+	value = re.sub(r"(sk-or-)[A-Za-z0-9_-]+", r"\1[redacted]", value)
+	return value
+
+
+print(f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes={len(raw)} chars={len(excerpt_source)} kept={kept}")
+if excerpt_source:
+	print("security-audit: rejected Claude reply starts: " + redact(excerpt_source[:300]))
+if len(excerpt_source) > 300:
+	print("security-audit: rejected Claude reply ends: " + redact(excerpt_source[-300:]))
+PY
 }
 
 if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] && security_audit_try_claude; then

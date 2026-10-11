@@ -7837,6 +7837,7 @@ run_security_pass_inline() {
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
+    SECURITY_AUDIT_CLAUDE_REJECTED_OUT="${RUNTIME_DIR}/security_pass_claude_rejected_${TRACKING_NUM}.txt" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
     AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
     bash scripts/codex_heartbeat.sh \
