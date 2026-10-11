@@ -2798,7 +2798,10 @@ jobs:
             MSG+="PR: ${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/pull/${PR_NUMBER}"
             MSG+=$'\n'
             MSG+="Run: ${REPORT_RUN_URL}"
-            tg_send_msg "${MSG}" "WARNING" >/dev/null || true
+            # DEBUG: the ai:review-blocked label hands the PR to the
+            # review-blocked judge, whose outcome alert pages when a human
+            # is needed.
+            tg_send_msg "${MSG}" "DEBUG" >/dev/null || true
           fi
 
           # Heal report: the cap is the streak, so the reporter sends it on
@@ -3381,7 +3384,7 @@ jobs:
           CLAUDE_POOL_STEP_REASON: ${{ steps.claude_pool.outputs.reason }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_pool_capacity.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_pool_capacity.sh"
@@ -5495,7 +5498,7 @@ jobs:
           # CONFLICT_RESOLVED_ALERT_LEVEL is a step-scoped override for this
           # one ping (same pattern as PR_PROCESSED_ALERT_LEVEL); it falls back
           # to the global ALERT_MSG_LEVEL, then DEBUG.
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -5918,7 +5921,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           RB_JUDGE_PROVIDER_STATUS: ${{ steps.rb_judge.outputs.rb_judge_provider_status }}
         run: |
           set -uo pipefail
@@ -6445,7 +6448,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
           elif [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; then
             echo "Editor changes lost re-dispatch skipped; peer run already in flight."
           else
@@ -6490,7 +6493,7 @@ jobs:
               MSG+="PR: ${PR_URL}"
               MSG+=$'\n'
               MSG+="Run: ${RUN_URL}"
-              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
             fi
           fi
 
@@ -6556,7 +6559,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor model returned a safety-policy refusal (safety filter), so no fix was applied this pass."
             BODY+=$'\n\n'
@@ -6607,7 +6610,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
             BODY+=$'\n\n'
@@ -6621,12 +6624,15 @@ jobs:
             MSG+=$'\n'
             MSG+="Editor claimed no changes needed but disposition could not be verified."
             MSG+=$'\n'
-            MSG+="Auto-merge blocked. Manual review or re-run required."
+            MSG+="Auto-merge blocked. The no-op recovery sweep re-dispatches the review automatically."
             MSG+=$'\n'
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            # DEBUG for all three no-op branches: the orchestrator's no-op
+            # recovery sweep (or, for orchestrator sub-issue PRs, the stall
+            # ladder) re-dispatches; its force-merge gate failures page once.
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
             BODY+=$'\n\n'
@@ -6647,7 +6653,7 @@ jobs:
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6659,6 +6665,10 @@ jobs:
           if [ -n "${ISSUE_NUM}" ]; then
             ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
           fi
+          # CRITICAL pages a human. Outcomes the pipeline finishes or retries
+          # on its own (judge merged/fixed/re-issued, stall recovery retries,
+          # conflict resolver re-dispatch) are DEBUG.
+          JUDGE_ALERT_LEVEL="CRITICAL"
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               approval_pending)
@@ -6686,10 +6696,13 @@ jobs:
                 HOLD_REASON="${JUDGE_SKIP_REASON#security_hold_}"
                 MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")" ;;
               merge)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="Review-blocked judge pushed fix commit" ;;
               close_and_reissue)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="Review-blocked judge closed PR and created replacement issue" ;;
               *)
                 MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
@@ -6703,18 +6716,26 @@ jobs:
               missing_followup_details)
                 MSG="$(printf 'PR review blocked — judge selected merge_with_followup but omitted follow-up details\nNeeds judge retry or manual follow-up issue creation')" ;;
               unresolved_head_sha)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="$(printf 'PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically')" ;;
               check_runs_query_failed)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="$(printf 'PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically')" ;;
               blocking_check_runs)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')" ;;
               sync_merge_failed)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;
               auto_merge_disabled)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but ENABLE_AUTO_MERGE=false\nManual merge required before follow-up creation')" ;;
               merge_conflict)
-                MSG="$(printf 'PR review blocked — PR has merge conflicts\nNeeds rebase or conflict resolution')" ;;
+                # The orchestrator's review-blocked loop and the standalone
+                # conflict sweep re-dispatch the resolver; the sweep pages once
+                # when a head stays conflicted (STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS).
+                JUDGE_ALERT_LEVEL="DEBUG"
+                MSG="$(printf 'PR review blocked — PR has merge conflicts\nThe conflict resolver is re-dispatched automatically')" ;;
               mergeability_pending)
+                JUDGE_ALERT_LEVEL="DEBUG"
                 MSG="$(printf 'PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically')" ;;
               followup_issue_create_failed)
                 MSG="$(printf 'PR review blocked — PR merged but follow-up issue creation failed\nNeeds follow-up issue creation or retry')" ;;
@@ -6730,7 +6751,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
 
       - name: Check PR state before failure alerts
         if: failure() && env.PR_CLOSED != 'true'
@@ -6783,7 +6804,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_provider_outage_record.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_provider_outage_record.sh"
@@ -6858,7 +6879,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6881,7 +6902,11 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_phase_failure review_autofix "${MSG}" "ERROR" "${PR_NUMBER}"
+          # DEBUG: the failure steps above label linked issues
+          # ai:review-blocked, poke the orchestrator and file a heal report;
+          # the review-blocked judge, the stall ladder and workflow heal page
+          # when a person is needed.
+          tg_send_phase_failure review_autofix "${MSG}" "DEBUG" "${PR_NUMBER}"
 
       - name: Record review run completion in memory (fail-open)
         if: success()

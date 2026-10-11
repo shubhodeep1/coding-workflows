@@ -219,7 +219,9 @@ def _untrusted_pr_ops(ctx: dict, verdict_name: str) -> list[dict]:
 		},
 		{"op": "close", "issue": item, "reason": "not_planned", "pr": True},
 		{"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]},
-		{"op": "telegram", "level": "WARNING", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
+		# DEBUG: closing the untrusted PR is the finished outcome; nothing is
+		# left for a person to do.
+		{"op": "telegram", "level": "DEBUG", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
 	]
 
 

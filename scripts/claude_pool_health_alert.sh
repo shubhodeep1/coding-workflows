@@ -83,7 +83,13 @@ Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID
 fi
 # tg_send_msg returns success without a message id when the level is filtered,
 # credentials are missing or the request fails; only a message id means sent.
-message_id="$(tg_send_msg "${text}" "WARNING" 2>/dev/null)" || message_id=""
+# Gated accounts reset on their own and roles fall back meanwhile (DEBUG);
+# a rejected token or a failed probe needs a person (WARNING).
+pool_health_level="DEBUG"
+if [ "${auth_failed}" -gt 0 ] || [ "${probe_failed}" -gt 0 ]; then
+	pool_health_level="WARNING"
+fi
+message_id="$(tg_send_msg "${text}" "${pool_health_level}" 2>/dev/null)" || message_id=""
 if [ -n "${message_id}" ]; then
 	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" sent
 else

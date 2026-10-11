@@ -403,7 +403,9 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 	ISSUE_URL="$(_pf '.issue_url // ""')"
 	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
 	if [ "${REPORT_AUTH}" = "absent" ]; then
-		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# DEBUG: the report is processed normally and the daily wrapper sync
+		# (update_workflows.yml) brings the consumer's wrappers up to date.
+		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
 	fi
 else
 	log "report_auth=event reason=workflow_run_event source=${SOURCE_REPO} kind=${SOURCE_KIND}"
