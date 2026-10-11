@@ -1217,6 +1217,19 @@ not delete wrappers that are already present in `.github/workflows/`.
 > an `agents.md` change, a `files_touched` or `ai:scope:` scope that covers
 > `agents.md` covers its top-level fragments, the review editor keeps the
 > fragments it creates, and tests read the file through `tests/agents_doc.py`.
+>
+> CI's `agents.md direct-edit check (CLAUDE.md §30)` step enforces the
+> contract on pull requests, except a project's final PR from an
+> `orchestrator/project-*` branch (its sub-PRs are checked when they land
+> there). `scripts/check_agents_md_direct_edits.py` diffs the PR merge commit
+> against its base parent and fails when an `agents.md` / `AGENTS.md` hunk
+> outside `## Repo-tree (auto-generated)` only inserts lines, or when the file
+> gains more than `AGENTS_MD_DIRECT_NET_ADD_MAX` lines (default `5`) in total
+> outside that section, so a correction cannot carry new documentation along.
+> It logs `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped`. The release
+> fold pushes to the branch directly and is not a pull request. The inline
+> implement prompt, the review editor prompt and
+> `unattended_system_instructions.md` §25 give the same rule.
 
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
