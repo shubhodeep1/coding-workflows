@@ -309,6 +309,8 @@ def _scope_author_login(value: Any) -> str | None:
 
 def _scope_author_association(value: Any) -> str | None:
 	return value if isinstance(value, str) and value in _SCOPE_AUTHOR_ASSOCIATIONS else None
+
+
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 _ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")

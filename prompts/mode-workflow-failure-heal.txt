@@ -169,7 +169,7 @@ Hard rules:
   a regression test that reproduces the failing condition (fails on the
   failing SHA, passes with the fix).
 - Never suggest adding a `files_touched` block that lists only the rejected
-  automation paths to an issue that has none: the scope guard then enforces
-  that block, and every other file the change needs is rejected as out of
-  scope.
+  automation paths to an issue that has none, unless the issue shows the
+  change needs no other file: the scope guard then enforces that block, and
+  every other file the change needs is rejected as out of scope.
 - Keep the body focused and skimmable; this is a work item, not an essay.

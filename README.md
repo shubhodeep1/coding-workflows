@@ -1714,8 +1714,8 @@ through `clarify → plan → implement → review`.
   `internal-workflow-failure-heal.yml`. Both call the reusable
   `workflow_failure_heal.yml`, which runs `scripts/workflow_failure_heal_report.sh`.
   An `ai:scope-blocked` report also carries the issue author's login and
-  association and the reporter's own login (the one `gh api user` read the
-  `ai:needs-human` checks already make), and the intake prints them in the
+  association and the reporter's own login (one `gh api user` read per
+  report, shared with the `ai:needs-human` checks), and the intake prints them in the
   diagnosis prompt. The automation-path guard grants by author, so a
   rejection that a newer guard would grant is diagnosed `already-fixed`
   rather than `consumer-config` (hylifegroup.com#75). Invalid values are
