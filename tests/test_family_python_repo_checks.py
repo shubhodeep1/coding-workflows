@@ -58,6 +58,20 @@ def _run_renderer(manifest_path: Path, output_root: Path) -> subprocess.Complete
 	)
 
 
+def _run_family_marker(script: Path) -> subprocess.CompletedProcess[str]:
+	# Execute the rendered marker script and let callers assert on its TAP
+	# output rather than its source text, so the check holds whether the
+	# template uses `echo` or `printf` (issue #6843, PR #6569 CI failure).
+	return subprocess.run(
+		["bash", str(script)],
+		cwd=str(script.parent),
+		text=True,
+		capture_output=True,
+		timeout=60,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
 def _snapshot_directory(root: Path) -> tuple[list[str], str]:
 	files = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
 	hasher = hashlib.sha256()
@@ -124,8 +138,10 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "pip install --no-cache-dir pyyaml jsonschema jinja2" in dockerfile_text
 		assert "flask" not in dockerfile_text
 
-		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-repo-checks family for demo-project" in family_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - python-repo-checks family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		repo_check_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
 		assert "REPO_CHECK_ENTRY" in repo_check_text
@@ -148,9 +164,11 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		# image, so the audit must run inside the app container, not on the
 		# host runner (#6031 validation run 37315007990).
 		import_audit_shell = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
-		assert 'COMPOSE_FILE="${COMPOSE_FILE:-out/docker-compose.test.yml}"' in import_audit_shell
+		assert "_default_compose_file=out/docker-compose.test.yml" in import_audit_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in import_audit_shell
 		assert 'APP_SERVICE="${APP_SERVICE:-app}"' in import_audit_shell
-		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/out/tests/_lib/import_audit.py}"' in import_audit_shell
+		assert "_default_container_import_audit=/workspace/out/tests/_lib/import_audit.py" in import_audit_shell
+		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-${_default_container_import_audit}}"' in import_audit_shell
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" python3 "${CONTAINER_IMPORT_AUDIT}"' in import_audit_shell
 		assert "/bin/sh -c" not in import_audit_shell
 		assert "printf '%s\\n' \"${audit_output}\" | sed 's/^/# /'" in import_audit_shell

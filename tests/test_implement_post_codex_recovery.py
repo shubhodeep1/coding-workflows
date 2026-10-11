@@ -837,6 +837,7 @@ def _run_fetch_issue_metadata_step(
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"MOCK_GH_STATE_FILE": str(gh_state_file),
 			"TMPDIR": str(runtime_dir),
+			"RUNTIME_DIR": str(runtime_dir),
 		}
 	)
 
@@ -1307,7 +1308,8 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": issue_title,
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "EOF\nUNSAFE_SCOPE=enabled",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
 			capture_output=True, text=True, check=False,
 		)
 		assert proc.returncode == 0, proc.stderr
@@ -1327,7 +1329,8 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
 			capture_output=True, text=True, check=False,
 		)
 		assert blocked.returncode != 0
@@ -1800,6 +1803,13 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_run_dir / "files_touched_scope_guard.py")
+	# This fixture exercises staged-support reconciliation, not grant rejection:
+	# give the trusted issue an exact grant for its intentionally edited helper.
+	grant_file = runtime_dir / "automation_path_grant.json"
+	grant_file.write_text(json.dumps({"schema_version": "automation_path_grant.v1", "issue_number": 4075,
+		"trusted": True, "reason": "granted", "author_login": "maintainer",
+		"author_association": "OWNER", "paths": ["scripts/helper.sh", "scripts/extra.sh"]}), encoding="utf-8")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -1822,6 +1832,8 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 			"GITHUB_OUTPUT": str(github_output),
 			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
 			"ISSUE_NUMBER": "4075",
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"AUTOMATION_PATH_GRANT_FILE": str(grant_file),
 			"RUNTIME_DIR": str(runtime_dir),
 			"SCRIPT_REF": "abc123",
 			"SERENA_PROJECT_BOOTSTRAP_HASH": "",
@@ -2200,7 +2212,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
+	assert "codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
 	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
@@ -2417,7 +2429,7 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 			{
 				"ALLOW_BULK_DELETE": "false",
 				"ALLOW_OUT_OF_SCOPE_FILES": "false",
-				"ALLOW_WORKFLOW_EDITS": "false",
+				"ALLOW_WORKFLOW_EDITS": "true",
 				"ENFORCE_FILES_TOUCHED": "true",
 				"FETCHED_MANIFEST": str(fetched_manifest),
 				"ISSUE_BODY_FILE": str(issue_body),
@@ -4720,6 +4732,65 @@ def test_implement_prompt_reserves_blocked_for_real_obstacles() -> None:
 		"the phrase the prompt mandates must match the workflow's "
 		"success-no-op regex"
 	)
+
+
+def _heredoc_body(block: str, opener: str, terminator: str) -> str:
+	"""Return the text between `opener` and a line that is just
+	`terminator` (both matched after stripping indentation), with all
+	whitespace runs collapsed to single spaces."""
+	lines = block.splitlines()
+	start = next(
+		(i for i, line in enumerate(lines) if line.strip().endswith(opener)),
+		None,
+	)
+	assert start is not None, f"could not find heredoc opener {opener!r}"
+	end = next(
+		(i for i in range(start + 1, len(lines)) if lines[i].strip() == terminator),
+		None,
+	)
+	assert end is not None, f"could not find heredoc terminator {terminator!r}"
+	# Collapse wrapping so assertions can match phrases across line breaks.
+	return " ".join(" ".join(line.strip() for line in lines[start + 1:end]).split())
+
+
+def test_implement_inline_prompt_names_success_noop_sentinel() -> None:
+	"""The prompt `implement.yml` actually sends is the inline
+	`mode-implement-inline.txt` heredoc, not `prompts/mode-implement.txt`.
+	Run 38082111776 (issue #6812, a verification-only plan whose fix was
+	already on `main`) spent 5 attempts and about $14 because the inline
+	completeness contract never named `No changes needed.`: the model wrote
+	"This is reported as already done" in prose, the success-no-op regex did
+	not match, and the retry nudge then insisted the plan required edits.
+	Both texts the model sees must name the exact sentinel, and the
+	sentinel must satisfy the workflow's success-no-op regex.
+	"""
+	block = _step_block_text("Run Codex implementation")
+	inline_prompt = _heredoc_body(block, '"${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', "EOF")
+	retry_nudge = _heredoc_body(block, "<<'RETRY_EOF'", "RETRY_EOF")
+	for label, text in (("inline prompt", inline_prompt), ("retry nudge", retry_nudge)):
+		assert "exactly `No changes needed.` on its own line" in text, (
+			f"the {label} must name the exact success-no-op sentinel"
+		)
+	assert "It is NOT the marker for" in inline_prompt, (
+		"the inline prompt must state that BLOCKED is not the nothing-to-do marker"
+	)
+	match = re.search(
+		r"if grep -qEi '(\^\(\[\[:space:\]\]\*.*?)' \"\$\{CODEX_OUTPUT_FILE\}\"",
+		block,
+	)
+	assert match is not None, "could not extract the success-no-op regex from implement.yml"
+	# The final message from run 38082111776, ended the way the prompt now
+	# asks; the prose-only original must still miss (no loosening).
+	prose = "I've again made no file changes. This is reported as already done, not as `BLOCKED`.\n"
+	for text, expected_rc in ((prose, 1), (prose + "\nNo changes needed.\n", 0)):
+		proc = subprocess.run(
+			["grep", "-qEi", match.group(1)],
+			input=text,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert proc.returncode == expected_rc, text
 
 
 def test_codex_empty_output_streak_bail_and_flag() -> None:

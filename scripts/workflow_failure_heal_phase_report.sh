@@ -161,8 +161,27 @@ fi
 
 # The report is enveloped under client_payload.report: GitHub rejects a
 # client_payload with more than 10 top-level properties (HTTP 422).
+# Report identity (issue #6559): see workflow_failure_heal_report.sh. The
+# heal-report job runs with `permissions: {}`, so the OIDC request normally
+# logs identity=absent and the intake's provenance gate binds the report; a
+# token is attached whenever the job is granted id-token: write. Only when the
+# staged helper knows the subcommand; the token file is 0600, never printed,
+# and removed on exit.
+IDENTITY_FILE="${REPORT_DIR}/report_identity.jwt"
 DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
-if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${BUILD_ERROR_FILE}"; then
+trap 'rm -f "${IDENTITY_FILE}" "${DISPATCH_FILE}"' EXIT
+WRAP_ARGS=(--payload-json "${PAYLOAD_FILE}")
+if grep -q 'request-report-identity' "${HEAL_PY}" 2>/dev/null; then
+	IDENTITY_STATUS="$(python3 "${HEAL_PY}" request-report-identity --out "${IDENTITY_FILE}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+	IDENTITY_STATUS="$(printf '%s' "${IDENTITY_STATUS}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+	log "${IDENTITY_STATUS:-identity=absent reason=unknown} issue=${ISSUE_NUMBER} phase=${PHASE}"
+	if [ -s "${IDENTITY_FILE}" ]; then
+		WRAP_ARGS+=(--report-identity-file "${IDENTITY_FILE}")
+	fi
+else
+	log "identity=absent reason=helper_outdated issue=${ISSUE_NUMBER} phase=${PHASE}"
+fi
+if ! python3 "${HEAL_PY}" wrap-dispatch "${WRAP_ARGS[@]}" > "${DISPATCH_FILE}" 2> "${BUILD_ERROR_FILE}"; then
 	log "skip reason=dispatch_envelope_failed issue=${ISSUE_NUMBER} phase=${PHASE} detail=$(head -c 200 "${BUILD_ERROR_FILE}" | tr '\n' ' ')"
 	exit 0
 fi

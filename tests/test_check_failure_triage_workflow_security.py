@@ -256,12 +256,12 @@ esac
 			checkout = root / "checkout"
 			_stage_clarify_support(trusted)
 			_stage_clarify_support(checkout)
-			for name in ("AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md", "src/app.py", "assets/AGENTS.md"):
+			for name in ("AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md", "src/app.py", "assets/AGENTS.md", "agents.d/7058-x.md"):
 				path = checkout / name
 				path.parent.mkdir(parents=True, exist_ok=True)
 				path.write_text("PR-authored content\n", encoding="utf-8")
 			subprocess.run(["git", "init", "-q", str(checkout)], check=True)
-			subprocess.run(["git", "add", "AGENTS.md", "agents.md", "docs", "scripts/CLAUDE.md", "src", "assets"], cwd=checkout, check=True)
+			subprocess.run(["git", "add", "AGENTS.md", "agents.md", "docs", "scripts/CLAUDE.md", "src", "assets", "agents.d"], cwd=checkout, check=True)
 			bin_dir = root / "bin"
 			bin_dir.mkdir()
 			_write_executable(bin_dir / "docker", '''#!/usr/bin/env bash
@@ -311,9 +311,9 @@ esac
 						self.assertEqual(files, {
 							"src/app.py", "scripts/write_codex_config.sh", "scripts/codex_model_catalog.json",
 						})
-						self.assertIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count=5", proc.stderr)
+						self.assertIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count=6", proc.stderr)
 					else:
-						self.assertTrue({"AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md"} <= files)
+						self.assertTrue({"AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md", "agents.d/7058-x.md"} <= files)
 						self.assertNotIn("assets/AGENTS.md", files)
 						self.assertNotIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED", proc.stderr)
 
@@ -329,6 +329,77 @@ esac
 		self.assertEqual(len(checkouts), 3)
 		for checkout in checkouts:
 			self.assertIn(checkout["with"]["persist-credentials"], (False, "false"))
+
+	def test_diagnose_step_env_carries_only_model_credential(self) -> None:
+		# The diagnosis reads untrusted PR text, so no GitHub credential may reach it.
+		triage_job = _workflow()["jobs"]["triage"]
+		diagnose = _step(triage_job, name="Diagnose check failure")
+		self.assertNotIn("uses", diagnose)
+		self.assertIn("run", diagnose)
+		diagnose_env = diagnose.get("env", {})
+		diagnose_secret_names = {
+			match
+			for env_value in diagnose_env.values()
+			for match in re.findall(r"secrets\.([A-Za-z0-9_]+)", str(env_value))
+		}
+		self.assertEqual(diagnose_secret_names, {"OPENROUTER_API_KEY"})
+		forbidden_env_keys = {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "CHECK_TRIAGE_ISSUES_TOKEN"}
+		self.assertFalse(forbidden_env_keys & set(diagnose_env), diagnose_env)
+		for env_key, env_value in diagnose_env.items():
+			self.assertNotIn("github.token", str(env_value), env_key)
+		for env_key, env_value in triage_job.get("env", {}).items():
+			self.assertIsNone(re.search(r"secrets\.|github\.token", str(env_value)), env_key)
+
+	def test_no_step_persists_github_credentials_for_later_steps(self) -> None:
+		triage_job = _workflow()["jobs"]["triage"]
+		step_names = [step.get("name") for step in triage_job["steps"]]
+		diagnose_index = step_names.index("Diagnose check failure")
+		for step in triage_job["steps"][:diagnose_index]:
+			for run_line in step.get("run", "").splitlines():
+				if "GITHUB_ENV" not in run_line and "GITHUB_PATH" not in run_line:
+					continue
+				self.assertIsNone(
+					re.search(r"(?i)token|secrets\.|gh_pat", run_line),
+					f"{step.get('name')}: {run_line.strip()}",
+				)
+		# The collect stage holds GH_PAT; its helpers must not export state to later steps.
+		for helper_path in (
+			TRIAGE_SCRIPT_PATH,
+			REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py",
+			REPO_ROOT / "scripts" / "gh_helpers.sh",
+		):
+			self.assertNotIn("GITHUB_ENV", helper_path.read_text(encoding="utf-8"), str(helper_path))
+		for credential_source in (
+			WORKFLOW_PATH,
+			TRIAGE_SCRIPT_PATH,
+			REPO_ROOT / "scripts" / "gh_helpers.sh",
+		):
+			credential_text = credential_source.read_text(encoding="utf-8")
+			for persisting_command in ("gh auth login", "gh auth setup-git", "credential.helper", "extraheader"):
+				self.assertNotIn(persisting_command, credential_text, f"{credential_source}: {persisting_command}")
+
+	def test_issue_posting_token_scoped_to_post_step(self) -> None:
+		workflow = _workflow()
+		posting_secret = "secrets.CHECK_TRIAGE_ISSUES_TOKEN"
+		post_step_name = "Post check-failure triage issue"
+		post_steps_seen = 0
+		for job_name, job in workflow["jobs"].items():
+			self.assertNotIn(posting_secret, json.dumps(job.get("env", {})), job_name)
+			for step in job.get("steps", []):
+				step_text = json.dumps({key: step.get(key) for key in ("env", "with", "run")})
+				if job_name == "triage" and step.get("name") == post_step_name:
+					post_steps_seen += 1
+					self.assertEqual(step_text.count(posting_secret), 1)
+				else:
+					self.assertNotIn(posting_secret, step_text, f"{job_name}: {step.get('name')}")
+		self.assertEqual(post_steps_seen, 1)
+		post = _step(workflow["jobs"]["triage"], name=post_step_name)
+		post_secret_names = {
+			match
+			for env_value in post.get("env", {}).values()
+			for match in re.findall(r"secrets\.([A-Za-z0-9_]+)", str(env_value))
+		}
+		self.assertEqual(post_secret_names, {"CHECK_TRIAGE_ISSUES_TOKEN", "TG_BOT_SECRET"})
 
 	def test_support_staging_uses_trusted_checkout_not_pr_head(self) -> None:
 		stage_script = _step(_workflow()["jobs"]["triage"], name="Stage workflow support files")["run"]
@@ -357,6 +428,7 @@ esac
 				"render_prompt.sh", "render_prompt.py", "assemble_prompt.sh",
 				"write_codex_config.sh", "codex_helpers.sh", "collect_pr_check_runs_context.py",
 				"check_failure_triage.sh", "clarify_isolated_run.sh", "clarify_openrouter_broker.py",
+				"sandbox_image.sh",
 			):
 				(support / "scripts" / filename).write_bytes(
 					(REPO_ROOT / "scripts" / filename).read_bytes()
@@ -381,7 +453,7 @@ esac
 			self.assertEqual((trusted / "scripts" / "render_prompt.sh").read_text(), "# trusted support\n")
 			self.assertEqual((trusted / "scripts" / "assemble_prompt.sh").read_text(), "# trusted support\n")
 			self.assertEqual((trusted / "scripts" / "check_failure_triage.sh").read_text(), "# trusted support\n")
-			for path in ("clarify_isolated_run.sh", "clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile", "write_codex_config.sh", "codex_model_catalog.json"):
+			for path in ("clarify_isolated_run.sh", "sandbox_image.sh", "clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile", "write_codex_config.sh", "codex_model_catalog.json"):
 				self.assertEqual((workspace / "scripts" / path).read_bytes(), (trusted / "scripts" / path).read_bytes())
 			self.assertEqual(
 				(trusted / "scripts" / "collect_pr_check_runs_context.py").read_bytes(),
@@ -1122,12 +1194,33 @@ esac
 			self.assertFalse(capture_path.exists())
 
 
-def _run_collect_stage(*, parent_body: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
+def _run_collect_stage(
+	*,
+	parent_body: str = "",
+	head_ref: str = "ai/issue-41",
+	head_repo: str | None = "owner/repo",
+	branch_flag: str | None = None,
+	ref_status: int = 200,
+	gh_calls: list[str] | None = None,
+	base: dict | None = None,
+	extra_env: dict[str, str] | None = None,
+	calls_path: list[str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
 	"""Run scripts/check_failure_triage.sh (stage=collect) for a failing CI check on
 	PR #17, whose head branch is ai/issue-41, against a fake ``gh`` that serves
 	the PR, its source issue #41 with ``parent_body``, and an empty open-triage
 	list. Returns the process, the GITHUB_OUTPUT map, and the collected
-	triage_metadata.json (empty when the script exited before writing it)."""
+	triage_metadata.json (empty when the script exited before writing it).
+
+	``head_ref`` / ``head_repo`` shape the PR payload (``head_repo=None`` drops
+	``head.repo``), ``branch_flag`` sets TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED
+	(None leaves it unset), ``ref_status`` is the fake git/ref/heads answer, and
+	``gh_calls`` (when given) receives every recorded gh invocation.
+
+	``base`` adds a base branch to the PR payload and the base-branch gate's
+	reads: ``{"ref": "main", "workflow_id": "9", "conclusion": "success"}`` for a
+	failed CI workflow run, plus ``"check_conclusion"`` for a check_run event.
+	``calls_path`` receives every gh argument line the script issued."""
 	temp_dir = tempfile.TemporaryDirectory(prefix="check-triage-lineage-")
 	temp_path = Path(temp_dir.name)
 	bin_dir = temp_path / "bin"
@@ -1144,14 +1237,32 @@ def _run_collect_stage(*, parent_body: str) -> tuple[subprocess.CompletedProcess
 		"title": "AI implementation for issue #41",
 		"html_url": "https://github.com/owner/repo/pull/17",
 		"body": "",
-		"head": {"ref": "ai/issue-41", "sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
+		"head": {"ref": head_ref, "sha": "a" * 40, **({"repo": {"full_name": head_repo}} if head_repo is not None else {})},
+		**({"base": {"ref": base["ref"]}} if base else {}),
 	})
+	calls_file = temp_path / "gh_calls.txt"
 	_write_executable(
 		bin_dir / "gh",
 		"""#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\\n' "$*" >> "${MOCK_GH_CALLS}"
 case "$*" in
+  "api repos/owner/repo/git/ref/heads/"*)
+    case "${MOCK_REF_STATUS}" in
+      200) printf '{"ref": "refs/heads/x"}\\n' ;;
+      404) printf 'gh: Not Found (HTTP 404)\\n' >&2; exit 1 ;;
+      *) printf 'gh: Server Error (HTTP %s)\\n' "${MOCK_REF_STATUS}" >&2; exit 1 ;;
+    esac ;;
   "api repos/owner/repo/pulls/17") printf '%s\\n' "${MOCK_PR_PAYLOAD}" ;;
+  "api repos/owner/repo/actions/runs/1 --jq .workflow_id "*)
+    [ -n "${MOCK_BASE_WORKFLOW_ID:-}" ] || exit 1
+    printf '%s\\n' "${MOCK_BASE_WORKFLOW_ID}" ;;
+  "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&per_page=1 --jq "*)
+    [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
+    printf '%s\\n' "${MOCK_BASE_CONCLUSION}" ;;
+  "api -X GET repos/owner/repo/commits/"*"/check-runs -f check_name="*)
+    [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
+    printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
   "api --paginate --method GET repos/owner/repo/issues "*) printf '[]\\n' ;;
   "label create "*) ;;
@@ -1165,6 +1276,9 @@ esac
 	env.pop("ENV", None)
 	for name in ("GH_TOKEN", "GITHUB_TOKEN", "TG_BOT_SECRET", "TG_CHAT_ID", "TG_ADMIN_CHAT_ID"):
 		env.pop(name, None)
+	env.pop("TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED", None)
+	if branch_flag is not None:
+		env["TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED"] = branch_flag
 	env.update(
 		{
 			"CHECK_FAILURE_TRIAGE_ENABLED": "true",
@@ -1182,10 +1296,20 @@ esac
 			"GITHUB_RUN_ID": "1",
 			"MOCK_PARENT_BODY_FILE": str(temp_path / "parent_body.txt"),
 			"MOCK_PR_PAYLOAD": pr_payload,
+			"MOCK_REF_STATUS": str(ref_status),
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 			"RUNTIME_DIR": str(runtime_dir),
+			"MOCK_GH_CALLS": str(calls_file),
 		}
 	)
+	if base:
+		if "workflow_id" in base:
+			env["MOCK_BASE_WORKFLOW_ID"] = base["workflow_id"]
+		if "conclusion" in base:
+			env["MOCK_BASE_CONCLUSION"] = base["conclusion"]
+		if "check_conclusion" in base:
+			env["MOCK_BASE_CHECK_CONCLUSION"] = base["check_conclusion"]
+	env.update(extra_env or {})
 	proc = subprocess.run(
 		["bash", "--noprofile", "--norc", str(TRIAGE_SCRIPT_PATH)],
 		cwd=REPO_ROOT,
@@ -1203,6 +1327,10 @@ esac
 	metadata_path = runtime_dir / "triage_metadata.json"
 	if metadata_path.exists() and metadata_path.stat().st_size:
 		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+	if gh_calls is not None and calls_file.exists():
+		gh_calls.extend(calls_file.read_text(encoding="utf-8").splitlines())
+	if calls_path is not None and calls_file.exists():
+		calls_path.extend(calls_file.read_text(encoding="utf-8").splitlines())
 	temp_dir.cleanup()
 	return proc, outputs, metadata
 
@@ -1307,6 +1435,369 @@ class CheckFailureTriageLineageTests(unittest.TestCase):
 				self.assertNotIn("source_issue_not_triage", proc.stdout)
 				self.assertNotIn("ready", outputs)
 				self.assertEqual(metadata, {})
+
+
+_RESOLVER_INTEGRATION_BRANCH_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE,
+)
+_TRUSTED_INTEGRATION_LINE = "- **Integration branch:** `orchestrator/project-6664`"
+
+
+def _run_diagnose_stage(
+	*, metadata_extra: dict, branch_flag: str | None, diagnosis: str = "## Summary\nDiagnosis\n",
+) -> tuple[subprocess.CompletedProcess[str], str | None, bool]:
+	"""Run the diagnose stage on a prepared hand-off with a stub isolated helper
+	that writes ``diagnosis``. Returns the process, the issue body (None when
+	not produced), and whether ready=true was written."""
+	with tempfile.TemporaryDirectory(prefix="check-triage-intbranch-") as temp_dir:
+		root = Path(temp_dir)
+		workspace = root / "workspace"
+		trusted = root / "trusted"
+		runtime = root / "runtime"
+		for directory in (workspace / "scripts" / "clarify_sandbox", trusted / "scripts" / "clarify_sandbox", trusted / "prompts", runtime):
+			directory.mkdir(parents=True)
+		(trusted / "unattended_system_instructions.md").write_text("Trusted instructions\n")
+		(trusted / "prompts" / "mode-check-failure-triage.txt").write_text("Trusted prompt\n")
+		for filename in ("clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile"):
+			(workspace / "scripts" / filename).write_text("TRUSTED\n")
+			(trusted / "scripts" / filename).write_text("TRUSTED\n")
+		_write_executable(trusted / "scripts" / "clarify_isolated_run.sh", '#!/usr/bin/env bash\ncat "$MOCK_DIAG_SOURCE" > "$2"\n')
+		metadata = {
+			"pr_number": "17", "check_name": "CI / lint", "fingerprint": "f" * 64,
+			"generation": "1", "root": "f" * 64, "head_ref": "orchestrator/project-6664",
+			"title": "CI failure", "url": "https://github.com/owner/repo/pull/17",
+		}
+		metadata.update(metadata_extra)
+		(runtime / "triage_metadata.json").write_text(json.dumps(metadata))
+		(runtime / "pr_payload.json").write_text("{}")
+		(runtime / "pr_body.txt").write_text("PR description\n")
+		model_source = root / "model-output"
+		model_source.write_text(diagnosis)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		_write_executable(bin_dir / "docker", "#!/usr/bin/env bash\nexit 0\n")
+		env = os.environ.copy()
+		for name in ("BASH_ENV", "ENV", "TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED", "TG_BOT_SECRET", "TG_CHAT_ID", "TG_ADMIN_CHAT_ID"):
+			env.pop(name, None)
+		if branch_flag is not None:
+			env["TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED"] = branch_flag
+		output_path = root / "output"
+		env.update({
+			"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted),
+			"CHECK_TRIAGE_STAGE": "diagnose", "CHECK_TRIAGE_PREPARE_ONLY": "true",
+			"GITHUB_WORKSPACE": str(workspace), "GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_OUTPUT": str(output_path),
+			"MOCK_DIAG_SOURCE": str(model_source), "RUNTIME_DIR": str(runtime),
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+		})
+		proc = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, env=env, capture_output=True, text=True, timeout=60)
+		body_path = runtime / "issue_body.md"
+		body = body_path.read_text() if body_path.exists() else None
+		ready = output_path.exists() and "ready=true" in output_path.read_text()
+		return proc, body, ready
+
+
+class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
+	"""Issue #6726: behind TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED (default off),
+	a triage issue carries one Integration branch line only when the GitHub API
+	reports a same-repository orchestrator/project-<N> head that exists."""
+
+	def _ref_calls(self, calls: list[str]) -> list[str]:
+		return [call for call in calls if "git/ref/heads/" in call]
+
+	def test_same_repo_project_branch_with_flag_on_is_recorded(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(head_ref="orchestrator/project-6664", branch_flag="true", gh_calls=calls)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("integration_branch"), "orchestrator/project-6664")
+		self.assertIn("CHECK_TRIAGE integration_branch outcome=added branch=orchestrator/project-6664 pr=17", proc.stdout)
+		self.assertEqual(self._ref_calls(calls), ["api repos/owner/repo/git/ref/heads/orchestrator%2Fproject-6664"])
+
+	def test_fork_head_is_skipped_without_lookup(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			head_ref="orchestrator/project-6664", head_repo="fork/repo", branch_flag="true", gh_calls=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=fork_pr", proc.stdout)
+		self.assertEqual(self._ref_calls(calls), [])
+		self.assertEqual(metadata, {})
+		self.assertNotIn("ready", outputs)
+
+	def test_missing_branch_and_lookup_failure_leave_line_out(self) -> None:
+		for status, reason in ((404, "branch_missing"), (500, "lookup_failed")):
+			with self.subTest(status=status):
+				calls: list[str] = []
+				proc, outputs, metadata = _run_collect_stage(
+					head_ref="orchestrator/project-6664", branch_flag="true", ref_status=status, gh_calls=calls,
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("integration_branch"), "")
+				self.assertIn(f"CHECK_TRIAGE integration_branch outcome=skip reason={reason} pr=17", proc.stdout)
+				self.assertNotIn("outcome=added", proc.stdout)
+				self.assertTrue(self._ref_calls(calls))
+
+	def test_green_base_does_not_drop_integration_branch_failure(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			head_ref="orchestrator/project-6664", branch_flag="true", gh_calls=calls,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("integration_branch"), "orchestrator/project-6664")
+		self.assertNotIn("pr_specific_failure", proc.stdout)
+		self.assertIn(
+			"CHECK_TRIAGE base_gate outcome=file reason=integration_branch branch=orchestrator/project-6664 pr=17",
+			proc.stdout,
+		)
+		self.assertFalse([call for call in calls if "/actions/" in call])
+
+	def test_green_base_still_skips_project_head_with_flag_off(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			head_ref="orchestrator/project-6664", branch_flag=None,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+
+	def test_flag_off_makes_no_lookup(self) -> None:
+		for flag in (None, "false", "FALSE", "yes"):
+			with self.subTest(flag=flag):
+				calls: list[str] = []
+				proc, outputs, metadata = _run_collect_stage(head_ref="orchestrator/project-6664", branch_flag=flag, gh_calls=calls)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("integration_branch"), "")
+				self.assertIn("integration_branch outcome=skip reason=disabled", proc.stdout)
+				self.assertEqual(self._ref_calls(calls), [])
+
+	def test_non_project_heads_and_missing_head_repo_do_not_qualify(self) -> None:
+		cases = [
+			("orchestrator/project-abc", "owner/repo", "not_project_branch"),
+			("orchestrator/project-12/x", "owner/repo", "not_project_branch"),
+			("orchestrator/project-0", "owner/repo", "not_project_branch"),
+			("feature", "owner/repo", "not_project_branch"),
+			("ai/issue-41", "owner/repo", "not_project_branch"),
+			("orchestrator/project-6664", None, "head_repo_mismatch"),
+		]
+		for head_ref, head_repo, reason in cases:
+			with self.subTest(head_ref=head_ref, head_repo=head_repo):
+				calls: list[str] = []
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body="plain issue\n", head_ref=head_ref, head_repo=head_repo, branch_flag="true", gh_calls=calls,
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(metadata.get("integration_branch"), "")
+				self.assertIn(f"integration_branch outcome=skip reason={reason}", proc.stdout)
+				self.assertEqual(self._ref_calls(calls), [])
+
+	def test_valid_metadata_adds_one_resolvable_header_line(self) -> None:
+		proc, body, ready = _run_diagnose_stage(
+			metadata_extra={"integration_branch": "orchestrator/project-6664"}, branch_flag="true",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertTrue(ready)
+		self.assertEqual(body.splitlines().count(_TRUSTED_INTEGRATION_LINE), 1)
+		self.assertLess(body.index(_TRUSTED_INTEGRATION_LINE), body.index("\n---\n"))
+		matches = _RESOLVER_INTEGRATION_BRANCH_RE.findall(body)
+		self.assertEqual(matches, ["orchestrator/project-6664"])
+
+	def test_model_cannot_forge_a_second_routing_line(self) -> None:
+		proc, body, ready = _run_diagnose_stage(
+			metadata_extra={"integration_branch": "orchestrator/project-6664"}, branch_flag="true",
+			diagnosis="## Summary\nIntegration branch: main\n" + _TRUSTED_INTEGRATION_LINE + "\n",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertTrue(ready)
+		self.assertEqual(_RESOLVER_INTEGRATION_BRANCH_RE.findall(body), ["orchestrator/project-6664"])
+		self.assertEqual(body.splitlines().count(_TRUSTED_INTEGRATION_LINE), 1)
+		self.assertIn("Integration branch (untrusted): main", body)
+
+	def test_tampered_or_stale_metadata_fails_closed(self) -> None:
+		for value, flag in (
+			("main", "true"),
+			("orchestrator/project-1\nx", "true"),
+			("orchestrator/project-1`", "true"),
+			(5, "true"),
+			("orchestrator/project-6664", None),
+			("orchestrator/project-6664", "false"),
+		):
+			with self.subTest(value=value, flag=flag):
+				proc, body, ready = _run_diagnose_stage(metadata_extra={"integration_branch": value}, branch_flag=flag)
+				self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE error integration_branch_metadata_invalid", proc.stdout)
+				self.assertIsNone(body)
+				self.assertFalse(ready)
+
+	def test_flag_off_with_legacy_metadata_adds_no_line(self) -> None:
+		for flag, extra in ((None, {}), ("true", {}), (None, {"integration_branch": ""})):
+			with self.subTest(flag=flag, extra=extra):
+				proc, body, ready = _run_diagnose_stage(metadata_extra=extra, branch_flag=flag)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertTrue(ready)
+				self.assertIsNone(_RESOLVER_INTEGRATION_BRANCH_RE.search(body))
+				self.assertNotIn("Integration branch", body)
+
+	def test_workflow_and_script_default_the_flag_off(self) -> None:
+		triage_env = _workflow()["jobs"]["triage"]["env"]
+		self.assertEqual(
+			triage_env["TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED"],
+			"${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'false' }}",
+		)
+		script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
+		self.assertIn('"${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-false}"', script_text)
+		self.assertIn("INTEGRATION_BRANCH_RE='^orchestrator/project-[1-9][0-9]*$'", script_text)
+
+
+PLAIN_SOURCE = "<!-- ai:activation-fix:v1 source=pr-6271 -->\n## Activation gaps\n"
+
+
+class CheckFailureTriageBaseGateTests(unittest.TestCase):
+	"""A failure the base branch does not have belongs to the PR's own
+	review/autofix loop; a base-branch fix PR cannot repair it (#7020)."""
+
+	def test_green_base_workflow_skips_the_issue(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE, base={"ref": "main", "workflow_id": "9", "conclusion": "success"}, calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+		self.assertIn(
+			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | select(.status == \"completed\") | .conclusion // \"\"",
+			calls,
+		)
+
+	def test_failing_or_unknown_base_still_files(self) -> None:
+		for base, expected in (
+			({"ref": "main", "workflow_id": "9", "conclusion": "failure"}, "base_conclusion=failure pr=17"),
+			({"ref": "main", "workflow_id": "9", "conclusion": ""}, "base_conclusion=unknown reason=no_completed_base_run"),
+			({"ref": "main", "workflow_id": "9"}, "base_conclusion=unknown reason=no_completed_base_run"),
+			({"ref": "main"}, "base_conclusion=unknown reason=workflow_unresolved"),
+		):
+			with self.subTest(base=base):
+				proc, outputs, metadata = _run_collect_stage(parent_body=PLAIN_SOURCE, base=base)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main " + expected, proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+
+	def test_unusable_details_url_files_with_a_specific_reason(self) -> None:
+		for url, expected in (
+			("", "reason=details_url_unavailable"),
+			("https://ci.example.test/build/42", "reason=details_url_unparseable"),
+		):
+			with self.subTest(url=url):
+				proc, outputs, _metadata = _run_collect_stage(
+					parent_body=PLAIN_SOURCE, base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+					extra_env={"CHECK_TRIAGE_DETAILS_URL": url},
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=unknown " + expected, proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+
+	def test_check_run_event_reads_the_base_check(self) -> None:
+		calls: list[str] = []
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE, base={"ref": "main", "check_conclusion": "success"},
+			extra_env={"CHECK_TRIAGE_CHECK_RUN_ID": "55", "CHECK_TRIAGE_CHECK_NAME": "external / lint"}, calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("skip reason=pr_specific_failure base=main base_conclusion=success", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertTrue(any(call.startswith("api -X GET repos/owner/repo/commits/main/check-runs -f check_name=external / lint") for call in calls))
+
+	def test_check_run_event_encodes_a_slash_in_the_base_ref(self) -> None:
+		calls: list[str] = []
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE, base={"ref": "release/1.x", "check_conclusion": "success"},
+			extra_env={"CHECK_TRIAGE_CHECK_RUN_ID": "55", "CHECK_TRIAGE_CHECK_NAME": "external / lint"}, calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("skip reason=pr_specific_failure base=release/1.x base_conclusion=success", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertTrue(any(call.startswith("api -X GET repos/owner/repo/commits/release%2F1.x/check-runs -f check_name=") for call in calls))
+
+	def test_check_run_event_with_failing_or_unknown_base_check_still_files(self) -> None:
+		for check_base, expected in (
+			({"ref": "main", "check_conclusion": "failure"}, "base_conclusion=failure pr=17"),
+			({"ref": "main", "check_conclusion": ""}, "base_conclusion=unknown reason=no_completed_base_check"),
+			({"ref": "main"}, "base_conclusion=unknown reason=no_completed_base_check"),
+		):
+			with self.subTest(base=check_base):
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body=PLAIN_SOURCE, base=check_base,
+					extra_env={"CHECK_TRIAGE_CHECK_RUN_ID": "55", "CHECK_TRIAGE_CHECK_NAME": "external / lint"},
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main " + expected, proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+
+	def test_gate_can_be_disabled_and_ignores_unsafe_base_refs(self) -> None:
+		for base, extra, expected in (
+			({"ref": "main", "workflow_id": "9", "conclusion": "success"}, {"CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED": "false"}, "base_gate outcome=disabled pr=17"),
+			({"ref": "main&event=x", "workflow_id": "9", "conclusion": "success"}, {}, "base_gate outcome=unknown reason=base_ref_unavailable"),
+			({"ref": "a/../main", "workflow_id": "9", "conclusion": "success"}, {}, "base_gate outcome=unknown reason=base_ref_unavailable"),
+		):
+			with self.subTest(base=base["ref"], extra=extra):
+				proc, outputs, _metadata = _run_collect_stage(parent_body=PLAIN_SOURCE, base=base, extra_env=extra)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE " + expected, proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+
+	def test_pending_newest_base_run_is_not_read_as_an_older_success(self) -> None:
+		# The query must not filter on status=completed: that would skip a pending
+		# newest run and return an older success, wrongly skipping triage.
+		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
+		self.assertNotIn("&status=completed", source)
+		jq_filter = '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""'
+		self.assertIn(jq_filter, source)
+		for payload, expected in (
+			({"workflow_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, ""),
+			({"workflow_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
+			({"workflow_runs": []}, ""),
+		):
+			with self.subTest(payload=payload):
+				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
+				self.assertEqual(out.stdout.strip(), expected)
+
+	def test_pending_base_check_run_is_not_read_as_an_older_success(self) -> None:
+		# A pending base check run must not let an earlier completed success skip triage.
+		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
+		jq_filter = ('[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) '
+			'or any($r[]; .status != "completed") then "" '
+			'elif all($r[]; .conclusion == "success") then "success" '
+			'else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end')
+		self.assertIn(jq_filter, source)
+		self.assertNotIn('select(.status == "completed")][0].conclusion', source)
+		for payload, expected in (
+			({"check_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, ""),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "queued", "conclusion": None}]}, ""),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}]}, "failure"),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
+			({"check_runs": []}, ""),
+			({}, ""),
+			# A truncated page (more runs than returned) is unknown, never success.
+			({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "success"}]}, ""),
+			({"total_count": 1, "check_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
+		):
+			with self.subTest(payload=payload):
+				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
+				self.assertEqual(out.stdout.strip(), expected)
+
+	def test_duplicate_issue_is_checked_before_the_base_gate(self) -> None:
+		# The gate's reads come after the open-issue dedup, so a duplicate costs nothing extra.
+		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
+		self.assertLess(source.index("skip reason=duplicate_open_issue"), source.index("--- Base-branch gate (#7020)"))
+		self.assertLess(source.index("--- Base-branch gate (#7020)"), source.index("--- Lineage cap / escalation"))
 
 
 if __name__ == "__main__":

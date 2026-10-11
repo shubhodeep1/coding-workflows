@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +52,10 @@ class SchemaLoadError(RenderValidationTemplatesError):
 
 class ManifestValidationError(RenderValidationTemplatesError):
 	"""Raised when manifest validation fails."""
+
+
+class ManifestSafetyError(RenderValidationTemplatesError):
+	"""Raised when a manifest value is unsafe to interpolate into generated shell."""
 
 
 class FamilyResolutionError(RenderValidationTemplatesError):
@@ -110,6 +116,19 @@ RENDERED_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
 }
 
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
+# slots.project_name is interpolated into generated shell tests. This allowlist
+# is enforced in the renderer itself, independent of the --schema a caller
+# passes (validation-refresh supplies its own schema path), so a shell-active
+# value such as "x$(cmd)" or "x`cmd`" is rejected before any template renders.
+# Mirrors the pattern on slots.project_name in slot_manifest.schema.json.
+PROJECT_NAME_MAX_LENGTH = 128
+PROJECT_NAME_PATTERN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9 ._/@+:-]*[A-Za-z0-9._/@+:-])?\Z")
+PORT_STRING_PATTERN = re.compile(r"\A[0-9]{1,5}\Z")
+# canary_tools entries are tool names joined into the inline
+# CANARY_TOOLS="${CANARY_TOOLS:-...}" default; validation_lint.py and the
+# validate_process.sh canary-scope preflight read that literal line, so the
+# entries are restricted to a shell-inert charset instead of being re-quoted.
+CANARY_TOOL_PATTERN = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\Z")
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 
 
@@ -257,6 +276,59 @@ def validate_manifest(manifest: dict[str, Any], schema: dict[str, Any]) -> None:
 	raise ManifestValidationError(f"Manifest validation failed:\n{formatted}")
 
 
+def shell_quote(value: Any) -> str:
+	"""Jinja filter: quote a manifest value as a single literal shell word."""
+	return shlex.quote(str(value))
+
+
+def enforce_shell_safe_manifest(manifest: dict[str, Any]) -> None:
+	"""Reject manifest values that are unsafe in generated shell, whatever the schema.
+
+	Error messages name the offending JSON pointer only; the raw value is never
+	echoed, because it is untrusted repository content.
+	"""
+	slots = manifest.get("slots")
+	if not isinstance(slots, dict):
+		raise ManifestSafetyError("Manifest safety check failed: /slots must be a mapping")
+	project_name = slots.get("project_name")
+	if not isinstance(project_name, str) or not project_name:
+		raise ManifestSafetyError("Manifest safety check failed: /slots/project_name must be a non-empty string")
+	if len(project_name) > PROJECT_NAME_MAX_LENGTH:
+		raise ManifestSafetyError(
+			f"Manifest safety check failed: /slots/project_name exceeds {PROJECT_NAME_MAX_LENGTH} characters"
+		)
+	if PROJECT_NAME_PATTERN.match(project_name) is None:
+		raise ManifestSafetyError(
+			"Manifest safety check failed: /slots/project_name contains shell-active characters "
+			"(allowed: letters, digits, space and . _ / @ + : -, starting with a letter or digit)"
+		)
+	canary_tools = slots.get("canary_tools")
+	if not isinstance(canary_tools, list) or not canary_tools:
+		raise ManifestSafetyError("Manifest safety check failed: /slots/canary_tools must be a non-empty list")
+	for index, tool in enumerate(canary_tools):
+		if not isinstance(tool, str) or CANARY_TOOL_PATTERN.match(tool) is None:
+			raise ManifestSafetyError(
+				f"Manifest safety check failed: /slots/canary_tools/{index} must be a tool name "
+				"(letters, digits and . _ + -)"
+			)
+	if "tap_plan" in slots:
+		tap_plan = slots["tap_plan"]
+		if isinstance(tap_plan, bool) or not isinstance(tap_plan, int) or tap_plan < 1:
+			raise ManifestSafetyError("Manifest safety check failed: /slots/tap_plan must be an integer >= 1")
+	if "port" in manifest:
+		port = manifest["port"]
+		if isinstance(port, bool):
+			port_value = None
+		elif isinstance(port, int):
+			port_value = port
+		elif isinstance(port, str) and PORT_STRING_PATTERN.match(port):
+			port_value = int(port)
+		else:
+			port_value = None
+		if port_value is None or not 1 <= port_value <= 65535:
+			raise ManifestSafetyError("Manifest safety check failed: /port must be an integer between 1 and 65535")
+
+
 def resolve_family(manifest: dict[str, Any]) -> FamilySpec:
 	manifest_type = manifest.get("type")
 	if not isinstance(manifest_type, str) or not manifest_type.strip():
@@ -366,6 +438,7 @@ def render_templates(
 		keep_trailing_newline=True,
 		undefined=StrictUndefined,
 	)
+	environment.filters["shell_quote"] = shell_quote
 
 	rendered_files: list[RenderedFile] = []
 	for template_spec in template_specs:
@@ -439,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
 		manifest = load_manifest(manifest_path)
 		schema = load_schema(schema_path)
 		validate_manifest(manifest, schema)
+		enforce_shell_safe_manifest(manifest)
 		family = resolve_family(manifest)
 		template_specs = collect_templates(templates_root, family)
 		context = build_render_context(manifest, family)
