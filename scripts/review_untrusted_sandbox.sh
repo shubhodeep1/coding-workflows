@@ -492,6 +492,16 @@ if [ "${engine}" = claude ]; then
 				continue
 				;;
 			*)
+				# Q65: a crash such as "result_success exit_code=1" (an API
+				# error the CLI reports as a result) left no trace once the
+				# sandbox root was removed. Log the first 400 printable
+				# characters of the result text so the job log shows why.
+				if _ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${root}/crash_result.txt" >/dev/null 2>&1; then
+					crash_detail_text="$(head -c 400 "${root}/crash_result.txt" | tr '\n\r\t' '   ' | tr -cd '[:print:]')"
+					echo "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=${crash_detail_text:-empty}" >&2
+				else
+					echo "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=no_result_event" >&2
+				fi
 				rc=1
 				break
 				;;
