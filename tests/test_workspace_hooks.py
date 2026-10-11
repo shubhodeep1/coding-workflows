@@ -628,12 +628,27 @@ def test_implement_workflow_stages_and_orders_workspace_hooks() -> None:
 	assert "run_workspace_hook.sh" in stage_block
 	assert _step(IMPLEMENT_WORKFLOW, "Run Codex implementation").get("id") == "implement_run"
 	for hook_step in ("Run workspace after_create hook", "Run workspace before_run hook", "Run workspace after_run hook", "Run workspace before_remove hook"):
-		assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh"' in _step_run_text(IMPLEMENT_WORKFLOW, hook_step)
-	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'"
+		assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh"' in _step_run_text(IMPLEMENT_WORKFLOW, hook_step)
+	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''"
+	assert _step(IMPLEMENT_WORKFLOW, "Run workspace before_remove hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''"
 	assert _step_index(IMPLEMENT_WORKFLOW, "Activate workspace shell context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_create hook") < _step_index(IMPLEMENT_WORKFLOW, "Detect preexisting Serena project config")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Retrieve implementation memory context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Write run summary")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Emit Serena stats") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_remove hook") < _step_index(IMPLEMENT_WORKFLOW, "Cleanup temporary artifacts")
+
+
+def test_implement_hooks_never_fall_back_to_checkout_helper(tmp_path: Path) -> None:
+	repo_root, helper_path = _prepare_case(tmp_path)[:2]
+	marker_path = tmp_path / "host-hook-marker"
+	helper_path.write_text('#!/usr/bin/env bash\nprintf compromised > "${HOST_HOOK_MARKER}"\n', encoding="utf-8")
+	hook_environment = {**os.environ, "HOST_HOOK_MARKER": str(marker_path)}
+	hook_environment.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
+	for hook_step in ("Run workspace after_create hook", "Run workspace before_run hook", "Run workspace after_run hook", "Run workspace before_remove hook"):
+		result = subprocess.run(["bash", "-c", _step_run_text(IMPLEMENT_WORKFLOW, hook_step)],
+			cwd=repo_root, env=hook_environment, capture_output=True, text=True, check=False)
+		assert result.returncode != 0, (hook_step, result.stderr)
+		assert "trusted support copy missing" in result.stderr
+		assert not marker_path.exists(), hook_step
 
 
 def test_validate_workflow_stages_and_orders_workspace_hooks() -> None:
@@ -679,6 +694,7 @@ def main() -> int:
 	):
 		_run_tmp_path_case(case_fn)
 	test_implement_workflow_stages_and_orders_workspace_hooks()
+	_run_tmp_path_case(test_implement_hooks_never_fall_back_to_checkout_helper)
 	test_validate_workflow_stages_and_orders_workspace_hooks()
 	return 0
 
