@@ -179,6 +179,23 @@ def test_still_blocked_24_hours_after_the_last_round_is_terminal() -> None:
 	assert not ledger.decide(7, "blocked", FP, recent, None, NOW)["terminal"]
 
 
+def test_a_round_on_an_earlier_block_does_not_start_a_new_blocks_clock() -> None:
+	"""binance-blessings#249: round 1 (fingerprint b5db0e02fd76) on 10-08, then
+	a new harness-broken block (82b040492e96) on 10-11 was closed on sight."""
+	other_fp = "fedcba987654"
+	old_other = ledger.parse_markers([_comment(_marker(fp=other_fp), created_at="2026-10-01T07:37:00Z")], BOT)
+	decision = ledger.decide(7, "blocked", FP, old_other, None, NOW)
+	assert decision["terminal"] is False
+	assert decision["item_rounds"] == 1 and decision["next_round"] == 2
+	assert "close" not in decision["allowed"]
+	# Same fingerprint, same age: still terminal.
+	old_same = ledger.parse_markers([_comment(_marker(), created_at="2026-10-01T07:37:00Z")], BOT)
+	assert ledger.decide(7, "blocked", FP, old_same, None, NOW)["terminal_reason"] == "still_blocked_24h"
+	# Another stop with the same fingerprint text does not count either.
+	old_stop = ledger.parse_markers([_comment(_marker(stop="harness-broken"), created_at="2026-10-01T07:37:00Z")], BOT)
+	assert ledger.decide(7, "blocked", FP, old_stop, None, NOW)["terminal"] is False
+
+
 def test_override_guard_only_for_the_guard_latches() -> None:
 	assert "override_guard" not in ledger.decide(7, "scope-blocked", FP, [], None, NOW)["allowed"]
 	assert "override_guard" in ledger.decide(7, "scope-blocked", FP, [], None, NOW, rejection=_rejection())["allowed"]
