@@ -7953,7 +7953,8 @@ def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	# intake reads their logs instead of this gate-stopped run's (§15: no new call).
 	assert 'PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}"' in job
 	assert 'AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}"' in job
-	assert 'tg_send_msg "${MSG}" "WARNING"' in job
+	# DEBUG: the ai:review-blocked label hands the PR to the judge, which pages.
+	assert 'tg_send_msg "${MSG}" "DEBUG"' in job
 	assert "head_moved" in job
 
 
