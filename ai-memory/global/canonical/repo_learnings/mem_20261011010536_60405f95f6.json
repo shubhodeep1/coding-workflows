@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "When changing orchestration or automation behavior, check the related workflow definitions and shell or Python helpers, and update tests that verify their contracts. Several merged changes touched these layers together, so editing only the apparent entry point can leave behavior or wiring untested.",
+  "fingerprint": "5c7b92e93b5b203153446f6f7914e03eb6eecb8a9c4f9cf5ba5cb5ae32ec36aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38100444111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38100444111",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6668",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6712",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6812",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7103",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6722",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7104",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7111"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261011010536_60405f95f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow behavior changes often span workflow YAML, helper scripts, and contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-11T01:05:36Z",
+    "promoted_at": "2026-10-11T01:07:17Z",
+    "superseded_at": null
+  }
+}
