@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The plan already splits this work into five phases with one PR each (`docs/plans/prepush-affected-test-gate-plan.md` lines 450-464, and the Q16/Q23/Q24 row at line 147). Each phase has its own \"done when\" check and rollback, and P2-P5 do nothing until the gate module exists. So this issue should cover P1, and P2-P5 should follow in order. Option C puts every phase in one high-risk PR with no rollback points. Option B would need someone to close this issue and start a new project, which is not an unattended answer.\nQ2: The pipeline editor cannot see or write the top-level `CLAUDE.md`. `workflow-templates/CLAUDE.md` must be byte-identical to it (plan line 505-506, pinned by `tests/test_pr_merge_status_guard.py`), so changing only the template would break CI. The plan already asks for an `agents.d/` fragment per phase PR and README docs (lines 221, 549, 749). The text that only an interactive session can add goes to the operator-step tracker, so the issue does not stall. The hook still prompts when the stamp is missing, so behaviour is safe before \u00a731 lands.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - docs/plans/prepush-affected-test-gate-plan.md (\u00a718 automation surface lines 13-42; Phases table lines 450-464; P1 steps from line 468; files list lines 734-749)\n  steps:\n    - Implement only P1 here:\n      - `workflow-templates/.claude/hooks/prepush_affected_tests.py` (select/run/stamp/hook/assertion-diff, baseline classification, result format)\n      - `scripts/prepush_test_gate_run.sh` (credential-free container wrapper; unused until P3)\n      - the PreToolUse `Bash` entry in `workflow-templates/.claude/settings.json`\n      - `tests/claude_template_drift.py`, plus the PR-only parity tolerance in `tests/test_claude_template_live_parity.py` and the related guard tests. `main` and release-gate parity stay strict.\n      - `tests/test_prepush_affected_tests.py`, covering the plan's unit tests and the measured cases\n      - CI wiring in `.github/workflows/ci.yml`\n      - registry entries in `docs/scripts-pending-removal.md` and `docs/INVENTORY.md`, one `changelog.d/` fragment, and one `agents.d/` fragment creating the \"Pre-push affected-test gate\" section\n    - In the PR body, list P2 (orchestrator scope augmentation), P3 (implement gate), P4 (review autofix, conflict resolver and heal gates) and P5 (integration post-sync repair) as follow-ups still outstanding. Name the gaps this PR leaves open, so activation verification files them in plan order.\n  replaces_acceptance_criterion: \"Close every listed gap in this issue\" becomes \"close the P1 gap (shared gate + interactive wiring + parity tolerance) here; P2-P5 each land as their own PR in plan order.\"\n  equivalence_argument: Every gap is still closed, in the plan's own phase order, with each phase's rollback intact. Because P2-P5 do nothing when the module is absent, splitting the work never leaves a broken state.\n  reversibility: If a human wants everything in one project, they can run the remaining phases through `/implement-plan-ai`. The P1 PR is still the plan's first wave either way.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - docs/plans/prepush-affected-test-gate-plan.md lines 505-511 (the \u00a731 text), 221 and 549 (agents.d fragment)\n    - agents.md \"Claude engine\" (`hide_claude_md` excludes `CLAUDE.md` from the sandbox and its write-back)\n  steps:\n    - Write `agents.d/<issue>-prepush-affected-test-gate.md` describing the `stamp` command, the hook's ask/allow behaviour and the `CLAUDE_PREPUSH_TEST_GATE=off` switch. Add a matching README note.\n    - Do not edit `CLAUDE.md` or `workflow-templates/CLAUDE.md`. Changing only the template would break the byte-identical parity test.\n    - In the PR body, state that the CLAUDE.md \u00a731 text from plan lines 505-511 is an operator step: an interactive session must add it to both copies together.\n  replaces_acceptance_criterion: \"CLAUDE.md \u00a731 added in P1\" becomes \"the stamp guidance is documented in an agents.d fragment and the README; adding \u00a731 is recorded as an operator step.\"\n  equivalence_argument: Agents still learn the stamp workflow from agents.md and the README, and the hook itself prompts when the stamp is missing. Only the CLAUDE.md wording is deferred, to the one session type that can write it.\n  reversibility: An interactive session adds \u00a731 to both CLAUDE.md copies at any time. Nothing in the code depends on that text.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- CLAUDE_MD_PREPUSH_SECTION (resource): an interactive session adds `## \u00a731. Pre-Push Affected Tests (MANDATORY)` (plan lines 505-511) to `CLAUDE.md` and `workflow-templates/CLAUDE.md`, byte-identical. Until then, the guidance lives only in agents.md and the README, and the PreToolUse hook prompts on any push without a stamp.",
+  "fingerprint": "fbee1d0e03137d4d8017fe8af8c74dd99ac2714d17b97e783013b2457e16a791",
+  "lineage": {
+    "issue_number": 7137,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38109587508",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38109587508",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7137"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011035819_27da4d2e61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7137,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38109587508"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7137",
+  "timestamps": {
+    "created_at": "2026-10-11T03:58:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
