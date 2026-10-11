@@ -488,6 +488,8 @@ def test_implement_hook_has_no_credentials_or_git(tmp_path: Path) -> None:
 	assert "GH_TOKEN" not in invocation["env"] and "GIT_DIR" not in invocation["env"]
 	assert "secret" not in str(invocation)
 	assert "WORKSPACE_HOOK_PHASE=implement" in args
+	env_args = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--env"]
+	assert not any(v.split("=", 1)[0] in ("GH_TOKEN", "GIT_DIR") for v in env_args)
 
 
 def test_implement_hook_runs_trusted_copy_not_workspace_copy(tmp_path: Path) -> None:
@@ -555,6 +557,31 @@ def test_implement_hook_symlink_hook_file_refused(tmp_path: Path) -> None:
 	assert not (runner_temp / "docker_invocation.json").exists()
 
 
+def test_host_python_ignores_workspace_modules(tmp_path: Path) -> None:
+	# The helper's cwd is the branch-authored workspace in implement; a
+	# root-level json.py there must never be imported by the host Python.
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	host_marker = tmp_path / "shadow-imported.txt"
+	shadow = f"open({str(host_marker)!r}, 'w').write('x')\n"
+	for directory in (repo_root, workspace_path):
+		(directory / "json.py").write_text(shadow, encoding="utf-8")
+	_write_hook(repo_root, "implement", "before_run", "#!/usr/bin/env bash\n"
+		"mkdir -p implement/hook-output/before_run\n"
+		"printf 'ok' > implement/hook-output/before_run/status.txt\n")
+	result = subprocess.run(
+		["bash", str(helper_path), "implement", "before_run"],
+		cwd=str(workspace_path),
+		env={**os.environ, "RUNNER_TEMP": str(runner_temp), "WORKSPACE_PATH": str(workspace_path),
+			"PATH": f"{runner_temp.parent / 'fake-bin'}:{os.environ['PATH']}"},
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert not host_marker.exists()
+	assert (runner_temp / "workspace-hooks/output/implement/before_run/status.txt").read_text(encoding="utf-8") == "ok"
+
+
 def test_phase_dotdot_rejected(tmp_path: Path) -> None:
 	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
 	for phase in ("..", ".", ".hidden"):
@@ -567,6 +594,8 @@ def test_implement_workflow_stages_and_orders_workspace_hooks() -> None:
 	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
 	assert "run_workspace_hook.sh" in stage_block
 	assert _step(IMPLEMENT_WORKFLOW, "Run Codex implementation").get("id") == "implement_run"
+	for hook_step in ("Run workspace after_create hook", "Run workspace before_run hook", "Run workspace after_run hook", "Run workspace before_remove hook"):
+		assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh"' in _step_run_text(IMPLEMENT_WORKFLOW, hook_step)
 	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'"
 	assert _step_index(IMPLEMENT_WORKFLOW, "Activate workspace shell context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_create hook") < _step_index(IMPLEMENT_WORKFLOW, "Detect preexisting Serena project config")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Retrieve implementation memory context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation")
@@ -612,6 +641,7 @@ def main() -> int:
 		test_implement_hook_never_runs_on_host_when_sandbox_missing,
 		test_implement_hook_symlink_hook_file_refused,
 		test_phase_dotdot_rejected,
+		test_host_python_ignores_workspace_modules,
 	):
 		_run_tmp_path_case(case_fn)
 	test_implement_workflow_stages_and_orders_workspace_hooks()

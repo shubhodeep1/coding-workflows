@@ -1586,7 +1586,8 @@ jobs:
         id: workspace_after_create_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement after_create
+          # Run the trusted pre-editor copy (#7158), like after_run / before_remove.
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement after_create
 
       - name: Detect preexisting Serena project config
         if: env.SKIP_IMPLEMENT != 'true'
@@ -2310,7 +2311,8 @@ jobs:
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement before_run
+          # Run the trusted pre-editor copy (#7158), like after_run / before_remove.
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement before_run
 
       # Claude engine (replace-claude-sessions plan Phase 5b): IMPLEMENT,
       # IMPLEMENT_REPAIR and IMPLEMENT_DIAGNOSE each resolve their engine from

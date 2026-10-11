@@ -99,7 +99,7 @@ run_validate_hook_isolated()
 	local timeout_seconds="$3"
 	local runner_temp="$4"
 	local phase="${5:-validate}"
-	local hook_path="${6:-${workspace_path}/.github/ai/workspace_hooks/validate/${hook}.sh}"
+	local hook_path="${6:-${workspace_path}/.github/ai/workspace_hooks/${phase}/${hook}.sh}"
 	local isolated_root isolated_status container_name replay_root
 	case "${phase}" in
 		''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
@@ -131,11 +131,14 @@ run_validate_hook_isolated()
 	}
 	trap 'cleanup_validate_isolation; exit 143' TERM
 	# Snapshot and manifest are separate; the container can only write the copy.
+	# Host Python runs with -I (no cwd or PYTHON* env on sys.path): the cwd is the
+	# branch-authored workspace, and a root-level json.py there must never be
+	# imported on the credential-bearing host.
 	# The excluded names and allowed() below keep .git (whose config carries the
 	# origin-URL token in implement), .ai, the workflow-support checkouts,
 	# credential files and every dot-directory except the hook directory out of
 	# the sandbox; implement relies on this as much as validate does.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" "${phase}" "${hook}" "${hook_path}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${workspace_path}" "${isolated_root}" "${phase}" "${hook}" "${hook_path}" <<'PY'
 import hashlib
 import json
 import os
@@ -268,7 +271,7 @@ PY
 		return "${isolated_status}"
 	fi
 	# Never extract an untrusted tar entry directly onto the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${isolated_root}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${isolated_root}" <<'PY'
 import os
 from pathlib import Path, PurePosixPath
 import tarfile
@@ -314,7 +317,7 @@ PY
 		fi
 	fi
 	# Validate the entire returned tree before changing the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" "${hook}" "${phase}" "${replay_root}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${workspace_path}" "${isolated_root}" "${hook}" "${phase}" "${replay_root}" <<'PY'
 import hashlib
 import json
 import os

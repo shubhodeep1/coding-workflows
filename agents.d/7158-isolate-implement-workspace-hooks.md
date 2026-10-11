@@ -13,3 +13,6 @@
   workspace; any other change refuses the whole result (exit 125: fatal for
   `after_create` / `before_run`, a warning for `after_run` / `before_remove`).
   Phase names must start with a letter or digit.
+  The helper's own host-side Python runs with `-I -B`, so a root-level module
+  in the workspace (its cwd) is never imported on the host, and all four
+  implement hook steps start the helper from `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
