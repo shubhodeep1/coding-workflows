@@ -254,13 +254,17 @@ def test_conflict_newer_untrusted_marker_does_not_shadow_trusted_one():
 	assert "outcome=alerted" in out
 
 
-def test_conflict_truncated_window_without_trusted_marker_skips():
-	"""Older comments exist and the window holds no trusted marker: the count
-	is unknown, so it is neither restarted nor reposted."""
+def test_conflict_truncated_window_without_trusted_marker_restarts_count():
+	"""Older comments exist and the window holds no trusted marker (it may
+	have scrolled out): a fresh marker is posted so later ticks keep counting
+	and the stuck alert can still fire."""
 	_require_jq()
 	sends, calls, out = _conflict_harness(marker=f"60|intruder|{HEAD_A}|0|0", loaded="partial")
-	assert (sends, calls) == ([], [])
-	assert "reason=marker_outside_window" in out
+	assert sends == []
+	assert len(calls) == 1 and calls[0].startswith("api repos/o/r/issues/7/comments -f body=")
+	assert f"head={HEAD_A} attempts=1 alerted=0 -->" in calls[0]
+	assert "outcome=restart reason=marker_outside_window" in out
+	assert "outcome=counted" in out
 	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", loaded="partial")
 	assert len(sends) == 1 and sends[0][0] == "WARNING"
 	assert calls[0].startswith("api repos/o/r/issues/comments/55 -X PATCH")
@@ -408,3 +412,74 @@ def test_review_blocked_judge_successes_are_debug():
 		start = workflow.index(f"              {action})\n", workflow.index('JUDGE_ALERT_LEVEL="CRITICAL"'))
 		arm = workflow[start:workflow.index(";;", start)]
 		assert 'JUDGE_ALERT_LEVEL="DEBUG"' in arm, action
+
+
+def _judge_alert(env: dict[str, str]) -> list[tuple[str, str]]:
+	"""Run the "Telegram review-blocked judge decision" step body with the
+	given step outputs; return the (level, message) sent."""
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	start = workflow.index("      - name: Telegram review-blocked judge decision")
+	end = workflow.index("      - name: Check PR state before failure alerts", start)
+	step = workflow[start:end]
+	body = step[step.index("        run: |\n") + len("        run: |\n"):]
+	body = "\n".join(line[10:] for line in body.splitlines())
+	body = re.sub(r"\$\{\{[^}]*\}\}", "x", body)
+	with tempfile.TemporaryDirectory() as tmp:
+		log = Path(tmp) / "tg.log"
+		(Path(tmp) / "tg_helpers.sh").write_text(
+			'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n', encoding="utf-8"
+		)
+		run_env = {"PATH": "/usr/bin:/bin", "SUPPORT_SCRIPTS_DIR": tmp, "TG_LOG": str(log), "PR_NUMBER": "7", "MAX_AUTOFIX_ITERATIONS": "5"}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", body], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		sends = []
+		if log.exists():
+			for line in log.read_text(encoding="utf-8").splitlines():
+				level, message = line.split("\t", 1)
+				sends.append((level, message))
+		return sends
+
+
+def test_review_blocked_judge_merge_alert_follows_merge_status():
+	"""judge_action=merge pages unless the merge went through or retries on
+	its own; a missing status (older judge script) still pages."""
+	for status, expected in (
+		("merge_requested", "DEBUG"),
+		("already_merged", "DEBUG"),
+		("ready_to_merge", "DEBUG"),
+		("deferred_base_moved", "DEBUG"),
+		("checks_not_ready", "DEBUG"),
+		("mergeability_pending", "DEBUG"),
+		("merge_conflict", "DEBUG"),
+		("checks_failed", "CRITICAL"),
+		("merge_failed", "CRITICAL"),
+		("manual_merge_required", "CRITICAL"),
+		("not_open", "CRITICAL"),
+		("", "CRITICAL"),
+	):
+		sends = _judge_alert({"JUDGE_HANDLED": "true", "JUDGE_ACTION": "merge", "JUDGE_MERGE_STATUS": status})
+		assert len(sends) == 1 and sends[0][0] == expected, (status, sends)
+		if expected == "CRITICAL":
+			assert "merged PR as-is" not in sends[0][1], (status, sends)
+
+
+def test_review_blocked_judge_reissue_alert_follows_issue_creation():
+	sends = _judge_alert({"JUDGE_HANDLED": "true", "JUDGE_ACTION": "close_and_reissue", "JUDGE_REISSUE_CREATED": "true"})
+	assert sends[0][0] == "DEBUG" and "created replacement issue" in sends[0][1]
+	for created in ("false", ""):
+		sends = _judge_alert({"JUDGE_HANDLED": "true", "JUDGE_ACTION": "close_and_reissue", "JUDGE_REISSUE_CREATED": created})
+		assert sends[0][0] == "CRITICAL" and "could not create the replacement issue" in sends[0][1]
+
+
+def test_review_blocked_judge_base_moved_overlap_skip_is_debug():
+	sends = _judge_alert({"JUDGE_HANDLED": "false", "JUDGE_SKIP_REASON": "base_moved_overlap"})
+	assert sends[0][0] == "DEBUG" and "synchronize run re-validates" in sends[0][1]
+	sends = _judge_alert({"JUDGE_HANDLED": "false", "JUDGE_SKIP_REASON": "sync_merge_failed"})
+	assert sends[0][0] == "CRITICAL"
+
+
+def test_review_rb_judge_emits_merge_and_reissue_status():
+	script = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert script.count('echo "judge_action=merge" >> "$GITHUB_OUTPUT"') == script.count('judge_merge_status=')
+	assert 'echo "judge_reissue_created=${RB_REISSUE_CREATED:-false}" >> "$GITHUB_OUTPUT"' in script

@@ -6713,6 +6713,8 @@ jobs:
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
+          JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
@@ -6757,14 +6759,42 @@ jobs:
                 HOLD_REASON="${JUDGE_SKIP_REASON#security_hold_}"
                 MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")" ;;
               merge)
-                MSG="Review-blocked judge merged PR as-is"
-                JUDGE_ALERT_LEVEL="DEBUG" ;;
+                # judge_merge_status (scripts/review_rb_judge.sh) says whether
+                # the merge went through. Only finished or self-retrying
+                # outcomes are DEBUG; a failed merge, failing required checks,
+                # ENABLE_AUTO_MERGE=false or an unknown status still pages.
+                MSG="$(printf 'Review-blocked judge approved PR as-is, but the merge did not go through (status: %s)\nNeeds merge investigation' "${JUDGE_MERGE_STATUS:-unknown}")"
+                if [ "${JUDGE_MERGE_STATUS}" = "merge_requested" ] || [ "${JUDGE_MERGE_STATUS}" = "already_merged" ]; then
+                  MSG="Review-blocked judge merged PR as-is (or enabled auto-merge)"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "ready_to_merge" ]; then
+                  MSG="Review-blocked judge approved PR as-is; linked issues moved to ai:ready-to-merge"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "deferred_base_moved" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; base moved under its files, branch update requested\nThe synchronize run re-validates automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "checks_not_ready" ] || [ "${JUDGE_MERGE_STATUS}" = "mergeability_pending" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; merge waits for checks or mergeability (%s)\nStall recovery will retry automatically' "${JUDGE_MERGE_STATUS}")"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "merge_conflict" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but it has merge conflicts\nThe conflict resolver is re-dispatched automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "checks_failed" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nNeeds a CI fix before the merge')"
+                elif [ "${JUDGE_MERGE_STATUS}" = "manual_merge_required" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; ENABLE_AUTO_MERGE=false\nManual merge required')"
+                fi ;;
               fix)
                 MSG="Review-blocked judge pushed fix commit"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
               close_and_reissue)
-                MSG="Review-blocked judge closed PR and created replacement issue"
-                JUDGE_ALERT_LEVEL="DEBUG" ;;
+                # A closed PR without a replacement issue leaves the work
+                # untracked: that pages.
+                MSG="$(printf 'Review-blocked judge closed PR but could not create the replacement issue\nNeeds a replacement issue for the remaining work')"
+                if [ "${JUDGE_REISSUE_CREATED}" = "true" ]; then
+                  MSG="Review-blocked judge closed PR and created replacement issue"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                fi ;;
               merge_with_followup)
                 # Merged, and the follow-up issue was created for the
                 # pipeline to implement: nothing left for a person.
@@ -6789,6 +6819,11 @@ jobs:
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
               blocking_check_runs)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              base_moved_overlap)
+                # review_rb_judge.sh requested a branch update; its
+                # synchronize run re-validates the PR without a person.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
               sync_merge_failed)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;

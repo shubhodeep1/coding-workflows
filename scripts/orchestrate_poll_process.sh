@@ -26436,10 +26436,12 @@ _standalone_conflict_count_attempt() {
 		fi
 	done <<< "${raw}"
 	if [ "${found}" != "true" ] && [ "${loaded}" = "partial" ]; then
-		# The comment window is truncated and holds no trusted marker; it may be
-		# older than the window, so restarting the count could page again.
-		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=skip reason=marker_outside_window"
-		return 0
+		# The comment window is truncated and holds no trusted marker (an older
+		# one may have scrolled out of the last 100 comments). Post a fresh
+		# marker counting from 1 so later ticks find it in the window and the
+		# stuck alert can still fire; the cost is at most one repeat WARNING
+		# per head if the old marker had already alerted.
+		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=restart reason=marker_outside_window"
 	fi
 	[[ "${comment_id}" =~ ^[0-9]+$ ]] || comment_id=""
 	[[ "${attempts}" =~ ^[0-9]+$ ]] || attempts="0"
