@@ -581,7 +581,7 @@ def test_modify_delete_host_only_conflict_takes_base(tmp_path, shape, stages, ex
 	repo = tmp_path / "repo"
 	repo.mkdir()
 	_host_only_conflict(repo, shape=shape)
-	result, _runtime, github_env, _ = _run_take_base(tmp_path, repo, linked=[])
+	result, _runtime, github_env, _ = _run_take_base(tmp_path, repo)
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert f"stages={stages}" in result.stdout
 	assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
@@ -604,6 +604,45 @@ def test_ordinary_conflicts_still_go_to_the_sandbox(tmp_path):
 	assert (runtime / "host_only_take_base_comment.md").is_file()
 
 
+def _paired_hook_conflict(repo: Path, template_differs: bool) -> None:
+	"""Live hook and its workflow-templates twin both conflict."""
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.name", "t")
+	_git(repo, "config", "user.email", "t@t")
+	template = repo / "workflow-templates" / HOOK
+	for path in (repo / HOOK, template):
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text("x = 0\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-q", "-b", "feat")
+	(repo / HOOK).write_text("x = 'pr'\n", encoding="utf-8")
+	template.write_text("x = 'pr'\n", encoding="utf-8")
+	_git(repo, "commit", "-qam", "feat change")
+	_git(repo, "checkout", "-q", "main")
+	(repo / HOOK).write_text("x = 'base'\n", encoding="utf-8")
+	template.write_text("x = 'base template'\n" if template_differs else "x = 'base'\n", encoding="utf-8")
+	_git(repo, "commit", "-qam", "main change")
+	_git(repo, "checkout", "-q", "feat")
+	assert _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False).returncode != 0
+
+
+@pytest.mark.parametrize("template_differs", [False, True])
+def test_paired_live_copy_is_never_taken_from_base(tmp_path, template_differs):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_paired_hook_conflict(repo, template_differs)
+	result, runtime, github_env, _ = _run_take_base(tmp_path, repo)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE" not in result.stdout
+	assert "block-fell-through" in result.stdout
+	assert sorted(_unmerged(repo)) == sorted([HOOK, "workflow-templates/" + HOOK])
+	assert not (runtime / "host_only_conflict_scope.tsv").exists()
+	assert not github_env.exists()
+	if template_differs:
+		assert "reason=unpaired_live_copy" in result.stdout
+
+
 def test_declared_host_only_path_is_left_for_reissue(tmp_path):
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -618,6 +657,7 @@ def test_declared_host_only_path_is_left_for_reissue(tmp_path):
 
 @pytest.mark.parametrize("kwargs,log", [
 	({"status": "failed"}, "outcome=unknown reason=linked_issues_unavailable"),
+	({"linked": []}, "outcome=unknown reason=linked_issues_unavailable_or_empty"),
 	({"target_branch": "orchestrator/project-12"}, ""),
 	({"enabled": "false"}, ""),
 ])
@@ -678,6 +718,8 @@ def _run_reissue_guard(tmp_path, *, linked=None, assoc="MEMBER", fail_create=Fal
 RUNTIME_DIR={str(tmp_path)!r}
 SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_MODEL_PATHS_FILE={str(paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
 GITHUB_ENV={str(github_env)!r}
 GITHUB_REPOSITORY=o/r
 PR_NUMBER=7
@@ -690,6 +732,7 @@ _persist_resolver_retry_state_from_current_failure() {{ :; }}
 {_failure_helper()}
 {helpers}
 {_path_failure_helper()}
+{_report_helper()}
 {guard}
 echo guard-passed
 '''], cwd=tmp_path, env=env, capture_output=True, text=True)
@@ -733,10 +776,18 @@ def test_reissue_create_failure_never_closes(tmp_path):
 
 
 def test_existing_reissue_marker_prevents_a_second_issue(tmp_path):
-	comments = json.dumps([{"body": "x\n<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=900 head=abc -->"}])
+	comments = json.dumps([{"body": "x\n<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=900 head=abc -->", "author_association": "OWNER"}])
 	result, calls, _ = _run_reissue_guard(tmp_path, comments=comments)
 	assert result.returncode == 1 and "reason=already_reissued" in result.stdout
 	assert calls == []
+
+
+@needs_jq
+def test_untrusted_reissue_marker_does_not_suppress_the_reissue(tmp_path):
+	comments = json.dumps([{"body": "<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=900 head=abc -->", "author_association": "NONE"}])
+	result, calls, _ = _run_reissue_guard(tmp_path, comments=comments)
+	assert "reason=already_reissued" not in result.stdout
+	assert "outcome=reissued" in result.stdout, result.stdout + result.stderr
 
 
 @needs_jq

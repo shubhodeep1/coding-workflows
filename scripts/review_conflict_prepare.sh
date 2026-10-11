@@ -529,14 +529,43 @@ fi
 if [ "${_ho_enabled}" = "true" ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
   _ho_dir="$(mktemp -d)"
   git diff --name-only --diff-filter=U | sed '/^$/d' | sort -u > "${_ho_dir}/unmerged.txt"
+  # Paired live/template copies (issue #6595) stay with the resolver's
+  # pairing path: split them out exactly as review_conflict_resolve.sh does,
+  # so a live hook is never taken from base while its template goes to the
+  # model (the copies would diverge).
   _ho_check_rc=0
-  PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_workspace_py}" check-paths "$(pwd)" "${_ho_dir}/unmerged.txt" "${_ho_dir}/report.txt" >/dev/null 2>&1 || _ho_check_rc=$?
+  _ho_pairing_ok=false
+  if git ls-files -u -z > "${_ho_dir}/unmerged_index.z" 2>/dev/null && \
+     PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_workspace_py}" paired-live-copies "$(pwd)" "${_ho_dir}/unmerged.txt" \
+       "${_ho_dir}/unmerged_index.z" "${_ho_dir}/pairs.txt" "${_ho_dir}/model_paths.txt" >/dev/null 2>&1; then
+    _ho_pairing_ok=true
+    PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_workspace_py}" check-paths "$(pwd)" "${_ho_dir}/model_paths.txt" "${_ho_dir}/report.txt" >/dev/null 2>&1 || _ho_check_rc=$?
+  else
+    echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=skip reason=pairing_check_failed"
+  fi
   : > "${_ho_dir}/host_only.txt"
   _ho_report_ok=false
-  if [ "${_ho_check_rc}" -ne 0 ] && [ -s "${_ho_dir}/report.txt" ] && \
+  if [ "${_ho_pairing_ok}" = "true" ] && [ "${_ho_check_rc}" -ne 0 ] && [ -s "${_ho_dir}/report.txt" ] && \
      ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${_ho_dir}/report.txt"; then
     _ho_report_ok=true
     cut -f2 "${_ho_dir}/report.txt" | sort -u > "${_ho_dir}/host_only.txt"
+    # An unpaired live copy whose template also conflicts (different index
+    # stages) cannot be resolved without diverging from its template: leave
+    # the whole conflict set on the fail-closed path.
+    _ho_unpaired_live="$(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import review_untrusted_workspace as workspace
+unmerged = set(open(sys.argv[2], encoding="utf-8").read().split("\n"))
+for path in open(sys.argv[3], encoding="utf-8").read().split("\n"):
+    if path in workspace.PAIRED_LIVE_COPIES and workspace.PAIRED_LIVE_COPIES[path] in unmerged:
+        print(path)
+' "$(dirname -- "${_ho_workspace_py}")" "${_ho_dir}/unmerged.txt" "${_ho_dir}/host_only.txt" 2>/dev/null)" || _ho_unpaired_live="unknown"
+    if [ -n "${_ho_unpaired_live}" ]; then
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=skip reason=unpaired_live_copy"
+      _ho_report_ok=false
+      : > "${_ho_dir}/host_only.txt"
+    fi
   fi
   if [ "${_ho_report_ok}" = "true" ] && [ -s "${_ho_dir}/host_only.txt" ]; then
     # Scope lookup: linked issues come from review_collect_pr_metadata.sh's
@@ -550,14 +579,15 @@ if [ "${_ho_enabled}" = "true" ] && git rev-parse -q --verify MERGE_HEAD >/dev/n
        ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import json, sys
 issues = json.load(open(sys.argv[1], encoding="utf-8"))
-if not isinstance(issues, list):
+# No linked issue means the PR scope is unknown, not "no allowlist".
+if not isinstance(issues, list) or not issues:
     raise SystemExit(1)
 for index, issue in enumerate(issues):
     body = issue.get("body") if isinstance(issue, dict) else None
     with open(f"{sys.argv[2]}/{index:04d}.txt", "w", encoding="utf-8") as handle:
         handle.write(body if isinstance(body, str) else "")
 ' "${_ho_linked_file}" "${_ho_dir}/bodies" 2>/dev/null; then
-      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=unknown reason=linked_issues_unavailable"
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=unknown reason=linked_issues_unavailable_or_empty"
       _ho_scope_ok=false
     else
       for _ho_body_file in "${_ho_dir}"/bodies/*.txt; do

@@ -300,6 +300,10 @@ _linked_context_raw="${_linked_raw}"
 _linked_raw_status="failed"
 if [ "${_linked_fetch_ok}" = "true" ]; then
 	_linked_raw_status="ok"
+	# A full first:50 page may be truncated; the scope lookup then fails closed.
+	if [ "$(printf '%s' "${_linked_raw}" | jq 'length' 2>/dev/null || echo 50)" -ge 50 ] 2>/dev/null; then
+		_linked_raw_status="failed"
+	fi
 fi
 if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" != "[]" ]; then
 	_linked_raw_status="failed"

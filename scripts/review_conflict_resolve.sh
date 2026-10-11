@@ -642,8 +642,24 @@ _resolver_reissue_for_host_only_scope()
     echo "${reissue_manual_error}" >&2
     return 1
   fi
+  # Only a marker from a trusted author (OWNER/MEMBER/COLLABORATOR; the
+  # pipeline account is one) counts, so an outside commenter cannot suppress
+  # the re-issue by pasting it.
   if [ -f "${PR_ISSUE_COMMENTS_FILE:-/nonexistent}" ] && \
-     grep -Fq "<!-- ai:host-only-conflict-reissue:v1 pr=${PR_NUMBER} " "${PR_ISSUE_COMMENTS_FILE}"; then
+     PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+try:
+    comments = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+marker = "<!-- ai:host-only-conflict-reissue:v1 pr=" + sys.argv[2] + " "
+found = isinstance(comments, list) and any(
+    isinstance(c, dict) and isinstance(c.get("body"), str) and marker in c["body"]
+    and c.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+    for c in comments
+)
+raise SystemExit(0 if found else 1)
+' "${PR_ISSUE_COMMENTS_FILE}" "${PR_NUMBER}" 2>/dev/null; then
     echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=skip reason=already_reissued"
     echo "::error::Conflict resolver: host-only conflicted path(s) are in the PR's declared files_touched scope; a re-issue is already recorded on this PR, manual follow-up needed if it is still open: ${reissue_paths}" >&2
     return 1
@@ -725,7 +741,17 @@ _resolver_reissue_for_host_only_scope()
     printf '%s\n\n' "This pull request is closed as not planned and its change is re-issued on the current \`${reissue_base}\` branch as #${reissue_issue}. Failure reason: \`conflict_resolver_sandbox_path_host_only\` (non-retryable)."
     printf '%s\n' "<!-- ai:host-only-conflict-reissue:v1 pr=${PR_NUMBER} issue=${reissue_issue} head=${reissue_head} -->"
   } > "${reissue_dir}/pr_comment.md"
-  if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1; then
+  # Retried: a repeated comment is harmless (the marker only deduplicates).
+  local reissue_comment_posted=false
+  if type gh_retry >/dev/null 2>&1; then
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
+  else
+    gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
+  fi
+  if [ "${reissue_comment_posted}" != "true" ]; then
+    # Close anyway: the replacement exists and its provenance line names this
+    # PR; leaving the PR open without the marker would let the next run
+    # create a second replacement.
     echo "::warning::Host-only re-issue: failed to post the explanation on PR #${PR_NUMBER}; closing anyway (replacement #${reissue_issue})."
   fi
   echo "::error::Conflict resolver: host-only conflicted path(s) are in the PR's declared files_touched scope; PR closed and re-issued as #${reissue_issue}: ${reissue_paths}" >&2

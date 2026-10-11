@@ -247,20 +247,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     merge: <paths>` line and fails closed with `sandbox_path_host_only`;
     symlinks and odd names keep the nameless `sandbox_path_unsupported`. No
     model runs in either case, because a merge commit needs every path
-    resolved. Since #6748 `review_conflict_prepare.sh` first resolves
-    host-only paths on the host outside integration-sync PRs: a path the
-    linked issues' `files_touched:` allowlist does not cover takes the base
-    version (`CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE`, dropped PR-side diff
-    posted with `<!-- ai:host-only-take-base:v1 -->`; with no other
-    conflict the merge is committed without a model). A covered path makes
-    the resolver re-issue the PR through `unblock_actions.py`'s `reissue`
-    ops and `unblock_run_ops` (create, PR comment with
-    `<!-- ai:host-only-conflict-reissue:v1 -->`, then close;
-    `CONFLICT_RESOLVER_HOST_ONLY_REISSUE`) before failing with
-    `sandbox_path_host_only`. Unknown scope (linked issues from
-    `LINKED_ISSUES_RAW_FILE` unavailable; `CONFLICT_RESOLVER_HOST_ONLY_SCOPE
-    outcome=unknown`) or `HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED=false` keeps
-    the manual-merge failure. Outside integration-sync PRs every fail-closed reason is
+    resolved. Outside integration-sync PRs every fail-closed reason is
     exported as `AUTOFIX_FAILURE_REASON=conflict_resolver_<reason>`, so the
     failure marker names it; integration-sync PRs keep the generic reason so
     their failures still reach the retry-state escape threshold that drives
@@ -2369,9 +2356,6 @@ and shipped:
 - `INTEGRATION_JUDGE_SCOPE`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
-- `CONFLICT_RESOLVER_HOST_ONLY_SCOPE`
-- `CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE`
-- `CONFLICT_RESOLVER_HOST_ONLY_REISSUE`
 - `PROVIDER_OUTAGE` (`scripts/provider_outage.py`: `op=classify|open|close|mark_label|sweep|resume outcome= …`)
 - `GH_API_RETRY` (`gh_api_retry` in `scripts/gh_helpers.sh` and `scripts/gh_api_retry.py`: `outcome=retry|gave_up|permanent|skipped kind=primary|secondary|transient|permanent|breaker bucket= status= attempt=<i>/<n> wait_secs= endpoint=`)
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
@@ -2629,9 +2613,6 @@ LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
-LOG_PREFIX.name=CONFLICT_RESOLVER_HOST_ONLY_SCOPE
-LOG_PREFIX.name=CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE
-LOG_PREFIX.name=CONFLICT_RESOLVER_HOST_ONLY_REISSUE
 LOG_PREFIX.name=PROVIDER_OUTAGE
 LOG_PREFIX.name=GH_API_RETRY
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
