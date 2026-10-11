@@ -967,13 +967,23 @@ case "$1" in
     # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
     if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
     case "${8:-}" in WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) [ "$claude_access" = read ] || exit 2 ;; esac
-    printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
+    if [ "${8:-}" = INTEGRATION_JUDGE ] && [ -n "${MOCK_INTEGRATION_JUDGE_RAW_OUTPUT:-}" ]; then
+      printf '%s\\n' "$MOCK_INTEGRATION_JUDGE_RAW_OUTPUT" > "$3"
+    else
+      printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
+    fi
+    if [ "${8:-}" = INTEGRATION_JUDGE ] && [ -n "${MOCK_INTEGRATION_JUDGE_STDERR:-}" ]; then
+      printf '%s\\n' "$MOCK_INTEGRATION_JUDGE_STDERR" >&2
+    fi
     if [ "${9:-write}" = write ] && [ -n "${MOCK_CODEX_TOUCH_FILE:-}" ]; then
       while IFS= read -r mock_touch_path; do
         [ -n "${mock_touch_path}" ] || continue
         mkdir -p -- "$(dirname -- "${mock_touch_path}")"
         printf 'mock change\\n' >> "${mock_touch_path}"
       done <<< "${MOCK_CODEX_TOUCH_FILE}"
+    fi
+    if [ "${8:-}" = INTEGRATION_JUDGE ] && [ -n "${MOCK_INTEGRATION_JUDGE_RUN_EXIT:-}" ]; then
+      exit "${MOCK_INTEGRATION_JUDGE_RUN_EXIT}"
     fi ;;
   *) exit 2 ;;
 esac
@@ -24444,6 +24454,83 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 		)
 		assert result["latest_state"]["status"] == "failed"
 		assert result["review_dispatches"] == []
+
+
+def test_integration_judge_invalid_answer_is_retried_within_lifetime_cap():
+	"""#6902 (run 38107119024): a hot-file conflict went straight to the
+	judge, whose answer was rejected, and that single rejection failed the
+	project. An invalid answer now defers to a later tick, spends one
+	lifetime dispatch slot and logs why it was rejected."""
+	valid = {"action": "redispatch_resolver", "diagnosis": "d", "resolution_guidance": "g"}
+	cases = (
+		(valid, {"MOCK_INTEGRATION_JUDGE_RUN_EXIT": "1"}, "exit_1"),
+		(valid, {"MOCK_INTEGRATION_JUDGE_RAW_OUTPUT": "not json at all"}, "unparseable"),
+		({"action": "redispatch_resolver", "diagnosis": "x" * 2001, "resolution_guidance": ""}, {}, "too_long"),
+		({"action": "maybe", "diagnosis": "d", "resolution_guidance": "g"}, {}, "schema"),
+	)
+	for verdict, env_overrides, reason in cases:
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["integration_conflict_unresolved_ticks"] = 3
+		state["integration_conflict_total_dispatches"] = 1
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+			merge_conflict_on_sync=True, mock_local_integration_content_conflict=True,
+			codex_json=verdict,
+			env_overrides={**env_overrides, "MOCK_INTEGRATION_JUDGE_STDERR": "::error::forged ##[warning]x"},
+		)
+		output = result["stdout"] + result["stderr"]
+		latest = result["latest_state"]
+		assert latest["status"] != "failed", (reason, output[-2000:])
+		assert latest["integration_conflict_total_dispatches"] == 2, reason
+		assert latest["integration_sync_status"] == "healing", reason
+		assert "INTEGRATION_JUDGE_INVALID pr=" in output and f"reason={reason} " in output, (reason, output[-2000:])
+		assert "INTEGRATION_JUDGE_RETRY pr=" in output and f"reason={reason} total_dispatches=2 lifetime_max=10" in output, reason
+		assert "Integration self-healing exhausted" not in output, reason
+		assert result["review_dispatches"] == [], reason
+		# The judge log tail cannot inject workflow commands.
+		assert "| ::error::forged ##\\[warning]x" in output, (reason, output[-2000:])
+		assert not any(line.startswith("::error::forged") for line in output.splitlines()), reason
+
+
+def test_integration_judge_invalid_answer_retries_end_at_lifetime_cap():
+	"""The retries are bounded: an invalid answer that spends the last
+	lifetime slot keeps the project healing, and the next tick's existing
+	lifetime-cap path ends it before another judge call."""
+	prs = [{
+		"number": 300, "state": "open", "draft": True, "mergeable": False, "mergeable_state": "dirty",
+		"baseRefName": "main", "headRefName": "orchestrator/project-192",
+		"headSha": "0000000000000000000000000000000000000300",
+	}]
+	invalid = {"action": "maybe", "diagnosis": "d", "resolution_guidance": "g"}
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_total_dispatches"] = 9
+	state["final_merge_pr"] = 300
+	first = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True, mock_local_integration_content_conflict=True,
+		prs=prs, codex_json=invalid,
+	)
+	first_output = first["stdout"] + first["stderr"]
+	assert first["latest_state"]["status"] != "failed", first_output[-2000:]
+	assert first["latest_state"]["integration_conflict_total_dispatches"] == 10
+	assert "INTEGRATION_JUDGE_RETRY pr=300 reason=schema total_dispatches=10 lifetime_max=10" in first_output
+
+	second = _run_poller(
+		state=first["latest_state"], enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True, mock_local_integration_content_conflict=True,
+		prs=prs, codex_json=invalid,
+	)
+	second_output = second["stdout"] + second["stderr"]
+	assert second["latest_state"]["status"] == "failed"
+	assert "INTEGRATION_JUDGE_INVALID" not in second_output
+	assert "INTEGRATION_JUDGE_RETRY" not in second_output
+	assert "lifetime dispatch cap (10) reached" in json.dumps(second["latest_state"])
 
 
 if __name__ == "__main__":
