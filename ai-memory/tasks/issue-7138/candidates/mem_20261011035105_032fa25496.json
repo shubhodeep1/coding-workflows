@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the poller decide that a terminalized validation run failed \"solely by the stale workflow pin\", and that the updated wrapper is now available?\nChoices:\nA. Use run metadata the poller already reads: the last validation run's `head_branch` is not the default branch (the run used the integration branch's wrapper copy). Recover once per project by sending the new default-branch dispatch, and record a state flag (for example `validation_stale_pin_recovered_ref`) so it never fires twice. (RECOMMENDED)\nB. Compare the failed run's validate.yml `workflow_ref` pin (the `VALIDATE_SUPPORT_REF` log line) with the pin in the default branch's current `ai-validate.yml`. Recover once per new default-branch pin, like `SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE`. This needs a log or file read per candidate.\nC. Recover once per project whenever the orchestrator engine SHA changes, with no per-run evidence. This is broader and may re-run real failures.\nQ2: Which terminalized projects can get this one-shot automatic recovery?\nChoices:\nA. Only projects stopped as a harness failure (`validation_last_raw_status=harness_error` / `ai:harness-broken`). The recovery acts as an automatic `/revalidate` and leaves the recovery counters unchanged. (RECOMMENDED)\nB. Harness failures plus `ai:validation-failed` projects whose recovery or cycle budget ran out, when the Q1 signal matches.\nC. Any failed validation state where the Q1 signal matches.\nQ3: Should the automatic recovery have its own kill switch?\nChoices:\nA. Yes. Add a new env var that defaults to `true` (for example `VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED`), and log the outcome with a stable prefix. (RECOMMENDED)\nB. No. Always on, with no switch.",
+  "fingerprint": "a4ec22e56e3626675acc2641018695db405bec24d704038453c9b0d164a3f33b",
+  "lineage": {
+    "issue_number": 7138,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38109317366",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38109317366",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011035105_032fa25496",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7138,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38109317366"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7138 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T03:51:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
