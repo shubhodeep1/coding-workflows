@@ -35,6 +35,13 @@ Inputs you are given below this prompt:
   block with the run's structured summary line and log tails. The stall
   poller has already retried at least once by then; look for the systemic
   cause in the workflow source rather than recommending another re-run.
+- For an `ai:scope-blocked` report, the issue author, its association and the
+  pipeline account (`unknown` when an older reporter did not send them). The
+  automation-path guard (`scripts/files_touched_scope_guard.py`) grants by
+  author: compare its grant rules in `HEAL_SOURCE_DIR` with
+  `HEAL_BRANCH_TIP_DIR`. When the newer guard would grant this author's
+  rejected paths, the cause is `already-fixed` and reaches the consumer with
+  the next stable release; it is not `consumer-config`.
 - A `FAILED RUN LOGS` block containing the failing job(s), the failing step
   name(s), and a filtered tail of their logs. The script source GitHub echoes
   at the top of every `run:` step (`##[group]Run ...`) is removed, so every
@@ -144,6 +151,16 @@ Hard rules:
   "inconclusive -- here is what to check next".
 - Do not propose changes that would weaken a security control, delete data,
   skip a test, or disable the escalation / guard that surfaced the failure.
+- When a failing test and the code it covers disagree, decide which side is
+  wrong from the documented behaviour, never from "the test should match what
+  the code does now": read the README / agents.md sections and the
+  changelog.d fragments for that behaviour, and the issues or pull requests
+  that introduced each side (git log / git blame in the diagnosis checkout).
+  Fix the side that contradicts the documented or most recently decided
+  behaviour; when the two sides come from two merged changes that contradict
+  each other, say so under Root cause and name the decision the fix follows.
+  The scope marker lists the subject files the failing tests cover, so the
+  code side is editable too.
 - A failure that repeated with the same fingerprint (the report's failure
   reason is `identical_failure_cap`) or that came back after an earlier heal
   of this lineage merged a fix is deterministic. Never classify it
@@ -151,4 +168,8 @@ Hard rules:
   as the fix: find the deterministic cause, and make the Suggested fix include
   a regression test that reproduces the failing condition (fails on the
   failing SHA, passes with the fix).
+- Never suggest adding a `files_touched` block that lists only the rejected
+  automation paths to an issue that has none, unless the issue shows the
+  change needs no other file: the scope guard then enforces that block, and
+  every other file the change needs is rejected as out of scope.
 - Keep the body focused and skimmable; this is a work item, not an essay.
