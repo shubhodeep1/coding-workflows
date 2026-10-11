@@ -404,8 +404,8 @@ def test_rejected_attempt_output_is_kept_for_diagnosis(tmp_path: Path) -> None:
 	assert kept.read_text(encoding="utf-8") == "No findings in this diff.\n"
 	# The crashed Haiku attempt wrote nothing, so no file but a bytes=0 line.
 	assert not (reviews / f"rejected_review_{SAFE}_attempt2.txt").exists()
-	assert f"REVIEWER_POOL_REJECTED_OUTPUT slot={SLOT} pass=review attempt=1 model=claude-sonnet-5-5 bytes=26 reason=malformed_output" in result["log"]
-	assert f"REVIEWER_POOL_REJECTED_OUTPUT slot={SLOT} pass=review attempt=2 model=claude-haiku-5-5 bytes=0 reason=exit_1" in result["log"]
+	assert f"REVIEWER_POOL_REJECTED_OUTPUT slot={SLOT} pass=review attempt=1 model=claude-sonnet-5-5 bytes=26 reason=malformed_output kept_bytes=26 truncated=false" in result["log"]
+	assert f"REVIEWER_POOL_REJECTED_OUTPUT slot={SLOT} pass=review attempt=2 model=claude-haiku-5-5 bytes=0 reason=exit_1 kept_bytes=0 truncated=false" in result["log"]
 	# The summariser reads only <prefix>_*.txt; the kept file never matches.
 	assert not any(path.name.startswith(("review_", "pass1_")) and "rejected" in path.name for path in reviews.iterdir())
 	workflow = WORKFLOW.read_text(encoding="utf-8")
