@@ -14,6 +14,8 @@ paths and the closed PR's changed files, and the PR branch is kept. The managed
 and standalone replacement bodies discard a stale `Target branch` header for
 the default base, or replace it with the PR's base for an integration branch.
 The ancestor no-op cap does not discard a verified retired-conflict re-issue.
+Managed recovery closes the source issue and PR only after confirming the
+replacement issue was created; a failed create leaves both open for retry.
 The managed review-blocked pre-judge dispatch skips the resolver and the judge for such a PR
 and leaves the re-issue to the stall-recovery rung. Conflicts are read locally
 with `git merge-tree`, the head tip must equal the PR head SHA, and the PR must

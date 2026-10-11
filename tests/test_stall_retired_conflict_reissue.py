@@ -252,8 +252,8 @@ def test_retired_reissue_retargets_stale_issue_header(base: str, expected_header
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for issue JSON parsing")
 @pytest.mark.parametrize("recovery_mode", ["managed", "standalone"])
 @pytest.mark.parametrize("base", ["main", "orchestrator/project-7"])
-@pytest.mark.parametrize("retired_guidance", [True, False])
-def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: Path, recovery_mode: str, base: str, retired_guidance: bool) -> None:
+@pytest.mark.parametrize(("retired_guidance", "create_fails"), [(True, False), (False, False), (True, True)])
+def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: Path, recovery_mode: str, base: str, retired_guidance: bool, create_fails: bool) -> None:
 	if recovery_mode == "managed":
 		start = POLLER_TEXT.index("    close_and_reissue)\n      # Belt-and-braces ancestor-chain")
 		stop = POLLER_TEXT.index("    skip)\n", start)
@@ -266,8 +266,8 @@ def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: 
 	script = """set -euo pipefail
 count_noop_ancestors() { printf '2\\n'; }
 ensure_label_exists() { :; }
-close_linked_pr() { :; }
-surface_reissue_closed_without_pr() { :; }
+close_linked_pr() { printf 'pr_closed\\n' >> "$CAPTURED_ACTIONS_FILE"; }
+surface_reissue_closed_without_pr() { printf 'surfaced\\n' >> "$CAPTURED_ACTIONS_FILE"; }
 tg_notify() { :; }
 tg_notify_issue() { :; }
 _gh_url() { :; }
@@ -277,6 +277,7 @@ gh_retry() {
   if [ "$1" = _safe_gh_jq ]; then
     printf '%s\\n' "$ORIG_ISSUE_JSON"
   elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = create ]; then
+    if [ "$CREATE_FAILS" = true ]; then return 1; fi
     while [ "$#" -gt 0 ]; do
       if [ "$1" = --body ]; then
         printf '%s\\n' "$2" > "$CAPTURED_ISSUE_BODY_FILE"
@@ -285,6 +286,8 @@ gh_retry() {
       shift
     done
     printf 'https://github.com/o/r/issues/99\\n'
+  elif [ "$1" = gh ] && [ "$2" = issue ] && { [ "$3" = edit ] || [ "$3" = close ]; }; then
+    printf 'issue_%s\\n' "$3" >> "$CAPTURED_ACTIONS_FILE"
   fi
 }
 """ + _extract_function("_stall_retired_conflict_reissue_body") + """
@@ -304,17 +307,25 @@ reissue_case() {
 reissue_case
 """
 	created_body_file = tmp_path / "replacement-body.txt"
+	actions_file = tmp_path / "actions.txt"
 	result = subprocess.run(
 		["bash", "-c", script], capture_output=True, text=True, check=False,
 		env={**os.environ, "ORIG_ISSUE_JSON": issue_json, "PR_BASE": base,
-			"RETIRE_ISSUE": "7" if retired_guidance else "8", "CAPTURED_ISSUE_BODY_FILE": str(created_body_file)},
+			"RETIRE_ISSUE": "7" if retired_guidance else "8", "CAPTURED_ISSUE_BODY_FILE": str(created_body_file),
+			"CAPTURED_ACTIONS_FILE": str(actions_file), "CREATE_FAILS": "true" if create_fails else "false"},
 	)
+	if create_fails:
+		assert result.returncode == (1 if recovery_mode == "managed" else 0), result.stderr + result.stdout
+		assert not created_body_file.exists()
+		assert not actions_file.exists(), "failed creation must not close the PR or source issue"
+		return
 	assert result.returncode == 0, result.stderr + result.stdout
 	if not retired_guidance:
 		assert not created_body_file.exists()
 		assert "Ancestor-chain no-op cap reached" in result.stdout
 		return
 	assert created_body_file.exists(), result.stderr
+	assert actions_file.read_text(encoding="utf-8").splitlines()[:2] == ["surfaced", "pr_closed"]
 	created_body = created_body_file.read_text(encoding="utf-8")
 	assert "Keep this work." in created_body and "Review changed files" in created_body
 	assert "ai/issue-7" not in created_body

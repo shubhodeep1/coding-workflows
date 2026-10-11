@@ -16753,7 +16753,7 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	main_end = main_start + main_end_match.start()
 	main_case_body = script[main_start:main_end]
 	legacy_flow_match = re.search(
-		r'echo "  Closing and re-issuing stalled issue #\$\{issue_num\}\.\.\."\n[ \t]+surface_reissue_closed_without_pr "\$\{issue_num\}"',
+		r'echo "  Closing and re-issuing stalled issue #\$\{issue_num\}\.\.\."',
 		main_case_body,
 	)
 	assert legacy_flow_match is not None, (
@@ -16763,6 +16763,9 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
 	assert 'close_linked_pr "${issue_num}"' in main_window, (
 		"close_linked_pr call missing in main_window"
+	)
+	assert main_window.index('new_url="$(gh_retry gh issue create') < main_window.index('surface_reissue_closed_without_pr "${issue_num}"'), (
+		"managed reissue must create a replacement before closing its source"
 	)
 	assert main_window.index('surface_reissue_closed_without_pr "${issue_num}"') < main_window.index('close_linked_pr "${issue_num}"'), (
 		"surface must run before close_linked_pr so the comment lands on an open issue"

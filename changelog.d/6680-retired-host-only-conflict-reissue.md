@@ -12,4 +12,4 @@ The workflow failure heal intake also stops sending a fix for shared workflow co
 | New log prefix | `STALL_RETIRED_CONFLICT_REISSUE issue= pr= outcome=reissue\|skip reason= retired_paths=` |
 | New heal `target_branch_source` value | `shared_workflow` |
 
-What this means for operators: a PR stuck only on a retired file is now closed with a comment that names the file, and a fresh issue rebuilds its work against the current base. Check the closed PR's edits to the retired file. The replacement issue asks the implementer to move any intent that still matters into the file that replaced it.
+What this means for operators: a PR stuck only on a retired file is closed after its replacement issue is created. If creation fails, the source issue and PR remain open for retry and the failure is reported. Check the closed PR's edits to the retired file. The replacement issue asks the implementer to move any intent that still matters into the file that replaced it.

@@ -15660,7 +15660,6 @@ STALL_EOF
       fi
 
       echo "  Closing and re-issuing stalled issue #${issue_num}..."
-      surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
       local _stall_reissue_extra="" _stall_reissue_close_msg=""
       if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
         _stall_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
@@ -15670,25 +15669,19 @@ STALL_EOF
       STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
       STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
       [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
-      close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}"
 
       local orig_title orig_body orig_issue_json orig_issue_is_heal
       orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
       orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
       orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
+      if [ -z "${orig_title}" ]; then
+        echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
+        return 1
+      fi
       if [ -n "${_stall_reissue_extra}" ]; then
         orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
       fi
-
-      ensure_label_exists "ai:closed"
-      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:done' --remove-label 'ai:implementing' \
-        --remove-label 'ai:planning' --remove-label 'ai:clarification' \
-        --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
-        --add-label 'ai:closed' 2>/dev/null || true
-      gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
 
       local new_body
       new_body="$(cat <<REISSUE_EOF
@@ -15724,10 +15717,20 @@ REISSUE_EOF
         --body "${new_body}" \
         --label "ai:clarification" \
         --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
-      if [ -n "${new_url}" ]; then
-        new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
-        new_num="$(basename "${new_url_clean%%[?#]*}")"
-        if [[ "${new_num}" =~ ^[0-9]+$ ]] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+      new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+      new_num="$(basename "${new_url_clean%%[?#]*}")"
+      if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+        surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
+        close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}"
+        ensure_label_exists "ai:closed"
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+          --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
+        if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
           jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
             '.issue_number_map[$lid] = $new_num |
              (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
@@ -15736,7 +15739,9 @@ REISSUE_EOF
         fi
         tg_notify "Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")" "WARNING"
       else
-        echo "::warning::Could not create replacement issue for stalled #${issue_num}."
+        echo "::warning::Could not confirm replacement issue for stalled #${issue_num}; keeping it and its PR open."
+        tg_notify_issue "${issue_num}" "Stall recovery: could not confirm replacement issue for #${issue_num}; source issue and PR remain open." "ERROR"
+        return 1
       fi
       ;;
 
