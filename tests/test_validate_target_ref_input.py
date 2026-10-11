@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import yaml
@@ -196,6 +197,7 @@ def test_validation_hooks_use_verified_helper():
 
 def _validate_support_ref(repository: str, workflow_ref: str) -> str:
 	"""Run the ref-selection lines of "Fetch workflow support files"."""
+	assert shutil.which("jq"), "jq is required to run the support-ref selection"
 	steps = _load(REUSABLE)["jobs"]["validate"]["steps"]
 	fetch = next(step for step in steps if step["name"] == "Fetch workflow support files")["run"]
 	selection = fetch[:fetch.index("helper_stage_root=")]
