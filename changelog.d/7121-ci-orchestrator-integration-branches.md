@@ -12,4 +12,4 @@ What this means for operators: expect more CI runs while an orchestrator project
 
 ### For contributors
 
-The "Prepare template-only PR live copies for parity tests" step now also runs for these PRs and pushes. Pushes pass their own `before` SHA because they have no PR base. Template changes merged by earlier sub-issue PRs are copied by the sync script's drift recovery.
+The "Prepare template-only PR live copies for parity tests" step now also runs for these PRs and pushes. Pushes pass their own `before` SHA because they have no PR base. When that SHA is all zeros (branch creation) or unreachable (force push), the step warns and uses the merge-base with `main` instead, because the sync script skips drift recovery without a reachable `--before`. Template changes merged by earlier sub-issue PRs are copied by the sync script's drift recovery.

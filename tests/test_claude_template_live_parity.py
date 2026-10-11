@@ -901,7 +901,11 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')" in prepare_if
 	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
 	assert prepare["env"]["PUSH_BEFORE_SHA"] == "${{ github.event.before }}"
-	assert 'sync --dry-run --before "${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}" --after HEAD' in prepare["run"]
+	assert 'before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"' in prepare["run"]
+	# A branch-creation or force push has no reachable before: fall back to
+	# the merge-base with main so drift recovery still runs.
+	assert 'git merge-base HEAD origin/main' in prepare["run"]
+	assert 'sync --dry-run --before "${before}" --after HEAD' in prepare["run"]
 	assert "--keep-committed-security-paths" in prepare["run"]
 
 
