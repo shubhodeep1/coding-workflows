@@ -26,7 +26,8 @@ Rules enforced here:
     offered again, on this item or anywhere in the same project;
   - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
     per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
-    round with the item still blocked, the only outcome is the terminal close;
+    round on the same stop id and fingerprint with the item still blocked,
+    the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
     issue, and its paths never include `.github/`, `.claude/` or
     `workflow-templates/` (case-insensitive) in any repository, or `scripts/`
