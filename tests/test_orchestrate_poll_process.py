@@ -414,6 +414,9 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	# The production block reads each issue's wave status with jq under
+	# `set -euo pipefail`; without jq the runner exits silently, so skip
+	# like the module's other jq-dependent tests (#6892).
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
@@ -6703,8 +6706,8 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
-	# Issue #6729: a low finding converted at the cap must not ride through as a
-	# waiver when a high keep_fixing finding terminalizes the same round.
+	# Issue #6729 / #6539: the low finding's keep_fixing is converted to fail at the
+	# cap, and the high keep_fixing row still terminalizes the round with no waiver recorded.
 	low_finding = _security_pass_second_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6723,7 +6726,7 @@ def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -
 	assert "ai:security-pass-failed" in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "reason=blocking_findings_after_cap" in combined_log
-	# The low/medium rewrite runs before the terminal check; its result is discarded.
+	# The low row is converted to fail before the blocking high row terminalizes the round.
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_WAIVED" not in combined_log
 	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
@@ -24408,6 +24411,9 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	PR whose body carries a close keyword, keep skipping non-open PRs,
 	and treat an API failure as unknown state — all with exactly one
 	``pulls/<n>`` request per candidate."""
+	# close_linked_pr reads each PR's state with jq; without it every PR
+	# reads as state=unknown and the assertions fail for an environment
+	# reason, so skip like the module's other jq-dependent tests (#6892).
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
