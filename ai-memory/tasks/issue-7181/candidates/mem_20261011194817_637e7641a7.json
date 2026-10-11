@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The guard from #6838 already exists but is off by default. What should this issue deliver?\nChoices:\n- A: Turn the gate on by default. Change the `false` fallback to `true` in `plan.yml` and `orchestrate_poll.yml`, and in the poller's own default for an unset flag. Update the default-off contract tests, README, the agents.d fragment and the changelog, and add a no-grant regression that fails under the old default and passes under the new one. A repo can still set the variable to `false` to opt out. (RECOMMENDED)\n- B: Keep the default `false` and add only the missing regression tests: one for the no-grant security finding and one for a fully granted plan in standalone stall recovery. Turning the gate on stays a per-repo variable choice.\n- C: Turn the gate on only in this repository, by setting the repository variable (an operator step, no code change). Consumer repos keep the default `false`. Close this issue as already done in code.\n- D: Close this issue as already satisfied by #6838 and make no change.",
+  "fingerprint": "2bd70c155789bbbf632ae6258900e2643fc30b283e08a95daac7c193d017e2d9",
+  "lineage": {
+    "issue_number": 7181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38169168291",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38169168291",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011194817_637e7641a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38169168291"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7181 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T19:48:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
