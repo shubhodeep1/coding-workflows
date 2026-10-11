@@ -4951,7 +4951,7 @@ def test_security_pass_failed_project_auto_resets_once_on_newer_engine() -> None
 	assert not any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
 	assert any(
 		notification["issue"] == "192"
-		and notification["level"] == "WARNING"
+		and notification["level"] == "DEBUG"
 		and "security pass reset automatically" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
@@ -6228,7 +6228,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert not any("Project security pass exhausted" in comment["body"] for comment in result["issues"]["192"]["comments"])
 	assert any(
 		notification["issue"] == "192"
-		and notification["level"] == "WARNING"
+		and notification["level"] == "DEBUG"
 		and "exhaustion judge accepted 1 remaining finding(s)" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
@@ -7349,7 +7349,7 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert "- `unknown.id-1` (not among the reported findings; matched by exact id only)" in ack_comments[0]
 	assert "The bounded security-pass fix loop was reset." in ack_comments[0]
 	assert any(
-		notification["issue"] == "192" and notification["level"] == "WARNING" and "/security-pass-waive" in notification["message"]
+		notification["issue"] == "192" and notification["level"] == "DEBUG" and "/security-pass-waive" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
 
@@ -10616,7 +10616,8 @@ def test_review_blocked_fix_scope_rejects_unrelated_file():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_empty_staged_set():
@@ -10642,7 +10643,8 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out_automation_assets():
@@ -10690,7 +10692,8 @@ def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_template_outside_pr():
@@ -10832,7 +10835,8 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
@@ -10845,7 +10849,8 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
@@ -10887,7 +10892,8 @@ def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_renamed_pr_source():
