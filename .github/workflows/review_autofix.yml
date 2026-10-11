@@ -1260,6 +1260,7 @@ jobs:
                     --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)" || frj_decision=""
                   frj_count="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
                   frj_marker_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+                  frj_newest_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "newest_reason" { print $2 }' | tail -n 1)"
                   [ -n "${frj_marker_reason}" ] || frj_marker_reason="none"
                   if ! [[ "${frj_count}" =~ ^[0-9]+$ ]]; then
                     frj_skip_reason="parse_error"
@@ -1267,6 +1268,11 @@ jobs:
                     frj_skip_reason="no_trusted_marker"
                   elif [ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
                     frj_skip_reason="reason_mismatch"
+                  elif [ "${frj_newest_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+                    # A newer trusted marker (e.g. provider_unavailable, which
+                    # the counter passes over) has another reason.
+                    frj_skip_reason="newest_reason_mismatch"
+                    frj_marker_reason="${frj_newest_reason:-none}"
                   else
                     frj_skip_reason="host_only_marker"
                     FORCE_RB_JUDGE_CONFLICT_SKIP="true"
