@@ -535,6 +535,39 @@ def test_implement_hook_never_runs_on_host_when_sandbox_missing(tmp_path: Path) 
 	assert not host_marker.exists()
 
 
+def test_implement_hook_staging_rejects_symlinks(tmp_path: Path) -> None:
+	stage_block = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	start = stage_block.index('_staged_support_hooks_src=".github/ai/workspace_hooks/implement"')
+	end = stage_block.index('echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=', start)
+	for name in ("regular_hook", "hook", "hook_directory", "parent_directory"):
+		case_path = tmp_path / name
+		case_path.mkdir()
+		repo_root, _, _, runner_temp = _prepare_case(case_path)
+		hooks_parent = repo_root / ".github/ai/workspace_hooks"
+		hooks_parent.parent.mkdir(parents=True)
+		if name == "parent_directory":
+			hooks_parent.symlink_to(case_path / "missing", target_is_directory=True)
+		else:
+			hooks_parent.mkdir()
+			if name == "hook_directory":
+				(hooks_parent / "implement").symlink_to(case_path / "missing", target_is_directory=True)
+			else:
+				(hooks_parent / "implement").mkdir()
+				if name == "regular_hook":
+					(hooks_parent / "implement/before_run.sh").write_text("exit 0\n", encoding="utf-8")
+				else:
+					(hooks_parent / "implement/before_run.sh").symlink_to(case_path / "missing")
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + stage_block[start:end]],
+			cwd=repo_root, env={**os.environ, "RUNTIME_DIR": str(runner_temp)}, capture_output=True, text=True, check=False)
+		if name == "regular_hook":
+			assert result.returncode == 0, result.stderr
+			assert (runner_temp / "staged_support_run/.github/ai/workspace_hooks/implement/before_run.sh").read_text() == "exit 0\n"
+			continue
+		assert result.returncode == 125, (name, result.stderr)
+		assert "::error::Implement workspace hook staging refused symlink" in result.stderr
+		assert not (runner_temp / "staged_support_run/.github").exists()
+
+
 def test_implement_hook_symlink_hook_file_refused(tmp_path: Path) -> None:
 	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
 	secret = tmp_path / "secret.sh"
@@ -639,6 +672,7 @@ def main() -> int:
 		test_implement_hook_runs_trusted_copy_not_workspace_copy,
 		test_implement_hook_rejects_workspace_mutation,
 		test_implement_hook_never_runs_on_host_when_sandbox_missing,
+		test_implement_hook_staging_rejects_symlinks,
 		test_implement_hook_symlink_hook_file_refused,
 		test_phase_dotdot_rejected,
 		test_host_python_ignores_workspace_modules,

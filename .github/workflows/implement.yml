@@ -1471,6 +1471,14 @@ jobs:
           _staged_support_hooks_src=".github/ai/workspace_hooks/implement"
           _staged_support_hooks_dest="${RUNTIME_DIR}/staged_support_run/.github/ai/workspace_hooks/implement"
           rm -rf -- "${RUNTIME_DIR}/staged_support_run/.github"
+          for _staged_support_hook_file in .github .github/ai .github/ai/workspace_hooks "${_staged_support_hooks_src}" \
+            "${_staged_support_hooks_src}/after_create.sh" "${_staged_support_hooks_src}/before_run.sh" \
+            "${_staged_support_hooks_src}/after_run.sh" "${_staged_support_hooks_src}/before_remove.sh"; do
+            if [ -L "${_staged_support_hook_file}" ]; then
+              echo "::error::Implement workspace hook staging refused symlink: ${_staged_support_hook_file}" >&2
+              exit 125
+            fi
+          done
           if [ -d "${_staged_support_hooks_src}" ] && [ ! -L "${_staged_support_hooks_src}" ]; then
             while IFS= read -r -d '' _staged_support_hook_file; do
               _staged_support_hook_file="${_staged_support_hook_file#./}"
