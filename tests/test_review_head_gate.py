@@ -149,8 +149,9 @@ sys.exit(1)
 '''
 
 
-def _marker(sync: int = 1, *, pr: int = 42, frm: str = APPROVED, author: str = "workflow-bot") -> dict:
-	return {"author_login": author, "body": f"**Branch updated from `main` before merging** (update {sync} of at most 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={frm} sync={sync} -->"}
+def _marker(sync: int = 1, *, pr: int = 42, frm: str = APPROVED, author: str = "workflow-bot", base: str | None = MAIN_TIP, merge: str | None = MERGE_HEAD) -> dict:
+	bound = f" base={base} merge={merge}" if base is not None and merge is not None else ""
+	return {"author_login": author, "body": f"**Branch updated from `main` before merging** (update {sync}; warning threshold 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={frm} sync={sync}{bound} -->"}
 
 
 def _commit(parents: list[str] | None = None, *, verified: bool = True, committer: str = "web-flow") -> str:
@@ -177,12 +178,13 @@ def _freshness(tmp_path: Path, comments: list[dict], *, commit: str | None = Non
 def test_github_merge_of_the_approved_head_with_main_skips_review(tmp_path: Path) -> None:
 	result, calls = _freshness(tmp_path, [_marker()])
 	assert result.returncode == 0, result.stdout + result.stderr
-	assert f"REVIEW_HEAD_GATE mode=freshness_sync pr=42 head={MERGE_HEAD} outcome=skip reason=freshness_sync from={APPROVED} base_parent={MAIN_TIP} sync=1" in result.stdout
+	assert f"REVIEW_HEAD_GATE mode=freshness_sync pr=42 head={MERGE_HEAD} outcome=skip reason=freshness_sync from={APPROVED} base_parent={MAIN_TIP} sync=1 merge={MERGE_HEAD}" in result.stdout
 	assert [call[1] for call in calls] == [f"repos/o/r/commits/{MERGE_HEAD}", f"repos/o/r/compare/{MAIN_TIP}...main"]
 
 
 def test_the_newest_marker_by_the_workflow_login_wins(tmp_path: Path) -> None:
-	comments = [_marker(1, frm="f" * 40), _marker(2, frm=APPROVED), _marker(3, frm="9" * 40, author="intruder"), _marker(4, frm="8" * 40, pr=43)]
+	comments = [_marker(1, frm="f" * 40), _marker(2, frm=APPROVED), _marker(3, frm="9" * 40, author="intruder"), _marker(4, frm="8" * 40, pr=43),
+		_marker(5, frm="7" * 40, merge="6" * 40)]
 	result, _calls = _freshness(tmp_path, comments)
 	assert result.returncode == 0, result.stdout
 	assert f"from={APPROVED}" in result.stdout and "sync=2" in result.stdout
@@ -239,3 +241,36 @@ def test_invalid_inputs_are_reviewed(tmp_path: Path) -> None:
 		result = subprocess.run(["bash", str(HELPER), "freshness-sync", *args], capture_output=True, text=True, check=False)
 		assert result.returncode == 1, args
 		assert "outcome=review reason=invalid_input" in result.stdout
+
+
+def test_a_legacy_marker_without_base_and_merge_never_skips(tmp_path: Path) -> None:
+	result, calls = _freshness(tmp_path, [_marker(base=None, merge=None)])
+	assert result.returncode == 1
+	assert "outcome=review reason=unbound_marker" in result.stdout
+	assert calls == []
+
+
+def test_a_bound_marker_for_another_commit_does_not_cover_this_head(tmp_path: Path) -> None:
+	result, calls = _freshness(tmp_path, [_marker(merge="6" * 40)])
+	assert result.returncode == 1
+	assert "outcome=review reason=marker_not_for_head" in result.stdout
+	assert calls == []
+
+
+def test_a_signed_github_merge_with_a_different_base_parent_is_reviewed(tmp_path: Path) -> None:
+	# Attack shape (finding freshness-sync-signed-merge-review-bypass): the
+	# branch is reset to the approved head and a web conflict-resolver merge
+	# [approved, other base tip] is made. Even if its SHA were recorded, the
+	# base parent differs from the one the marker bound.
+	other_tip = "1" * 40
+	result, calls = _freshness(tmp_path, [_marker()], commit=_commit([APPROVED, other_tip]))
+	assert result.returncode == 1
+	assert "outcome=review reason=base_parent_mismatch" in result.stdout
+	assert not any("/compare/" in call[1] for call in calls)
+
+
+def test_a_conflict_resolver_merge_on_a_reset_branch_is_not_the_recorded_commit(tmp_path: Path) -> None:
+	result, calls = _freshness(tmp_path, [_marker(merge="2" * 40)], commit=_commit([APPROVED, "3" * 40]))
+	assert result.returncode == 1
+	assert "outcome=review reason=marker_not_for_head" in result.stdout
+	assert calls == []
