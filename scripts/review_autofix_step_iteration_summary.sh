@@ -414,6 +414,8 @@ def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
         return "soft_deadline"
     if status == "skipped_open":
         return "cached_open"
+    if status == "skipped_pool":
+        return "pool_unavailable"
     if status == "skipped_unmapped":
         if stall_guard_logged:
             return "stall_guard"
@@ -715,6 +717,10 @@ def determine_finalize_reason() -> str:
     # editor never ran and its empty output is only the downstream symptom.
     if bool_env("AUTOFIX_REVIEWERS_FAILED"):
         return "reviewers_failed"
+    # Additive outcome (CLAUDE.md §6): the review sandbox could not be
+    # prepared, so the editor never ran either.
+    if bool_env("AUTOFIX_SANDBOX_PREPARE_FAILED"):
+        return "sandbox_prepare_failed"
     if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
         return "editor_empty_noop"
     if bool_env("EDITOR_CHANGES_LOST"):

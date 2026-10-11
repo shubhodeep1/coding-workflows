@@ -160,9 +160,9 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "sys.executable" in import_audit_text
 		assert "importlib.import_module" in import_audit_text
 
-		# The audited modules (yaml, jinja2) are installed only in the app
-		# image, so the audit must run inside the app container, not on the
-		# host runner (#6031 validation run 37315007990).
+		# The audit checks import isolation inside the app container, not on
+		# the host runner (#6031 validation run 37315007990). Its default
+		# modules are standard-library only (binance-blessings#249).
 		import_audit_shell = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
 		assert "_default_compose_file=out/docker-compose.test.yml" in import_audit_shell
 		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in import_audit_shell

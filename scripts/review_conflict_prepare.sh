@@ -26,6 +26,8 @@
 #   ${RUNTIME_DIR}/pre_resolver_state.tsv, conflicted_paths.txt,
 #                  resolver_unmerged_allowlist.txt, integration_fingerprints.json.
 #   ${CONFLICT_RESOLVER_PROMPT_FILE} rendered prompt text.
+#   ${RUNTIME_DIR}/host_only_conflict_scope.tsv, host_only_take_base_comment.md
+#                  (host-only take-base, issue #6748; read by review_conflict_resolve.sh).
 #
 # Failure modes:
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
@@ -357,6 +359,83 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
   unset _ghm_rc
 fi
 
+# Deterministic resolution for folded changelog / agents fragments.
+# The release fold (scripts/assemble_changelog.py, assemble_agents.py)
+# deletes every top-level changelog.d/*.md and agents.d/*.md on the base
+# branch.  A PR that changed one of those fragments after it was folded
+# then conflicts modify/delete (index stages 1+2: base copy, PR copy, no
+# base-branch copy).  The model resolver never resolved it: it edits file
+# content, the commit stages only the paths it touched, and the untouched
+# fragment stayed unmerged (PR #6844 / heal issue #7130: every attempt
+# ended "left unmerged Git index entries").  The PR's version is new
+# information the next fold must publish, so keep it: stage the HEAD copy
+# as an ordinary added file.  Other shapes (both sides edited, the PR
+# deleted it, nested paths) still go to the resolver.
+# Kill switch: CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED (default true).
+# On orchestrator/project-* branches a fragment-only conflict defers the
+# merge commit until the integration fingerprint check has run, exactly
+# like the manifest-only case.
+_ff_kept=0
+_ff_defer_commit=false
+if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED:-true}" = "true" ]; then
+  while IFS= read -r _ff_path; do
+    case "${_ff_path}" in
+      changelog.d/*.md|agents.d/*.md) ;;
+      *) continue ;;
+    esac
+    case "${_ff_path#*/}" in
+      */*) continue ;;
+      # The assemblers never fold README.md (FRAGMENT_EXCLUDED_NAMES), so a
+      # base-side deletion of it is deliberate: leave it to the resolver.
+      README.md) continue ;;
+    esac
+    _ff_stages="$(git ls-files -u -- "${_ff_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+    if [ "${_ff_stages}" != "1 2 " ] || [ ! -f "${_ff_path}" ] || [ -L "${_ff_path}" ]; then
+      continue
+    fi
+    if ! git show ":2:${_ff_path}" | cmp -s - "${_ff_path}"; then
+      echo "Folded fragment keep: ${_ff_path} differs from the PR's index copy; leaving it to the resolver."
+      continue
+    fi
+    git add -- "${_ff_path}"
+    _ff_kept=$((_ff_kept + 1))
+    echo "Folded fragment keep: kept the PR's ${_ff_path}; the base branch had folded and deleted it (index stages: 1 2)."
+  done < "${RESOLVER_ALLOWLIST_FILE}"
+fi
+if [ "${_ff_kept}" -gt 0 ]; then
+  git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+  _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+  echo "Folded fragment keep: ${_ff_kept} fragment(s) kept, ${_resolver_allowlist_count} unmerged path(s) remain."
+  if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+    case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+      orchestrator/project-*)
+        echo "Folded fragment keep: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+        _ff_defer_commit=true
+        ;;
+      *)
+        # Same end state as the manifest-only commit below: a real
+        # two-parent merge commit, CONFLICT_RESOLVED=true, push deferred.
+        git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+        if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+          git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+          git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+        fi
+        git commit -m "[ai-merge-resolve] resolve merge conflicts"
+        for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          if [ -d "${RESOLVE_STASH}/${d}" ]; then
+            cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+          fi
+        done
+        rm -rf "${RESOLVE_STASH}"
+        rm -f "${_merge_stderr_file}"
+        echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+        echo "Folded fragment keep: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+        exit 0
+        ;;
+    esac
+  fi
+fi
+
 # Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
@@ -588,7 +667,7 @@ fi
 _det_commit_label="${_det_commit_label:-Manifest union-merge}"
 _det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
 if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
-   && [ "${_mu_resolved}" != "true" ]; then
+   && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
@@ -601,6 +680,15 @@ if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -e
 fi
 
 if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ]; then
+  if [ "${_ff_defer_commit}" = "true" ]; then
+    _mu_defer_commit=true
+    _det_commit_label="Folded fragment keep"
+    _det_commit_scope="folded-fragment-only"
+    _det_commit_path="folded fragments"
+  fi
+fi
+
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
   if [ "${_merge_exit}" -eq 0 ]; then
     echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
     if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
@@ -667,6 +755,252 @@ for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main;
   fi
 done
 rm -rf "${RESOLVE_STASH}"
+
+# >>> host-only take-base (issue #6748)
+# Host-only conflicted paths (host-executed safety code such as
+# .claude/hooks/pr_merge_status_guard.py, and file types the sandbox does not
+# carry) can never reach the sandboxed resolver.  Before issue #6748 they
+# failed the resolver closed with sandbox_path_host_only and stalled the
+# merge train behind a manual merge.  Resolve them here instead:
+#   - A host-only path the PR's linked issue(s) do not list in their
+#     `files_touched:` allowlist (or with no allowlist at all) takes the base
+#     branch's version: the PR did not set out to change host-executed code,
+#     so it must not carry a divergent copy into the base.  The dropped
+#     PR-side diff is written to host_only_take_base_comment.md and posted on
+#     the PR once the merge is committed.
+#   - When any host-only path IS in scope, nothing is changed here; the
+#     classification goes to host_only_conflict_scope.tsv and
+#     review_conflict_resolve.sh closes the PR and re-issues its issue.
+#   - Unknown scope (linked issues unavailable, guard error), unsafe paths,
+#     unexpected index stage shapes, integration-sync branches, and the kill
+#     switch HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED=false all leave the
+#     conflict set untouched, so the pre-#6748 fail-closed path applies.
+# Log keys: CONFLICT_RESOLVER_HOST_ONLY_SCOPE, CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE.
+HOST_ONLY_CONFLICT_SCOPE_FILE="${RUNTIME_DIR}/host_only_conflict_scope.tsv"
+HOST_ONLY_TAKE_BASE_COMMENT_FILE="${RUNTIME_DIR}/host_only_take_base_comment.md"
+rm -f -- "${HOST_ONLY_CONFLICT_SCOPE_FILE}" "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}" "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}.posted"
+_ho_pr="${PR_NUMBER:-none}"
+_ho_branch_class="${TARGET_BRANCH:-${HEAD_REF:-}}"
+_ho_enabled=true
+if [ "${HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED:-true}" != "true" ]; then
+  _ho_enabled=false
+fi
+case "${_ho_branch_class}" in
+  orchestrator/project-*) _ho_enabled=false ;;
+esac
+if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
+  _ho_enabled=false
+fi
+_ho_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+_ho_scope_py="${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"
+if [ "${_ho_enabled}" = "true" ] && { [ ! -f "${_ho_workspace_py}" ] || [ ! -f "${_ho_scope_py}" ]; }; then
+  echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=skip reason=support_missing"
+  _ho_enabled=false
+fi
+if [ "${_ho_enabled}" = "true" ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  _ho_dir="$(mktemp -d)"
+  git diff --name-only --diff-filter=U | sed '/^$/d' | sort -u > "${_ho_dir}/unmerged.txt"
+  # Paired live/template copies (issue #6595) stay with the resolver's
+  # pairing path: split them out exactly as review_conflict_resolve.sh does,
+  # so a live hook is never taken from base while its template goes to the
+  # model (the copies would diverge).
+  _ho_check_rc=0
+  _ho_pairing_ok=false
+  if git ls-files -u -z > "${_ho_dir}/unmerged_index.z" 2>/dev/null && \
+     PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_workspace_py}" paired-live-copies "$(pwd)" "${_ho_dir}/unmerged.txt" \
+       "${_ho_dir}/unmerged_index.z" "${_ho_dir}/pairs.txt" "${_ho_dir}/model_paths.txt" >/dev/null 2>&1; then
+    _ho_pairing_ok=true
+    PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_workspace_py}" check-paths "$(pwd)" "${_ho_dir}/model_paths.txt" "${_ho_dir}/report.txt" >/dev/null 2>&1 || _ho_check_rc=$?
+  else
+    echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=skip reason=pairing_check_failed"
+  fi
+  : > "${_ho_dir}/host_only.txt"
+  _ho_report_ok=false
+  if [ "${_ho_pairing_ok}" = "true" ] && [ "${_ho_check_rc}" -ne 0 ] && [ -s "${_ho_dir}/report.txt" ] && \
+     ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${_ho_dir}/report.txt"; then
+    _ho_report_ok=true
+    cut -f2 "${_ho_dir}/report.txt" | sort -u > "${_ho_dir}/host_only.txt"
+    # An unpaired live copy whose template also conflicts (different index
+    # stages) cannot be resolved without diverging from its template: leave
+    # the whole conflict set on the fail-closed path.
+    _ho_unpaired_live="$(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import review_untrusted_workspace as workspace
+unmerged = set(open(sys.argv[2], encoding="utf-8").read().split("\n"))
+for path in open(sys.argv[3], encoding="utf-8").read().split("\n"):
+    if path in workspace.PAIRED_LIVE_COPIES and workspace.PAIRED_LIVE_COPIES[path] in unmerged:
+        print(path)
+' "$(dirname -- "${_ho_workspace_py}")" "${_ho_dir}/unmerged.txt" "${_ho_dir}/host_only.txt" 2>/dev/null)" || _ho_unpaired_live="unknown"
+    if [ -n "${_ho_unpaired_live}" ]; then
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=skip reason=unpaired_live_copy"
+      _ho_report_ok=false
+      : > "${_ho_dir}/host_only.txt"
+    fi
+  fi
+  if [ "${_ho_report_ok}" = "true" ] && [ -s "${_ho_dir}/host_only.txt" ]; then
+    # Scope lookup: linked issues come from review_collect_pr_metadata.sh's
+    # existing GraphQL read (no extra API call here).
+    _ho_linked_file="${LINKED_ISSUES_RAW_FILE:-${RUNTIME_DIR}/linked_issues_raw.json}"
+    _ho_scope_ok=true
+    : > "${_ho_dir}/in_scope.txt"
+    mkdir -p "${_ho_dir}/bodies"
+    # Split the linked issues into one body file each (bodies/<index>.txt).
+    if [ "$(cat "${_ho_linked_file}.status" 2>/dev/null || true)" != "ok" ] || \
+       ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+issues = json.load(open(sys.argv[1], encoding="utf-8"))
+# No linked issue means the PR scope is unknown, not "no allowlist".
+if not isinstance(issues, list) or not issues:
+    raise SystemExit(1)
+for index, issue in enumerate(issues):
+    body = issue.get("body") if isinstance(issue, dict) else None
+    with open(f"{sys.argv[2]}/{index:04d}.txt", "w", encoding="utf-8") as handle:
+        handle.write(body if isinstance(body, str) else "")
+' "${_ho_linked_file}" "${_ho_dir}/bodies" 2>/dev/null; then
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=unknown reason=linked_issues_unavailable_or_empty"
+      _ho_scope_ok=false
+    else
+      for _ho_body_file in "${_ho_dir}"/bodies/*.txt; do
+        [ -f "${_ho_body_file}" ] || continue
+        _ho_guard_rc=0
+        PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_scope_py}" --issue-body-file "${_ho_body_file}" \
+          --staged-file "${_ho_dir}/host_only.txt" --strict-allowlist > "${_ho_dir}/out_of_scope.txt" 2>/dev/null || _ho_guard_rc=$?
+        case "${_ho_guard_rc}" in
+          0) cat "${_ho_dir}/host_only.txt" >> "${_ho_dir}/in_scope.txt" ;;
+          10) ;;
+          20)
+            sed '/^$/d' "${_ho_dir}/out_of_scope.txt" | sort -u > "${_ho_dir}/out_sorted.txt"
+            comm -23 "${_ho_dir}/host_only.txt" "${_ho_dir}/out_sorted.txt" >> "${_ho_dir}/in_scope.txt"
+            ;;
+          *)
+            echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=unknown reason=scope_guard_failed rc=${_ho_guard_rc}"
+            _ho_scope_ok=false
+            break
+            ;;
+        esac
+      done
+    fi
+    if [ "${_ho_scope_ok}" = "true" ]; then
+      sort -u -o "${_ho_dir}/in_scope.txt" "${_ho_dir}/in_scope.txt"
+      while IFS= read -r _ho_path; do
+        if grep -Fxq -- "${_ho_path}" "${_ho_dir}/in_scope.txt"; then
+          printf 'in_scope\t%s\n' "${_ho_path}"
+        else
+          printf 'take_base\t%s\n' "${_ho_path}"
+        fi
+      done < "${_ho_dir}/host_only.txt" > "${HOST_ONLY_CONFLICT_SCOPE_FILE}"
+      _ho_in_scope_count="$(grep -c $'^in_scope\t' "${HOST_ONLY_CONFLICT_SCOPE_FILE}" || true)"
+      _ho_total_count="$(wc -l < "${HOST_ONLY_CONFLICT_SCOPE_FILE}" | tr -d '[:space:]')"
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=classified host_only=${_ho_total_count} in_scope=${_ho_in_scope_count:-0}"
+      if [ "${_ho_in_scope_count:-0}" -eq 0 ]; then
+        # Every stage shape is checked before the first write, so an
+        # unexpected shape leaves the whole conflict set untouched.
+        _ho_shapes_ok=true
+        while IFS= read -r _ho_path; do
+          _ho_stages="$(git ls-files -u -- "${_ho_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+          case " ${_ho_stages}" in
+            ' 1 2 3 '|' 2 3 '|' 1 2 '|' 1 3 ') ;;
+            *)
+              echo "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=${_ho_pr} path=${_ho_path} outcome=skip reason=stage_shape stages=${_ho_stages% }"
+              _ho_shapes_ok=false
+              ;;
+          esac
+        done < "${_ho_dir}/host_only.txt"
+        if [ "${_ho_shapes_ok}" != "true" ]; then
+          rm -f -- "${HOST_ONLY_CONFLICT_SCOPE_FILE}"
+        else
+          _ho_merge_base="$(git merge-base HEAD MERGE_HEAD 2>/dev/null || true)"
+          _ho_head_sha="$(git rev-parse HEAD)"
+          _ho_comment_budget=61440
+          {
+            printf '%s\n' "<!-- ai:host-only-take-base:v1 pr=${_ho_pr} head=${_ho_head_sha} -->"
+            printf '%s\n\n' "### Host-only merge conflicts resolved with \`${BASE_BRANCH}\`'s version"
+            printf '%s\n\n' "The merge with \`origin/${BASE_BRANCH}\` conflicted on path(s) the sandboxed conflict resolver may never edit, and this PR's linked issue does not list them in its \`files_touched:\` allowlist. Each was resolved to the \`${BASE_BRANCH}\` branch's version (log key \`CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE\`). This PR's changes to them, shown below, were dropped:"
+          } > "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"
+          while IFS= read -r _ho_path; do
+            _ho_stages="$(git ls-files -u -- "${_ho_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+            _ho_stages="${_ho_stages% }"
+            : > "${_ho_dir}/dropped.diff"
+            if [ -n "${_ho_merge_base}" ]; then
+              git diff "${_ho_merge_base}" HEAD -- "${_ho_path}" > "${_ho_dir}/dropped_full.diff" 2>/dev/null || true
+              head -n 200 "${_ho_dir}/dropped_full.diff" > "${_ho_dir}/dropped.diff"
+              if [ "$(wc -l < "${_ho_dir}/dropped_full.diff" | tr -d '[:space:]')" -gt 200 ]; then
+                printf '%s\n' "... (truncated at 200 lines)" >> "${_ho_dir}/dropped.diff"
+              fi
+            fi
+            case "${_ho_stages}" in
+              '1 2')
+                # The base branch deleted the path: honour the deletion.
+                if ! git rm -q -- "${_ho_path}"; then
+                  echo "::error::Host-only take-base failed path=${_ho_path}"
+                  exit 1
+                fi
+                ;;
+              *)
+                if ! git checkout MERGE_HEAD -- "${_ho_path}"; then
+                  echo "::error::Host-only take-base failed path=${_ho_path}"
+                  exit 1
+                fi
+                ;;
+            esac
+            echo "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=${_ho_pr} path=${_ho_path} base=${BASE_BRANCH} stages=${_ho_stages}"
+            _ho_fence_len="$(grep -o '`\+' "${_ho_dir}/dropped.diff" 2>/dev/null | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' || true)"
+            [ "${_ho_fence_len:-0}" -ge 3 ] || _ho_fence_len=2
+            _ho_fence="$(printf '%*s' "$((_ho_fence_len + 1))" '' | tr ' ' '`')"
+            _ho_section_file="${_ho_dir}/section.md"
+            {
+              printf '\n#### `%s` (index stages %s)\n\n' "${_ho_path}" "${_ho_stages}"
+              if [ -s "${_ho_dir}/dropped.diff" ]; then
+                printf '%sdiff\n' "${_ho_fence}"
+                cat "${_ho_dir}/dropped.diff"
+                printf '%s\n' "${_ho_fence}"
+              else
+                printf '%s\n' "(no PR-side diff against the merge base)"
+              fi
+            } > "${_ho_section_file}"
+            _ho_section_bytes="$(wc -c < "${_ho_section_file}" | tr -d '[:space:]')"
+            if [ "${_ho_section_bytes}" -le "${_ho_comment_budget}" ]; then
+              cat "${_ho_section_file}" >> "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"
+              _ho_comment_budget=$((_ho_comment_budget - _ho_section_bytes))
+            else
+              printf '\n#### `%s` (index stages %s)\n\n%s\n' "${_ho_path}" "${_ho_stages}" "(dropped diff omitted: comment size budget reached)" >> "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"
+            fi
+          done < "${_ho_dir}/host_only.txt"
+          git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+          _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+          echo "Host-only take-base: ${_resolver_allowlist_count} unmerged path(s) remain for the sandboxed resolver."
+          if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+            # Nothing is left for the model: commit the two-parent merge now,
+            # with the same hygiene and end state as the manifest-only commit
+            # above (CONFLICT_RESOLVED=true, MERGE_CONFLICT left as is).
+            git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+              git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+              git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+            fi
+            git commit -m "[ai-merge-resolve] resolve merge conflicts"
+            if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+              if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${HOST_ONLY_TAKE_BASE_COMMENT_FILE}" >/dev/null 2>&1; then
+                mv -f -- "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}" "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}.posted" 2>/dev/null || true
+              else
+                echo "::warning::Host-only take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
+              fi
+            fi
+            rm -rf "${_ho_dir}"
+            echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+            echo "Host-only take-base: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+            exit 0
+          fi
+        fi
+      else
+        echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=in_scope reason=declared_in_files_touched action=reissue_in_resolver"
+      fi
+    fi
+  fi
+  rm -rf "${_ho_dir}"
+fi
+# <<< host-only take-base (issue #6748)
 
 # Enumerate the unmerged paths git is currently tracking so the
 # resolver prompt can name every conflicted file explicitly.  Without
@@ -902,16 +1236,15 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
   rm -f "${_fp_violated_tmp}"
 fi
 
-# Deferred manifest-only (or guard-hook-only) commit on integration-sync
-# branches.
-# The manifest union block (or the guard-hook template merge) above
-# resolved the only unmerged path but left the merge in progress so the fingerprint
-# check could run against the merged tree.  Commit only when that
+# Deferred deterministic commit on integration-sync branches.
+# The manifest, guard-hook, or folded-fragment resolution above cleared
+# the unmerged paths but left the merge in progress so the fingerprint
+# check could run against the merged tree. Commit only when that
 # check ran and found no violation; otherwise fail closed exactly as
 # integration-sync branches did before (reason=integration_sync), so
 # an auto-merged file that reverts merged sub-issue intent can never
 # be committed without the verifier seeing it.
-if [ "${_mu_defer_commit}" = "true" ]; then
+if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; then
   _mu_remaining_unmerged="$(git diff --name-only --diff-filter=U | sed '/^$/d' | wc -l | tr -d '[:space:]')"
   if [ "${_fp_check_ok}" != "true" ]; then
     echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
