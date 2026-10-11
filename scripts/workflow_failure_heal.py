@@ -210,8 +210,12 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 # identical-failure cap posts its comment, so a heal issue adds nothing and
 # only files more heal issues (#6738). skip_reason() drops the per-run report,
 # the cap report repeating this reason, and the ai:needs-human report on an
-# item whose newest trusted autofix marker names it. The other non-retryable
-# resolver reasons can be real pipeline defects and are still healed.
+# item whose newest trusted autofix marker names it. Since #6756 the
+# review/autofix reporter and the intake defer the first two
+# (defer_host_only_autofix) so the intake can post a provenance-verified PR
+# diagnosis (non_retryable_route); the intake still ends every undiagnosed
+# host-only report in this skip. With that routing off, the other
+# non-retryable resolver reasons are still healed.
 HOST_ONLY_CONFLICT_FAILURE_REASON = "conflict_resolver_sandbox_path_host_only"
 HOST_ONLY_CONFLICT_SKIP_REASON = "host_only_conflict_manual_merge"
 IDENTICAL_FAILURE_CAP_REASON = "identical_failure_cap"
@@ -1371,12 +1375,18 @@ def skip_reason(
 	heal_scope_unverified: bool = False,
 	non_retryable_diagnosed: bool = False,
 	host_only_conflict: bool = False,
+	defer_host_only_autofix: bool = False,
 ) -> str:
 	"""Return a stable skip reason when a validated payload must not be healed.
 
 	``host_only_conflict`` is set by the label reporter only after the newest
 	trusted autofix marker on the labeled item named the host-only resolver
 	stop (``latest_trusted_autofix_marker_is_host_only``).
+
+	``defer_host_only_autofix`` leaves an ``autofix_failure`` host-only report
+	to the intake's provenance-verified non-retryable routing (#6756), which
+	posts the PR diagnosis and falls back to HOST_ONLY_CONFLICT_SKIP_REASON
+	itself, so no heal issue is filed either way. Label reports are unaffected.
 	"""
 	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
 		return "heal_scope_unverified"
@@ -1384,7 +1394,9 @@ def skip_reason(
 	# non-retryable review/autofix failure; reporting that label would loop.
 	if non_retryable_diagnosed and payload.get("label") == "ai:needs-human":
 		return "non_retryable_diagnosed"
-	if is_host_only_conflict_report(payload, host_only_conflict=host_only_conflict):
+	if is_host_only_conflict_report(payload, host_only_conflict=host_only_conflict) and not (
+		defer_host_only_autofix and payload.get("source_kind") == "autofix_failure"
+	):
 		return HOST_ONLY_CONFLICT_SKIP_REASON
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
@@ -2918,6 +2930,17 @@ def non_retryable_route(payload: dict[str, Any], *, comments: Iterable[dict[str,
 	return result
 
 
+# Reason-specific remediation text: only the host-only stop is a host-executed
+# path; an unsupported path is a symlink or a name the sandbox cannot carry,
+# and missing support is a workflow-support defect, not a PR defect.
+_NON_RETRYABLE_EXPLANATIONS = {
+	"conflict_resolver_sandbox_path_host_only": "Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+	"conflict_resolver_sandbox_path_unsupported": "Another review/autofix run cannot resolve this: the conflicted path(s) are symlinks or have names the resolver sandbox cannot carry, so it refuses them. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+	"conflict_resolver_sandbox_support_missing": "Another review/autofix run cannot resolve this: the verified workflow support commit is missing the conflict resolver's sandbox support files, so no resolver run can start until workflow support is fixed. Ask a maintainer to fix workflow support, or merge the conflict by hand and push, then remove `ai:needs-human`.",
+}
+_NON_RETRYABLE_EXPLANATION_DEFAULT = "Another review/autofix run cannot resolve this failure. Resolve it by hand, push, then remove `ai:needs-human`."
+
+
 def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, head_sha: str, intake_run_url: str = "") -> str:
 	"""Render the PR diagnosis comment for a routed non-retryable failure, ending with its marker."""
 	reason = safe_token(decision.get("reason"))
@@ -2933,16 +2956,9 @@ def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, he
 		lines.append("Conflicted path(s) that need a manual merge:")
 		lines.append("")
 		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
-	else:
+	elif reason != "conflict_resolver_sandbox_support_missing":
 		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
-	lines.extend(
-		[
-			"",
-			"Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
-			"",
-			"No heal issue was opened.",
-		]
-	)
+	lines.extend(["", _NON_RETRYABLE_EXPLANATIONS.get(reason, _NON_RETRYABLE_EXPLANATION_DEFAULT), "", "No heal issue was opened."])
 	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
 	if run_match:
 		lines.extend(["", f"Heal intake run: {run_match.group(0)}"])
@@ -3841,6 +3857,7 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 			heal_scope_unverified=args.heal_scope_unverified,
 			non_retryable_diagnosed=args.non_retryable_diagnosed,
 			host_only_conflict=args.host_only_conflict,
+			defer_host_only_autofix=args.defer_host_only_autofix,
 		)
 		+ "\n"
 	)
@@ -4427,6 +4444,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--heal-scope-unverified", action="store_true")
 	p.add_argument("--non-retryable-diagnosed", action="store_true")
 	p.add_argument("--host-only-conflict", action="store_true", help="the newest trusted autofix marker on the labeled item names the host-only resolver stop")
+	p.add_argument("--defer-host-only-autofix", action="store_true", help="leave autofix_failure host-only reports to the intake's non-retryable routing (#6756)")
 	p.set_defaults(func=_cmd_skip_reason)
 
 	p = sub.add_parser("host-only-conflict-marker", help="Print true when the newest trusted autofix marker names the host-only resolver stop")

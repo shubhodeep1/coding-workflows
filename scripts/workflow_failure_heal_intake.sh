@@ -303,6 +303,16 @@ esac
 rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
 
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
+# A host-only autofix_failure report (#6745) is not skipped here while the
+# non-retryable routing below is on: it must pass binding and provenance first,
+# then gets the PR diagnosis (#6756). Every path that does not diagnose it
+# still ends in this skip reason after provenance, so no heal issue is filed.
+NON_RETRYABLE_ROUTING_ENABLED="${WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED:-true}"
+HOST_ONLY_DEFERRED=false
+if [ "${SKIP_REASON}" = "host_only_conflict_manual_merge" ] && [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLED,,}" != "false" ]; then
+	HOST_ONLY_DEFERRED=true
+	SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" --defer-host-only-autofix 2>/dev/null || echo "host_only_conflict_manual_merge")"
+fi
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
 	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
@@ -496,23 +506,44 @@ fi
 # diagnosis on the PR (marker ai:workflow-heal-non-retryable:v1, keyed on
 # pr / head / reason), label it ai:needs-human, send a WARNING, and stop.
 # §14 API audit: reuses the comment snapshot and login the provenance gate
-# already read; no new GET. A duplicate report makes no API call at all.
-# Fail open: a helper error falls through to the existing heal path.
-NON_RETRYABLE_ROUTING_ENABLED="${WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED:-true}"
+# already read; no new GET. A duplicate report makes no API call unless the
+# PR read by claim binding lacks ai:needs-human (one label add).
+# Fail open: a helper error falls through to the existing heal path (or, for
+# a deferred host-only report, to the #6745 skip right after this block).
 if [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLED,,}" != "false" ] \
 	&& [ -n "${PROVENANCE_COMMENTS:-}" ] && [ -n "${PROVENANCE_LOGIN:-}" ]; then
 	NON_RETRYABLE_FILE="${RUNTIME_DIR}/non_retryable_route.json"
+	NON_RETRYABLE_ERR_FILE="${RUNTIME_DIR}/non_retryable_route.err"
 	if python3 "${HEAL_PY}" non-retryable-route --payload-json "${PAYLOAD_FILE}" --comments-json "${PROVENANCE_COMMENTS}" \
-		--trusted-login "${PROVENANCE_LOGIN}" --intake-run-url "${RUN_URL}" > "${NON_RETRYABLE_FILE}" 2>/dev/null \
+		--trusted-login "${PROVENANCE_LOGIN}" --intake-run-url "${RUN_URL}" > "${NON_RETRYABLE_FILE}" 2> "${NON_RETRYABLE_ERR_FILE}" \
 		&& jq -e 'type == "object" and (.route | type == "boolean") and (.already_diagnosed | type == "boolean") and (.comment | type == "string")' "${NON_RETRYABLE_FILE}" >/dev/null 2>&1; then
 		if [ "$(jq -r '.route' "${NON_RETRYABLE_FILE}")" = "true" ]; then
 			NON_RETRYABLE_REASON="$(jq -r '.reason' "${NON_RETRYABLE_FILE}")"
 			NON_RETRYABLE_SUFFIX="$(jq -r '.suffix' "${NON_RETRYABLE_FILE}")"
 			NON_RETRYABLE_PATH_COUNT="$(jq -r '.paths | length' "${NON_RETRYABLE_FILE}")"
 			NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
-			[ -n "${NON_RETRYABLE_PATHS}" ] || NON_RETRYABLE_PATHS="the conflicted path(s)"
+			if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
+				NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
+			elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
+				NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
+			else
+				NON_RETRYABLE_ACTION="the conflicted path(s) need a manual merge"
+			fi
 			if [ "$(jq -r '.already_diagnosed' "${NON_RETRYABLE_FILE}")" = "true" ]; then
-				log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=duplicate source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA}"
+				# The diagnosis is already posted. Re-add ai:needs-human only when
+				# the PR read by claim binding shows it missing (a failed label
+				# write earlier); otherwise this costs no API call.
+				NON_RETRYABLE_DUP_LABEL="present"
+				if [ -f "${BIND_PULL_FILE:-}" ] && jq -e '.labels | type == "array"' "${BIND_PULL_FILE}" >/dev/null 2>&1 \
+					&& ! jq -e '[.labels[]? | if type == "object" then .name else . end] | index("ai:needs-human") != null' "${BIND_PULL_FILE}" >/dev/null 2>&1; then
+					ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
+					if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+						NON_RETRYABLE_DUP_LABEL="reapplied"
+					else
+						NON_RETRYABLE_DUP_LABEL="failed"
+					fi
+				fi
+				log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=duplicate source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} label=${NON_RETRYABLE_DUP_LABEL}"
 				exit 0
 			fi
 			NON_RETRYABLE_COMMENT_FILE="${RUNTIME_DIR}/non_retryable_comment.md"
@@ -525,16 +556,27 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLE
 				exit 0
 			fi
 			ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
+			NON_RETRYABLE_LABEL_STATUS="ai:needs-human applied"
+			NON_RETRYABLE_LABEL_TOKEN="applied"
 			if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
 				log "warn non_retryable_label_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER}"
+				NON_RETRYABLE_LABEL_STATUS="adding ai:needs-human FAILED (the next report for this head retries it)"
+				NON_RETRYABLE_LABEL_TOKEN="failed"
 			fi
-			tg_send_msg "Workflow failure heal: non-retryable review/autofix failure (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}: ${NON_RETRYABLE_PATHS} need a manual merge. Diagnosis posted and ai:needs-human applied; no heal issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
-			log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=diagnosed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} paths=${NON_RETRYABLE_PATH_COUNT}"
+			tg_send_msg "Workflow failure heal: non-retryable review/autofix failure (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}: ${NON_RETRYABLE_ACTION}. Diagnosis posted, ${NON_RETRYABLE_LABEL_STATUS}; no heal issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=diagnosed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} paths=${NON_RETRYABLE_PATH_COUNT} label=${NON_RETRYABLE_LABEL_TOKEN}"
 			exit 0
 		fi
 	else
-		log "warn non_retryable_route_unavailable source=${SOURCE_LABEL}"
+		log "warn non_retryable_route_unavailable source=${SOURCE_LABEL} detail=$(head -c 200 "${NON_RETRYABLE_ERR_FILE}" 2>/dev/null | tr -c 'A-Za-z0-9_.:=-' ' ' | tr -s ' ' || true)"
 	fi
+fi
+if [ "${HOST_ONLY_DEFERRED}" = "true" ]; then
+	# Not diagnosed (no trusted comment snapshot or login, a helper error, or a
+	# cap report whose trusted markers do not name the host-only reason): keep
+	# #6745's outcome, a manual merge and no heal issue.
+	log "skip reason=host_only_conflict_manual_merge source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} stage=after_provenance"
+	exit 0
 fi
 
 # --- Collect failed jobs + logs --------------------------------------------

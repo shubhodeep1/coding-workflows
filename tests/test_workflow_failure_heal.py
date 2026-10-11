@@ -1569,6 +1569,8 @@ if args[:2] == ["issue", "create"]:
 	out("https://github.com/%s/issues/%d\n" % (record.get("repo"), 900 + len(state["issues_created"])))
 if args[:2] == ["issue", "edit"]:
 	state.setdefault("issue_edits", []).append(args[2:])
+	if state.get("issue_edit_fail"):
+		fail("HTTP 422")
 	out("")
 fail("unexpected gh call " + " ".join(args))
 '''
@@ -5765,6 +5767,12 @@ def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None
 	payload = _consumer_payload()
 	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == "non_retryable_diagnosed"
 	assert heal.skip_reason(dict(payload, label="ai:scope-blocked"), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == ""
+	# defer_host_only_autofix leaves only the autofix_failure host-only stop to the intake.
+	host_only = heal.validate_payload(_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	assert heal.skip_reason(host_only, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "host_only_conflict_manual_merge"
+	assert heal.skip_reason(host_only, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, defer_host_only_autofix=True) == ""
+	assert heal.skip_reason(host_only, registered_repos=[], self_repo=SELF_REPO, defer_host_only_autofix=True) == "unregistered_source_repo"
+	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, host_only_conflict=True, defer_host_only_autofix=True) == "host_only_conflict_manual_merge"
 	reporter_marker = {"author": NR_LOGIN, "body": _nr_diagnosis_comment()["body"]}
 	assert heal.non_retryable_label_suppressed([reporter_marker], trusted_login=NR_LOGIN) is True
 	assert heal.non_retryable_label_suppressed([dict(reporter_marker, author="attacker")], trusted_login=NR_LOGIN) is False
@@ -5810,10 +5818,10 @@ def test_intake_non_retryable_requires_verified_provenance(tmp_path: Path) -> No
 
 def test_intake_non_retryable_duplicate_report_stays_silent(tmp_path: Path) -> None:
 	tg_log = tmp_path / "tg.log"
-	state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment()])
+	state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment()], pull_request=_pr(4174, labels=["ai:needs-human"]))
 	result, state_after, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert "WORKFLOW_HEAL skip reason=non_retryable_host_only outcome=duplicate" in result.stdout
+	assert "WORKFLOW_HEAL skip reason=non_retryable_host_only outcome=duplicate" in result.stdout and "label=present" in result.stdout
 	assert "comments_posted" not in state_after and not _nr_label_edits(state_after) and "issues_created" not in state_after
 	assert not tg_log.exists()
 	# A marker by another author does not count as a diagnosis.
@@ -5826,10 +5834,17 @@ def test_intake_retryable_and_disabled_routing_still_file_heal_issues() -> None:
 	result, state, _ = _run_intake(_autofix_payload(), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
-	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
-		extra_env={"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"})
+	disabled = {"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"}
+	unsupported = "conflict_resolver_sandbox_path_unsupported"
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=unsupported), _nr_state([_nr_failure_comment(reason=unsupported)]),
+		diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=disabled)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	# With routing off, a host-only stop keeps #6745's early skip: no heal issue.
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=disabled)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL skip reason=host_only_conflict_manual_merge" in result.stdout and "stage=after_provenance" not in result.stdout
+	assert "non_retryable" not in result.stdout and "issues_created" not in state and "comments_posted" not in state
 
 
 def test_intake_identical_failure_cap_routes_only_on_trusted_non_retryable_markers() -> None:
@@ -5849,6 +5864,34 @@ def test_intake_non_retryable_comment_failure_adds_no_label_or_issue(tmp_path: P
 	assert "WORKFLOW_HEAL error non_retryable_comment_failed" in result.stdout
 	assert not _nr_label_edits(state) and "issues_created" not in state
 	assert tg_log.read_text().startswith("WARNING\t")
+
+
+def test_intake_non_retryable_label_failure_is_reported_and_retried(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	payload = _autofix_payload(failure_reason=HOST_ONLY_REASON)
+	result, state, _ = _run_intake(payload, _nr_state(issue_edit_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "outcome=diagnosed" in result.stdout and "label=failed" in result.stdout and "issues_created" not in state
+	warning = tg_log.read_text()
+	assert "FAILED" in warning and "ai:needs-human applied" not in warning
+	# The next report for the same head finds the marker but no label on the PR: it re-adds it.
+	dup_state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment()])
+	result, state, _ = _run_intake(payload, dup_state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "outcome=duplicate" in result.stdout and "label=reapplied" in result.stdout
+	assert _nr_label_edits(state) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]] and "comments_posted" not in state
+
+
+def test_non_retryable_comment_text_matches_the_reason() -> None:
+	support = "conflict_resolver_sandbox_support_missing"
+	payload = heal.validate_payload(_autofix_payload(failure_reason=support))
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment(reason=support, first_error="Conflict resolver: support missing")], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["paths"] == []
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert "workflow support" in body and "executed on the host" not in body and "could not be read" not in body
+	unsupported = "conflict_resolver_sandbox_path_unsupported"
+	decision = heal.non_retryable_route(heal.validate_payload(_autofix_payload(failure_reason=unsupported)), comments=[], trusted_login=NR_LOGIN)
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert "symlinks" in body and "executed on the host" not in body
 
 
 def test_reporter_skips_label_event_caused_by_non_retryable_diagnosis() -> None:
@@ -6000,14 +6043,17 @@ def test_host_only_conflict_marker_cli() -> None:
 		assert skip.stdout == HOST_ONLY_SKIP + "\n"
 
 
-def test_autofix_report_skips_host_only_conflict_failure() -> None:
+def test_autofix_report_forwards_host_only_conflict_failure() -> None:
+	# Since #6756 the reporter forwards the host-only stop: the intake verifies
+	# it and posts the PR diagnosis, or falls back to its own #6745 skip.
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-host-only-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_REASON": HOST_ONLY_REASON})
 		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 		assert result.returncode == 0, result.stderr + result.stdout
-		assert f"skip reason={HOST_ONLY_SKIP} pr=4174 failure={HOST_ONLY_REASON}" in result.stdout
-		assert "dispatches" not in _state(state_file)
+		assert f"dispatched pr=4174 failure={HOST_ONLY_REASON}" in result.stdout, result.stdout + result.stderr
+		assert HOST_ONLY_SKIP not in result.stdout
+		assert len(_state(state_file)["dispatches"]) == 1
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-unsupported-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_FAILURE_REASON": "conflict_resolver_sandbox_path_unsupported"})
@@ -6016,7 +6062,7 @@ def test_autofix_report_skips_host_only_conflict_failure() -> None:
 		assert len(_state(state_file)["dispatches"]) == 1
 
 
-def test_autofix_report_skips_cap_repeating_host_only_conflict() -> None:
+def test_autofix_report_forwards_cap_repeating_host_only_conflict() -> None:
 	cap_flags = {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "AUTOFIX_FAILURE_FP": FP_HEX}
 	host_only_markers = [_failure_marker_comment("AI review/autofix failed", head=SHA_B, reason=HOST_ONLY_REASON, run="7")]
 	cases = [
@@ -6030,20 +6076,18 @@ def test_autofix_report_skips_cap_repeating_host_only_conflict() -> None:
 		([], {"FINGERPRINT_CAP_REASON": "editor_empty_noop"}, False),
 		([], {"FINGERPRINT_CAP_REASON": "Not A Reason"}, False),
 	]
-	for comments, extra, skipped in cases:
+	for comments, extra, host_only in cases:
 		with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-host-only-") as tmp_name:
 			tmp = Path(tmp_name)
 			work, state_file, env = _stage_autofix_report(tmp, comments=comments, flags={**cap_flags, **extra})
 			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
 			assert result.returncode == 0, result.stderr + result.stdout
 			state = _state(state_file)
-			if skipped:
-				assert f"skip reason={HOST_ONLY_SKIP} pr=4174 failure=identical_failure_cap" in result.stdout, (extra, result.stdout)
-				assert "dispatches" not in state
-			else:
-				assert "dispatched pr=4174 failure=identical_failure_cap" in result.stdout, (extra, result.stdout + result.stderr)
-				report = state["dispatches"][0]["body"]["client_payload"]["report"]
-				assert report.get("repeated_failure_reason") != HOST_ONLY_REASON
+			# Every case is forwarded (#6756); the repeated reason tells the intake
+			# which ones are host-only stops.
+			assert "dispatched pr=4174 failure=identical_failure_cap" in result.stdout, (extra, result.stdout + result.stderr)
+			report = state["dispatches"][0]["body"]["client_payload"]["report"]
+			assert (report.get("repeated_failure_reason") == HOST_ONLY_REASON) is host_only, (extra, report)
 
 
 def _host_only_label_state(comment_rows: list[dict], *, pr_head: str = SHA_B) -> dict:
@@ -6089,9 +6133,16 @@ def test_intake_skips_host_only_conflict_reports() -> None:
 		_autofix_payload(failure_reason=HOST_ONLY_REASON),
 		_autofix_payload(failure_reason="identical_failure_cap", repeated_failure_reason=HOST_ONLY_REASON),
 	]
+	# With the #6756 routing off, both are skipped before provenance (#6745).
 	for payload in payloads:
-		result, state, prompt = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+		result, state, prompt = _run_intake(payload, _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"})
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout, result.stdout
 		assert "issues_created" not in state
 		assert prompt == ""
+	# With routing on, a cap report whose trusted markers do not name the
+	# host-only reason is not diagnosed, but still skipped after provenance.
+	result, state, prompt = _run_intake(payloads[1], _nr_state([_nr_failure_comment(reason="editor_empty_noop")]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout and "stage=after_provenance" in result.stdout, result.stdout
+	assert "issues_created" not in state and "comments_posted" not in state and prompt == ""
