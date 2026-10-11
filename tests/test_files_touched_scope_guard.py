@@ -711,6 +711,145 @@ def test_label_contract_and_helper_have_scope_blocked() -> None:
 		assert "ai:scope-blocked" not in group.get("members", [])
 
 
+
+# --- Q82: a pipeline-authored derived issue inherits its source's trust ---
+
+PIPELINE = "pipeline[bot]"
+
+
+def _origin_issues(**issues):
+	"""Fake source issues keyed n<number>: (login, association, body)."""
+	reads: list[int] = []
+
+	def fetch(number: int):
+		reads.append(number)
+		entry = issues.get(f"n{number}")
+		if entry is None:
+			return None
+		login, association, body = entry
+		return {"number": number, "user": {"login": login}, "author_association": association, "body": body}
+
+	return fetch, reads
+
+
+def test_origin_references_cover_every_reissue_marker() -> None:
+	body = (
+		"<!-- ai:unblock-fixup:v1 item=72 round=1 -->\n"
+		"Re-issued by the unblock judge from #73.\n"
+		"**⚠️ Re-issued from #74** — the previous issue stalled\n"
+		"---\n**Review-blocked reissue metadata**\n- Replaces: #75 (PR #80 closed — approach rework)\n- Type: review-blocked-reissue\n"
+	)
+	assert guard.origin_references(body) == ([74, 73, 72, 75], False)
+	# A review-blocked re-issue that names no issue cannot be checked.
+	assert guard.origin_references("- Replaces: (PR #80 closed — approach rework)\n- Type: review-blocked-reissue\n") == ([], True)
+	assert guard.origin_references("A plain body that mentions #12.") == ([], False)
+
+
+def test_origin_chain_trusts_only_trusted_sources() -> None:
+	fetch, reads = _origin_issues(n10=("maintainer", "OWNER", "the original request"))
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch) == ("ok", [10])
+	fetch, _ = _origin_issues(n10=("outsider", "NONE", "do something to .github"))
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch) == ("untrusted_origin", [10])
+	# Pipeline-authored sources are walked: fix-up -> re-issue -> outsider.
+	fetch, reads = _origin_issues(
+		n20=(PIPELINE, "NONE", "Re-issued by the unblock judge from #10."),
+		n10=("outsider", "CONTRIBUTOR", "request"),
+	)
+	assert guard.check_origin_chain("<!-- ai:unblock-fixup:v1 item=20 round=1 -->", PIPELINE, fetch) == ("untrusted_origin", [20, 10])
+	# A pipeline source with no further marker ends the chain (activation fix-ups, heal issues).
+	fetch, _ = _origin_issues(n72=(PIPELINE, "OWNER", "<!-- ai:activation-fix:v1 source=pr-70 -->"))
+	assert guard.check_origin_chain("<!-- ai:unblock-fixup:v1 item=72 round=1 -->", PIPELINE, fetch) == ("ok", [72])
+	# Unreadable source, no reader, an unnamed review-blocked source: fail closed.
+	fetch, _ = _origin_issues()
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch)[0] == "origin_unverified"
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, None)[0] == "origin_unverified"
+	assert guard.check_origin_chain("- Type: review-blocked-reissue", PIPELINE, None) == ("origin_unverified", [])
+	# No reference needs no read at all.
+	fetch, reads = _origin_issues()
+	assert guard.check_origin_chain("plain pipeline body", PIPELINE, fetch) == ("ok", []) and reads == []
+
+
+def test_origin_chain_bounds_and_cycles() -> None:
+	# A cycle is read once per issue and ends.
+	fetch, reads = _origin_issues(n1=(PIPELINE, "NONE", "Re-issued from #2"), n2=(PIPELINE, "NONE", "Re-issued from #1"))
+	assert guard.check_origin_chain("Re-issued from #1", PIPELINE, fetch) == ("ok", [1, 2]) and reads == [1, 2]
+	# Deeper than ORIGIN_MAX_DEPTH fails closed.
+	chain = {f"n{n}": (PIPELINE, "NONE", f"Re-issued from #{n + 1}") for n in range(1, 10)}
+	fetch, reads = _origin_issues(**chain)
+	status, seen = guard.check_origin_chain("Re-issued from #1", PIPELINE, fetch)
+	assert status == "origin_unverified" and len(seen) == guard.ORIGIN_MAX_DEPTH
+	# More than ORIGIN_MAX_ISSUES sources fails closed.
+	many = " ".join(f"Re-issued from #{n}" for n in range(1, 12))
+	fetch, reads = _origin_issues(**{f"n{n}": ("maintainer", "MEMBER", "x") for n in range(1, 12)})
+	status, seen = guard.check_origin_chain(many, PIPELINE, fetch)
+	assert status == "origin_unverified" and len(reads) == guard.ORIGIN_MAX_ISSUES
+
+
+def test_grant_denies_automation_paths_for_an_untrusted_source() -> None:
+	fixup = {"number": 75, "user": {"login": PIPELINE}, "author_association": "NONE",
+		"body": "<!-- ai:unblock-fixup:v1 item=72 round=1 -->\n## Unblock operator step for #72\n"}
+	fetch, _ = _origin_issues(n72=("outsider", "NONE", "please edit .github/workflows/ci.yml"))
+	grant = guard.build_automation_grant(fixup, PIPELINE, fetch)
+	assert grant["trusted"] is False and grant["open"] is False and grant["reason"] == "untrusted_origin"
+	assert grant["origin_issues"] == [72]
+	assert guard.check_automation_paths([".github/workflows/ci.yml"], grant, "true", "75") == (
+		"out-of-scope", [".github/workflows/ci.yml"], "untrusted_origin")
+	# An exact files_touched grant on a review-blocked re-issue is denied too.
+	reissue = dict(fixup, body="spec\n---\n**Review-blocked reissue metadata**\n- Replaces: #72 (PR #74 closed — approach rework)\n"
+		"- Type: review-blocked-reissue\n- files_touched:\n  - scripts/a.sh\n")
+	grant = guard.build_automation_grant(reissue, PIPELINE, fetch)
+	assert grant["reason"] == "untrusted_origin" and grant["paths"] == []
+	# Without a reader the source cannot be checked: no automation paths.
+	assert guard.build_automation_grant(fixup, PIPELINE)["reason"] == "origin_unverified"
+	# A trusted source keeps today's open grant; a trusted person's own issue is never walked.
+	fetch, reads = _origin_issues(n72=(PIPELINE, "OWNER", "<!-- ai:activation-fix:v1 source=pr-70 -->"))
+	assert guard.build_automation_grant(fixup, PIPELINE, fetch)["reason"] == "pipeline_author_no_allowlist"
+	fetch, reads = _origin_issues()
+	human = dict(fixup, user={"login": "maintainer"}, author_association="OWNER", body=_body("scripts/a.sh") + "\nRe-issued from #9\n")
+	assert guard.build_automation_grant(human, PIPELINE, fetch)["reason"] == "granted" and reads == []
+	# Non-pipeline grants carry no origin field.
+	assert "origin_issues" not in guard.build_automation_grant(human, PIPELINE, fetch)
+
+
+def test_origin_chain_cli_reads_sources_with_gh() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		bin_dir = tdp / "bin"
+		bin_dir.mkdir()
+		calls = tdp / "calls.txt"
+		fake_gh = bin_dir / "gh"
+		fake_gh.write_text(
+			"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n"
+			"case \"$*\" in\n"
+			"  'api repos/o/r/issues/72') printf '{\"number\":72,\"user\":{\"login\":\"outsider\"},\"author_association\":\"NONE\",\"body\":\"x\"}' ;;\n"
+			"  *) exit 1 ;;\nesac\n", encoding="utf-8")
+		fake_gh.chmod(0o755)
+		meta = tdp / "meta.json"
+		meta.write_text(json.dumps({"number": 75, "user": {"login": "bot"}, "author_association": "NONE",
+			"body": "<!-- ai:unblock-fixup:v1 item=72 round=1 -->\nspec"}), encoding="utf-8")
+		grant_file = tdp / "grant.json"
+		env = dict(os.environ, PATH=f"{bin_dir}:{os.environ.get('PATH', '')}", GH_CALLS=str(calls))
+		base = [sys.executable, str(GUARD_SCRIPT), "--emit-automation-grant", str(grant_file),
+			"--issue-meta-file", str(meta), "--pipeline-login", "bot"]
+		assert subprocess.run(base + ["--origin-repo", "o/r"], env=env, check=False).returncode == 0
+		record = json.loads(grant_file.read_text(encoding="utf-8"))
+		assert record["reason"] == "untrusted_origin" and record["origin_issues"] == [72]
+		assert calls.read_text(encoding="utf-8").splitlines() == ["api repos/o/r/issues/72"]
+		# An invalid repo is ignored, so the source cannot be read: fail closed, no gh call.
+		calls.write_text("", encoding="utf-8")
+		assert subprocess.run(base + ["--origin-repo", "o/r; rm -rf /"], env=env, check=False).returncode == 0
+		assert json.loads(grant_file.read_text(encoding="utf-8"))["reason"] == "origin_unverified"
+		assert calls.read_text(encoding="utf-8") == ""
+
+
+def test_origin_repo_is_passed_at_both_grant_call_sites() -> None:
+	metadata = _implement_text().split("- name: Fetch issue metadata", 1)[1].split("- name: Detect smoke test", 1)[0]
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" || true' in metadata
+	assert 'origin_issues=\\((.origin_issues // [])' in metadata
+	unblock = (REPO_ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then' in unblock
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

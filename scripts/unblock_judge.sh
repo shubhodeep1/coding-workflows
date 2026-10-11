@@ -478,8 +478,11 @@ unblock_try_regrant()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=rejection_unreadable"
 		return 1
 	fi
+	# --origin-repo (Q82): a re-grant re-checks a re-issue's source chain too
+	# (one gh api read per source issue, at most 8).
 	if ! unblock_py "${SUPPORT_DIR}/scripts/files_touched_scope_guard.py" --emit-automation-grant "${grant_file}" \
-		--issue-meta-file "${RUNTIME_DIR}/item.json" --pipeline-login "${UNBLOCK_LOGIN}" >/dev/null 2>&1; then
+		--issue-meta-file "${RUNTIME_DIR}/item.json" --pipeline-login "${UNBLOCK_LOGIN}" \
+		--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=skip reason=grant_unavailable"
 		return 1
 	fi
