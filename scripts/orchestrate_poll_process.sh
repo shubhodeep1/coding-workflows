@@ -26479,10 +26479,11 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #          exists on the PR (a brand-new editor that has never
 #          produced work is not eligible for force-merge).
 #       D) Gate D delegates to `_pr_checks_completed` (shared gate in
-#          scripts/pr_checks_lib.sh, required-set filter): pending
-#          required checks block, and a required check-run whose newest
-#          run is not success / neutral / skipped (failure / cancelled /
-#          timed_out / action_required) blocks; advisory checks do not.
+#          scripts/pr_checks_lib.sh, required-set filter): any pending
+#          check-run blocks (advisory ones too), and a required check-run
+#          whose newest run is not success / neutral / skipped (failure /
+#          cancelled / timed_out / action_required) blocks; a completed
+#          advisory check's conclusion does not.
 #     If every gate passes: `gh pr merge --squash --auto`, Telegram
 #     WARNING, and one audit-trail comment posted to the PR so the
 #     decision is visible on the thread (not only in Telegram).
