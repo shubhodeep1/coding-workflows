@@ -201,6 +201,83 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
+# Deterministic resolution for folded changelog / agents fragments.
+# The release fold (scripts/assemble_changelog.py, assemble_agents.py)
+# deletes every top-level changelog.d/*.md and agents.d/*.md on the base
+# branch.  A PR that changed one of those fragments after it was folded
+# then conflicts modify/delete (index stages 1+2: base copy, PR copy, no
+# base-branch copy).  The model resolver never resolved it: it edits file
+# content, the commit stages only the paths it touched, and the untouched
+# fragment stayed unmerged (PR #6844 / heal issue #7130: every attempt
+# ended "left unmerged Git index entries").  The PR's version is new
+# information the next fold must publish, so keep it: stage the HEAD copy
+# as an ordinary added file.  Other shapes (both sides edited, the PR
+# deleted it, nested paths) still go to the resolver.
+# Kill switch: CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED (default true).
+# On orchestrator/project-* branches a fragment-only conflict defers the
+# merge commit until the integration fingerprint check has run, exactly
+# like the manifest-only case.
+_ff_kept=0
+_ff_defer_commit=false
+if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED:-true}" = "true" ]; then
+  while IFS= read -r _ff_path; do
+    case "${_ff_path}" in
+      changelog.d/*.md|agents.d/*.md) ;;
+      *) continue ;;
+    esac
+    case "${_ff_path#*/}" in
+      */*) continue ;;
+      # The assemblers never fold README.md (FRAGMENT_EXCLUDED_NAMES), so a
+      # base-side deletion of it is deliberate: leave it to the resolver.
+      README.md) continue ;;
+    esac
+    _ff_stages="$(git ls-files -u -- "${_ff_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+    if [ "${_ff_stages}" != "1 2 " ] || [ ! -f "${_ff_path}" ] || [ -L "${_ff_path}" ]; then
+      continue
+    fi
+    if ! git show ":2:${_ff_path}" | cmp -s - "${_ff_path}"; then
+      echo "Folded fragment keep: ${_ff_path} differs from the PR's index copy; leaving it to the resolver."
+      continue
+    fi
+    git add -- "${_ff_path}"
+    _ff_kept=$((_ff_kept + 1))
+    echo "Folded fragment keep: kept the PR's ${_ff_path}; the base branch had folded and deleted it (index stages: 1 2)."
+  done < "${RESOLVER_ALLOWLIST_FILE}"
+fi
+if [ "${_ff_kept}" -gt 0 ]; then
+  git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+  _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+  echo "Folded fragment keep: ${_ff_kept} fragment(s) kept, ${_resolver_allowlist_count} unmerged path(s) remain."
+  if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+    case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+      orchestrator/project-*)
+        echo "Folded fragment keep: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+        _ff_defer_commit=true
+        ;;
+      *)
+        # Same end state as the manifest-only commit below: a real
+        # two-parent merge commit, CONFLICT_RESOLVED=true, push deferred.
+        git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+        if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+          git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+          git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+        fi
+        git commit -m "[ai-merge-resolve] resolve merge conflicts"
+        for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          if [ -d "${RESOLVE_STASH}/${d}" ]; then
+            cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+          fi
+        done
+        rm -rf "${RESOLVE_STASH}"
+        rm -f "${_merge_stderr_file}"
+        echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+        echo "Folded fragment keep: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+        exit 0
+        ;;
+    esac
+  fi
+fi
+
 # Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
@@ -415,7 +492,7 @@ fi
 #      the workflow silently continue as if the conflict were
 #      resolved.  Fail loudly with an error annotation and
 #      dump diagnostics so the root cause is visible.
-if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ]; then
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
   if [ "${_merge_exit}" -eq 0 ]; then
     echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
     if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
@@ -719,20 +796,21 @@ fi
 
 # Deferred manifest-only commit on integration-sync branches.
 # The manifest union block above resolved the manifest (the only
-# unmerged path) but left the merge in progress so the fingerprint
-# check could run against the merged tree.  Commit only when that
+# unmerged path), or the folded fragment keep block kept the only
+# conflicted fragments (_ff_defer_commit), but left the merge in progress
+# so the fingerprint check could run against the merged tree.  Commit only when that
 # check ran and found no violation; otherwise fail closed exactly as
 # integration-sync branches did before (reason=integration_sync), so
 # an auto-merged file that reverts merged sub-issue intent can never
 # be committed without the verifier seeing it.
-if [ "${_mu_defer_commit}" = "true" ]; then
+if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; then
   _mu_remaining_unmerged="$(git diff --name-only --diff-filter=U | sed '/^$/d' | wc -l | tr -d '[:space:]')"
   if [ "${_fp_check_ok}" != "true" ]; then
-    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}."
+    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the deterministic resolution (manifest or folded fragments)."
     exit 1
   fi
   if [ -n "${FP_VIOLATED_FILES_LIST}" ] || [ "${_mu_remaining_unmerged}" -ne 0 ]; then
-    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}."
+    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the deterministic resolution (manifest or folded fragments)."
     exit 1
   fi
   git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
