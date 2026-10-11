@@ -14879,6 +14879,27 @@ def test_stale_validation_redispatch_stops_at_cap_as_harness_error():
 	assert "3 validation run(s) dispatched for cycle 1 ended without a verdict label" in ls["validation_failure_reason"]
 
 
+def test_validation_dispatch_count_resets_on_new_cycle():
+	"""Q50: a dispatch for a new validation cycle starts the per-cycle count
+	at 1, however many dispatches the previous cycle used."""
+	state = _stale_validation_state(3)
+	state["validation_cycle"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=_VERDICTLESS_FAILED_RUN,
+	)
+	output = result["stdout"] + result["stderr"]
+	assert len(result["validation_dispatches"]) == 1, output
+	ls = result["latest_state"]
+	assert ls["validation_last_dispatch_cycle"] == 2
+	assert ls["validation_cycle_dispatch_count"] == 1
+	assert ls["status"] == "validating"
+	assert "VALIDATION_DISPATCH_CAP outcome=exhausted" not in output
+
+
 def test_stale_validation_redispatch_cap_is_configurable():
 	result = _run_poller(
 		state=_stale_validation_state(1),

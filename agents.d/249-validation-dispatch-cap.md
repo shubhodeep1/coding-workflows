@@ -11,5 +11,5 @@ heal and unblock paths without spending `MAX_VALIDATION_RECOVERY_ATTEMPTS`.
 State written before the counter existed reads as one dispatch.
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
-- `VALIDATION_DISPATCH_CAP` (`scripts/orchestrate_poll_process.sh`: `outcome=redispatch|exhausted`, `issue=`, `cycle=`, `dispatches=`, `max=`)
+- `VALIDATION_DISPATCH_CAP` (`scripts/orchestrate_poll_process.sh`: `outcome=redispatch|phase_cap_blocked|exhausted`, `issue=`, `cycle=`, `dispatches=`, `max=`; `exhausted` adds `last_conclusion=`)
 LOG_PREFIX.name=VALIDATION_DISPATCH_CAP

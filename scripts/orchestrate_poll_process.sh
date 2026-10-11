@@ -13043,6 +13043,7 @@ dispatch_validation_if_needed() {
   local validation_dispatch_safe_despite_failures
   local validation_cycle_dispatches
   local validation_cap_run_url
+  local validation_cap_redispatch_fields=""
 
   # Defensive preflight: refuse to dispatch validate while the current
   # wave's PRs are not all merged into the integration branch
@@ -13154,13 +13155,21 @@ dispatch_validation_if_needed() {
       LAST_VAL_RAW_STATUS="harness_error" mark_validation_failed "Runtime validation harness error: ${validation_cycle_dispatches} validation run(s) dispatched for cycle ${validation_cycle} ended without a verdict label (last run conclusion: ${LAST_VAL_CONCLUSION:-unknown}${validation_cap_run_url:+, ${validation_cap_run_url}}). Re-dispatching the same ref will not change that (MAX_VALIDATION_DISPATCHES_PER_CYCLE=${MAX_VALIDATION_DISPATCHES_PER_CYCLE})."
       return 0
     fi
-    echo "VALIDATION_DISPATCH_CAP outcome=redispatch issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE}"
+    validation_cap_redispatch_fields="issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE}"
 
     echo "No active validation runs found. Redispatching..."
   fi
 
   if ! phase_cap_can_dispatch "ai:validating" "dispatch_validation" "${TRACKING_NUM:-validation}"; then
+    # Log the cap outcome only once the phase-cap guard has decided, so an
+    # outcome=redispatch line always means a dispatch was attempted.
+    if [ -n "${validation_cap_redispatch_fields}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=phase_cap_blocked ${validation_cap_redispatch_fields}"
+    fi
     return 0
+  fi
+  if [ -n "${validation_cap_redispatch_fields}" ]; then
+    echo "VALIDATION_DISPATCH_CAP outcome=redispatch ${validation_cap_redispatch_fields}"
   fi
 
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
