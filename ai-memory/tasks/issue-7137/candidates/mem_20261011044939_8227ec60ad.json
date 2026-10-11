@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7137,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7137\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7146\",\"pr_number\":7146,\"branch\":\"ai/issue-7137\",\"run_id\":\"38110723904\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38110723904\",\"changed_files\":[\".github/workflows/ci.yml\",\"README.md\",\"agents.d/7137-prepush-affected-test-gate.md\",\"changelog.d/7137-prepush-affected-test-gate-module.md\",\"docs/INVENTORY.md\",\"docs/scripts-pending-removal.md\",\"scripts/prepush_test_gate_run.sh\",\"tests/claude_template_drift.py\",\"tests/test_claude_template_live_parity.py\",\"tests/test_gh_api_write_guard.py\",\"tests/test_pr_merge_status_guard.py\",\"tests/test_pr_watch_guard.py\",\"tests/test_prepush_affected_tests.py\",\"tests/test_session_start_extract_repo_slug.py\",\"workflow-templates/.claude/hooks/prepush_affected_tests.py\",\"workflow-templates/.claude/settings.json\"]}",
+  "fingerprint": "9604b858b09dbbde86f1ac6189e68a4a1d56f2efe76859ce3275bd1b66f601ad",
+  "lineage": {
+    "issue_number": 7137,
+    "parent_ids": [],
+    "pr_number": 7146,
+    "run_id": "38110723904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38110723904",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7146"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261011044939_8227ec60ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7137,
+    "level": "run",
+    "pr_number": 7146,
+    "run_id": "38110723904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7137: https://github.com/shubhodeep1/coding-workflows/pull/7146",
+  "timestamps": {
+    "created_at": "2026-10-11T04:49:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
