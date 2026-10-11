@@ -271,8 +271,25 @@ jobs:
       - name: ShellCheck static analysis
         run: |
           set -euo pipefail
+          # Issue #6680: ShellCheck 0.9.x (the runner image's copy) always runs
+          # its dataflow analysis, which takes the runner down on
+          # scripts/orchestrate_poll_process.sh. ShellCheck 0.10+ honours that
+          # file's `# shellcheck extended-analysis=false` directive, so pin it.
+          # A failed install keeps the runner's copy with a warning.
+          sc=shellcheck
+          if python3 -m pip install --quiet 'shellcheck-py==0.10.0.1'; then
+            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" || sc_dir=""
+            if [ -x "${sc_dir}/shellcheck" ]; then
+              sc="${sc_dir}/shellcheck"
+            else
+              echo "::warning::ShellCheck 0.10.0.1 installed but ${sc_dir:-<unknown>}/shellcheck is missing; using $(command -v shellcheck || echo 'no shellcheck')."
+            fi
+          else
+            echo "::warning::Could not install ShellCheck 0.10.0.1; using $(command -v shellcheck || echo 'no shellcheck')."
+          fi
+          "${sc}" --version
           for f in scripts/*.sh; do
-            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+            "${sc}" --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
       - name: Python syntax check
@@ -368,11 +385,15 @@ jobs:
             wait "${shard_pid}" || true
           done
 
+          # Each failed shard's failing tests are repeated after the loop (#6888).
+          # The shard logs above sit in collapsed groups, so in run 37907017153 the
+          # job tail showed only the last shard's "33 passed", not shard 1's failure.
           shard_failures=0
           # Failing tests' names, repeated after every shard's log group so they
           # reach the end of the job log and its annotations (#6919).
           shard_failure_details=()
           shard_crash_tails=()
+          shard_failure_lines=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             # A shard with tests but no log died before its runner started, so
@@ -380,6 +401,7 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_lines+=("shard ${shard}: no log recorded, its tests did not run")
               continue
             fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
@@ -393,6 +415,26 @@ jobs:
             esac
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              # Name the failing tests in annotations (#6885): the per-shard
+              # log above sits inside a ::group:: that triage cannot read.
+              # Match the runner's exact "  FAIL  <name>: ..." prefix, cap at
+              # 20 lines, and escape workflow-command data. Without a FAIL
+              # line (interrupted shard), print the log tail with a prefix so
+              # log text can never start a workflow command.
+              mapfile -t shard_fail_lines < <(grep -a -E '^  FAIL  ' "/tmp/poll_shard_${shard}.log" | head -n 20 || true)
+              if [ "${#shard_fail_lines[@]}" -gt 0 ]; then
+                for shard_fail_line in "${shard_fail_lines[@]}"; do
+                  shard_fail_line="${shard_fail_line//%/%25}"
+                  shard_fail_line="${shard_fail_line//$'\r'/%0D}"
+                  shard_fail_line="${shard_fail_line//$'\n'/%0A}"
+                  echo "::error::orchestrate-poll shard ${shard}: ${shard_fail_line#  }"
+                done
+              else
+                echo "::error::orchestrate-poll shard ${shard} had no FAIL line; last log lines follow"
+                while IFS= read -r shard_tail_line || [ -n "${shard_tail_line}" ]; do
+                  echo "orchestrate-poll shard ${shard} | ${shard_tail_line}"
+                done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
+              fi
               shard_failures=$((shard_failures + 1))
               # grep exits 1 on no match; `|| true` keeps pipefail from ending the step.
               shard_fail_total="$(grep -c '^  FAIL  ' "/tmp/poll_shard_${shard}.log" || true)"
@@ -415,6 +457,22 @@ jobs:
                 shard_failure_details+=("orchestrate-poll shard ${shard}: no FAIL line in its log; last lines follow")
                 shard_crash_tails+=("${shard}")
               fi
+              # Prefer the runner's FAIL line (it carries the exception); fall back
+              # to its "complete" fail events; else say no failure was recorded.
+              # Every match is kept so the "... and <k> more" count below is exact.
+              # `-a`: a NUL byte in the log must not turn the matches into grep's
+              # "Binary file ... matches" line.
+              mapfile -t shard_fail_matches < <(grep -a -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                mapfile -t shard_fail_matches < <(grep -a -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -a -F '"status":"fail"' || true)
+              fi
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")
+              else
+                for shard_fail_match in "${shard_fail_matches[@]}"; do
+                  shard_failure_lines+=("shard ${shard}: ${shard_fail_match#"${shard_fail_match%%[![:space:]]*}"}")
+                done
+              fi
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
@@ -425,6 +483,22 @@ jobs:
               echo "--- orchestrate-poll shard ${shard} log tail ---"
               tail -n 30 "/tmp/poll_shard_${shard}.log" || true
             done
+            # At most 20 annotations; CR removed, cut to 400 characters, then "%"
+            # escaped so a test message cannot break the annotation syntax.
+            shard_failure_shown=0
+            for shard_failure_line in "${shard_failure_lines[@]}"; do
+              if [ "${shard_failure_shown}" -ge 20 ]; then
+                break
+              fi
+              shard_failure_line="${shard_failure_line//$'\r'/}"
+              shard_failure_line="${shard_failure_line:0:400}"
+              shard_failure_line="${shard_failure_line//\%/%25}"
+              echo "::error::orchestrate-poll failing test: ${shard_failure_line}"
+              shard_failure_shown=$((shard_failure_shown + 1))
+            done
+            if [ "${#shard_failure_lines[@]}" -gt 20 ]; then
+              echo "::error::orchestrate-poll failing test: ... and $(( ${#shard_failure_lines[@]} - 20 )) more (see the shard groups above)"
+            fi
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi
@@ -668,7 +742,27 @@ jobs:
   release:
     needs: [source, resolve-version, validate, validate-scripts]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
+    # retries still have to fit after it. A job timeout fails closed.
+    timeout-minutes: 50
+    # Least privilege: only this job gets an OIDC token and attestation write,
+    # for the release-manifest attestation (#6943). A job-level block replaces
+    # the inherited one, so contents: write is listed again.
+    # checks: read lets the CI lint gates read check-runs with github.token;
+    # actions: read lets the CI gate read workflow runs when GH_PAT is absent;
+    # contents: write keeps the tag and release writes.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      checks: read
+      actions: read
+    outputs:
+      release_enabled: ${{ steps.release_switch.outputs.enabled }}
+    env:
+      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'false' }}
+      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}
     # Serialise the mutating tag pushes across every stable-tag writer
     # (test-and-mark-stable.yml, this legacy path, and everything that
     # dispatches them). The stale-tip guard in the tagging step covers the
@@ -698,11 +792,175 @@ jobs:
           fi
           echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
+      # Publishing switch (issue #6532 / #6809). Off unless the repository
+      # variable STABLE_RELEASE_ENABLED is exactly `true` (any case). While
+      # off the gate still runs every validation job and the CI lint check
+      # below, but the changelog push, tags, GitHub release, consumer
+      # dispatch and sync-to-main are skipped. The value reaches the script
+      # only through env.
+      - name: Resolve stable release switch
+        id: release_switch
+        run: |
+          set -euo pipefail
+          release_switch_value="${STABLE_RELEASE_ENABLED:-false}"
+          release_switch_value="${release_switch_value,,}"
+          if [ "${release_switch_value}" = "true" ]; then
+            release_switch_enabled=true
+          else
+            release_switch_enabled=false
+          fi
+          echo "STABLE_RELEASE_SWITCH enabled=${release_switch_enabled}"
+          printf 'enabled=%s\n' "${release_switch_enabled}" >> "$GITHUB_OUTPUT"
+
+      # Issue #6532: never release a commit whose CI failed. GitHub Actions
+      # jobs report as check-runs, not commit statuses, so the validate job's
+      # combined-status read cannot see `lint`, the aggregate job of ci.yml.
+      # Runs before the first step that can push, whatever dry_run and the
+      # switch say. Only `lint` check-runs created by the github-actions app
+      # in a check suite of a `.github/workflows/ci.yml` run for the SHA
+      # count (other workflows also have `lint` jobs). As in
+      # scripts/release_ci_gate.sh, the newest of them (highest check-run id)
+      # decides, so a re-run that passed outweighs an older failed attempt;
+      # it must be completed with `success`. Missing and incomplete results are
+      # re-checked within a bounded wait; whatever is still missing or
+      # incomplete then, and failed or unreadable results, fail closed.
+      # GitHub API audit (§14): no existing call in this job returns
+      # check-runs; each poll makes two reads (ci.yml runs for the SHA,
+      # then the commit's `lint` check-runs).
+      - name: Require successful CI lint check-run
+        id: ci_lint_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CHECK_NAME: lint
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          gate_sha="${RELEASE_TESTED_SHA:-}"
+          if ! [[ "${gate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=invalid_sha sha=invalid runs=0"
+            exit 1
+          fi
+          gate_check_name="${CI_CHECK_NAME:-lint}"
+          gate_wait_secs="${STABLE_RELEASE_CI_WAIT_SECS:-600}"
+          case "${gate_wait_secs}" in
+            ''|*[!0-9]*)
+              echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is not a non-negative integer; using 600."
+              gate_wait_secs=600
+              ;;
+          esac
+          # Drop leading zeros first so a zero-padded in-range value (`002400`)
+          # is not mistaken for an oversized one by the length check below.
+          gate_wait_secs="${gate_wait_secs#"${gate_wait_secs%%[!0]*}"}"
+          gate_wait_secs="${gate_wait_secs:-0}"
+          # Same range as RELEASE_CI_GATE_WAIT_SECS (0..2400); the length check
+          # runs first so a huge value never reaches shell arithmetic.
+          if [ "${#gate_wait_secs}" -gt 4 ] || [ "$((10#${gate_wait_secs}))" -gt 2400 ]; then
+            echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is above 2400; using 600."
+            gate_wait_secs=600
+          fi
+          # Force base 10: a leading zero (`0900`, `08`) would be read as octal.
+          gate_wait_secs=$((10#${gate_wait_secs}))
+          gate_poll_secs=30
+          # Round up so any positive budget below one poll interval still re-checks once.
+          gate_polls_left=$(((gate_wait_secs + gate_poll_secs - 1) / gate_poll_secs))
+          gate_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate.XXXXXX")"
+          gate_runs_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate_runs.XXXXXX")"
+          trap 'rm -f "${gate_response_file}" "${gate_runs_file}"' EXIT
+
+          # Prints "<reason> <runs>" where reason is one of
+          # pass|missing|incomplete|failed|unreadable.
+          stable_release_ci_gate_classify() {
+            local gate_rc=0
+            local gate_verdict=""
+            set +e
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${gate_sha}&per_page=100" >"${gate_runs_file}"
+            gate_rc=$?
+            if [ "${gate_rc}" -eq 0 ]; then
+              gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${gate_sha}/check-runs?check_name=${gate_check_name}&filter=latest&per_page=100" >"${gate_response_file}"
+              gate_rc=$?
+            fi
+            set -e
+            if [ "${gate_rc}" -ne 0 ]; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            if ! gate_verdict="$(jq -rn --arg name "${gate_check_name}" --arg sha "${gate_sha}" \
+                --slurpfile checks "${gate_response_file}" --slurpfile ci_runs "${gate_runs_file}" '
+                if ($checks | length) != 1 or ($ci_runs | length) != 1 then "unreadable 0"
+                else $ci_runs[0] as $wr
+                  | $checks[0]
+                  | if (type != "object") or ((.check_runs | type) != "array") or ((.total_count | type) != "number") then "unreadable 0"
+                    elif ($wr | type) != "object" or (($wr.workflow_runs | type) != "array") or (($wr.total_count | type) != "number") then "unreadable 0"
+                    elif .total_count > (.check_runs | length) or $wr.total_count > ($wr.workflow_runs | length) then "unreadable \(.check_runs | length)"
+                    else
+                      [$wr.workflow_runs[] | select(type == "object" and .head_sha == $sha) | .check_suite_id | select(type == "number")] as $suites
+                      | [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions"
+                          and ((.check_suite.id? // null) as $sid | ($sid | type) == "number" and any($suites[]; . == $sid))
+                          and ((.id? // null) | type) == "number")] as $runs
+                      | if ($runs | length) == 0 then "missing 0"
+                        else ($runs | max_by(.id)) as $newest
+                          | if $newest.status != "completed" then "incomplete \($runs | length)"
+                            elif $newest.conclusion != "success" then "failed \($runs | length)"
+                            else "pass \($runs | length)"
+                            end
+                        end
+                    end
+                end' 2>/dev/null)"; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            case "${gate_verdict}" in
+              *$'\n'*) printf 'unreadable 0\n' ;;
+              "pass "*|"missing "*|"incomplete "*|"failed "*|"unreadable "*) printf '%s\n' "${gate_verdict}" ;;
+              *) printf 'unreadable 0\n' ;;
+            esac
+          }
+
+          while :; do
+            gate_result="$(stable_release_ci_gate_classify)"
+            gate_reason="${gate_result%% *}"
+            gate_runs="${gate_result##* }"
+            if [ "${gate_reason}" = "pass" ]; then
+              echo "STABLE_RELEASE_CI_GATE outcome=pass sha=${gate_sha} runs=${gate_runs}"
+              exit 0
+            fi
+            if { [ "${gate_reason}" = "incomplete" ] || [ "${gate_reason}" = "missing" ]; } && [ "${gate_polls_left}" -gt 0 ]; then
+              gate_polls_left=$((gate_polls_left - 1))
+              echo "STABLE_RELEASE_CI_GATE outcome=wait reason=${gate_reason} sha=${gate_sha} runs=${gate_runs} polls_left=${gate_polls_left}"
+              sleep "${gate_poll_secs}"
+              continue
+            fi
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=${gate_reason} sha=${gate_sha} runs=${gate_runs}"
+            exit 1
+          done
+
+      # Security finding release-gate-ignores-actions-ci (#6797, Refs #6532):
+      # the jobs above run this workflow's own tests, and the combined commit
+      # status never contains GitHub Actions check-runs, so a commit whose
+      # `CI / lint` aggregate was red, cancelled or never ran could be tagged.
+      # Require the github-actions `lint` check-run from ci.yml on the exact
+      # tested commit to be completed with success. Pending or missing runs
+      # are waited for (bounded); anything else fails closed. It runs before
+      # the changelog push and every tag write, and in dry runs too (read only).
+      # The tag may point at this commit plus a changelog-only commit; the
+      # RELEASE_UNTESTED_HEAD and RELEASE_STALE_TIP guards below bind it.
+      - name: Require CI / lint success on the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${RELEASE_TESTED_SHA}"
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          # The switch off behaves like a dry run here: assembled locally, never pushed.
+          DRY_RUN: ${{ (inputs.dry_run || steps.release_switch.outputs.enabled != 'true') && 'true' || 'false' }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
           set -euo pipefail
@@ -723,8 +981,15 @@ jobs:
           # bookkeeping.
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
+          # commit. Fail open: a fragment that cannot fold stays in agents.d/
+          # for the next release, and a missing script (an older ref) is a no-op.
+          if [ -f scripts/assemble_agents.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py assemble --repo-root . \
+              || echo "::warning::agents.md fragment assembly failed; fragments stay in agents.d/ for the next release."
+          fi
 
-          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
+          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d agents.md agents.d)" ]; then
             echo "No changelog fragments to fold — nothing to commit."
             exit 0
           fi
@@ -736,7 +1001,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A -- CHANGELOG.md changelog.d
+          git add -A -- CHANGELOG.md changelog.d agents.md agents.d
           git commit -m "chore: assemble changelog fragments for ${VERSION}"
 
           pushed="false"
@@ -786,7 +1051,7 @@ jobs:
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
 
       - name: Tag version and update stable pointer
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
@@ -908,8 +1173,8 @@ jobs:
           HEAD_SHA="$(git rev-parse HEAD)"
           if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
             if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
-              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/)' || true)" ]; then
-              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog assembly; refusing to tag."
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/|agents\.md$|agents\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog/agents.md assembly; refusing to tag."
               exit 1
             fi
           fi
@@ -939,8 +1204,34 @@ jobs:
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
+      # Release manifest (safeguarded consumer updater, phase 1, #6943):
+      # build it from the tagged tree, attest it, and upload it as a release
+      # asset before consumers are notified. Any failure stops the job before
+      # consumer dispatch; dry runs skip all three steps. Logic lives in
+      # scripts/release_manifest_publish.sh (log prefix RELEASE_MANIFEST).
+      - name: Build release manifest
+        id: release_manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release-manifest
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="$(git rev-parse "${RELEASE_VERSION}^{commit}")"
+          RELEASE_SHA="${RELEASE_SHA,,}"
+          bash scripts/release_manifest_publish.sh build \
+            --tag "${RELEASE_VERSION}" \
+            --release-sha "${RELEASE_SHA}" \
+            --output-dir "${RELEASE_MANIFEST_DIR}"
+
+      - name: Attest release manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
+
       - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
@@ -1001,8 +1292,22 @@ jobs:
           cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
           exit "${RELEASE_CREATE_RC}"
 
+      - name: Upload release manifest asset
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.manifest_path }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_manifest_publish.sh upload \
+            --tag "${RELEASE_VERSION}" \
+            --manifest "${RELEASE_MANIFEST_PATH}" \
+            --repo "${RELEASE_REPOSITORY}"
+
       - name: Notify consumer repos via repository_dispatch
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
@@ -1041,6 +1346,15 @@ jobs:
               -f "client_payload[sha]=${RELEASE_SHA}" \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
           done
+
+      - name: Release disabled summary
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled != 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::notice::STABLE_RELEASE_DISABLED version=${RELEASE_VERSION} sha=${RELEASE_TESTED_SHA}: validation and the CI lint gate passed; changelog push, tags, GitHub release, consumer dispatch and sync-to-main skipped"
+          printf 'Stable release %s passed the gate but was not published: STABLE_RELEASE_ENABLED is off.\n' "${RELEASE_VERSION}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
