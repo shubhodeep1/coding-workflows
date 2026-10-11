@@ -430,7 +430,9 @@ def test_sandbox_crash_logs_the_cli_result_text(tmp_path: Path) -> None:
 	error the CLI reports as a result) logged only `outcome=crashed
 	reason=result_success`. The sandbox now logs the result text."""
 	sandbox = SANDBOX.read_text(encoding="utf-8")
-	branch = sandbox.split('\t\t\tusage_limit|auth_failed)\n\t\t\t\tcontinue\n\t\t\t\t;;\n\t\t\t*)\n', 1)[1].split("\t\tesac\n", 1)[0]
+	# The catch-all arm after auth_failed (one `usage_limit|auth_failed` arm on
+	# main, split arms once project-6664 tracks all_usage_limit).
+	branch = sandbox.split("auth_failed)\n", 1)[1].split("\t\t\t*)\n", 1)[1].split("\t\tesac\n", 1)[0]
 	assert '_ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${root}/crash_result.txt"' in branch
 	assert "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=" in branch
 	assert "head -c 400" in branch and "tr -cd '[:print:]'" in branch
