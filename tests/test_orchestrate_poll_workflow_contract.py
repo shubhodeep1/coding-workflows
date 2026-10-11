@@ -116,6 +116,7 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}" in wf
 	assert "SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}" in wf
 	assert "SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}" in wf
+	assert "VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}" in wf
 	assert "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}" in wf
 	assert "for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do" in wf
 	assert "_templates/mode-judge-security-pass-exhaustion.txt" in wf
