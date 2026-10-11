@@ -1,0 +1,6 @@
+<!-- changelog: security -->
+- **Stable releases now require a green `CI / lint` run on the exact commit they tag.**
+
+Before, `test-and-mark-stable.yml` and `mark-stable.yml` tagged a commit after their own test jobs only. They read the combined commit status, which never contains GitHub Actions check-runs, so a commit whose `CI / lint` aggregate was red, cancelled or never ran could be tagged `stable` and shipped to every consumer repository. The `release` job of both workflows now runs `scripts/release_ci_gate.sh` before the changelog push and every tag write. It passes only when the newest github-actions `lint` check-run from a `ci.yml` run on the released SHA completed with `success`. A failed, cancelled, skipped or timed-out run, a check-run for a different SHA, or unreadable API output fails the release. A missing or pending run is waited for up to `RELEASE_CI_GATE_WAIT_SECS` (default `1800`, polling every `RELEASE_CI_GATE_POLL_SECS`, default `30`), then fails closed. Each check is logged as a `RELEASE_CI_GATE` line.
+
+What this means for operators: a release run now fails rather than tagging when CI on the released commit is not green. Re-run or fix CI on that commit, then release again. The `release` job timeout went from 10 to 50 minutes to fit the wait.

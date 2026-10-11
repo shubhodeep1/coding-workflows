@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -30,6 +31,8 @@ state.setdefault("calls", []).append(args)
 def save():
     state_path.write_text(json.dumps(state))
 def respond(payload):
+    if "--slurp" in args:
+        payload = [payload]
     save()
     sys.stdout.write(json.dumps(payload))
     sys.exit(0)
@@ -46,9 +49,25 @@ if args[:1] == ["api"]:
         respond({"total_count": total, "items": [{"number": 700 + i} for i in range(total)]})
     if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments?per_page=100"):
         # Marker comments on a candidate issue. Trusted (bot-authored) unless
-        # the test supplies its own rows.
+        # the test supplies its own rows; comments_by_issue overrides per issue.
+        issue = path.split("/issues/", 1)[1].split("/", 1)[0]
+        if issue in state.get("comments_fail_issues", []):
+            save(); sys.stderr.write("gh: Server Error (HTTP 502)\n"); sys.exit(1)
+        if issue in state.get("comments_by_issue", {}):
+            respond(state["comments_by_issue"][issue])
         default_body = "\n".join("apply-analysis-source-doc: " + m for m in state.get("search_hits", {}))
         respond(state.get("issue_comments", [{"body": default_body, "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
+    if "/contents/" in path:
+        # Branch-tip existence check before dispatch (issue #7022).
+        doc = path.split("/contents/", 1)[1].split("?", 1)[0]
+        state.setdefault("contents_reads", []).append(path)
+        if state.get("contents_fail"):
+            save(); sys.stderr.write("gh: Server Error (HTTP 503)\n"); sys.exit(1)
+        if doc in state.get("gone_docs", []):
+            save(); sys.stderr.write("gh: Not Found (HTTP 404)\n"); sys.exit(1)
+        save()
+        sys.stdout.write("file\n" if "--jq" in args else json.dumps({"type": "file", "path": doc}))
+        sys.exit(0)
     if "/actions/workflows/" in path and "/runs" in path:
         if state.get("orchestrate_runs_fail"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
@@ -337,8 +356,51 @@ def test_release_gate_only_mode_contract() -> None:
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
 	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
-	assert 'if [ "${GATE_ONLY}" = "true" ]; then' in source_run
-	assert 'echo "branch=${REF}" >> "$GITHUB_OUTPUT"' in source_run
+	gate_marker = 'if [ "${GATE_ONLY}" = "true" ]; then'
+	assert gate_marker in source_run
+	gate_start = source_run.index(gate_marker)
+
+	def _writes_github_output(line: str) -> bool:
+		return '>> "$GITHUB_OUTPUT"' in line or '>> "${GITHUB_OUTPUT}"' in line
+
+	# Gate-only path: the dispatched ref is written to GITHUB_OUTPUT before the
+	# path exits. Either spelling of the write is accepted (the `echo` form on
+	# main, the `printf` form introduced by PR #6555).
+	gate_exit = source_run.find("exit 0", gate_start)
+	assert gate_exit != -1, "gate-only path must end with exit 0"
+	gate_block = source_run[gate_start:gate_exit]
+	dispatched_ref_writes = ('echo "branch=${REF}"', "printf 'branch=%s\\n' \"${DISPATCH_REF_NAME}\"")
+	assert any(
+		_writes_github_output(line) and any(form in line for form in dispatched_ref_writes)
+		for line in gate_block.splitlines()
+	), "gate-only path must write the dispatched ref to GITHUB_OUTPUT before exit 0"
+
+	# Release path: the stable-ref guard exits 1 for any other ref, and only
+	# after it is `branch=stable` written.
+	# Since #6546 the guard must compare the full ref "${DISPATCH_REF}" with
+	# `refs/heads/stable`: a bare `stable` comparison against `github.ref_name`
+	# also accepts a dispatch from the `stable` tag.
+	stable_guard_marker = 'if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then'
+	guard = source_run.find(stable_guard_marker, gate_exit)
+	assert guard > gate_exit, (
+		"release path must guard with "
+		"'if [ \"${DISPATCH_REF}\" != \"refs/heads/stable\" ]; then' after the gate-only exit"
+	)
+	guard_exit = source_run.find("exit 1", guard)
+	assert guard_exit != -1, "the stable-ref guard must exit 1 for any other ref"
+	# Search for the write only after the guard's closing `fi`: a write between
+	# `exit 1` and `fi` is unreachable and must not satisfy the contract.
+	guard_fi = re.search(r"^[ \t]*fi[ \t]*$", source_run[guard_exit:], re.MULTILINE)
+	assert guard_fi is not None, "the stable-ref guard block must be closed with fi"
+	guard_end = guard_exit + guard_fi.end()
+	assert any(
+		_writes_github_output(line) and ("branch=stable" in line or ("branch=%s" in line and "stable" in line))
+		for line in source_run[guard_end:].splitlines()
+	), "release path must write branch=stable to GITHUB_OUTPUT only after the stable-ref guard"
+	assert not any(
+		_writes_github_output(line) and "branch=stable" in line
+		for line in source_run[:guard_end].splitlines()
+	), "branch=stable must not be written before or inside the stable-ref guard"
 	notify_step = next(step for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
 	assert notify_step["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
 	notify_run = notify_step["run"]
@@ -399,3 +461,129 @@ def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
 		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in run, workflow
 		assert "RELEASE_UNTESTED_HEAD" in run and "RELEASE_STALE_TIP" in run, workflow
 		assert run.index("RELEASE_STALE_TIP") < run.index('git tag -a "$VERSION"'), workflow
+
+
+# Issue #7022: the promote cycle reads docs from the checkout it pinned when
+# it started; the daily log analysis purged analysis/workflow-optimization-
+# 2026-09-09.md from main at 01:03 and the cycle still dispatched it at 02:59,
+# so the project's plan could not read it ("source doc unavailable").
+
+def test_doc_removed_on_the_branch_tip_is_skipped_for_the_next_one() -> None:
+	docs = ["analysis/workflow-optimization-2026-09-09.md", "analysis/workflow-optimization-2026-09-12.md"]
+	state = {"open_tracking": [], "gone_docs": ["analysis/workflow-optimization-2026-09-09.md"]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "APPLY_ANALYSIS_DOC_GONE doc=analysis/workflow-optimization-2026-09-09.md ref=main" in proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-12.md role=proving" in proc.stdout
+	assert final["contents_reads"] == [
+		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-09.md?ref=main",
+		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-12.md?ref=main",
+	]
+	assert len(final["dispatches"]) == 1
+
+
+def test_every_unprocessed_doc_removed_on_the_tip_dispatches_nothing() -> None:
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [], "gone_docs": [doc]}, docs=[doc])
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=source_doc_removed ref=main docs=1" in proc.stdout
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+
+
+def test_branch_tip_read_failure_fails_closed() -> None:
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [], "contents_fail": True}, docs=[doc])
+	assert proc.returncode == 0, proc.stderr
+	assert f"APPLY_ANALYSIS_SKIPPED reason=guard_unavailable lookup=contents:{doc}" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_in_flight_docs_lists_trusted_markers_on_open_tracking_issues() -> None:
+	trusted = {"user": {"login": "github-actions[bot]"}, "author_association": "NONE"}
+	state = {
+		"open_tracking": [_tracking(7021, "ai:comprehensive-test-pending"), _tracking(6902)],
+		"comments_by_issue": {
+			"7021": [
+				{**trusted, "body": "<!-- apply-analysis-source-doc -->\napply-analysis-source-doc: analysis/workflow-optimization-2026-09-09.md\napply-analysis-role: proving"},
+				{"user": {"login": "stranger"}, "author_association": "NONE", "body": "apply-analysis-source-doc: analysis/workflow-optimization-2026-10-01.md"},
+			],
+			"6902": [{**trusted, "body": "unrelated"}],
+		},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		# The purge needs the list even while dispatching is switched off.
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true", "APPLY_ANALYSIS_ON_MAIN_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == ["analysis/workflow-optimization-2026-09-09.md"]
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS count=1 docs=analysis/workflow-optimization-2026-09-09.md" in proc.stderr
+	assert not final.get("dispatches")
+	assert not any(call[:2] == ["api", "-X"] or "search/issues" in " ".join(call) for call in final["calls"])
+
+
+def test_in_flight_docs_fails_when_a_comment_read_fails() -> None:
+	state = {"open_tracking": [_tracking(7021)], "comments_fail_issues": ["7021"]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert proc.stdout == ""
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable" in proc.stderr
+
+
+def test_log_analysis_purge_keeps_docs_open_projects_use_and_fails_closed() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "workflow-log-analysis.yml").read_text(encoding="utf-8")
+	step = workflow.split("      - name: Commit and push report\n", 1)[1].split("\n      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT || github.token }}" in step
+	assert "COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}" in step
+	assert 'purge_in_flight_docs="$(APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash scripts/apply_analysis_on_main.sh)"' in step
+	# The guard is listed before the loop, gates the whole purge, and is
+	# consulted before every git rm.
+	assert step.index("APPLY_ANALYSIS_IN_FLIGHT_DOCS=true") < step.index('for old_report in analysis/workflow-optimization-*.md; do')
+	assert 'if [ "${purge_guard_ok}" = "true" ] && cutoff_date=' in step
+	loop = step.split('for old_report in analysis/workflow-optimization-*.md; do', 1)[1]
+	assert loop.index('grep -qxF -- "${old_report}"') < loop.index('git rm -- "${old_report}"')
+	assert 'WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=${old_report} reason=in_flight_project' in loop
+
+
+def test_in_flight_docs_fails_while_an_orchestrator_run_is_active() -> None:
+	# A just-dispatched project has no tracking issue or marker until its
+	# orchestrator run creates them, so the purge must not run meanwhile.
+	state = {"open_tracking": [], "orchestrate_runs": [{"id": 5, "status": "queued", "conclusion": None}]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert proc.stdout == ""
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_run_in_flight" in proc.stderr
+
+
+def test_in_flight_docs_fails_when_the_orchestrator_runs_read_fails() -> None:
+	state = {"open_tracking": [], "orchestrate_runs_fail": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert "reason=orchestrate_runs_unreadable" in proc.stderr
+
+
+def test_open_tracking_issue_list_reads_every_page() -> None:
+	state = {"open_tracking": [_tracking(7021)], "comments_by_issue": {"7021": []}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 0, proc.stderr
+	list_calls = [call for call in final["calls"] if any("/issues?state=open" in a for a in call)]
+	assert list_calls and all("--paginate" in call and "--slurp" in call for call in list_calls)
+
+
+def test_in_flight_docs_reads_every_comment_page() -> None:
+	# A marker past the first 100 comments must still keep its doc from the purge.
+	trusted = {"user": {"login": "github-actions[bot]"}, "author_association": "NONE"}
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	state = {"open_tracking": [_tracking(7021)], "comments_by_issue": {"7021": [{**trusted, "body": "apply-analysis-source-doc: " + doc}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == [doc]
+	comment_calls = [call for call in final["calls"] if any(a.endswith("/comments?per_page=100") for a in call)]
+	assert comment_calls and all("--paginate" in call and "--slurp" in call for call in comment_calls)
