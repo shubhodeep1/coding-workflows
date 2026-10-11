@@ -5306,6 +5306,32 @@ def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
 		assert result["api_calls"].count("search/issues") == (enabled == "true")
 
 
+def test_standalone_pr_sweep_only_mode_runs_only_the_standalone_pr_sweeps() -> None:
+	# Issue #7177: without a tracking issue, the workflow runs only the
+	# standalone conflict and noop-suspicious sweeps through this mode.
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		env_overrides={
+			"STANDALONE_PR_SWEEP_ONLY": "true",
+			"ALERT_MSG_LEVEL": "SILENT",
+			"STANDALONE_SWEEP_ALERT_MSG_LEVEL": "WARNING",
+			"OPENROUTER_API_KEY": "",
+		},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Standalone PR sweep-only mode" in combined_log
+	assert "Standalone PR conflict sweep" in combined_log
+	assert "Standalone PR noop-suspicious recovery sweep" in combined_log
+	assert "Noop-suspicious recovery complete." in combined_log
+	assert "Standalone PR sweeps alert level: WARNING (poller level: SILENT)" in combined_log
+	assert "Processing tracking issue" not in combined_log
+	assert "Standalone issue stall recovery" not in combined_log
+	assert "UNBLOCK_SCAN" not in combined_log
+	assert "Staged-support needs-human latch release" not in combined_log
+
+
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
 	engine_sha = "c" * 40
 

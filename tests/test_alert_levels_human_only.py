@@ -333,6 +333,53 @@ def test_conflict_sweep_reads_marker_from_existing_graphql_batch():
 	assert "STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}" in workflow
 
 
+def _sweep_alert_level_harness(env_lines: str) -> str:
+	"""Apply the standalone sweep alert level, probe the real tg_helpers
+	filter for a WARNING, restore, and print what ALERT_MSG_LEVEL is left."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	functions = (
+		'_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="false"\n'
+		'_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL=""\n'
+		+ _extract_bash_function(script, "_standalone_sweep_alert_level_apply() {")
+		+ _extract_bash_function(script, "_standalone_sweep_alert_level_restore() {")
+	)
+	body = (
+		"set -euo pipefail\n"
+		f"source {str(TG_HELPERS)!r}\n"
+		+ env_lines
+		+ functions
+		+ "_standalone_sweep_alert_level_apply\n"
+		"_tg_should_send WARNING && echo warning=sent || echo warning=filtered\n"
+		"_standalone_sweep_alert_level_restore\n"
+		'echo "restored=${ALERT_MSG_LEVEL-unset}"\n'
+	)
+	result = subprocess.run(["bash", "-c", body], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	return result.stdout
+
+
+def test_standalone_sweeps_do_not_inherit_smoke_silent_level():
+	"""Issue #7177: real standalone PRs page even when every tracking issue
+	is a smoke fixture and the poller runs at SILENT."""
+	out = _sweep_alert_level_harness("ALERT_MSG_LEVEL=SILENT\nSTANDALONE_SWEEP_ALERT_MSG_LEVEL=WARNING\n")
+	assert "warning=sent" in out
+	assert "Standalone PR sweeps alert level: WARNING (poller level: SILENT)" in out
+	assert "restored=SILENT" in out
+
+
+def test_standalone_sweep_alert_level_empty_or_invalid_keeps_poller_level():
+	out = _sweep_alert_level_harness("ALERT_MSG_LEVEL=SILENT\nSTANDALONE_SWEEP_ALERT_MSG_LEVEL=\n")
+	assert "warning=filtered" in out
+	assert "restored=SILENT" in out
+	out = _sweep_alert_level_harness("ALERT_MSG_LEVEL=SILENT\nSTANDALONE_SWEEP_ALERT_MSG_LEVEL='WARNING; rm -rf /'\n")
+	assert "::warning::Ignoring invalid STANDALONE_SWEEP_ALERT_MSG_LEVEL" in out
+	assert "warning=filtered" in out
+	assert "restored=SILENT" in out
+	out = _sweep_alert_level_harness("unset ALERT_MSG_LEVEL\nSTANDALONE_SWEEP_ALERT_MSG_LEVEL=ERROR\n")
+	assert "warning=filtered" in out
+	assert "restored=unset" in out
+
+
 def test_conflict_marker_parser_lists_markers_newest_first():
 	"""The jq program the sweep runs over its GraphQL batch."""
 	_require_jq()
