@@ -207,3 +207,43 @@ No `TODO`, `FIXME` or `HACK` markers were found in the scoped workflow and scrip
 | Code modularization | Three workspace workflows, two release workflows, `workflow-log-analysis.yml`, shared/new workflow-invoked helpers | Large |
 | Expression size reduction | `implement.yml`, implementation staging/guard scripts; optionally `review_autofix.yml` and a step script | Medium |
 | Medium/Low fixes | `implement.yml`, `review_autofix.yml`, `workflow-log-analysis.yml`, label helpers, affected tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-11)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because it touches a protected retry, pagination, rate-limit, or race-sensitive path.
+
+### Consolidation Candidates (MERGE-###)
+
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** `scripts/review_merge_train.sh`, `_mt_find_marker_comment`: **804–805**; `_mt_upsert_comment`: **871–883**; gate caller: **957–999**. **Current → proposed:** two logical reads → one when an existing queue marker is found; the paginated read still takes however many pages it needs. **Endpoints:** `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100` and `GET /repos/{owner}/{repo}/issues/comments/{id}`. **Evidence:** the first read selects the latest trusted marker’s ID and creation time; the later read fetches that same comment’s body solely to compare it with the proposed body. **Proposed fix:** extend `_mt_find_marker_comment` to optionally retain the selected body, pass it from `_mt_gate` to `_mt_upsert_comment`, and keep the individual GET as a fallback when that body is incomplete. Preserve the existing ID/time output contract for other callers. **Safety rationale:** the first read uses `--paginate`, and a label write occurs before the upsert; comment freshness and page-boundary behavior cannot be assumed equivalent. **Downstream signal:** Do not auto-implement. Manually review concurrent comment-edit behavior, every `_mt_find_marker_comment` caller’s output parsing, pagination completeness, and the upsert’s fallback and failure semantics before using the earlier body.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Reusing a `/rate_limit` probe affects a rate-limit-sensitive poller path.
+- API-002: RISKY_SKIP — The proposed reduction changes retry-loop behavior; permanent-error classification needs manual review.
+- BATCH-001: RISKY_SKIP — The reads are inside `orchestrate_poll_process.sh`; live-state and cache-miss guards must remain intact.
+- BATCH-002: RISKY_SKIP — Poller race defenses and timeline pagination preclude automatic replacement.
+- BATCH-003: RISKY_SKIP — Poller authorization reads and paginated comments require manual safety review.
+
+### Summary Counts
+
+*Counts cover net-new findings; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
