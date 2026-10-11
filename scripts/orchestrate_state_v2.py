@@ -227,6 +227,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	if not isinstance(comments, list):
 		print("comments json is not a JSON array", file=sys.stderr)
 		return 2
+	skip_statuses = set(args.skip_status or [])
+	if skip_statuses and args.require_latest:
+		print("--skip-status cannot be combined with --require-latest", file=sys.stderr)
+		return 2
 	# GitHub returns comments oldest-first.  Reverse to walk newest-first
 	# so the first complete chain we encounter is the most recent write.
 	# Key by (manifest, total), not manifest alone: the same raw state bytes
@@ -289,6 +293,17 @@ def cmd_extract(args: argparse.Namespace) -> int:
 				active_chain_by_key.pop(chain_key, None)
 				continue
 			digest = hashlib.sha256(decoded).hexdigest()
+			if digest == manifest and skip_statuses:
+				# --skip-status: keep walking older writes past a state whose
+				# top-level "status" is one of the skipped values (or that is
+				# not a JSON object), e.g. the last state before a failure.
+				try:
+					decoded_state = json.loads(decoded)
+				except (ValueError, UnicodeDecodeError):
+					decoded_state = None
+				if not isinstance(decoded_state, dict) or decoded_state.get("status") in skip_statuses:
+					active_chain_by_key.pop(chain_key, None)
+					continue
 			if digest == manifest:
 				# Write raw bytes through the buffer so non-UTF-8
 				# state bytes round-trip unchanged.  In practice the
@@ -322,6 +337,7 @@ def main() -> int:
 	)
 	p_extract.add_argument("--comments-json", required=True)
 	p_extract.add_argument("--require-latest", action="store_true", help="Reject older state if the newest V2 write is incomplete")
+	p_extract.add_argument("--skip-status", action="append", help="Skip states whose top-level status is this value and return the newest older one (repeatable)")
 	p_extract.set_defaults(func=cmd_extract)
 	args = p.parse_args()
 	return args.func(args)
