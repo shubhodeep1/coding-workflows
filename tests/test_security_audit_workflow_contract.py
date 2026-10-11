@@ -2875,6 +2875,12 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		("[" * 5000, "malformed_output"),
 		# An array nested in a JSON object that parses is not top-level.
 		("Here: {\"findings\": " + finding + "}", "malformed_output"),
+		# A complete nested findings array inside a truncated wrapper is not
+		# top-level either, even when the array itself parses successfully.
+		('Result: {"findings": ' + finding, "malformed_output"),
+		('Findings:\n[\n' + finding, "malformed_output"),
+		('Checked [file_a.py].\nResult: {"findings": ' + finding, "malformed_output"),
+		('Result: {"findings": ' + finding + ', "summary": ', "malformed_output"),
 		("", "missing_output"),
 		(json.dumps({"findings": []}), "schema_mismatch"),
 		(json.dumps(["not an object"]), "schema_mismatch"),
@@ -2886,6 +2892,36 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 			assert f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes=" in proc.stdout, (result_text, proc.stdout)
 
 
+def test_security_audit_claude_reply_parser_rejects_truncated_wrappers_without_docker() -> None:
+	parser_source = SCRIPT_PATH.read_text(encoding="utf-8").split('if ! claude_check_result=', 1)[1].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+	finding = json.dumps([{"finding_id": "scoped"}])
+	cases = (
+		('Result: {"findings": ' + finding, "malformed_output", None),
+		('Findings:\n[\n' + finding, "malformed_output", None),
+		('Checked [file_a.py].\nResult: {"findings": ' + finding, "malformed_output", None),
+		('Checked [file_a.py].\nResult: {"findings":\n[]', "malformed_output", None),
+		('Result: {"findings": ' + finding + ', "summary": ', "malformed_output", None),
+		('Checked [file_a.py].\nFindings:\n' + finding, "extracted items=1", [{"finding_id": "scoped"}]),
+		('Files checked: [foo.py, bar.py].\n[]', "extracted items=0", []),
+	)
+	with tempfile.TemporaryDirectory(prefix="security-audit-parser-") as td:
+		reply_path = Path(td) / "reply.txt"
+		output_path = Path(td) / "output.json"
+		for reply_text, expected_message, expected_output in cases:
+			reply_path.write_text(reply_text, encoding="utf-8")
+			output_path.unlink(missing_ok=True)
+			proc = subprocess.run(
+				[sys.executable, "-c", parser_source, str(reply_path), str(output_path)],
+				capture_output=True, text=True, check=False,
+			)
+			assert expected_message in proc.stdout, (reply_text, proc.stdout, proc.stderr)
+			assert (proc.returncode == 0) is (expected_output is not None), (reply_text, proc.stderr)
+			if expected_output is not None:
+				assert json.loads(output_path.read_text(encoding="utf-8")) == expected_output
+			else:
+				assert not output_path.exists()
+
+
 def test_security_audit_claude_engine_extracts_the_last_findings_array_from_prose() -> None:
 	first = [_finding_payload("draft-finding", file_path="file_b.py")]
 	final = [_finding_payload("prose-finding", file_path="file_b.py")]
@@ -2895,6 +2931,7 @@ def test_security_audit_claude_engine_extracts_the_last_findings_array_from_pros
 		# Two arrays: the last one wins, nested arrays never count.
 		("Draft: " + json.dumps(first) + "\nFinal:\n```json\n" + json.dumps(final) + "\n```", ["prose-finding"]),
 		("Checkpoint: done.\n```\n" + json.dumps(final) + "\n```", ["prose-finding"]),
+		("Checked [file_a.py].\nFindings:\n" + json.dumps(final), ["prose-finding"]),
 		# A trailing empty array never replaces the findings before it.
 		("Findings:\n" + json.dumps(final) + "\nRemaining after re-check:\n[]", ["prose-finding"]),
 		# An empty array that ends the reply (or its fence) is a clean audit.

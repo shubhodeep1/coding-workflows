@@ -1529,11 +1529,9 @@ else:
 # Top-level arrays only: after a parsed array or object the scan resumes past
 # its end, so an array nested in a JSON value that parsed is never a candidate.
 # An empty array never replaces a non-empty one, and it counts only when it
-# starts a line and nothing but a closing fence follows it, so a "[]" nested
-# in a cut-off reply (`"evidence": []`) is not read as a clean audit. When an
-# opener fails to parse, a later "[]" may sit inside that unclosed value
-# (`Results:\n{"findings":\n[]`), so an empty array counts only when every
-# failed opener before it closes first, read both with and without JSON string
+# starts a line and nothing but a closing fence follows it. Any candidate
+# inside an unclosed value (`Results:\n{"findings":\n[]`) is rejected: earlier
+# failed openers must close first, read both with and without JSON string
 # quoting; bracketed prose such as `Files checked: [a.py, b.py].` closes.
 decoder = json.JSONDecoder()
 opener = re.compile(r"[\[{]")
@@ -1583,14 +1581,17 @@ while position != -1:
 		failed_opens.append(position)
 		position = next_open(position + 1)
 		continue
-	if isinstance(value, list) and all(isinstance(item, dict) and "finding_id" in item for item in value):
+	if (
+		isinstance(value, list)
+		and all(isinstance(item, dict) and "finding_id" in item for item in value)
+		and all(closes_before(failed, position) for failed in failed_opens)
+	):
 		if value:
 			candidate = (value, position, end)
 		elif (
 			candidate is None
 			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
 			and re.fullmatch(r"\s*(```)?\s*", text[end:])
-			and all(closes_before(failed, position) for failed in failed_opens)
 		):
 			candidate = (value, position, end)
 	position = next_open(end)
