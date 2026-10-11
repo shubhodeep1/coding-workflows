@@ -723,7 +723,7 @@ _pr_base_sync_count()
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
 		  | select(type == "object" and ((.user.login // "") == $login))
-		  | (.body // "") | select(type == "string" and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+ -->\\s*$")) ]
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+ -->\\s*$")) ]
 		| length' 2>/dev/null | tail -n1)"
 	if ! [[ "${PR_BASE_SYNC_COUNT}" =~ ^[0-9]+$ ]]; then
 		PR_BASE_SYNC_COUNT=""

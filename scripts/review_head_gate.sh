@@ -133,7 +133,7 @@ review_head_gate_freshness_sync()
 	fi
 	fs_marker="$(jq -r --arg login "${fs_login}" --arg pr "${fs_pr}" '
 		[ .[]? | select(type == "object" and (.author_login // "") == $login)
-		  | (.body // "") | select(type == "string")
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `"))
 		  | capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+) -->\\s*$")?
 		  | select(.pr == $pr) ] | last // empty | "\(.from) \(.sync)"' "${fs_comments}" 2>/dev/null || true)"
 	if [ -z "${fs_marker}" ]; then

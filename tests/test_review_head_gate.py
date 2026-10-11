@@ -193,6 +193,7 @@ def test_the_newest_marker_by_the_workflow_login_wins(tmp_path: Path) -> None:
 	([_marker(author="someone-else")], "no_sync_marker"),
 	([_marker(pr=43)], "no_sync_marker"),
 	([{"author_login": "workflow-bot", "body": f"quoted: <!-- ai:merge-base-sync:v1 pr=42 from={APPROVED} sync=1 --> and more"}], "no_sync_marker"),
+	([{"author_login": "workflow-bot", "body": f"AI autofix editor summary\n\n<!-- ai:merge-base-sync:v1 pr=42 from={APPROVED} sync=1 -->"}], "no_sync_marker"),
 ))
 def test_no_trusted_marker_means_a_normal_review_and_no_api_call(tmp_path: Path, comments: list[dict], reason: str) -> None:
 	result, calls = _freshness(tmp_path, comments)

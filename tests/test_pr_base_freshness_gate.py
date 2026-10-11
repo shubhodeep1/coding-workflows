@@ -485,7 +485,7 @@ SYNC_LOGIN = "workflow-bot"
 
 
 def _sync_marker(sync: int, *, pr: int = 7, author: str = SYNC_LOGIN) -> dict:
-	return {"user": {"login": author}, "body": f"Branch updated.\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync} -->"}
+	return {"user": {"login": author}, "body": f"**Branch updated from `main` before merging** (update {sync} of at most 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync} -->"}
 
 
 def _sync_gate(comments: list[dict] | None, *, max_syncs: str | None = None, user_ok: bool = True) -> tuple[int, str, list[str]]:
@@ -589,6 +589,16 @@ class FreshnessSyncWiring(unittest.TestCase):
 		self.assertIn('reason=merge_conflict pr=${PR_NUMBER}', fast_path)
 		self.assertIn('reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync', fast_path)
 		self.assertLess(fast_path.index("reason=single_issue_security_pass"), fast_path.index("gate_fetch_marker_comments"))
+		# The security-pass eligibility rule must match the doc-only /
+		# small-diff skip's copy, or a drift could merge an eligible PR unaudited.
+		skip_block = text.split('SECURITY_PASS_SKIP_SUPPRESSED="false"', 1)[1].split("SECURITY_PASS_SKIP_SUPPRESSED=\"true\"", 1)[0]
+		for cond in ('[ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ]',
+				'&& [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ]',
+				'&& [ "${pr_head_repo}" = "${REPOSITORY}" ]',
+				'&& ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]]',
+				'&& [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]'):
+			self.assertIn(cond, fast_path)
+			self.assertIn(cond, skip_block)
 		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
 		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
 			self.assertIn(line, branch)
