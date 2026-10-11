@@ -1119,6 +1119,7 @@ jobs:
           _staged_support_installed_paths=()
 
           mkdir -p scripts
+          mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
           for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
@@ -1130,6 +1131,9 @@ jobs:
               exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            if [ "${f}" = load_workflow_overlay.py ]; then
+              install -m 0755 "${src}" "${RUNTIME_DIR}/host_python/${f}"
+            fi
             _fetched_scripts+=("${f}")
             _staged_support_installed_paths+=("scripts/${f}")
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
@@ -1289,7 +1293,9 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # Use the runner-temp copy from verified support, outside the branch
+          # checkout; isolated mode also excludes PYTHONPATH and the cwd.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${RUNTIME_DIR}/host_python/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -1737,13 +1743,18 @@ jobs:
           # it cannot supply this grant's pipeline identity before the editor.
           pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
           automation_grant_path="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_grant.json"
+          # --origin-repo (Q82): for a pipeline-authored re-issue or unblock
+          # fix-up the guard reads each source issue once (gh api, at most 8
+          # reads) so an untrusted author's request never becomes an
+          # automation-path grant. Plain issues cost no extra call.
           python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
             --emit-automation-grant "${automation_grant_path}" \
-            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" || true
+            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" \
+            --origin-repo "${GITHUB_REPOSITORY:-}" || true
           echo "AUTOMATION_PATH_GRANT_FILE=${automation_grant_path}" >> "$GITHUB_ENV"
           if [ -f "${automation_grant_path}" ]; then
             jq -r --arg issue "${ISSUE_NUMBER}" \
-              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association)"' \
+              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association) origin_issues=\((.origin_issues // []) | map(tostring) | join(",") | if . == "" then "none" else . end)"' \
               "${automation_grant_path}" || echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_error paths=0"
           else
             echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_unavailable paths=0"
@@ -1917,7 +1928,17 @@ jobs:
             exit 0
           fi
           printf '%s\n' "${DEPENDENCY_META}" > "${ISSUE_META_FILE}"
-          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          # Run the trusted runtime copy in isolated mode (issue #7159): the
+          # checkout's scripts/ is branch-controlled, and Python would import a
+          # branch-added scripts/json.py from the script's directory while
+          # GH_TOKEN holds GH_PAT. A missing or symlinked copy fails closed.
+          _security_dependency_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/security_dependency.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_security_dependency_helper}" ] || [ -L "${_security_dependency_helper}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=trusted_helper_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
           if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
@@ -2098,7 +2119,14 @@ jobs:
             echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
             exit 0
           fi
-          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py rejection-snapshot \
+          # Trusted runtime copy, isolated mode (issue #7159): never import
+          # branch-controlled modules from the checkout's scripts/ with GH_PAT.
+          _unblock_ledger_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/unblock_ledger.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_unblock_ledger_helper}" ] || [ -L "${_unblock_ledger_helper}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=trusted_helper_unavailable"
+            exit 0
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/unblock_ledger.py" rejection-snapshot \
               --run-file "${rejection_dir}/run.json" --artifact-file "${rejection_dir}/artifact.json" \
               --zip-file "${rejection_dir}/snapshot.zip" --item "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --approved-json "${approved_deletions}" > "${rejection_dir}/verified.json"; then
@@ -2300,7 +2328,15 @@ jobs:
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
-          verdict="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          # Trusted runtime copy, isolated mode (issue #7159); see "Validate
+          # approval phase label". A missing or symlinked copy fails closed.
+          _security_dependency_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/security_dependency.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_security_dependency_helper}" ] || [ -L "${_security_dependency_helper}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=trusted_helper_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
           if [ "$(printf '%s' "${verdict}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held_before_edits outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
