@@ -290,6 +290,9 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+# Own-line variant of _FAILURE_MARKER_RE for latest_trusted_autofix_marker_is_host_only:
+# a marker quoted inline in PR-influenced text (the "First error" code span) is not one.
+_FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -2508,7 +2511,9 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 		if login != author:
 			continue
 		body = sanitize_text(comment.get("body"))
-		for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE):
+		# Own-line markers only: the pipeline writes its marker on its own line,
+		# while PR-influenced "First error" text can quote a forged one inline.
+		for pattern in (_FAILURE_MARKER_LINE_RE, _FAILURE_CAP_MARKER_LINE_RE):
 			match = pattern.search(body)
 			if match is not None:
 				break
