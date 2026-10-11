@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7165_6107594769_approved",
   "issue_number": 7165,
   "metadata": {
+    "branch": "ai/issue-7165",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      "changelog.d/7165-implement-run-expression-limit.md",
+      "tests/test_implement_post_codex_recovery.py",
+      "tests/test_workflow_file_size_limit.py"
+    ],
+    "issue_number": 7165,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7165",
+    "pr_number": 7169,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7169",
+    "run_attempt": "1",
+    "run_id": "38128545499",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38128545499"
   },
   "run_attempt": 1,
   "run_id": "38128545499",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-11T09:34:41Z",
+  "status": "completed",
+  "timestamp": "2026-10-11T09:54:39Z",
   "workflow": "implement"
 }
