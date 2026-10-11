@@ -23,6 +23,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 POLLER = SCRIPTS / "orchestrate_poll_process.sh"
+RETIRED_HELPER = SCRIPTS / "orchestrate_stall_retired_conflict.sh"
 sys.path.insert(0, str(SCRIPTS))
 
 import orchestrate_lib as lib  # noqa: E402
@@ -173,6 +174,7 @@ def test_resolver_never_reads_the_retired_manifest() -> None:
 
 
 POLLER_TEXT = POLLER.read_text(encoding="utf-8")
+RETIRED_HELPER_TEXT = RETIRED_HELPER.read_text(encoding="utf-8")
 
 
 def test_managed_resolve_merge_conflict_reroutes_before_dispatch() -> None:
@@ -219,9 +221,13 @@ def test_both_reissue_bodies_append_issue_bound_guidance() -> None:
 
 
 def _extract_function(name: str) -> str:
-	match = re.search(rf"^{re.escape(name)}\(\) \{{\n.*?^\}}\n", POLLER_TEXT, re.S | re.M)
-	assert match, name
-	return match.group(0)
+	# The issue #6680 helpers live in their own sourced file; the rest of the
+	# extracted functions are defined in the poller itself.
+	for text in (RETIRED_HELPER_TEXT, POLLER_TEXT):
+		match = re.search(rf"^{re.escape(name)}\(\) \{{\n.*?^\}}\n", text, re.S | re.M)
+		if match:
+			return match.group(0)
+	raise AssertionError(name)
 
 
 HELPER_SOURCE = "\n".join(_extract_function(n) for n in (
@@ -350,7 +356,6 @@ def test_helper_fork_head_fails_closed(tmp_path: Path) -> None:
 	assert "RC=1" in result.stdout and "reason=head_not_same_repo" in result.stdout
 
 
-@needs_tools
 def test_reissue_dispatch_fn_targets_the_stall_action_and_is_not_env_controlled() -> None:
 	# The reroutes call execute_stall_recovery_action through a variable so
 	# ShellCheck's dataflow analysis does not inline it at each new site.
@@ -368,6 +373,7 @@ def test_helper_fetch_failure_fails_closed(tmp_path: Path) -> None:
 	assert "RC=1" in result.stdout and "reason=fetch_failed" in result.stdout, result.stdout + result.stderr
 
 
+@needs_tools
 def test_helper_missing_support_fails_closed(tmp_path: Path) -> None:
 	poller, head_sha = _scratch(tmp_path, base_deletes=RETIRED)
 	result = _run_helper(tmp_path, poller, _pr(head_sha), support=False)
@@ -383,6 +389,29 @@ def test_helper_cross_reference_pr_fails_closed(tmp_path: Path) -> None:
 	pr_other["head"]["ref"] = "ai/issue-8"
 	result = _run_helper(tmp_path, poller, pr_other)
 	assert "RC=1" in result.stdout and "reason=not_implementation_pr" in result.stdout, result.stdout + result.stderr
+
+
+def test_poller_sources_helper_file_with_fail_closed_stubs() -> None:
+	# The helper bodies moved out of the ~27,000-line poller so CI ShellCheck
+	# checks them as their own file; the poller sources them and falls back
+	# to stubs that keep the resolver dispatch when the file is missing.
+	assert RETIRED_HELPER.stat().st_mode & 0o111
+	for name in ("_stall_retired_conflict_branch_ok", "_stall_pr_json_may_conflict", "_stall_retired_host_only_conflict_check"):
+		assert re.search(rf"^{name}\(\) \{{$", RETIRED_HELPER_TEXT, re.M), name
+		assert not re.search(rf"^{name}\(\) \{{$", POLLER_TEXT, re.M), name
+	assert 'source "${_OPP_RETIRED_CONFLICT_DIR}/orchestrate_stall_retired_conflict.sh"' in POLLER_TEXT
+	assert "outcome=skip reason=helper_unavailable" in POLLER_TEXT
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "for f in orchestrate_stall_retired_conflict.sh; do" in workflow
+
+
+def test_poller_stub_fails_closed_when_helper_missing(tmp_path: Path) -> None:
+	start = POLLER_TEXT.index("_OPP_RETIRED_CONFLICT_DIR=")
+	end = POLLER_TEXT.index("\n_iso8601_to_epoch() {", start)
+	block = POLLER_TEXT[start:end]
+	script = "set -euo pipefail\n" + block + '\nif _stall_retired_host_only_conflict_check 7 42 "{}"; then echo RC=0; else echo RC=1; fi\n'
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False)
+	assert "RC=1" in result.stdout and "reason=helper_unavailable" in result.stdout, result.stdout + result.stderr
 
 
 def test_helper_fails_closed_on_oversized_conflict_set() -> None:

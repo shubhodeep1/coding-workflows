@@ -24294,7 +24294,8 @@ def test_stall_retired_conflict_reissue_is_wired_and_registered():
 	# guard, and the managed and standalone dispatch_rb_judge rungs.
 	assert poller_text.count("_stall_retired_host_only_conflict_check \"${issue_num}\"") == 5
 	assert '_stall_retired_host_only_conflict_check "${rb_issue}" "${RB_PR}" "${_rb_pr_json}"' in poller_text
-	assert 'STALL_RETIRED_CONFLICT_REISSUE_ENABLED:-true' in poller_text
+	helper_text = (REPO_ROOT / "scripts" / "orchestrate_stall_retired_conflict.sh").read_text(encoding="utf-8")
+	assert 'STALL_RETIRED_CONFLICT_REISSUE_ENABLED:-true' in helper_text
 	poll_workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}" in poll_workflow
 	agents_text = _agents_text_with_fragments(REPO_ROOT)

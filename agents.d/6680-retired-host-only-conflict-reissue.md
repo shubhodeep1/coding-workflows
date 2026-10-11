@@ -3,8 +3,9 @@ Retired host-only conflict re-issue (issue #6680): before stall recovery
 dispatches the conflict resolver or the review-blocked judge for an open PR
 (managed `resolve_merge_conflict`, the managed open-PR guard, the standalone
 conflict guard, and the managed and standalone `dispatch_rb_judge` rungs), it
-runs `_stall_retired_host_only_conflict_check` (`scripts/orchestrate_poll_process.sh`,
-classifier `orchestrate_lib.py retired-conflict-check`). When every host-only
+runs `_stall_retired_host_only_conflict_check` (`scripts/orchestrate_stall_retired_conflict.sh`,
+sourced by the poller, which falls back to fail-closed stubs when the file is
+not staged; classifier `orchestrate_lib.py retired-conflict-check`). When every host-only
 conflicted path of the PR (one `review_untrusted_workspace.allowed()` refuses)
 is listed in the verified support checkout's `workflow-templates/retired_files.txt`
 and absent from the base, it runs `close_and_reissue` instead of re-dispatching
