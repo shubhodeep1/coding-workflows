@@ -22,6 +22,8 @@
 #   ai_engine_fallback <role> <reason>
 #       Logs `AI_ENGINE_FALLBACK role= reason=` and sends at most one
 #       Telegram note per job (plan D1). The caller then runs codex.
+#       AI_ENGINE_LAST_FALLBACK_REASON holds the sanitized reason afterwards,
+#       so a caller whose stderr is redirected can log it.
 #   ai_engine_pool_dir
 #       The account pool directory (CLAUDE_ENGINE_POOL_DIR below).
 #   ai_engine_claude_home
@@ -137,6 +139,8 @@ ai_engine_fallback()
 {
 	local role="${1:-unknown}" reason="${2:-unknown}"
 	reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-60)"
+	# shellcheck disable=SC2034  # read by callers whose stderr is redirected
+	AI_ENGINE_LAST_FALLBACK_REASON="${reason}"
 	echo "AI_ENGINE_FALLBACK role=${role} reason=${reason}" >&2
 	# The Claude review-panel slot has no codex path: it retries its pool
 	# fallback model or is skipped (skipped_pool), so say so in the alert.
