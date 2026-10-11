@@ -1518,7 +1518,7 @@ if fenced:
 	strict_text = fenced.group(1).strip()
 try:
 	findings = json.loads(strict_text)
-except ValueError:
+except (ValueError, RecursionError):
 	findings = None
 else:
 	if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
@@ -1530,7 +1530,9 @@ else:
 # its end, so an array nested in a JSON value that parsed is never a candidate.
 # An empty array never replaces a non-empty one, and it counts only when it
 # starts a line and nothing but a closing fence follows it, so a "[]" nested
-# in a cut-off reply (`"evidence": []`) is not read as a clean audit.
+# in a cut-off reply (`"evidence": []`) is not read as a clean audit. Once an
+# opener fails to parse, a later "[]" may sit inside that unclosed value
+# (`Results:\n{"findings":\n[]`), so no empty array counts after it.
 decoder = json.JSONDecoder()
 opener = re.compile(r"[\[{]")
 
@@ -1541,11 +1543,13 @@ def next_open(start: int) -> int:
 
 
 candidate = None
+failed_open = False
 position = next_open(0)
 while position != -1:
 	try:
 		value, end = decoder.raw_decode(text, position)
-	except ValueError:
+	except (ValueError, RecursionError):
+		failed_open = True
 		position = next_open(position + 1)
 		continue
 	if isinstance(value, list) and all(isinstance(item, dict) and "finding_id" in item for item in value):
@@ -1553,6 +1557,7 @@ while position != -1:
 			candidate = (value, position, end)
 		elif (
 			candidate is None
+			and not failed_open
 			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
 			and re.fullmatch(r"\s*(```)?\s*", text[end:])
 		):

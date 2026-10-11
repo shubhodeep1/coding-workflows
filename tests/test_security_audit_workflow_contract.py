@@ -2863,6 +2863,11 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		# A cut-off reply that ends in a nested empty array is not a clean audit.
 		('Findings:\n[{"finding_id": "x", "evidence": []', "malformed_output"),
 		('Results so far: {"counts": {"files": 3}, "findings": []', "malformed_output"),
+		# A line-start "[]" inside an unclosed value is not a clean audit either.
+		('Results:\n{"findings":\n[]', "malformed_output"),
+		('Findings so far.\n[\n[]', "malformed_output"),
+		# Nesting deeper than the JSON decoder's recursion limit falls back cleanly.
+		("[" * 5000, "malformed_output"),
 		# An array nested in a JSON object that parses is not top-level.
 		("Here: {\"findings\": " + finding + "}", "malformed_output"),
 		("", "missing_output"),
