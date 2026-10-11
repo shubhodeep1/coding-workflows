@@ -1119,3 +1119,71 @@ def test_ci_runs_this_file():
 ])
 def test_substitution_bodies_follow_bash_quoting(command, bodies):
 	assert guard.substitution_bodies(command) == bodies
+
+
+# ──────────────────────────────────────────────────────────────────
+# Bare usage text (issue #6668)
+# ──────────────────────────────────────────────────────────────────
+
+# `gh api --help` / `gh api -h` with nothing else only prints usage and sends
+# no API request (operator decision 2026-09-30, Q1: A). Any other argument
+# beside it keeps the call unreadable, so it still asks.
+
+@pytest.mark.parametrize("command", [
+	"gh api --help",
+	"gh api -h",
+	"gh api --help 2>&1",
+	"gh api -h | head -20",
+])
+def test_bare_help_is_a_read(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == "allow"
+	assert "read call" in reason
+
+
+@pytest.mark.parametrize("command", [
+	"gh api --help repos/o/r",
+	"gh api repos/o/r --help",
+	"gh api -X DELETE repos/o/r --help",
+	"gh api -X POST --help",
+	"gh api -f a=b --help",
+	"gh api --input x.json --help",
+	"gh api -h -h",
+	"gh api --help -h",
+	"gh api --help --",
+	"gh api --help=x",
+	"gh api -h repos/o/r",
+])
+def test_help_with_other_arguments_still_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == "ask"
+	assert "unreadable call" in reason
+
+
+@pytest.mark.parametrize("command", [
+	"gh api --help | grep x",
+	(
+		"gh api --help | grep -n -i -A3 \"escape\"; grep -rn \"allow-escape-sequences\" --include=*.sh "
+		"--include=*.yml --include=*.py . | grep -v '^./.git/' | head -20"
+	),
+])
+def test_bare_help_piped_to_grep_gets_no_decision(command):
+	assert _decide(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"echo \"$(gh api --help)\"",
+	"echo `gh api --help`",
+	"bash -c 'gh api --help'",
+	"xargs gh api --help",
+])
+def test_hidden_bare_help_still_asks(command):
+	assert _decide(command) == "ask"
+
+
+def test_bare_help_beside_a_write_still_asks():
+	assert _decide("gh api --help; gh api -X DELETE repos/o/r") == "ask"
+
+
+def test_literal_loop_over_bare_help_gets_no_decision():
+	assert _decide("for i in a b; do gh api --help; done") is None
