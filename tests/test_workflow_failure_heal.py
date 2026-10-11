@@ -343,6 +343,33 @@ def test_select_failed_runs_matches_title_and_conclusion() -> None:
 	assert [run["run_id"] for run in picked] == ["2", "4"]
 
 
+def test_select_failed_runs_picks_the_tracking_issues_validation_runs() -> None:
+	"""binance-blessings#249: its validation run is titled `AI Validate
+	[tracking:249]`, never the project title, so the report carried no runs."""
+	runs = [
+		{"id": 7, "conclusion": "failure", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:04:45Z", "html_url": "u7", "name": "AI Validate"},
+		{"id": 8, "conclusion": "failure", "display_title": "Internal: AI Validate [tracking:249]", "created_at": "2026-10-11T03:05:45Z", "html_url": "u8", "name": "Internal: AI Validate"},
+		{"id": 9, "conclusion": "failure", "display_title": "AI Validate [tracking:2490]", "created_at": "2026-10-11T03:06:45Z", "html_url": "u9", "name": "AI Validate"},
+		{"id": 10, "conclusion": "success", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:07:45Z", "html_url": "u10", "name": "AI Validate"},
+		{"id": 11, "conclusion": "failure", "display_title": "AI Validate [tracking:249] extra", "created_at": "2026-10-11T03:08:45Z", "html_url": "u11", "name": "AI Validate"},
+	]
+	title = "[Orchestrator] Support/Resistance TWAP Flips and Sell Guardrails"
+	assert [run["run_id"] for run in heal.select_failed_runs(runs, title=title, tracking_issue=249)] == ["7", "8"]
+	assert heal.select_failed_runs(runs, title=title) == []
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:harness-broken",
+		issue={**_issue(249, title=title, labels=["ai:orchestrator-tracking", "ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["7", "8"]
+	pr_payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="pull_request", label="ai:harness-broken",
+		issue={**_issue(249, title="Unrelated PR", labels=["ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert pr_payload["run_refs"] == []
+
+
 def _issue(number: int = 42, *, title: str = "Add retries to the poller", body: str = "body", labels: list[str] | None = None, state: str = "open") -> dict:
 	return {
 		"number": number,
@@ -2168,6 +2195,54 @@ def test_intake_without_linked_runs_still_files_from_label_context() -> None:
 	assert "no failed run could be linked" in prompt
 	created = state["issues_created"][0]
 	assert created["title"] == f"Workflow heal: ai:needs-human on {CONSUMER_REPO}#42"
+
+
+def test_intake_label_only_fingerprint_is_per_escalated_item() -> None:
+	"""A run-less label report used to fingerprint as `label:<label>` alone, so
+	every repository's run-less reports of that label shared one lineage:
+	binance-blessings#249's first ai:harness-broken report escalated at
+	generation 4 because three unrelated heals (the last #7063, from
+	coding-workflows#6902) carried that fingerprint."""
+	shared_fp = heal.fingerprint("label:ai:needs-human", "", "label:ai:needs-human")
+	unrelated = _sourced_heal_issue(7063, state="closed", fp=shared_fp, source=f"{SELF_REPO}#6902", gen=3)
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [unrelated], CONSUMER_REPO: []})
+	result, state_after, _ = _run_intake(_consumer_payload(run_refs=[]), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	expected_fp = heal.fingerprint("label:ai:needs-human", "", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=label:ai:needs-human" in result.stdout
+	assert "reason=lineage_cap" not in result.stdout
+	created = state_after["issues_created"][0]
+	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
+
+
+def test_intake_unreadable_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A report whose linked runs' job logs all failed to fetch carries only
+	"(job log unavailable)" placeholders, whose `no-error-lines` signature is
+	the same for every item; it is keyed on the escalated item instead."""
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(job_logs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_fetch_failed" in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
+
+
+def test_intake_filter_failed_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A job log that was fetched but whose `filter-log` failed is emptied and
+	is not readable evidence either: it must not count as a read log, or the
+	report falls back to the shared `no-error-lines` signature."""
+	def _fail_filter_log(_tmp: Path, work: Path) -> None:
+		heal_py = work / "scripts" / "workflow_failure_heal.py"
+		text = heal_py.read_text(encoding="utf-8")
+		guard = 'if __name__ == "__main__" and sys.argv[1:2] == ["filter-log"]:\n\tsys.exit(1)\n\n\nif __name__ == "__main__":'
+		assert text.count('if __name__ == "__main__":') == 1
+		heal_py.write_text(text.replace('if __name__ == "__main__":', guard), encoding="utf-8")
+
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_fail_filter_log)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_filter_failed" in result.stdout
+	assert "warn job_log_fetch_failed" not in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -4880,11 +4955,25 @@ def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "yes"})
 	assert "WORKFLOW_HEAL warn invalid_require_report_auth value=yes; using false" in result.stdout
 	assert "report_auth=absent reason=bound" in result.stdout
-	# Phase reports carry no identity (heal-report runs with permissions: {});
-	# the provenance gate binds them, so enforcement does not skip them.
+	# Phase reports get no exemption (issue #6834): heal-report is granted
+	# id-token: write, so a tokenless phase report is rejected under
+	# enforcement before the provenance gate runs...
 	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
 	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"report_auth=rejected reason=unauthenticated_report source={CONSUMER_REPO} kind=phase_failure" in result.stdout
+	assert "provenance_verified" not in result.stdout
+	assert _api_writes(state) == []
+	# ...and still accepted through the provenance gate by default.
+	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
 	assert "unauthenticated_report" not in result.stdout and "provenance_verified" in result.stdout
+	# A phase report carrying a valid identity passes under enforcement.
+	with tempfile.TemporaryDirectory(prefix="heal-identity-phase-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name), run_id="500", job_workflow_ref=f"{SELF_REPO}/.github/workflows/plan.yml@refs/heads/main")
+		result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", **_identity_env(token_file, jwks_file)})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "report_auth=verified" in result.stdout and "provenance_verified" in result.stdout
+		assert token not in result.stdout + result.stderr
 	# Manual re-runs are bound but never need an identity.
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", "WORKFLOW_HEAL_REPORT_ORIGIN": "workflow_dispatch"})
 	assert "report_auth=manual reason=bound" in result.stdout
@@ -5724,7 +5813,7 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		condition = " ".join(job["if"].split())
 		assert condition.startswith(f"always() && needs.{job_name}.result == 'failure' &&")
 		assert "!contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)" in condition
-		assert job["permissions"] == {}
+		assert job["permissions"] == {"id-token": "write"}
 		assert job["env"]["WORKFLOW_HEAL_PHASE"] == name
 		assert job["env"]["WORKFLOW_HEAL_PHASE_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}"
 		assert job["env"]["WORKFLOW_HEAL_ISSUE_NUMBER"] == "${{ github.event.issue.number }}"
@@ -5735,6 +5824,16 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		report = next(step["run"] for step in job["steps"] if step.get("name") == "Report the failed run to workflow failure heal")
 		assert ".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh" in report and "reason=reporter_missing" in report
 		assert "${{" not in report
+	# A reusable-workflow job asking for more than its caller grants fails the
+	# whole run at startup, so every caller must grant id-token: write.
+	for name in ("clarify", "plan", "implement"):
+		for caller in (REPO_ROOT / "workflow-templates" / f"ai-{name}.yml", REPO_ROOT / ".github" / "workflows" / f"internal-{name}.yml"):
+			doc = yaml.safe_load(caller.read_text(encoding="utf-8"))
+			calling = [job for job in (doc.get("jobs") or {}).values() if f"/.github/workflows/{name}.yml@" in str(job.get("uses") or "")]
+			assert calling, caller
+			for job in calling:
+				granted = job["permissions"] if "permissions" in job else (doc.get("permissions") or {})
+				assert granted == "write-all" or (isinstance(granted, dict) and granted.get("id-token") == "write"), caller
 	implement = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
 	assert "needs.implement.outputs.heal_report == 'true'" in implement["jobs"]["heal-report"]["if"]
 	assert implement["jobs"]["implement"]["outputs"]["heal_report"] == "${{ steps.heal_report_gate.outputs.report }}"

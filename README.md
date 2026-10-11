@@ -467,6 +467,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   clarify:
     if: >-
@@ -485,6 +486,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   plan:
     if: >-
@@ -521,6 +523,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  id-token: write
 jobs:
   implement:
     if: >-
@@ -1219,6 +1222,22 @@ not delete wrappers that are already present in `.github/workflows/`.
 > an `agents.md` change, a `files_touched` or `ai:scope:` scope that covers
 > `agents.md` covers its top-level fragments, the review editor keeps the
 > fragments it creates, and tests read the file through `tests/agents_doc.py`.
+>
+> CI's `agents.md direct-edit check (CLAUDE.md §30)` step enforces the
+> contract on pull requests, except a project's final PR from an
+> `orchestrator/project-*` branch (its sub-PRs are checked when they land
+> there) and an `auto/forward-merge-stable-*` fallback PR (it carries the
+> release fold's generated text); both skips require a same-repository head
+> targeting the default branch. `scripts/check_agents_md_direct_edits.py` diffs the PR merge commit
+> against its base parent and fails when an `agents.md` / `AGENTS.md` hunk
+> outside the generated TREE-marker blocks of `## Repo-tree (auto-generated)`
+> only inserts lines, or when its hunks outside those blocks add more than `AGENTS_MD_DIRECT_NET_ADD_MAX`
+> lines (default `5`) beyond the lines they replace, so a correction cannot
+> carry new documentation along. It logs
+> `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|error`. The release
+> fold pushes to the branch directly and is not a pull request. The inline
+> implement prompt, the review editor prompt and
+> `unattended_system_instructions.md` §25 give the same rule.
 
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
@@ -1385,6 +1404,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 jobs:
   clarify:
@@ -1884,9 +1904,14 @@ through `clarify → plan → implement → review`.
   (`skip reason=downstream_gate_failure`) because the gate run reports itself.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
   comments, and the repository's recent runs. It links at most 3 listed failed
-  runs whose display title matches the issue title; run URLs in comments can
+  runs whose display title matches the issue title, or, for an orchestrator
+  project, ends in `[tracking:<issue number>]` (the validate wrappers' run name,
+  `AI Validate [tracking:N]`); run URLs in comments can
   prioritize those runs but cannot introduce an unverified run ID. A run absent
-  from the recent listing is omitted. Lineage markers in the source issue are
+  from the recent listing is omitted. A report that still links no run, or whose
+  linked runs' job logs could not be read, is fingerprinted on the label and the escalated item
+  (`label:<label>|source:<repo>#<n>`), so run-less reports from different
+  issues or repositories never share one lineage. Lineage markers in the source issue are
   inherited only from an `ai:workflow-heal` issue with a canonical header
   authored by a bot or an owner/member/collaborator;
   forged markers on other issues do not consume the heal generation budget.
@@ -1927,10 +1952,11 @@ through `clarify → plan → implement → review`.
   (a consumer whose wrappers have not synced yet) is accepted after the
   binding checks with a Telegram WARNING while
   `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (the default) and skipped when it
-  is `true`. Phase reports are the exception: the clarify / plan / implement
-  `heal-report` job runs with `permissions: {}`, so they carry no token (the
-  phase reporter attaches one only if the job is granted `id-token: write`)
-  and are always left to the provenance gate. Manual `workflow_dispatch` re-runs always take the binding
+  is `true`. Phase reports follow the same rule: the clarify / plan /
+  implement `heal-report` job is granted `id-token: write` and attaches a
+  token, which is verified when present; a tokenless phase report (an older
+  pin, or a failed token request) is skipped when enforcement is on, and the
+  provenance gate still runs after verification. Manual `workflow_dispatch` re-runs always take the binding
   checks; `workflow_run` payloads come from GitHub's own event. Every
   rejection fails closed with `WORKFLOW_HEAL report_auth=rejected reason=…`,
   a Telegram WARNING, and no issue or comment.
@@ -2361,7 +2387,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch`. Failed release runs use their failed branch; same-repo review failures use the verified support-script branch when resolvable, otherwise the PR head (falling back to stable if missing). |
-| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), except phase reports, which the provenance gate binds. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), phase reports included; enable it only after consumers have synced wrappers whose reporters attach a token. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |

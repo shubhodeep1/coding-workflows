@@ -287,12 +287,10 @@ case "${REPORT_ORIGIN}" in
 				REPORT_AUTH="verified"
 				;;
 			*)
-				# phase_failure reports come from the heal-report job of the
-				# clarify / plan / implement workflows, which runs with
-				# `permissions: {}` and so carries no identity; the provenance
-				# gate below binds them to a run of that workflow in source_repo
-				# linked from the issue by a trusted author.
-				if [ "${REQUIRE_REPORT_AUTH}" = "true" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
+				# Every repository_dispatch report, phase_failure included (its
+				# heal-report job is granted id-token: write), needs a verified
+				# identity when enforcement is on (issue #6834).
+				if [ "${REQUIRE_REPORT_AUTH}" = "true" ]; then
 					_report_auth_reject "unauthenticated_report"
 				fi
 				REPORT_AUTH="absent"
@@ -584,6 +582,8 @@ fi
 SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
 printf '[]' > "${SUMMARIES_FILE}"
 LOG_FILES=()
+# Job logs actually fetched (placeholders for unreadable logs do not count).
+READ_JOB_LOG_COUNT=0
 RUN_COUNT=0
 
 while IFS=$'\t' read -r run_id run_url; do
@@ -666,6 +666,9 @@ while IFS=$'\t' read -r run_id run_url; do
 			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
 				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 				: > "${FILTERED_LOG}"
+			else
+				# A log whose filtering failed was emptied above and is not readable evidence.
+				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
@@ -798,7 +801,11 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi
-elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
+# An issue / PR report whose linked runs' logs were all unreadable carries only
+# "(job log unavailable)" placeholders, whose `no-error-lines` signature is the
+# same for every item; key it on the escalated item like a run-less report.
+elif [ "${#LOG_FILES[@]}" -gt 0 ] && { [ "${READ_JOB_LOG_COUNT}" -gt 0 ] \
+	|| { [ "${SOURCE_KIND}" != "issue" ] && [ "${SOURCE_KIND}" != "pull_request" ]; }; }; then
 	SIG_ARGS=()
 	for f in "${LOG_FILES[@]}"; do
 		SIG_ARGS+=(--log-file "${f}")
@@ -809,7 +816,12 @@ elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	# the (absent) escalation label.
 	SIGNATURE="phase:${FAILURE_REASON:-unknown}"
 else
-	SIGNATURE="label:${LABEL:-unknown}"
+	# No run (or no readable run log) to read: key on the escalated item as well as the label. A bare
+	# `label:<label>` signature gave every run-less report of that label, in
+	# every repository, one fingerprint and one lineage, so three unrelated
+	# harness fixes capped binance-blessings#249's first report at
+	# generation 4.
+	SIGNATURE="label:${LABEL:-unknown}|source:${SOURCE_REPO}#${ISSUE_NUMBER:-none}"
 fi
 FP="$(python3 "${HEAL_PY}" fingerprint --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" --signature "${SIGNATURE}")"
 log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_STEP:-none} runs=${SUMMARY_COUNT}"
