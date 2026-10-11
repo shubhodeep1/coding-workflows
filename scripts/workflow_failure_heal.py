@@ -2933,6 +2933,33 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	return result
 
 
+def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> str:
+	"""Return the reason of the newest trusted failure marker for ``head_sha``.
+
+	Same trust rules as ``count_identical_failures`` (author, head, valid
+	``fp``, and ``support`` when given), but ``provider_unavailable`` markers
+	are not skipped. The force_rb_judge host-only conflict skip (issue #6743)
+	uses it so a newer failure with any other reason keeps the conflict steps.
+	Returns "" when no trusted marker exists.
+	"""
+	support = _normalized_support_sha(support_sha)
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	if not head or not author:
+		return ""
+	for comment in reversed([comment for comment in comments if isinstance(comment, dict)]):
+		match = _FAILURE_MARKER_RE.search(sanitize_text(comment.get("body")))
+		if match is None or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(match)
+		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
+		return fields.get("reason") or "unknown"
+	return ""
+
+
 # ---------------------------------------------------------------------------
 # Dedup / lineage / budget
 # ---------------------------------------------------------------------------
@@ -3785,6 +3812,8 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
+	newest_reason = newest_trusted_failure_reason(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
+	sys.stdout.write(f"newest_reason={safe_token(newest_reason) if newest_reason else ''}\n")
 	return 0
 
 
@@ -4371,7 +4400,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
+	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / newest_reason= for the trailing identical failures on a head")
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
