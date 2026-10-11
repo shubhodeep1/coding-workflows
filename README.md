@@ -467,6 +467,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   clarify:
     if: >-
@@ -485,6 +486,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   plan:
     if: >-
@@ -521,6 +523,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  id-token: write
 jobs:
   implement:
     if: >-
@@ -1219,6 +1222,22 @@ not delete wrappers that are already present in `.github/workflows/`.
 > an `agents.md` change, a `files_touched` or `ai:scope:` scope that covers
 > `agents.md` covers its top-level fragments, the review editor keeps the
 > fragments it creates, and tests read the file through `tests/agents_doc.py`.
+>
+> CI's `agents.md direct-edit check (CLAUDE.md §30)` step enforces the
+> contract on pull requests, except a project's final PR from an
+> `orchestrator/project-*` branch (its sub-PRs are checked when they land
+> there) and an `auto/forward-merge-stable-*` fallback PR (it carries the
+> release fold's generated text); both skips require a same-repository head
+> targeting the default branch. `scripts/check_agents_md_direct_edits.py` diffs the PR merge commit
+> against its base parent and fails when an `agents.md` / `AGENTS.md` hunk
+> outside the generated TREE-marker blocks of `## Repo-tree (auto-generated)`
+> only inserts lines, or when its hunks outside those blocks add more than `AGENTS_MD_DIRECT_NET_ADD_MAX`
+> lines (default `5`) beyond the lines they replace, so a correction cannot
+> carry new documentation along. It logs
+> `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|error`. The release
+> fold pushes to the branch directly and is not a pull request. The inline
+> implement prompt, the review editor prompt and
+> `unattended_system_instructions.md` §25 give the same rule.
 
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
@@ -1385,6 +1404,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 jobs:
   clarify:
@@ -1927,10 +1947,11 @@ through `clarify → plan → implement → review`.
   (a consumer whose wrappers have not synced yet) is accepted after the
   binding checks with a Telegram WARNING while
   `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (the default) and skipped when it
-  is `true`. Phase reports are the exception: the clarify / plan / implement
-  `heal-report` job runs with `permissions: {}`, so they carry no token (the
-  phase reporter attaches one only if the job is granted `id-token: write`)
-  and are always left to the provenance gate. Manual `workflow_dispatch` re-runs always take the binding
+  is `true`. Phase reports follow the same rule: the clarify / plan /
+  implement `heal-report` job is granted `id-token: write` and attaches a
+  token, which is verified when present; a tokenless phase report (an older
+  pin, or a failed token request) is skipped when enforcement is on, and the
+  provenance gate still runs after verification. Manual `workflow_dispatch` re-runs always take the binding
   checks; `workflow_run` payloads come from GitHub's own event. Every
   rejection fails closed with `WORKFLOW_HEAL report_auth=rejected reason=…`,
   a Telegram WARNING, and no issue or comment.
@@ -2361,12 +2382,13 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch`. Failed release runs use their failed branch; same-repo review failures use the verified support-script branch when resolvable, otherwise the PR head (falling back to stable if missing). |
-| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), except phase reports, which the provenance gate binds. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), phase reports included; enable it only after consumers have synced wrappers whose reporters attach a token. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
 | `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor wall-time limit, for the codex container and for the Claude run alike. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. When `IMPLEMENT` resolves to Claude (the default), `scripts/heal_isolated_implement.sh` runs the heal editor and its syntax repairs through `ai_engine.sh` `claude_run` on its own snapshot (in `codex_isolated_exec.sh`'s credential-free write container, never the job's shared workspace sandbox), then applies the same syntax validation and scoped transfer as a codex edit. Claude unavailable (exit 75) runs the isolated codex editor; any other Claude failure fails the run. `HEAL_ISOLATED_EDITOR ... engine=` names the engine that ran. |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED` | `true` | Lets the heal intake route a provenance-verified review/autofix failure with a non-retryable reason (`conflict_resolver_sandbox_path_host_only`, `..._path_unsupported`, `..._support_missing`, also when it is the repeated reason behind an `identical_failure_cap` report) to a manual merge instead of a heal issue. The intake posts one diagnosis comment on the PR with reason-specific remediation, naming the host-only paths for the host-only stop (marker `ai:workflow-heal-non-retryable:v1`, keyed on PR, head and reason), adds `ai:needs-human` (a later report for the same head re-adds it if the first write failed), sends a WARNING, and logs `WORKFLOW_HEAL skip reason=non_retryable_<suffix>`. Host-only stops are forwarded by the review/autofix reporter for this; an intake path that does not diagnose one still skips it as `host_only_conflict_manual_merge`. The label reporter skips the label event the intake caused. `false` restores the earlier behaviour: host-only stops are skipped before provenance (no heal issue), the other two reasons file heal issues. |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
 | `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` | `1` | Consecutive failed runs of one phase (clarify, plan or implement) on one issue before that workflow's `heal-report` job reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
