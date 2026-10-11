@@ -198,6 +198,13 @@ def _warn(message: str) -> None:
 def _is_run_eligible(run: Any) -> bool:
 	if not isinstance(run, dict):
 		return False
+	# Issue #6637: the collector marks fork-origin and unknown-origin PR runs.
+	# Their log archives hold fork-written text and must never be fetched or
+	# summarised for the analysis model.
+	if run.get("log_download_status") == "excluded_untrusted_origin":
+		return False
+	if "origin_trust" in run and run.get("origin_trust") != "trusted":
+		return False
 	# Treat whitespace-only `log_summary` as missing so a prior empty write
 	# doesn't permanently block re-summarization (analyzer also drops blanks
 	# in `_normalized_run_view`).

@@ -295,6 +295,18 @@ def entry_matches(entry: str, path: str) -> bool:
 	return path == entry or path.startswith(entry + "/")
 
 
+# CLAUDE.md §30: agents.md is documented through agents.d/<pr>-<slug>.md
+# fragments that release automation folds in, so a scope that covers the agents
+# file covers its top-level fragments too.
+AGENTS_FRAGMENT_RE = re.compile(r"^agents\.d/[^/]+\.md$")
+AGENTS_DOC_PATHS = ("agents.md", "AGENTS.md")
+
+
+def is_agents_fragment(path: str) -> bool:
+	"""True for a top-level ``agents.d/*.md`` fragment."""
+	return bool(AGENTS_FRAGMENT_RE.match(path))
+
+
 def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True) -> bool:
 	"""True when a staged path is auto-allowed or covered by any allowlist entry."""
 	if allow_lockfiles and is_lockfile(path):
@@ -302,6 +314,8 @@ def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = Tr
 	for entry in allowlist:
 		if entry_matches(entry, path):
 			return True
+	if is_agents_fragment(path):
+		return any(entry_matches(entry, doc) for entry in allowlist for doc in AGENTS_DOC_PATHS)
 	return False
 
 
