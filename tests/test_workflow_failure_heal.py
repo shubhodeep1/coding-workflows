@@ -1885,6 +1885,54 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 			assert "--method" in call and call[call.index("--method") + 1] == "GET"
 
 
+@pytest.mark.parametrize("status", ("behind", "diverged"))
+def test_intake_targets_the_default_branch_when_stable_lacks_the_pinned_release(status: str) -> None:
+	"""#6902 -> #7063: a consumer pinned to a main-only commit got a stable hotfix
+	issue for a file stable does not have, and its plan could only block."""
+	state = _intake_state(compare=_compare(0, [], status=status), branches=["stable", "main"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+	assert f"target_branch_retarget from=stable to=main reason=wrapper_pin_not_on_target pin={SHA_A} compare_status={status}" in result.stdout
+	assert "target_branch=main" in result.stdout and "target_branch_source=wrapper_pin_not_on_target" in result.stdout
+	# No extra API call: the branch-progress compare already answered it.
+	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
+	assert len(compare_calls) == 1 and any(f"compare/{SHA_A}...stable" in part for part in compare_calls[0])
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"]
+	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
+
+
+@pytest.mark.parametrize("compare", (_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")], status="ahead"), _compare(0, [], status="identical"), None))
+def test_intake_keeps_stable_when_it_contains_the_pin_or_the_compare_is_unavailable(compare) -> None:
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "target_branch_retarget" not in result.stdout
+	assert "target_branch_source=default" in result.stdout
+
+
+def test_intake_retarget_uses_the_configured_default_branch_for_consumer_issue_reports() -> None:
+	"""Consumer issue reports skip the provenance block; the retarget must still
+	read WORKFLOW_HEAL_DEFAULT_BRANCH instead of assuming `main`."""
+	state = _intake_state(compare=_compare(0, [], status="behind"), branches=["stable", "main", "develop"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "develop"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "develop"
+	assert "target_branch_retarget from=stable to=develop" in result.stdout
+
+
+def test_intake_retarget_falls_back_to_main_without_a_known_default_branch() -> None:
+	state = _intake_state(compare=_compare(0, [], status="behind"))
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": ""})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+
+
 def test_intake_routes_consumer_defect_to_consumer_repo() -> None:
 	diag = "## Classification\nconsumer-app-defect\n\n## Summary\nThe app's tests import a removed module.\n"
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=diag)

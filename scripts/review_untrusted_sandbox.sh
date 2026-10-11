@@ -349,8 +349,10 @@ if [ "$#" -lt 9 ] && [ "${claude_role}" = REVIEW_CONSOLIDATOR ]; then
 	claude_access=read
 fi
 case "${claude_access}" in read|write) ;; *) exit 2 ;; esac
-# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the Claude review-panel
-# slot (PANEL_REVIEWER) are read-only sandbox roles; never transfer.
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
+# The Claude review-panel slot (PANEL_REVIEWER) is read-only too. Keep the line
+# above verbatim: orchestrate_poll_process.sh greps for it as a capability
+# marker and defers every poller judge as sandbox_helper_outdated without it.
 case "${claude_role}" in
 	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER)
 		[ "${claude_access}" = read ] || exit 2 ;;
