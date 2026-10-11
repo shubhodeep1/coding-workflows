@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this task be pointed at PR #7065's branch (`ai/issue-7059`) so planning and implementation check out the right code?\nChoices:\nA) A maintainer edits this issue's body to add this exact line on its own, at the start of a line: `Target branch: ai/issue-7059`. Then post `/reclarify`. (RECOMMENDED)\nB) Close this issue and make the test-only change directly on PR #7065: the review editor or an interactive session updates the four negative `issues_created` assertions and the negative `comments_posted` read in `tests/test_workflow_failure_heal.py` on `ai/issue-7059`.\nC) Go ahead against `main` with no target branch. **Note:** on `main` these assertions already handle a missing key, so this will most likely produce an empty change and will not fix PR #7065's failing check.",
+  "fingerprint": "7eac17dad843b38a5bc784fb0e8afc7e9e72313c5f33a0dc628a550763194318",
+  "lineage": {
+    "issue_number": 7188,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38182491540",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38182491540",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011230543_3bad54fd21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7188,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38182491540"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7188 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T23:05:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
