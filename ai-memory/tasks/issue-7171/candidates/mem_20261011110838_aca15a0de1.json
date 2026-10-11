@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which scope is authorized for this fix?\nChoices:\nA. Expand the trusted heal-scope marker to include the three named `scripts/unblock_*` files. (RECOMMENDED)\nB. Keep the marker unchanged and file a separately authorized issue for the script fix.",
+  "fingerprint": "4c5720daacd9048841e17582f21f480aa5296a42ad5a7061031bdda981923f2a",
+  "lineage": {
+    "issue_number": 7171,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38133940501",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38133940501",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011110838_aca15a0de1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7171,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38133940501"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7171 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T11:08:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
