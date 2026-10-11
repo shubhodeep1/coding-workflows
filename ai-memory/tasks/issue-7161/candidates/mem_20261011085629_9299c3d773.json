@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should we handle the conflict between the issue's allowed paths (`implement.yml`, `tests/**`, `changelog.d/*.md`) and the files the fix needs (`workflow-templates/ai-review.yml`, `scripts/workflow_wrapper_refs.py`, `scripts/review_security_hold_sweep.py`)?\nChoices:\nA) Widen the scope: refile or update this heal issue with a trusted heal-scope marker and a `files_touched` list that includes those three files plus their tests, then implement the full fix (RECOMMENDED)\nB) Stay inside the current scope: only add tests and a changelog fragment confirming that the automation-path guard correctly blocked bitsafe.io#498. The `ai-review.yml` security-hold weakness is handled in a separate issue.\nC) Close this issue with no code change: the failure was the guard working as designed, and the template weakness goes to a separate security issue\n**Note:** if you choose B or C, Q2 does not apply.\nQ2: Once the security-hold sweep in `ai-review.yml` runs with the job's `github.token`, how should it learn which account's finding comments to trust? Today it uses `gh api user` with its own token, and that endpoint does not work with `github.token`.\nChoices:\nA) Use `GH_PAT` only for a single identity lookup (`/user`) that names the trusted finding author. Every PR, comment and dispatch call uses `github.token`, with markers written by that token's account checked separately. If the `GH_PAT` identity cannot be resolved, refuse to run. (RECOMMENDED)\nB) Add an UPPER_SNAKE_CASE repo variable (for example `SECURITY_HOLD_TRUSTED_LOGIN`) with no default to name the trusted author. If it is unset, the sweep skips and fails closed.\nC) Keep `secrets.GH_PAT || github.token` for the sweep and only pin the support checkout to the release SHA. The token-scope part of the finding is deferred.",
+  "fingerprint": "f9b6689b4e2fbf5f0aeba6a904b6134fa58e5d8a70be3c41d1d848f12915e67a",
+  "lineage": {
+    "issue_number": 7161,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38126193248",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38126193248",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011085629_9299c3d773",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7161,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38126193248"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7161 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T08:56:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
