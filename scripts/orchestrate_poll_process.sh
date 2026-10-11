@@ -249,6 +249,33 @@ for _orch_fp_candidate in \
   fi
 done
 unset _orch_fp_candidate
+# Default-off automation-path gate for plan auto-approval (#6838); see
+# _automation_path_plan_auto_approval_gate. Keep an unset flag distinct from
+# explicit false: direct script callers without the flag can still recover a
+# plan-step hold marker. The workflow forwards an explicit default of false.
+# The grant guard is taken only from the verified support checkout.
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED-}"
+ORCH_AUTOMATION_PATH_GUARD=""
+for _orch_apg_candidate in \
+  "$(pwd)/.codex-workflow-src/scripts/files_touched_scope_guard.py" \
+  "$(pwd)/.codex-workflow-src-main/scripts/files_touched_scope_guard.py"; do
+  if [ -f "${_orch_apg_candidate}" ]; then
+    ORCH_AUTOMATION_PATH_GUARD="${_orch_apg_candidate}"
+    break
+  fi
+done
+unset _orch_apg_candidate
+_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS='
+  def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
+  def event_key: [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
+  def is_plan: ((.body // "") | test("(^|\n)\\s*implementation\\s+plan\\b"; "i"));
+  def hold_marker: ((.body // "") | (capture("<!-- ai:automation-path-plan-hold:v1 issue=(?<issue>[0-9]+) reason=(?<reason>[a-z_]+) source=(?<source>[a-z]+) paths=(?<paths>[A-Za-z0-9+/=]*) -->") // null));
+  def latest_plan: (map(select(trusted and is_plan)) | max_by(event_key));
+  def hold_markers: latest_plan as $plan
+    | [.[] | select(trusted) | . as $c | hold_marker as $m
+        | select($m != null and $m.issue == $issue and ($plan == null or (($c | event_key) > ($plan | event_key))))
+        | $m];
+'
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -2670,6 +2697,16 @@ MAX_VALIDATION_RECOVERY_ATTEMPTS="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
 if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" -lt 0 ]; then
   echo "::warning::MAX_VALIDATION_RECOVERY_ATTEMPTS must be a non-negative integer; defaulting to 2"
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
+fi
+
+# Validation runs dispatched for one validation cycle that may end without a
+# verdict label (ai:validated / ai:validation-failed) before the poller stops
+# re-dispatching every stale hour and fails validation as a harness error
+# (ai:harness-broken, which the heal and unblock paths pick up) (Q50).
+MAX_VALIDATION_DISPATCHES_PER_CYCLE="${MAX_VALIDATION_DISPATCHES_PER_CYCLE:-3}"
+if ! [[ "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" -lt 1 ]; then
+  echo "::warning::MAX_VALIDATION_DISPATCHES_PER_CYCLE must be a positive integer; defaulting to 3"
+  MAX_VALIDATION_DISPATCHES_PER_CYCLE="3"
 fi
 
 # Bounded retry budget for the post-validation final integration→default
@@ -9339,7 +9376,9 @@ EOF
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
 # Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
 #          3 when an existing resolver run already owns this PR,
-#          4 when guidance could not be published for the resolver.
+#          4 when guidance could not be published for the resolver,
+#          5 when the judge ran but its answer was not a valid diagnosis
+#            (the caller retries it within INTEGRATION_CONFLICT_LIFETIME_MAX).
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
@@ -9475,6 +9514,7 @@ invoke_judge_for_integration_conflict() {
     echo "how the isolated resolver should preserve merged sub-issue intent."
     echo 'Return only JSON: {"action":"redispatch_resolver","diagnosis":"...","resolution_guidance":"..."}.'
     echo 'Use action "fail" or "unknown" if a safe resolution cannot be identified.'
+    echo 'Keep "diagnosis" and "resolution_guidance" at 2000 characters or fewer each; longer answers are rejected.'
     echo
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
@@ -9560,10 +9600,33 @@ invoke_judge_for_integration_conflict() {
     if [ "${integration_judge_rc}" -ne 0 ] || ! integration_judge_verdict="$(_robust_parse_json_file "${output_file}")" ||
        ! printf '%s' "${integration_judge_verdict}" | jq -e 'type == "object" and (.action | IN("redispatch_resolver", "fail", "unknown")) and (.diagnosis | type == "string" and length <= 2000) and (.resolution_guidance | type == "string" and length <= 2000)' >/dev/null 2>&1; then
       echo "::warning::Integration judge did not return a valid diagnosis for PR #${final_pr}." >&2
+      # #6902 (run 38107119024): one rejected answer failed the project and
+      # the judge's output and log were deleted unread. Name the rejection
+      # and surface the log tail before the cleanup below.
+      local integration_judge_invalid_reason="schema"
+      local integration_judge_output_bytes=0
+      [ ! -f "${output_file}" ] || integration_judge_output_bytes="$(wc -c < "${output_file}" | tr -d '[:space:]')"
+      if [ "${integration_judge_rc}" -ne 0 ]; then
+        integration_judge_invalid_reason="exit_${integration_judge_rc}"
+      elif [ -z "${integration_judge_verdict:-}" ]; then
+        integration_judge_invalid_reason="unparseable"
+      elif printf '%s' "${integration_judge_verdict}" | jq -e '(.diagnosis | type == "string" and length > 2000) or (.resolution_guidance | type == "string" and length > 2000)' >/dev/null 2>&1; then
+        integration_judge_invalid_reason="too_long"
+      fi
+      echo "INTEGRATION_JUDGE_INVALID pr=${final_pr} reason=${integration_judge_invalid_reason} rc=${integration_judge_rc} output_bytes=${integration_judge_output_bytes:-0}" >&2
+      printf '%s\n' "${integration_judge_invalid_reason}" > "${RUNTIME_DIR}/integration_judge_invalid_reason" 2>/dev/null || true
+      if [ -s "${RUNTIME_DIR}/integration_judge.log" ]; then
+        echo "::group::Integration judge log (last 20 lines)" >&2
+        # The log carries model-influenced text: escape `##[` and prefix every
+        # line so no line can be parsed as a workflow command (::add-mask::,
+        # ::stop-commands::, ...).
+        tail -n 20 "${RUNTIME_DIR}/integration_judge.log" | cut -c1-400 | tr -cd '[:print:]\n' | sed -e 's/##\[/##\\[/g' -e 's/^/| /' >&2 || true
+        echo "::endgroup::" >&2
+      fi
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
       _integration_judge_remove_worktree "${judge_wt}"
       rm -rf -- "${baseline_dir}"
-      return 1
+      return 5
     fi
     _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
     integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
@@ -11410,6 +11473,25 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       echo '::warning::Integration judge guidance unavailable; deferring without consuming conflict dispatch budget.' >&2
       return 0
     fi
+    if [ "${integration_judge_result}" -eq 5 ]; then
+      # An invalid judge answer is retried on a later tick instead of failing
+      # the project (#6902: it failed on the first and only judge call). Each
+      # retry spends one lifetime slot, so the lifetime cap above still ends
+      # a judge that never answers validly.
+      local integration_judge_retry_reason="unknown"
+      [ ! -s "${RUNTIME_DIR}/integration_judge_invalid_reason" ] || integration_judge_retry_reason="$(head -n 1 "${RUNTIME_DIR}/integration_judge_invalid_reason" | tr -cd 'A-Za-z0-9_')"
+      rm -f -- "${RUNTIME_DIR}/integration_judge_invalid_reason"
+      total_dispatches=$((total_dispatches + 1))
+      jq --argjson total "${total_dispatches}" \
+        '.integration_sync_status = "healing" |
+         .integration_conflict_total_dispatches = $total |
+         .integration_sync_last_error = "integration judge returned an invalid diagnosis"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      echo "INTEGRATION_JUDGE_RETRY pr=${final_pr} reason=${integration_judge_retry_reason:-unknown} total_dispatches=${total_dispatches} lifetime_max=${INTEGRATION_CONFLICT_LIFETIME_MAX}" >&2
+      echo "::warning::Integration judge answer for PR #${final_pr} was invalid; retrying on a later tick (${total_dispatches}/${INTEGRATION_CONFLICT_LIFETIME_MAX} lifetime dispatches)." >&2
+      return 0
+    fi
     if [ "${integration_judge_result}" -eq 2 ]; then
       if [ -s "${RUNTIME_DIR}/judge_isolation_reason" ]; then
         _record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
@@ -13032,6 +13114,9 @@ dispatch_validation_if_needed() {
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
   local validation_dispatch_safe_despite_failures
+  local validation_cycle_dispatches
+  local validation_cap_run_url
+  local validation_cap_redispatch_fields=""
 
   # Defensive preflight: refuse to dispatch validate while the current
   # wave's PRs are not all merged into the integration branch
@@ -13126,17 +13211,45 @@ dispatch_validation_if_needed() {
       return 0
     fi
 
+    # Every earlier run of this cycle finished without a verdict label (the
+    # caller handles ai:validated / ai:validation-failed and a successful
+    # run first). Re-dispatching the same ref every hour cannot change that:
+    # binance-blessings#249 re-ran a pinned validate.yml hourly for days.
+    # After MAX_VALIDATION_DISPATCHES_PER_CYCLE runs, fail validation as a
+    # harness error so it reaches heal / escalation instead (Q50). State
+    # from before this counter existed reads as one dispatch.
+    validation_cycle_dispatches="$(jq -r '.validation_cycle_dispatch_count // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+    if ! [[ "${validation_cycle_dispatches}" =~ ^[0-9]+$ ]]; then
+      validation_cycle_dispatches=1
+    fi
+    if [ "${validation_cycle_dispatches}" -ge "${MAX_VALIDATION_DISPATCHES_PER_CYCLE}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=exhausted issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE} last_conclusion=${LAST_VAL_CONCLUSION:-unknown}"
+      validation_cap_run_url="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '.run_url // ""' 2>/dev/null || true)"
+      LAST_VAL_RAW_STATUS="harness_error" mark_validation_failed "Runtime validation harness error: ${validation_cycle_dispatches} validation run(s) dispatched for cycle ${validation_cycle} ended without a verdict label (last run conclusion: ${LAST_VAL_CONCLUSION:-unknown}${validation_cap_run_url:+, ${validation_cap_run_url}}). Re-dispatching the same ref will not change that (MAX_VALIDATION_DISPATCHES_PER_CYCLE=${MAX_VALIDATION_DISPATCHES_PER_CYCLE})."
+      return 0
+    fi
+    validation_cap_redispatch_fields="issue=${TRACKING_NUM:-?} cycle=${validation_cycle} dispatches=${validation_cycle_dispatches} max=${MAX_VALIDATION_DISPATCHES_PER_CYCLE}"
+
     echo "No active validation runs found. Redispatching..."
   fi
 
   if ! phase_cap_can_dispatch "ai:validating" "dispatch_validation" "${TRACKING_NUM:-validation}"; then
+    # Log the cap outcome only once the phase-cap guard has decided, so an
+    # outcome=redispatch line always means a dispatch was attempted.
+    if [ -n "${validation_cap_redispatch_fields}" ]; then
+      echo "VALIDATION_DISPATCH_CAP outcome=phase_cap_blocked ${validation_cap_redispatch_fields}"
+    fi
     return 0
+  fi
+  if [ -n "${validation_cap_redispatch_fields}" ]; then
+    echo "VALIDATION_DISPATCH_CAP outcome=redispatch ${validation_cap_redispatch_fields}"
   fi
 
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
     phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
-      '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
+      '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then (((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1) else 1 end)
+       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     if [ -n "${integration_branch}" ]; then
@@ -14938,6 +15051,277 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
+# ---------------------------------------------------------------
+# Default-off automation-path gate for stall-recovery auto-approval (#6838)
+# ---------------------------------------------------------------
+# plan.yml withholds its automatic /approved when
+# AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is on and the plan's
+# "Files ... change" section lists automation paths that the issue body does
+# not grant with a trusted exact files_touched entry. It then posts an
+# ai:automation-path-plan-hold:v1 marker. The stall-recovery auto_approve
+# branches below apply the same check when the workflow-forwarded flag is on.
+# For direct script callers without that flag, a trusted hold marker newer
+# than the latest plan also activates the check. Explicit false overrides
+# old markers; with the flag off the gate returns before any API call, so
+# behaviour is unchanged. The grant decision is the
+# unchanged scripts/files_touched_scope_guard.py from the verified support
+# checkout; a hold withholds the automatic /approved only (a human /approved
+# and the implement commit-time automation-path guard are unchanged).
+_automation_path_plan_extract()
+{
+  python3 -I -B - "$1" "$2" <<'AUTOMATION_PATH_PLAN_EXTRACTOR_PY'
+# BEGIN automation-path-plan-extractor v1
+# Reads an implementation plan (argv[1]) and writes the automation paths its
+# "Files ... change" section lists to argv[2], sorted, one per line. Exit 0
+# when a Files section exists (even with no paths); exit 3 when none exists
+# or the section lists more than 200 path tokens. This block is kept
+# byte-identical in .github/workflows/plan.yml and
+# scripts/orchestrate_poll_process.sh (#6838); a parity test pins it.
+import re
+import sys
+
+MAX_TOKENS = 200
+FILES_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchang", re.IGNORECASE)
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+NEXT_LABEL_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?`?\s*"
+    r"(?:Functions|Data structures|API|Decisions|Security considerations|Data flow|"
+    r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit|"
+    r"Implementation-time|Diagrams)\b",
+    re.IGNORECASE,
+)
+LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+NEGATIVE_RE = re.compile(r"^(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
+NEGATIVE_VERB_RE = re.compile(r"chang|modif|edit|touch|affect|updat", re.IGNORECASE)
+TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:\./)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`,;:()\"'<>]*)",
+    re.IGNORECASE,
+)
+
+
+def line_tokens(line):
+    found = []
+    for match in TOKEN_RE.finditer(line):
+        # A bare directory such as `scripts/` is kept: it names an automation
+        # path no exact grant can cover, so the gate holds (fail closed).
+        found.append(match.group(1).rstrip(".!?}]"))
+    return found
+
+
+def main(argv):
+    if len(argv) != 3:
+        return 2
+    with open(argv[1], encoding="utf-8", errors="replace") as handle:
+        lines = handle.read().splitlines()
+    found_section = False
+    in_section = False
+    suppress = None
+    tokens = []
+    for line in lines:
+        if FILES_RE.match(line):
+            found_section = True
+            in_section = True
+            suppress = None
+            tokens.extend(line_tokens(line))
+            continue
+        if not in_section:
+            continue
+        # A numbered file entry does not end the section; only a heading or
+        # the next known plan label does (fail closed on unknown layouts).
+        if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line):
+            in_section = False
+            suppress = None
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        list_match = LIST_RE.match(line)
+        text = line[list_match.end():].strip() if list_match else stripped
+        text = text.lstrip("*_` ")
+        if NEGATIVE_RE.match(text) and NEGATIVE_VERB_RE.search(text):
+            suppress = ("item" if list_match else "leadin", indent)
+            continue
+        if suppress is not None:
+            mode, base = suppress
+            if indent > base or (mode == "leadin" and list_match):
+                continue
+            suppress = None
+        tokens.extend(line_tokens(line))
+    if not found_section or len(tokens) > MAX_TOKENS:
+        return 3
+    with open(argv[2], "w", encoding="utf-8") as handle:
+        for token in sorted(set(tokens)):
+            handle.write(token + "\n")
+    return 0
+
+
+sys.exit(main(sys.argv))
+# END automation-path-plan-extractor v1
+AUTOMATION_PATH_PLAN_EXTRACTOR_PY
+}
+
+# Sets AUTOMATION_PATH_GATE_REASON / _DETAIL / _PATHS_FILE. Returns 0 when the
+# latest trusted plan lists no automation path or every listed path is
+# granted, 1 for a hold.
+_automation_path_plan_gate_check()
+{
+  local gate_dir="$1"
+  local issue_num="$2"
+  local comments_json="$3"
+  local plan_body="" issue_json="" check_rc=0 allow_edits="false"
+
+  AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
+  AUTOMATION_PATH_GATE_DETAIL="no_plan_comment"
+  AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/plan_paths.txt"
+  : > "${AUTOMATION_PATH_GATE_PATHS_FILE}" || return 1
+  plan_body="$(printf '%s' "${comments_json}" | jq -r --arg issue "${issue_num}" \
+    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' latest_plan | if . == null then empty else (.body // "") end' 2>/dev/null)" || plan_body=""
+  [ -n "${plan_body}" ] || return 1
+  printf '%s\n' "${plan_body}" > "${gate_dir}/plan.txt" || return 1
+  AUTOMATION_PATH_GATE_DETAIL="extractor"
+  if ! _automation_path_plan_extract "${gate_dir}/plan.txt" "${AUTOMATION_PATH_GATE_PATHS_FILE}" >/dev/null 2>&1; then
+    : > "${AUTOMATION_PATH_GATE_PATHS_FILE}"
+    return 1
+  fi
+  if [ ! -s "${AUTOMATION_PATH_GATE_PATHS_FILE}" ]; then
+    return 0
+  fi
+  AUTOMATION_PATH_GATE_DETAIL="guard_unavailable"
+  [ -n "${ORCH_AUTOMATION_PATH_GUARD}" ] && [ -f "${ORCH_AUTOMATION_PATH_GUARD}" ] || return 1
+  # GitHub API audit (§14): the comment history is the caller's already
+  # fetched copy (_staged_support_comments_for_guard / _candidate_details_json)
+  # and the login comes from the tick-cached unblock_trusted_login. This one
+  # issue read is new: no existing call in this path returns the live issue
+  # author, author_association and body the grant check needs. It runs only
+  # while the gate is active and the plan lists automation paths.
+  AUTOMATION_PATH_GATE_DETAIL="issue_lookup_failed"
+  issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null)" || issue_json=""
+  [ -n "${issue_json}" ] || return 1
+  printf '%s' "${issue_json}" > "${gate_dir}/issue.json" || return 1
+  unblock_trusted_login >/dev/null 2>&1 || true
+  AUTOMATION_PATH_GATE_DETAIL="grant_error"
+  python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --emit-automation-grant "${gate_dir}/grant.json" \
+    --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${UNBLOCK_TRUSTED_LOGIN:-}" >/dev/null 2>&1 || return 1
+  if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
+    allow_edits="true"
+  fi
+  python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --check-automation-paths \
+    --automation-grant-file "${gate_dir}/grant.json" \
+    --staged-file "${AUTOMATION_PATH_GATE_PATHS_FILE}" \
+    --allow-workflow-edits "${allow_edits}" --issue-number "${issue_num}" \
+    > "${gate_dir}/denied.txt" 2> "${gate_dir}/check.err" || check_rc=$?
+  if [ "${check_rc}" -eq 0 ]; then
+    return 0
+  fi
+  AUTOMATION_PATH_GATE_DETAIL="$(sed -n 's/^reason=\([a-z_]*\)$/\1/p' "${gate_dir}/check.err" 2>/dev/null | head -n 1)"
+  if [ "${check_rc}" -eq 30 ]; then
+    case "${AUTOMATION_PATH_GATE_DETAIL}" in
+      path_not_granted|no_allowlist|malformed_allowlist|untrusted_author|workflow_edits_disabled)
+        AUTOMATION_PATH_GATE_REASON="automation_path_ungranted"
+        if [ -s "${gate_dir}/denied.txt" ]; then
+          AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/denied.txt"
+        fi
+        ;;
+    esac
+  fi
+  [ -n "${AUTOMATION_PATH_GATE_DETAIL}" ] || AUTOMATION_PATH_GATE_DETAIL="guard_exit_${check_rc}"
+  return 1
+}
+
+# Logs STALL_SKIP for a hold and posts one deduplicated marker comment plus
+# one WARNING. Comment/alert failures only warn; the hold stands either way.
+_automation_path_plan_hold_report()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local phase="$3"
+  local mode="$4"
+  local paths_json="[]" paths_b64="" path_count=0 duplicate="false" hold_body=""
+
+  paths_json="$(jq -R -s -c 'split("\n") | map(select(length > 0)) | sort | unique' "${AUTOMATION_PATH_GATE_PATHS_FILE:-/dev/null}" 2>/dev/null)" || paths_json="[]"
+  [ -n "${paths_json}" ] || paths_json="[]"
+  path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
+  paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
+  echo "STALL_SKIP issue=${issue_num} reason=${AUTOMATION_PATH_GATE_REASON} phase=${phase} action=none detail=${AUTOMATION_PATH_GATE_DETAIL} paths=${path_count}"
+  duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${issue_num}" \
+    --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" \
+    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | any(.reason == $reason and .paths == $paths)' 2>/dev/null)" || duplicate="false"
+  if [ "${duplicate}" = "true" ]; then
+    return 0
+  fi
+  if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${issue_num}" \
+    --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg detail "${AUTOMATION_PATH_GATE_DETAIL}" \
+    --arg source "poller" --arg b64 "${paths_b64}" '
+      ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
+      | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
+      | [
+          (if $reason == "automation_path_ungranted"
+            then "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**"
+            else "**Automatic approval withheld: the automation-path grant check could not run.**" end),
+          "",
+          "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
+          "",
+          (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+          (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
+          (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
+          (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
+          "",
+          "To proceed, a trusted OWNER/MEMBER/COLLABORATOR adds these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant), or replies `/approved`. The implement commit-time automation-path guard still applies either way.",
+          "",
+          "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=\($source) paths=\($b64) -->"
+        ] | join("\n")
+    ' 2>/dev/null)"; then
+    echo "::warning::Could not render the automation-path hold comment for issue #${issue_num}."
+    return 0
+  fi
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    echo "::warning::Could not post the automation-path hold comment for issue #${issue_num}."
+  fi
+  if [ "${mode}" = "standalone" ]; then
+    tg_notify_issue "${issue_num}" "Stall recovery: plan auto-approval withheld (${AUTOMATION_PATH_GATE_REASON}, ${path_count} path(s))." "WARNING" || true
+  else
+    tg_notify "Stall recovery: plan auto-approval withheld for issue #${issue_num} (${AUTOMATION_PATH_GATE_REASON}, ${path_count} path(s))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING" || true
+  fi
+  return 0
+}
+
+# Returns 0 to proceed with the automatic /approved, 1 for a hold (after
+# logging STALL_SKIP). Callers must not count a hold as a recovery attempt.
+_automation_path_plan_auto_approval_gate()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local phase="$3"
+  local mode="$4"
+  local active="false" gate_dir="" gate_rc=0
+
+  if is_truthy "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"; then
+    active="true"
+  elif [ -z "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED}" ] \
+    && printf '%s' "${comments_json}" | jq -e --arg issue "${issue_num}" \
+    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | length > 0' >/dev/null 2>&1; then
+    active="true"
+  fi
+  if [ "${active}" != "true" ]; then
+    return 0
+  fi
+  gate_dir="$(mktemp -d "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_gate.XXXXXX" 2>/dev/null)" || gate_dir=""
+  if [ -z "${gate_dir}" ]; then
+    AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
+    AUTOMATION_PATH_GATE_DETAIL="tempdir"
+    AUTOMATION_PATH_GATE_PATHS_FILE="/dev/null"
+    _automation_path_plan_hold_report "${issue_num}" "${comments_json}" "${phase}" "${mode}" || true
+    return 1
+  fi
+  _automation_path_plan_gate_check "${gate_dir}" "${issue_num}" "${comments_json}" || gate_rc=$?
+  if [ "${gate_rc}" -ne 0 ]; then
+    _automation_path_plan_hold_report "${issue_num}" "${comments_json}" "${phase}" "${mode}" || true
+  fi
+  rm -rf "${gate_dir}"
+  [ "${gate_rc}" -eq 0 ]
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -15064,6 +15448,11 @@ STALL_EOF
           return 1
           ;;
       esac
+      # A held plan (#6838) is not a recovery attempt; like the staged-support
+      # skip above, return before STALL_RECOVERY_SHOULD_INCREMENT is set.
+      if ! _automation_path_plan_auto_approval_gate "${issue_num}" "${_managed_staged_support_comments}" "${phase}" "managed"; then
+        return 1
+      fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -18513,19 +18902,23 @@ STALL_EOF
         took_action="true"
         ;;
       auto_approve)
-        local _std_auto_approve_rc=0
-        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
+        # A held plan (#6838) is not a recovery attempt: took_action and
+        # STALL_RECOVERY_SHOULD_INCREMENT stay false, like the staged-support skip.
+        if _automation_path_plan_auto_approval_gate "${issue_num}" "${comments_json}" "${phase}" "standalone"; then
+          local _std_auto_approve_rc=0
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
 _Standalone stall recovery: plan approval stalled. Auto-approving to proceed._
 STALL_EOF
 )" >/dev/null 2>&1 || _std_auto_approve_rc=$?
-        if [ "${_std_auto_approve_rc}" -eq 0 ]; then
-          phase_cap_note_dispatch "ai:implementing"
+          if [ "${_std_auto_approve_rc}" -eq 0 ]; then
+            phase_cap_note_dispatch "ai:implementing"
+          fi
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-approved plan (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
         fi
-        tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-approved plan (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
-        STALL_RECOVERY_SHOULD_INCREMENT="true"
-        took_action="true"
         ;;
       retrigger_implement)
         # Same precheck gate as the managed arm in execute_stall_recovery_action:
