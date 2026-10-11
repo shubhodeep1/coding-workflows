@@ -439,7 +439,9 @@ jobs:
       # autofix-identical-failure-count subcommand.
       - name: Checkout fingerprint cap helper
         id: checkout_fingerprint_cap
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -452,7 +454,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify fingerprint cap support identity
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         env:
           WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
           WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}

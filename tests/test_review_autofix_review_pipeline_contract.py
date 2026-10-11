@@ -9614,6 +9614,10 @@ def test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge(
 	assert 'echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"' in gate
 	assert '[ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]' in gate
 	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=" in gate
+	# The helper checkout and support verification must also run on
+	# force_rb_judge dispatches when the fingerprint cap is disabled.
+	for setup_step in ("Checkout fingerprint cap helper", "Verify fingerprint cap support identity"):
+		assert "|| inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true'" in _step_if_line(setup_step), setup_step
 	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}" in _job_block("codex-agent")
 	skip_condition = "env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'"
 	for step_name in (
