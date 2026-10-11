@@ -91,3 +91,61 @@ jobs:
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
           SECURITY_HOLD_REVIEW_WORKFLOW: ai-review.yml
         run: PYTHONDONTWRITEBYTECODE=1 python3 .security-hold-support/scripts/review_security_hold_sweep.py
+
+  # Model-provider outage resume (issue #6633): while the repo's
+  # ai:provider-outage tracker is open, probe the provider once per tick; on
+  # recovery re-dispatch the PRs whose newest current-head failure was
+  # provider_unavailable (PR-named ai-review.yml runs), remove only the
+  # marker-backed outage labels, close the tracker and send one alert.
+  provider-outage-resume:
+    if: ${{ github.event_name == 'schedule' && vars.PROVIDER_OUTAGE_RESUME_ENABLED != 'false' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: provider-outage-resume-${{ github.repository }}
+      cancel-in-progress: false
+    # Least privilege: read PRs and comments, write the tracker issue,
+    # comments and labels, dispatch ai-review.yml.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Check out trusted provider-outage support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .provider-outage-support
+          persist-credentials: false
+      - name: Provider outage probe and resume
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROVIDER_OUTAGE_RESUME_ENABLED: ${{ vars.PROVIDER_OUTAGE_RESUME_ENABLED || 'true' }}
+          PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
+          PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
+          PROVIDER_OUTAGE_REVIEW_WORKFLOW: ai-review.yml
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' && 'true' || 'false' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=gh_pat_missing"
+            exit 0
+          fi
+          helper=".provider-outage-support/scripts/provider_outage.py"
+          if [ ! -f "${helper}" ]; then
+            echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          alert_file="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" sweep --repo "${REPOSITORY}" --alert-out "${alert_file}" || true
+          if [ -s "${alert_file}" ] && [ -f .provider-outage-support/scripts/tg_helpers.sh ]; then
+            source .provider-outage-support/scripts/tg_helpers.sh
+            tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null || true
+          fi
+          rm -f -- "${alert_file}"

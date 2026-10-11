@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- Require a verified reporter identity for clarify, plan and implement failure reports when `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=true`. Their `heal-report` job is now granted `id-token: write`, so it attaches the OIDC report identity the heal intake verifies. A phase report without one is no longer exempt and is skipped under enforcement like any other report; with the default `false` it is still accepted after the provenance checks. Enable enforcement only after consumers have synced.

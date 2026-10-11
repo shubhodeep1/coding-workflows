@@ -161,12 +161,12 @@ fi
 
 # The report is enveloped under client_payload.report: GitHub rejects a
 # client_payload with more than 10 top-level properties (HTTP 422).
-# Report identity (issue #6559): see workflow_failure_heal_report.sh. The
-# heal-report job runs with `permissions: {}`, so the OIDC request normally
-# logs identity=absent and the intake's provenance gate binds the report; a
-# token is attached whenever the job is granted id-token: write. Only when the
-# staged helper knows the subcommand; the token file is 0600, never printed,
-# and removed on exit.
+# Report identity (issues #6559, #6834): see workflow_failure_heal_report.sh.
+# The heal-report job is granted id-token: write, so a token is normally
+# attached; identity=absent means the OIDC request failed or a caller withheld
+# the grant, and the intake then rejects the report when
+# WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=true. Only when the staged helper knows the
+# subcommand; the token file is 0600, never printed, and removed on exit.
 IDENTITY_FILE="${REPORT_DIR}/report_identity.jwt"
 DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
 trap 'rm -f "${IDENTITY_FILE}" "${DISPATCH_FILE}"' EXIT
