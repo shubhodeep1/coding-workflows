@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1586-1588 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: A non-empty findings array nested inside an unclosed malformed JSON object is accepted as a top-level Claude finding array.\n  WHY: The non-empty candidate branch does not check whether an earlier opener failed to parse, so the audit accepts truncated output and skips the codex fallback.\n- scripts/security_audit.sh:1547-1573 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: closes_before can treat an earlier unclosed opener as closed when a separate bracketed phrase closes first.\n  WHY: It stops at the first empty bracket stack, so a later unclosed opener may be ignored and a nested findings array accepted.\n- agents.d/7155-security-audit-claude-reply-parse.md:line 2 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The documented empty-array acceptance rule omits the requirement that all earlier failed openers close with matching bracket types.\n  WHY: A future reader following the documented rule could accept inputs that the code and tests treat as malformed.\n- README.md:2869 | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The documented empty-array acceptance rule omits the requirement that all earlier failed openers close with matching bracket types.\n  WHY: A future reader following the documented rule could accept inputs that the code and tests treat as malformed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:1576-1596 | severity=high | confidence=[4]\n  PROBLEM: A non-empty findings array nested inside a malformed or truncated JSON object can be accepted as the top-level Claude findings.\n  WHY: The non-empty candidate branch sets the candidate unconditionally even when an earlier opener failed to parse, causing the audit to accept truncated output and skip the codex fallback.\n- scripts/security_audit.sh:1547-1573 | severity=low | confidence=[3]\n  PROBLEM: closes_before breaks when the bracket stack first empties, so it may not inspect a later unclosed opener.\n  WHY: With multiple failed openers, a separate bracketed phrase can make each call return true, allowing a nested findings array inside an unclosed object to be accepted.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:1586-1588 | severity=high | confidence=[5]\n  PROBLEM: A non-empty findings array is accepted even when an earlier JSON object opener failed to parse.\n  WHY: The scan can decode a nested array after strict parsing fails on an unclosed object, and the audit skips the codex fallback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1583-1588 | severity=high | confidence=[4]\n  PROBLEM: A non-empty findings array nested inside a truncated JSON object is accepted as a top-level array.\n  WHY: The non-empty branch does not check failed_opens, so the audit accepts the nested array and codex never runs.\n- agents.d/7155-security-audit-claude-reply-parse.md:line 2 | severity=low | confidence=[4]\n  PROBLEM: The documented empty-array acceptance rule omits the condition that every earlier failed opener must close with matching bracket types.\n  WHY: A future reader reimplementing the parser from the documentation could accept shapes that tests pin as malformed_output.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/security_audit.sh:1586-1595 | severity=high | confidence=[4]\n  PROBLEM: The failed-opener closure requirement added for empty arrays is not applied to non-empty candidates, allowing a findings array inside an unclosed wrapper to be accepted.\n  WHY: The truncated reply is treated as a finished Claude audit and the codex fallback does not run.\n- agents.d/7155-security-audit-claude-reply-parse.md (line 2) and README.md:2869 | severity=low | confidence=[4]\n  PROBLEM: The documented empty-array acceptance rule lists three conditions, while the code also requires earlier failed openers to close with matching bracket types.\n  WHY: The contract documents behavior inconsistently with the shipped parser and tests, potentially leading future implementers to accept malformed inputs.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bc9f00a7565c00fa62f56f2606c3af9f91df5635b92e58acef20982356287f14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7155,
+    "run_id": "38137424045",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38137424045",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011124733_8b2dc2425b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7155,
+    "run_id": "38137424045"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T12:47:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
