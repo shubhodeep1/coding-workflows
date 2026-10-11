@@ -683,6 +683,59 @@ def test_security_reissue_carries_canonical_metadata() -> None:
 	assert actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=labels, security_finding_id="abc-1", security_source_body="No metadata")) == actions.plan(_verdict("reissue", instructions="correct spec"), baseline)
 
 
+def test_pr_reissue_carries_linked_issue_metadata_when_sent() -> None:
+	"""Host-only conflict re-issue (#6748): the linked issue is the lineage source."""
+	source = "<!-- ai:security-finding:abc-1 -->\nFix it\n- Integration branch: `claude/x`\n- Depends on: #42"
+	ctx = _ctx("pr", linked_issue=31, source_issue_body=source, source_issue_labels=["ai:security"])
+	ops = actions.plan(_verdict("reissue", instructions="redo on main"), ctx)
+	assert [op["op"] for op in ops] == ["create_issue", "close"]
+	body = ops[0]["body"]
+	assert body.startswith("<!-- ai:security-finding:abc-1 -->\n")
+	assert "- Integration branch: `claude/x`\n- Depends on: #42" in body
+	assert body.endswith("head_sha=" + "a" * 40 + " -->")
+	assert ops[0]["labels"] == ["ai:security"]
+	plain = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body="- Integration branch: `orchestrator/project-9`", source_issue_labels=[]))
+	assert plain[0]["labels"] == [] and "- Integration branch: `orchestrator/project-9`" in plain[0]["body"]
+	assert "ai:security-finding" not in plain[0]["body"]
+
+
+def test_pr_reissue_uses_the_pr_base_when_the_linked_issue_has_no_branch() -> None:
+	ctx = _ctx("pr", linked_issue=31, source_issue_body="Fix it", source_issue_labels=[], pr_base_branch="claude/x")
+	ops = actions.plan(_verdict("reissue", instructions="redo"), ctx)
+	assert "- Integration branch: `claude/x`" in ops[0]["body"]
+	declared = _ctx("pr", linked_issue=31, source_issue_body="- Integration branch: `claude/y`", source_issue_labels=[], pr_base_branch="claude/x")
+	body = actions.plan(_verdict("reissue", instructions="redo"), declared)[0]["body"]
+	assert "`claude/y`" in body and "`claude/x`" not in body
+	for bad in ("a..b", "x//y", "-x", 5):
+		assert _ctx("pr", pr_base_branch=bad)["pr_base_branch"] is None
+	assert _ctx("pr", pr_trusted=False, pr_base_branch="claude/x")["pr_base_branch"] is None
+
+
+def test_pr_reissue_without_source_keys_is_unchanged() -> None:
+	baseline = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31))
+	empty = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body="Nothing", source_issue_labels=[]))
+	assert baseline == empty
+	assert baseline[0]["labels"] == []
+
+
+@pytest.mark.parametrize("body,labels", [
+	("<!-- ai:security-finding:abc def -->", ["ai:security"]),
+	("- Integration branch: `a..b`", []),
+	("- Integration branch: `claude/a`\n- Integration branch: `claude/b`", []),
+])
+def test_pr_reissue_refuses_unsafe_linked_issue_metadata(body: str, labels: list[str]) -> None:
+	ops = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body=body, source_issue_labels=labels))
+	assert [op["op"] for op in ops] == ["comment", "telegram"]
+	assert "stays open" in ops[0]["body"]
+
+
+def test_untrusted_pr_ignores_linked_issue_metadata() -> None:
+	ctx = _ctx("pr", pr_trusted=False, source_issue_body="<!-- ai:security-finding:abc-1 -->", source_issue_labels=["ai:security"])
+	assert not ctx["pr_source_present"]
+	ops = actions.plan(_verdict("reissue", instructions="redo"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "close", "add_labels", "telegram"]
+
+
 @pytest.mark.parametrize("body,finding_id", [
 	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42\n- Depends on: #43", "abc-1"),
 	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42 extra", "abc-1"),
@@ -907,6 +960,9 @@ if os.environ.get("FAKE_GH_OPERATOR_TRACKER") and endpoint.startswith("repos/o/r
 		"body": "<!-- ai:operator-step:v1 -->\nSteps", "html_url": "https://example.test/950"}]))
 if os.environ.get("FAKE_GH_OPERATOR_TRACKER") and endpoint == "repos/o/r/issues/950/comments?per_page=100":
 	done("[[]]")
+if endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
+	# Like GitHub, the label listing shows the trackers this fake created.
+	done(json.dumps(state.get("operator_trackers", [])))
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
@@ -948,12 +1004,24 @@ if method == "POST" and endpoint.endswith("/issues"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	state["created"].append(f)
+	if f.get("labels[]") == "ai:operator-step":
+		# A distinct number keeps the tracker apart from fix-up issue 901.
+		state.setdefault("operator_trackers", []).append({"number": 902, "title": f.get("title"), "body": f.get("body", ""),
+			"state": "open", "user": {"login": "pipeline-bot"}, "author_association": "OWNER",
+			"html_url": "https://github.com/o/r/issues/902", "labels": [{"name": "ai:operator-step"}]})
+		done("902\t" + f.get("labels[]", "") if jq else json.dumps({"number": 902}))
 	created_labels = os.environ.get("FAKE_GH_CREATE_LABELS", f.get("labels[]", ""))
 	done("901\t" + created_labels if jq else json.dumps({"number": 901}))
 if endpoint.endswith("/comments?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_COMMENTS"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	tracker_numbers = {str(t["number"]) for t in state.get("operator_trackers", [])}
+	tracker_number = endpoint[len("repos/o/r/issues/"):].split("/", 1)[0]
+	if endpoint.startswith("repos/o/r/issues/") and tracker_number in tracker_numbers:
+		# The writer reads with --paginate --slurp: one page holding the posted entries.
+		posted = [c for c in state["comments"] if c["endpoint"] == f"repos/o/r/issues/{tracker_number}/comments"]
+		done(json.dumps([[{"id": 1000 + i, "user": {"login": "pipeline-bot"}, "body": c["body"]} for i, c in enumerate(posted)]]))
 	if endpoint == "repos/o/r/issues/40/comments?per_page=100":
 		done(os.environ.get("FAKE_GH_PROJECT_COMMENTS", "[]"))
 	if endpoint == "repos/o/r/issues/7/comments?per_page=100":
@@ -1636,6 +1704,15 @@ def test_untrusted_pr_reissue_closes_without_creating_an_issue(tmp_path: Path, u
 	assert not any("model instructions" in comment["body"] or "model reason" in comment["body"] for comment in state["comments"] if "Unblock judge could not act" in comment["body"])
 
 
+def test_created_issue_numbers_are_recorded_only_when_requested(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	record = tmp_path / "created.txt"
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, UNBLOCK_CREATED_ISSUES_FILE=str(record))
+	assert result.returncode == 0, result.stderr
+	assert len(state["created"]) == 1
+	assert record.read_text(encoding="utf-8") == "901\n"
+
+
 def test_trusted_pr_reissue_records_provenance_on_created_issue(tmp_path: Path) -> None:
 	pr = dict(ISSUE, pull_request={"url": "u"})
 	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
@@ -1880,6 +1957,16 @@ def test_failed_operator_step_does_not_send_success_notification(tmp_path: Path)
 	assert "op=operator_step outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["created"]
+
+
+def test_operator_step_success_writes_tracker_entry(tmp_path: Path) -> None:
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "set the secret"}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict)
+	assert "op=operator_step outcome=failed" not in result.stdout
+	assert "verdict=operator_step round=1 outcome=acted" in result.stdout
+	assert [f for f in state["created"] if f.get("labels[]") == "ai:operator-step"]
+	entries = [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/902/comments"]
+	assert len(entries) == 1 and entries[0]["body"].startswith("<!-- ai:operator-step:entry key=")
 
 
 def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:

@@ -582,6 +582,8 @@ fi
 SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
 printf '[]' > "${SUMMARIES_FILE}"
 LOG_FILES=()
+# Job logs actually fetched (placeholders for unreadable logs do not count).
+READ_JOB_LOG_COUNT=0
 RUN_COUNT=0
 
 while IFS=$'\t' read -r run_id run_url; do
@@ -664,6 +666,9 @@ while IFS=$'\t' read -r run_id run_url; do
 			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
 				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 				: > "${FILTERED_LOG}"
+			else
+				# A log whose filtering failed was emptied above and is not readable evidence.
+				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
@@ -806,7 +811,11 @@ elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi
-elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
+# An issue / PR report whose linked runs' logs were all unreadable carries only
+# "(job log unavailable)" placeholders, whose `no-error-lines` signature is the
+# same for every item; key it on the escalated item like a run-less report.
+elif [ "${#LOG_FILES[@]}" -gt 0 ] && { [ "${READ_JOB_LOG_COUNT}" -gt 0 ] \
+	|| { [ "${SOURCE_KIND}" != "issue" ] && [ "${SOURCE_KIND}" != "pull_request" ]; }; }; then
 	SIG_ARGS=()
 	for f in "${LOG_FILES[@]}"; do
 		SIG_ARGS+=(--log-file "${f}")
@@ -817,7 +826,12 @@ elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	# the (absent) escalation label.
 	SIGNATURE="phase:${FAILURE_REASON:-unknown}"
 else
-	SIGNATURE="label:${LABEL:-unknown}"
+	# No run (or no readable run log) to read: key on the escalated item as well as the label. A bare
+	# `label:<label>` signature gave every run-less report of that label, in
+	# every repository, one fingerprint and one lineage, so three unrelated
+	# harness fixes capped binance-blessings#249's first report at
+	# generation 4.
+	SIGNATURE="label:${LABEL:-unknown}|source:${SOURCE_REPO}#${ISSUE_NUMBER:-none}"
 fi
 FP="$(python3 "${HEAL_PY}" fingerprint --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" --signature "${SIGNATURE}")"
 log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_STEP:-none} runs=${SUMMARY_COUNT}"
@@ -1220,6 +1234,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "URL: ${ISSUE_URL}"
 		echo "Escalation label: ${LABEL}"
 		echo "Other labels: $(_pf '.labels | join(", ")')"
+		if [ "${LABEL}" = "ai:scope-blocked" ]; then
+			# Validated logins and association only (Q81): the automation-path
+			# guard grants a pipeline-authored issue without files_touched
+			# differently from any other author.
+			echo "Issue author: $(_pf '.issue_author_login // "unknown"') (association: $(_pf '.issue_author_association // "unknown"'))"
+			echo "Pipeline account (the reporter's identity): $(_pf '.reporter_pipeline_login // "unknown"')"
+		fi
 	else
 		echo "Failed workflow: ${PAYLOAD_WORKFLOW_NAME} (conclusion: $(_pf '.conclusion // "unknown"'))"
 		echo "Branch: ${HEAD_BRANCH:-unknown}  Head SHA: ${HEAD_SHA:-unknown}"

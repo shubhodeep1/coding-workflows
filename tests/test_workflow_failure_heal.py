@@ -343,6 +343,33 @@ def test_select_failed_runs_matches_title_and_conclusion() -> None:
 	assert [run["run_id"] for run in picked] == ["2", "4"]
 
 
+def test_select_failed_runs_picks_the_tracking_issues_validation_runs() -> None:
+	"""binance-blessings#249: its validation run is titled `AI Validate
+	[tracking:249]`, never the project title, so the report carried no runs."""
+	runs = [
+		{"id": 7, "conclusion": "failure", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:04:45Z", "html_url": "u7", "name": "AI Validate"},
+		{"id": 8, "conclusion": "failure", "display_title": "Internal: AI Validate [tracking:249]", "created_at": "2026-10-11T03:05:45Z", "html_url": "u8", "name": "Internal: AI Validate"},
+		{"id": 9, "conclusion": "failure", "display_title": "AI Validate [tracking:2490]", "created_at": "2026-10-11T03:06:45Z", "html_url": "u9", "name": "AI Validate"},
+		{"id": 10, "conclusion": "success", "display_title": "AI Validate [tracking:249]", "created_at": "2026-10-11T03:07:45Z", "html_url": "u10", "name": "AI Validate"},
+		{"id": 11, "conclusion": "failure", "display_title": "AI Validate [tracking:249] extra", "created_at": "2026-10-11T03:08:45Z", "html_url": "u11", "name": "AI Validate"},
+	]
+	title = "[Orchestrator] Support/Resistance TWAP Flips and Sell Guardrails"
+	assert [run["run_id"] for run in heal.select_failed_runs(runs, title=title, tracking_issue=249)] == ["7", "8"]
+	assert heal.select_failed_runs(runs, title=title) == []
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:harness-broken",
+		issue={**_issue(249, title=title, labels=["ai:orchestrator-tracking", "ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["7", "8"]
+	pr_payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="pull_request", label="ai:harness-broken",
+		issue={**_issue(249, title="Unrelated PR", labels=["ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert pr_payload["run_refs"] == []
+
+
 def _issue(number: int = 42, *, title: str = "Add retries to the poller", body: str = "body", labels: list[str] | None = None, state: str = "open") -> dict:
 	return {
 		"number": number,
@@ -2174,6 +2201,54 @@ def test_intake_without_linked_runs_still_files_from_label_context() -> None:
 	assert "no failed run could be linked" in prompt
 	created = state["issues_created"][0]
 	assert created["title"] == f"Workflow heal: ai:needs-human on {CONSUMER_REPO}#42"
+
+
+def test_intake_label_only_fingerprint_is_per_escalated_item() -> None:
+	"""A run-less label report used to fingerprint as `label:<label>` alone, so
+	every repository's run-less reports of that label shared one lineage:
+	binance-blessings#249's first ai:harness-broken report escalated at
+	generation 4 because three unrelated heals (the last #7063, from
+	coding-workflows#6902) carried that fingerprint."""
+	shared_fp = heal.fingerprint("label:ai:needs-human", "", "label:ai:needs-human")
+	unrelated = _sourced_heal_issue(7063, state="closed", fp=shared_fp, source=f"{SELF_REPO}#6902", gen=3)
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [unrelated], CONSUMER_REPO: []})
+	result, state_after, _ = _run_intake(_consumer_payload(run_refs=[]), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	expected_fp = heal.fingerprint("label:ai:needs-human", "", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=label:ai:needs-human" in result.stdout
+	assert "reason=lineage_cap" not in result.stdout
+	created = state_after["issues_created"][0]
+	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
+
+
+def test_intake_unreadable_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A report whose linked runs' job logs all failed to fetch carries only
+	"(job log unavailable)" placeholders, whose `no-error-lines` signature is
+	the same for every item; it is keyed on the escalated item instead."""
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(job_logs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_fetch_failed" in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
+
+
+def test_intake_filter_failed_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A job log that was fetched but whose `filter-log` failed is emptied and
+	is not readable evidence either: it must not count as a read log, or the
+	report falls back to the shared `no-error-lines` signature."""
+	def _fail_filter_log(_tmp: Path, work: Path) -> None:
+		heal_py = work / "scripts" / "workflow_failure_heal.py"
+		text = heal_py.read_text(encoding="utf-8")
+		guard = 'if __name__ == "__main__" and sys.argv[1:2] == ["filter-log"]:\n\tsys.exit(1)\n\n\nif __name__ == "__main__":'
+		assert text.count('if __name__ == "__main__":') == 1
+		heal_py.write_text(text.replace('if __name__ == "__main__":', guard), encoding="utf-8")
+
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_fail_filter_log)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_filter_failed" in result.stdout
+	assert "warn job_log_fetch_failed" not in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -6505,3 +6580,83 @@ def test_intake_skips_host_only_conflict_reports() -> None:
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout and "stage=after_provenance" in result.stdout, result.stdout
 	assert "issues_created" not in state and "comments_posted" not in state and prompt == ""
+
+
+def test_scope_blocked_report_carries_validated_authorship_facts() -> None:
+	# hylifegroup.com#75 (Q81): the heal saw no author and classified a guard
+	# rejection that main already grants as consumer-config.
+	issue = dict(_issue(labels=["ai:scope-blocked"]), user={"login": "shubhodeep1"}, author_association="OWNER")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:scope-blocked", issue=issue, comments=[], runs=[],
+		wrapper_sha=SHA_A, reporter_run_url=None, pipeline_login="shubhodeep1",
+	)
+	normalized = heal.validate_payload(payload)
+	assert normalized["issue_author_login"] == "shubhodeep1"
+	assert normalized["issue_author_association"] == "OWNER"
+	assert normalized["reporter_pipeline_login"] == "shubhodeep1"
+	# Invalid values are dropped, never fatal; an older reporter sends none.
+	bad = dict(issue, user={"login": "x y\n<!--"}, author_association="ROOT")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:scope-blocked", issue=bad, comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None, pipeline_login="--evil",
+	)
+	normalized = heal.validate_payload(payload)
+	assert (normalized["issue_author_login"], normalized["issue_author_association"], normalized["reporter_pipeline_login"]) == (None, None, None)
+	legacy = {key: value for key, value in payload.items() if not key.startswith(("issue_author", "reporter_pipeline"))}
+	assert heal.validate_payload(legacy)["issue_author_login"] is None
+	forged = dict(legacy, issue_author_login="a\nb", reporter_pipeline_login="c" * 50)
+	normalized = heal.validate_payload(forged)
+	assert normalized["issue_author_login"] is None and normalized["reporter_pipeline_login"] is None
+	# Other labels carry no authorship facts.
+	other = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=issue, comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None, pipeline_login="shubhodeep1",
+	)
+	assert "issue_author_login" not in other and "issue_author_login" not in heal.validate_payload(other)
+
+
+def test_scope_blocked_reporter_and_intake_wire_the_authorship_facts() -> None:
+	report = REPORT_SCRIPT.read_text(encoding="utf-8")
+	identity = report.index('if [ "${LABEL}" = "ai:needs-human" ] || [ "${LABEL}" = "ai:scope-blocked" ]; then')
+	assert identity < report.index('build-issue-payload \\')
+	# One shared read; the only other is the retry the non-retryable-marker
+	# check takes when that read came back empty.
+	assert report.count("gh api user") == 2
+	assert 'if [ -z "${HEAL_REPORTER_LOGIN}" ]; then\n\t\tHEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login' in report
+	assert report.index("gh api user") < report.index('build-issue-payload \\')
+	assert '--pipeline-login "${HEAL_REPORTER_LOGIN}" \\' in report
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert "echo \"Issue author: $(_pf '.issue_author_login // \"unknown\"') (association: $(_pf '.issue_author_association // \"unknown\"'))\"" in intake
+	assert "echo \"Pipeline account (the reporter's identity): $(_pf '.reporter_pipeline_login // \"unknown\"')\"" in intake
+	for path in (PROMPT_FILE, REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt"):
+		text = " ".join(path.read_text(encoding="utf-8").split())
+		assert "When the newer guard would grant this author's rejected paths, the cause is `already-fixed`" in text, path
+		assert "Never suggest adding a `files_touched` block that lists only the rejected automation paths to an issue that has none" in text, path
+
+
+def test_build_issue_payload_cli_accepts_pipeline_login(tmp_path: Path) -> None:
+	issue_file = tmp_path / "issue.json"
+	issue_file.write_text(json.dumps(dict(_issue(labels=["ai:scope-blocked"]), user={"login": "bot-user"}, author_association="NONE")), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(LIB_PATH), "build-issue-payload", "--repo", CONSUMER_REPO, "--kind", "issue", "--label", "ai:scope-blocked",
+			"--issue-json", str(issue_file), "--pipeline-login", "pipeline-bot"],
+		capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+	)
+	assert result.returncode == 0, result.stderr
+	payload = json.loads(result.stdout)
+	assert (payload["issue_author_login"], payload["issue_author_association"], payload["reporter_pipeline_login"]) == ("bot-user", "NONE", "pipeline-bot")
+
+
+def test_scope_blocked_intake_prompt_names_the_author_and_pipeline_account() -> None:
+	payload = _consumer_payload(label="ai:scope-blocked", labels=["ai:scope-blocked"], issue_author_login="shubhodeep1",
+		issue_author_association="OWNER", reporter_pipeline_login="shubhodeep1")
+	result, _state, prompt = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "Issue author: shubhodeep1 (association: OWNER)" in prompt
+	assert "Pipeline account (the reporter's identity): shubhodeep1" in prompt
+	legacy = _consumer_payload(label="ai:scope-blocked", labels=["ai:scope-blocked"])
+	result, _state, prompt = _run_intake(legacy, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "Issue author: unknown (association: unknown)" in prompt
+	result, _state, prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "Issue author:" not in prompt
