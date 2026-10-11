@@ -642,10 +642,13 @@ jobs:
     timeout-minutes: 50
     # checks/actions read let the CI gate read check-runs and workflow runs
     # when GH_PAT is absent; contents: write keeps the tag and release writes.
+    # id-token/attestations write sign the consumer sync manifest (#7128).
     permissions:
       contents: write
       checks: read
       actions: read
+      id-token: write
+      attestations: write
     # Serialise the mutating tag pushes across every stable-tag writer
     # (test-and-mark-stable.yml, this legacy path, and everything that
     # dispatches them). The stale-tip guard in the tagging step covers the
@@ -788,6 +791,31 @@ jobs:
           # Write to file to avoid quoting issues
           echo "$NOTES" > /tmp/release_notes.md
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
+      # Signed consumer sync manifest (#7128). Built on the final release
+      # commit (HEAD: the tested commit plus any changelog/agents fold), on
+      # dry runs too so the builder is exercised. Consumers verify its
+      # attestation and hashes before running any fetched upstream code.
+      - name: Build sync manifest
+        id: sync_manifest
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SYNC_MANIFEST_PATH="${RUNNER_TEMP}/sync-manifest.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/build_sync_manifest.py build \
+            --repo-root . \
+            --commit "$(git rev-parse HEAD)" \
+            --version "${VERSION}" \
+            --out "${SYNC_MANIFEST_PATH}"
+          echo "path=${SYNC_MANIFEST_PATH}" >> "$GITHUB_OUTPUT"
+
+      # A failed attestation fails the job here, before any tag is pushed.
+      - name: Attest sync manifest
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.sync_manifest.outputs.path }}
 
       - name: Tag version and update stable pointer
         if: ${{ !inputs.dry_run }}
@@ -1004,6 +1032,25 @@ jobs:
           cat "${RELEASE_CREATE_ERROR_FILE}" >&2 2>/dev/null || true
           cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
           exit "${RELEASE_CREATE_RC}"
+
+      # Separate from "Create GitHub Release", which exits early on
+      # partial-release recovery. A rerun rebuilds a byte-identical manifest
+      # for the same commit and --clobber replaces the asset.
+      - name: Upload sync manifest
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          SYNC_MANIFEST_PATH: ${{ steps.sync_manifest.outputs.path }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if ! gh_retry gh release upload "${VERSION}" "${SYNC_MANIFEST_PATH}" --clobber; then
+            echo "::error::SYNC_MANIFEST outcome=upload_failed version=${VERSION}"
+            exit 1
+          fi
+          echo "SYNC_MANIFEST outcome=uploaded version=${VERSION}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}

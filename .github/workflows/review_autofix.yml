@@ -525,6 +525,9 @@ jobs:
           sparse-checkout: |
             scripts/review_head_gate.sh
             scripts/gh_helpers.sh
+            scripts/review_workflow_sync_skip.sh
+            scripts/build_sync_manifest.py
+            workflow-templates/
           sparse-checkout-cone-mode: false
 
       - name: Verify head-gate helper identity
@@ -1271,6 +1274,36 @@ jobs:
                   fi
                 fi
               fi
+            fi
+          fi
+
+          # Consumer sync PRs (#7128): an ai-sync/stable PR whose changed paths
+          # (rename sources too) all match the signed sync allowlist skips the
+          # panel. DETERMINISTIC_SKIP stays false: nothing here labels,
+          # comments, posts a status or merges. Complete file list required.
+          if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
+            && [ "${pr_head_ref}" = "ai-sync/stable" ] && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
+            && [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] \
+            && [ -f .codex-head-gate-src/scripts/review_workflow_sync_skip.sh ]; then
+            sync_skip_reason="unmanaged_or_unverified"
+            if printf '%s' "${PR_TITLE}" | grep -Fq "[force-review]" || [[ ",${pr_labels}," == *,force-review,* ]]; then
+              sync_skip_reason="force_review"
+            else
+              sync_paths_file="$(mktemp)"
+              if [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]] \
+                && gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename, previous_filename}]' 2>/dev/null \
+                  | jq -s 'add // []' 2>/dev/null \
+                  | jq -er --argjson n "${pr_changed_files}" 'select(type == "array" and length == $n and length < 3000) | .[] | .filename, (.previous_filename // empty)' > "${sync_paths_file}" 2>/dev/null \
+                && bash .codex-head-gate-src/scripts/review_workflow_sync_skip.sh check "${pr_head_ref}" "${sync_paths_file}" .codex-head-gate-src >/dev/null; then
+                SHOULD_RUN="false"
+                SKIP_REASON="workflow_sync_managed"
+                GATE_SKIP_RECORDED="true"
+                echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=skipped files=${pr_changed_files}"
+              fi
+              rm -f "${sync_paths_file}"
+            fi
+            if [ "${SHOULD_RUN}" = "true" ]; then
+              echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=review reason=${sync_skip_reason}"
             fi
           fi
 
