@@ -1168,7 +1168,10 @@ def test_release_switch_resolution_is_exact_and_defaults_off() -> None:
 def test_release_job_disabled_path_skips_every_publishing_step() -> None:
 	for workflow_path in WORKFLOWS:
 		release_job = _top_level_job_block(_read(workflow_path), "release")
-		assert "    permissions:\n      contents: write\n      checks: read\n" in release_job, workflow_path.name
+		# The job-level block also carries the release-manifest attestation scopes
+		# (tests/test_release_manifest_workflow_contract.py pins the full set).
+		assert "    permissions:\n      contents: write\n" in release_job, workflow_path.name
+		assert "\n      checks: read\n" in release_job.split("    outputs:", 1)[0], workflow_path.name
 		assert "      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'false' }}\n" in release_job
 		assert "      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}\n" in release_job
 		assert "      release_enabled: ${{ steps.release_switch.outputs.enabled }}\n" in release_job
