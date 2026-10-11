@@ -3,7 +3,7 @@
 
 `scripts/pr_checks_lib.sh` checks the check-runs on a PR's head before the orchestrator, the review-blocked judge and the auto-merge paths merge. It counted `cancelled` as passing. On a branch without protection, as on this repository's `main`, a PR whose CI aggregate job `lint` was cancelled could therefore merge. The gate now accepts only `success`, `neutral` and `skipped`. A required check that ended `cancelled`, `timed_out`, `action_required`, `failure` or `startup_failure` blocks.
 
-Re-running a job adds a new check-run with the same name on the same commit. The gate now looks only at the newest check-run of each name, so a cancelled run that a later run replaced does not block. A cancelled required check with nothing newer counts as finished, so the auto-merge wait refuses at once instead of waiting out its budget.
+Re-running a job adds a new check-run with the same name on the same commit. The gate now looks only at the newest check-run of each name, so a cancelled run that a later run replaced does not block. A cancelled required check with nothing newer counts as finished, so the auto-merge wait refuses at once instead of waiting out its budget, unless another check on the head is still running.
 
 The noop-suspicious force-merge fallback in the poller (Gate D) had its own check-runs query. That query blocked on failed advisory checks and ignored required checks that were still running. Gate D now calls the shared gate, so both paths apply the same rules.
 
