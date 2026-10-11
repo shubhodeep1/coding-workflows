@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -236,8 +237,11 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	on = _on(intake)
 	assert on["repository_dispatch"]["types"] == [heal.DISPATCH_EVENT_TYPE]
 	assert on["workflow_run"]["types"] == ["completed"]
-	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES)
+	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES) + list(heal.SCHEDULED_CHECK_WORKFLOW_NAMES)
 	assert _yaml(REPO_ROOT / ".github" / "workflows" / "ci.yml")["name"] in heal.MAIN_CI_WORKFLOW_NAMES
+	assert _yaml(REPO_ROOT / ".github" / "workflows" / "nightly-validation-selftest.yml")["name"] in heal.SCHEDULED_CHECK_WORKFLOW_NAMES
+	# Scheduled checks are healed from the default branch only.
+	assert "(github.event.workflow_run.name != 'Nightly Validation Self-Test' || github.event.workflow_run.head_branch == github.event.repository.default_branch)" in " ".join(intake["jobs"]["intake"]["if"].split())
 	assert "payload_json" in on["workflow_dispatch"]["inputs"]
 	actual_names = {
 		_yaml(REPO_ROOT / ".github" / "workflows" / name)["name"]
@@ -304,7 +308,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 
 def test_stable_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
@@ -1278,6 +1282,8 @@ def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
 		 "A release / promotion workflow run failed."),
 		("Mark Stable Release", "A release / promotion workflow run failed.",
 		 "A CI run on the default branch failed."),
+		("Nightly Validation Self-Test", "A scheduled self-check workflow run on the default branch failed.",
+		 "A release / promotion workflow run failed."),
 	):
 		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 			repo=SELF_REPO,
@@ -1739,6 +1745,7 @@ def _consumer_payload(**overrides) -> dict:
 
 JOB_LOG = (
 	"2026-09-20T10:00:00.000Z ##[group]Run codex\n"
+	"2026-09-20T10:00:00.000Z ##[endgroup]\n"
 	"2026-09-20T10:00:01.000Z codex: applying plan\n"
 	"2026-09-20T10:00:02.000Z ::error::resolve_integration_ref.sh: Integration branch 'orchestrator/project-4123' declared in child issue #4200 does not exist.\n"
 	"2026-09-20T10:00:03.000Z ##[error]Process completed with exit code 1.\n"
@@ -1877,6 +1884,54 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	for call in state["calls"]:
 		if any(part.endswith("/jobs") or part.endswith("/issues") for part in call):
 			assert "--method" in call and call[call.index("--method") + 1] == "GET"
+
+
+@pytest.mark.parametrize("status", ("behind", "diverged"))
+def test_intake_targets_the_default_branch_when_stable_lacks_the_pinned_release(status: str) -> None:
+	"""#6902 -> #7063: a consumer pinned to a main-only commit got a stable hotfix
+	issue for a file stable does not have, and its plan could only block."""
+	state = _intake_state(compare=_compare(0, [], status=status), branches=["stable", "main"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+	assert f"target_branch_retarget from=stable to=main reason=wrapper_pin_not_on_target pin={SHA_A} compare_status={status}" in result.stdout
+	assert "target_branch=main" in result.stdout and "target_branch_source=wrapper_pin_not_on_target" in result.stdout
+	# No extra API call: the branch-progress compare already answered it.
+	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
+	assert len(compare_calls) == 1 and any(f"compare/{SHA_A}...stable" in part for part in compare_calls[0])
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"]
+	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
+
+
+@pytest.mark.parametrize("compare", (_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")], status="ahead"), _compare(0, [], status="identical"), None))
+def test_intake_keeps_stable_when_it_contains_the_pin_or_the_compare_is_unavailable(compare) -> None:
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "target_branch_retarget" not in result.stdout
+	assert "target_branch_source=default" in result.stdout
+
+
+def test_intake_retarget_uses_the_configured_default_branch_for_consumer_issue_reports() -> None:
+	"""Consumer issue reports skip the provenance block; the retarget must still
+	read WORKFLOW_HEAL_DEFAULT_BRANCH instead of assuming `main`."""
+	state = _intake_state(compare=_compare(0, [], status="behind"), branches=["stable", "main", "develop"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "develop"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "develop"
+	assert "target_branch_retarget from=stable to=develop" in result.stdout
+
+
+def test_intake_retarget_falls_back_to_main_without_a_known_default_branch() -> None:
+	state = _intake_state(compare=_compare(0, [], status="behind"))
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": ""})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
 
 
 def test_intake_routes_consumer_defect_to_consumer_repo() -> None:
@@ -2686,6 +2741,7 @@ def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot(
 	assert workflow["env"]["REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS"].split() == [
 		"workflow_failure_heal.py",
 		"workflow_failure_heal_autofix_report.sh",
+		"provider_outage.py",
 	]
 	steps = workflow["jobs"]["codex-agent"]["steps"]
 	names = [step.get("name") for step in steps]
@@ -3097,11 +3153,11 @@ def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:
 
 
 def test_fingerprint_cap_log_prefixes_are_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
 		assert f"- `{prefix}`" in agents_text, prefix
 		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
-	workflow_text = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	workflow_text = expanded_review_autofix_text()
 	for prefix in ("AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=", "AUTOFIX_FINGERPRINT pr="):
 		assert prefix in workflow_text, prefix
 
@@ -3621,16 +3677,42 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 
 
 def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
-	"""Issues #6625/#6938: the gate and four failure-marker sites use the verified SHA.
+	"""Issues #6625/#6938: the gate and every failure-marker site use the verified SHA.
 
-	The gate SHA also reaches fingerprint-cap-block, codex-agent, and the
-	deterministic-skip-merge freshness-helper verification step.
+	Structural, not counted: every `autofix-failure-fingerprint` call passes
+	`--support-sha`, and the jobs that build markers or verify helper
+	checkouts take REVIEW_SUPPORT_SHA from the gate's verified output. A new
+	marker site or consumer then has to follow the rule instead of breaking
+	an occurrence count.
 	"""
-	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
-	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
-	assert wf.count("autofix-failure-fingerprint \\\n") == 4
-	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
-	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 3
+	wf = expanded_review_autofix_text()
+	calls = wf.split("autofix-failure-fingerprint \\\n")[1:]
+	assert calls, "no autofix-failure-fingerprint call sites found"
+	# A single-line call has no continuation to split on; every invocation
+	# must be one of the multi-line calls checked below.
+	invocations = [line for line in wf.splitlines() if '"${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint' in line]
+	assert len(invocations) == len(calls), invocations
+	for call in calls:
+		# The call's continuation lines end at the first line without a trailing backslash.
+		block = call.split(")\"", 1)[0]
+		assert '--support-sha "${REVIEW_SUPPORT_SHA:-}"' in block, block[:400]
+	# Spelling- and layout-agnostic: any non-comment, non-grep line naming the
+	# subcommand (a renamed variable, or the subcommand on its own continuation
+	# line) must be one of the checked calls.
+	mentions = [line for line in wf.splitlines() if "autofix-failure-fingerprint" in line and not line.lstrip().startswith("#") and "grep " not in line]
+	assert len(mentions) == len(calls), mentions
+	jobs = yaml.safe_load(wf)["jobs"]
+	gate_steps = {step.get("name"): step for step in jobs["gate"]["steps"]}
+	assert gate_steps["Evaluate review gate"]["env"]["REVIEW_SUPPORT_SHA"] == "${{ steps.resolve_support.outputs.review_support_sha }}"
+	verified = "${{ needs.gate.outputs.review_support_sha }}"
+	for job in ("fingerprint-cap-block", "codex-agent"):
+		assert jobs[job]["env"]["REVIEW_SUPPORT_SHA"] == verified, job
+	det_skip = {step.get("name"): step for step in jobs["deterministic-skip-merge"]["steps"]}
+	assert det_skip["Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"]["env"]["REVIEW_SUPPORT_SHA"] == verified
+	# No job may take the support SHA from anywhere but the verified outputs.
+	for line in wf.splitlines():
+		if line.strip().startswith("REVIEW_SUPPORT_SHA:"):
+			assert line.strip() in (f"REVIEW_SUPPORT_SHA: {verified}", "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}"), line
 	assert 'git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}"' in wf
 	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 
@@ -4338,7 +4420,7 @@ def test_heal_prompt_rule_for_deterministic_failures() -> None:
 
 
 def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() -> None:
-	wf = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	wf = expanded_review_autofix_text()
 	assert 'bash "${RESOLVER_SCRIPT}" 2> >(tee -a "${RUNTIME_DIR}/resolver_stage_stderr.txt" >&2)' in wf
 	assert '--evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt"' in wf
 	assert "select(.runner_name == env.RUNNER_NAME) | .steps[] | select(.conclusion == \"failure\") | .name" in wf
@@ -5122,6 +5204,21 @@ def test_verify_run_provenance_accepts_ci_push_on_default_branch() -> None:
 	assert heal.verify_run_provenance(pr_payload, runs={"500": {**_provenance_run(path="ci.yml", event="push", head_branch="main"), "pull_requests": [{"number": 4174}]}}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO, default_branch="main")["reason"] == "no_verified_runs"
 
 
+def test_verify_run_provenance_accepts_scheduled_check_on_default_branch_only() -> None:
+	payload = heal.validate_payload(heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Nightly Validation Self-Test", "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Nightly Validation Self-Test"},
+	))
+	def check(run, default_branch="main"):
+		return heal.verify_run_provenance(payload, runs={"500": run}, comments=None, trusted_login="", self_repo=SELF_REPO, default_branch=default_branch)
+	nightly = _provenance_run(repo=SELF_REPO, path="nightly-validation-selftest.yml", event="schedule", head_branch="main")
+	assert check(nightly)["status"] == "ok"
+	assert check({**nightly, "event": "workflow_dispatch"})["status"] == "ok"
+	for run, default_branch in (({**nightly, "head_branch": "feature/x"}, "main"), ({**nightly, "head_branch": None}, "main"), (nightly, "")):
+		assert check(run, default_branch)["reason"] == "current_run_rejected:scheduled_check_not_default_branch"
+	assert check({**nightly, "conclusion": "success"})["reason"] == "current_run_rejected:not_failed"
+
+
 def test_verify_run_provenance_cli_default_branch_for_ci_run(tmp_path) -> None:
 	payload_file = tmp_path / "payload.json"
 	runs_file = tmp_path / "runs.json"
@@ -5291,10 +5388,27 @@ def test_phase_report_skip_paths() -> None:
 
 PLAN_JOB_LOG = (
 	"2026-10-05T23:41:45.000Z ##[group]Run bash scripts/run_plan_codex.sh\n"
+	"2026-10-05T23:41:45.000Z ##[endgroup]\n"
 	"2026-10-05T23:41:47.000Z codex_stall_guard.sh: unknown option: --engine\n"
 	"2026-10-05T23:42:19.000Z ##[error]Codex planning failed after 3 attempts.\n"
 	"2026-10-05T23:42:19.000Z ##[error]Process completed with exit code 1.\n"
 )
+
+
+def test_job_log_fixtures_close_every_run_header() -> None:
+	# Real Actions job logs always close a ##[group]Run step header with
+	# ##[endgroup]; the log filter fails closed on a header it never sees
+	# closed, so fixtures must keep the real shape (#6876).
+	for fixture in (JOB_LOG, PLAN_JOB_LOG):
+		open_header = False
+		for raw in fixture.splitlines():
+			content = heal._LOG_TIMESTAMP_RE.sub("", raw)
+			if heal._STEP_HEADER_OPEN_RE.match(content):
+				assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
+				open_header = True
+			elif heal._STEP_HEADER_CLOSE_RE.match(content):
+				open_header = False
+		assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
 
 
 def _plan_intake_state(*, repo: str = CONSUMER_REPO, **overrides) -> dict:

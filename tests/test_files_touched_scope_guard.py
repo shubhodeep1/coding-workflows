@@ -58,6 +58,21 @@ def test_all_within_allowlist_passes() -> None:
 	assert oos == []
 
 
+def test_agents_md_scope_covers_its_top_level_fragments() -> None:
+	"""CLAUDE.md §30: a scope naming agents.md (or AGENTS.md) covers agents.d/*.md."""
+	for entry in ("agents.md", "AGENTS.md", "./agents.md"):
+		status, _allow, oos = guard.evaluate(_body("scripts/x.sh", entry), ["scripts/x.sh", "agents.d/7100-x.md"])
+		assert status == guard.STATUS_IN_SCOPE, entry
+		assert oos == []
+	status, _allow, oos = guard.evaluate_allowlist(["agents.md"], ["agents.d/7100-x.md"], allow_lockfiles=False)
+	assert status == guard.STATUS_IN_SCOPE
+	# Without agents.md in scope, nested paths, or other extensions: still out of scope.
+	_status, _allow, oos = guard.evaluate(_body("scripts/x.sh"), ["agents.d/7100-x.md"])
+	assert oos == ["agents.d/7100-x.md"]
+	_status, _allow, oos = guard.evaluate(_body("agents.md"), ["agents.d/sub/x.md", "agents.d/x.sh"])
+	assert oos == ["agents.d/sub/x.md", "agents.d/x.sh"]
+
+
 def test_out_of_allowlist_modification_blocks() -> None:
 	status, _allow, oos = guard.evaluate(_body("frontend/**"), ["frontend/app.tsx", "layerzero.config.ts"])
 	assert status == guard.STATUS_OUT_OF_SCOPE

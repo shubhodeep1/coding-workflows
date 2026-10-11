@@ -356,6 +356,12 @@ def verify_out_of_scope(block: dict[str, object], linked_issue_text: str) -> tup
 		return "inconclusive", "Linked issue files_touched metadata was unavailable, so scope could not be verified."
 	if cited_path in files_touched:
 		return "does-not-support", f"Linked issue files_touched explicitly includes {cited_path}."
+	# CLAUDE.md §30: an agents.d/ fragment documents agents.md, so a scope
+	# naming the agents file covers it (as files_touched_scope_guard.py does).
+	if re.fullmatch(r"agents\.d/[^/]+\.md", cited_path) and any(
+		entry.lstrip("./") in ("agents.md", "AGENTS.md") for entry in files_touched
+	):
+		return "does-not-support", f"Linked issue files_touched includes the agents file that {cited_path} documents."
 	return "support", f"Linked issue files_touched does not include {cited_path}."
 
 

@@ -894,11 +894,12 @@ def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit')" in content
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:retro')" in content
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')" in content
+	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage')" in content
 
 
 def test_clarify_skips_consumer_tracker_issues() -> None:
 	content = CLARIFY_PATH.read_text(encoding="utf-8")
-	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step'))" in content
+	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage'))" in content
 
 
 def test_security_audit_gate_disabled_skips_without_side_effects() -> None:
@@ -2694,7 +2695,8 @@ def test_security_audit_target_ref_routes_through_the_integration_ref_resolver()
 			bin_dir / "gh",
 			"#!/usr/bin/env python3\n"
 			"import json, sys\n"
-			"path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
+			"args = [a for a in sys.argv[1:] if a != '-i']\n"
+			"path = args[1] if len(args) > 1 else ''\n"
 			"if path == 'repos/owner/repo/issues/101':\n"
 			f"\tprint({body!r})\n"
 			"\tsys.exit(0)\n"

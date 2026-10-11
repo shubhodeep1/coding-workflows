@@ -6,6 +6,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -128,7 +132,7 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 
 
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:
-	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in (
 		"REISSUE_FILES_TOUCHED_UNION",
 		"REISSUE_FILES_TOUCHED_NEW_OUTPUTS",
@@ -146,7 +150,7 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 
 
 def test_validation_run_attribution_log_prefix_is_registered() -> None:
-	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	assert "- `VALIDATION_RUN_ATTRIBUTION`" in agents_text
 	assert "LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION" in agents_text
 
