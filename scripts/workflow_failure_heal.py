@@ -3026,7 +3026,7 @@ def _non_retryable_host_only_paths(comments: list[dict[str, Any]], *, head_sha: 
 		if _non_retryable_comment_author(comment) != author:
 			continue
 		body = sanitize_text(comment.get("body"))
-		fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
+		fields = _marker_fields(_canonical_failure_marker(body))
 		if fields.get("head", "").lower() != head_sha:
 			continue
 		match = _FIRST_ERROR_LINE_RE.search(body)
@@ -3156,7 +3156,7 @@ def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, truste
 		body = sanitize_text(comment.get("body"))
 		if _NON_RETRYABLE_MARKER_RE.search(body):
 			return True
-		if _FAILURE_MARKER_RE.search(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+		if _canonical_failure_marker(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
 			return False
 	return False
 
