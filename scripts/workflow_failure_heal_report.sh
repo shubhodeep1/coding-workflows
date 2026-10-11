@@ -12,7 +12,7 @@
 #   1. Reads the escalated issue / PR, its comments, and the repository's recent
 #      workflow runs, and picks the failed runs that belong to it (run links in
 #      the failure comments the pipeline posts, plus failed runs whose display
-#      title equals the issue title).
+#      title equals the issue title or ends in `[tracking:<issue>]`).
 #   2. Records the coding-workflows release SHA the consumer wrappers are pinned
 #      to, so the intake can diagnose against exactly the code that ran.
 #   3. Sends one thin `repository_dispatch` (event type `workflow-failure-heal`)
@@ -162,6 +162,16 @@ fi
 
 # --- Build + validate the payload -------------------------------------------
 
+HEAL_REPORTER_LOGIN=""
+if [ "${LABEL}" = "ai:needs-human" ] || [ "${LABEL}" = "ai:scope-blocked" ]; then
+	# One identity read shared by the heal-scope and host-only checks below
+	# (ai:needs-human) and the scope-blocked payload: the automation-path guard
+	# grants a pipeline-authored issue differently, so the diagnosis needs to
+	# know whether the issue author is this account (Q81). An empty login is
+	# recorded as unknown.
+	HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+fi
+
 PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
 if ! python3 "${HEAL_PY}" build-issue-payload \
 	--repo "${REPO}" \
@@ -172,17 +182,13 @@ if ! python3 "${HEAL_PY}" build-issue-payload \
 	--runs-json "${RUNS_JSON_FILE}" \
 	--wrapper-sha "${WRAPPER_SHA}" \
 	--reporter-run-url "${RUN_URL}" \
+	--pipeline-login "${HEAL_REPORTER_LOGIN}" \
 	> "${PAYLOAD_FILE}"; then
 	log "error payload_build_failed issue=${ISSUE_NUMBER}"
 	exit 1
 fi
 
 HEAL_SCOPE_SKIP_ARGS=()
-HEAL_REPORTER_LOGIN=""
-if [ "${LABEL}" = "ai:needs-human" ]; then
-	# One identity read shared by the heal-scope and host-only checks below.
-	HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
-fi
 if [ "${LABEL}" = "ai:needs-human" ] && jq -e '[.labels[]?.name] | index("ai:workflow-heal") != null' "${ISSUE_JSON_FILE}" >/dev/null; then
 	# The comments are already fetched above. Only the authenticated account's
 	# refusal marker may suppress a new heal generation.
@@ -191,7 +197,24 @@ if [ "${LABEL}" = "ai:needs-human" ] && jq -e '[.labels[]?.name] | index("ai:wor
 		exit 1
 	fi
 	if [ -n "${HEAL_REPORTER_LOGIN}" ] && jq -e --arg login "${HEAL_REPORTER_LOGIN}" 'any(.[]; .author == $login and (.body | contains("<!-- ai:workflow-heal-scope-unverified:v1")))' "${COMMENTS_JSON_FILE}" >/dev/null; then
-		HEAL_SCOPE_SKIP_ARGS=(--heal-scope-unverified)
+		HEAL_SCOPE_SKIP_ARGS+=(--heal-scope-unverified)
+	fi
+fi
+# The heal intake applies ai:needs-human itself after posting a non-retryable
+# diagnosis (marker ai:workflow-heal-non-retryable:v1); that label event must
+# not dispatch another heal. Only the authenticated account's marker counts,
+# and only while it is newer than that account's latest failure marker. The
+# /user read happens only when the marker text is present.
+if [ "${LABEL}" = "ai:needs-human" ] && jq -e 'any(.[]; (.body // "") | contains("<!-- ai:workflow-heal-non-retryable:v1"))' "${COMMENTS_JSON_FILE}" >/dev/null 2>&1; then
+	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
+		HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+	fi
+	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
+		log 'error non_retryable_marker_author_unavailable; not dispatching another heal'
+		exit 1
+	fi
+	if [ "$(python3 "${HEAL_PY}" non-retryable-label-suppressed --comments-json "${COMMENTS_JSON_FILE}" --trusted-login "${HEAL_REPORTER_LOGIN}" 2>/dev/null || echo false)" = "true" ]; then
+		HEAL_SCOPE_SKIP_ARGS+=(--non-retryable-diagnosed)
 	fi
 fi
 if [ "${LABEL}" = "ai:needs-human" ]; then
