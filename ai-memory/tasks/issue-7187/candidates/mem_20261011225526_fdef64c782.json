@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: An answer can't route this issue to the branch. `scripts/resolve_integration_ref.sh` (`resolve_ref`, lines 120-153) reads `Integration branch:` / `Target branch:` only from the issue body, or from a tracking issue named there, and only when the line stands alone (regex at lines 30 and 43). Option A needs someone to edit the body. An `/answer` can't do that, and #7049 was closed (not_planned) for exactly this missing line, so picking A again would loop. Option B is the conservative fallback that still leaves room to fix something. Check-failure triage only files an issue when the base branch fails the same check (`CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED`, default `true`), so the failure in #7049 most likely reproduces on the default branch too. Option C asks the implementer to re-run CI, which it can't do from its network-isolated sandbox, so it would end with no artefact.\n\nNotes for the planner and implementer (from the issue spec, scoped to option B):\n- Check out the default branch. Reproduce orchestrate-poll group 3, shard 0 with CI's own partition: `NR % CI_POLL_TEST_GROUP_COUNT == 3` over the post-fast-fail subset, then `NR % CI_POLL_TEST_SHARDS == 0`, with group count 4 and 4 shards. The partition is defined in `.github/workflows/ci.yml` and checked by `tests/test_ci_poll_test_sharding.py`.\n- If that shard passes, run all of `tests/test_orchestrate_poll_process.py`.\n- Fix only a root cause you can demonstrate, then rerun the relevant tests. Don't touch the aggregate `lint` gate in `ci.yml`.\n- If nothing fails, make no code change. Record which commands ran, against which commit, and the result, and say in the PR or issue that the CI on PR #7044 (head `c659fa81b380` on `ai/issue-6769`) needs a rerun.\n- A fix that lands on the default branch reaches PR #7044 when that PR next syncs with its base.\n\nReversibility: If an operator later puts `- Integration branch: ai/issue-6769` on its own line in the body and posts `/reclarify`, the resolver routes planning and implementation to that branch, and this answer no longer applies.",
+  "fingerprint": "c4e8b7bffa62c8de19d275131875a1592d1bf84e7af36759b5b5862532708386",
+  "lineage": {
+    "issue_number": 7187,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38181750281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38181750281",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7187"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011225526_fdef64c782",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7187,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38181750281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7187",
+  "timestamps": {
+    "created_at": "2026-10-11T22:55:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
