@@ -145,7 +145,9 @@ def test_command_rejects_an_invalid_output_format() -> None:
 		assert b"invalid output format 'xml'" in result.stderr
 
 
-def test_alert_is_single_line_sanitized_and_uses_error_level() -> None:
+def test_alert_is_single_line_sanitized_and_runtime_failures_use_debug_level() -> None:
+	# Runtime model-call failures are retried or recovered by the caller, so
+	# they are DEBUG; only setup defects page at ERROR.
 	with tempfile.TemporaryDirectory() as directory:
 		capture = Path(directory) / "telegram"
 		result = _bash(
@@ -159,7 +161,7 @@ def test_alert_is_single_line_sanitized_and_uses_error_level() -> None:
 		assert stderr_lines == [
 			"opencode_agent_failure phase=phase_bad role=reviewer model=vendor/model rc=17 failure_class=auth_failure"
 		]
-		assert capture.read_text(encoding="utf-8").splitlines() == [stderr_lines[0], "ERROR"]
+		assert capture.read_text(encoding="utf-8").splitlines() == [stderr_lines[0], "DEBUG"]
 
 
 def test_alert_survives_broken_telegram_helper() -> None:
@@ -250,6 +252,63 @@ def test_bootstrap_validates_writer_and_generated_json() -> None:
 			env,
 		)
 		assert valid.returncode == 0, valid.stderr.decode()
+
+
+def _alert_with_probe(probe_outcome: str, failure_class: str, open_outcome: str = "already_open") -> tuple[subprocess.CompletedProcess[bytes], list[str]]:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		helper_copy = root / "opencode_helpers.sh"
+		helper_copy.write_text(HELPERS.read_text(encoding="utf-8"), encoding="utf-8")
+		(root / "provider_outage.py").write_text(
+			"import sys\n"
+			"if sys.argv[1] == 'probe':\n"
+			f"\tprint('outcome={probe_outcome} status=402')\n"
+			"else:\n"
+			"\tout = sys.argv[sys.argv.index('--alert-out') + 1]\n"
+			f"\tif '{open_outcome}' == 'opened':\n"
+			"\t\topen(out, 'w').write('tracker alert\\n')\n"
+			f"\tprint('alert=0 outcome={open_outcome} tracker=1')\n",
+			encoding="utf-8",
+		)
+		runtime = root / "runtime"
+		runtime.mkdir()
+		capture = root / "telegram"
+		result = _bash(
+			f"source {helper_copy}; "
+			"tg_send_msg() { printf '%s\\n' \"$2\" >> \"$TG_CAPTURE\"; }; "
+			f"opencode_emit_failure_alert phase reviewer vendor/model 17 {failure_class}",
+			{"TG_CAPTURE": str(capture), "RUNTIME_DIR": str(runtime)},
+		)
+		levels = capture.read_text(encoding="utf-8").split() if capture.exists() else []
+	return result, levels
+
+
+def test_alert_is_suppressed_while_provider_probe_is_down() -> None:
+	# Issue #6633: the outage tracker sends the single alert.
+	result, levels = _alert_with_probe("down", "invocation_failed")
+	assert result.returncode == 17
+	assert b"PROVIDER_OUTAGE op=alert phase=phase outcome=suppressed reason=provider_down" in result.stderr
+	assert levels == []
+
+
+def test_alert_opens_tracker_when_provider_probe_is_down() -> None:
+	# A fail-open caller can let the job succeed, so the helper opens the
+	# tracker itself and sends its one CRITICAL alert instead of the ERROR.
+	result, levels = _alert_with_probe("down", "invocation_failed", open_outcome="opened")
+	assert result.returncode == 17 and levels == ["CRITICAL"]
+
+
+def test_alert_is_sent_when_tracker_cannot_be_confirmed() -> None:
+	result, levels = _alert_with_probe("down", "invocation_failed", open_outcome="failed")
+	assert result.returncode == 17 and levels == ["DEBUG"]
+	assert b"outcome=sent reason=tracker_unconfirmed" in result.stderr
+
+
+def test_alert_is_sent_when_provider_probe_is_up_or_failure_is_setup() -> None:
+	result, levels = _alert_with_probe("up", "invocation_failed")
+	assert result.returncode == 17 and levels == ["DEBUG"]
+	result, levels = _alert_with_probe("down", "config_generation")
+	assert result.returncode == 17 and levels == ["ERROR"]
 
 
 def main() -> int:
