@@ -29,6 +29,8 @@
 #       `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`: the caller must
 #       fail (never run codex). The optional class can only demote a reason
 #       to `non_capacity`. Always returns 0; callers use AI_ENGINE_FALLBACK_EXIT.
+#       AI_ENGINE_LAST_FALLBACK_REASON holds the sanitized reason afterwards,
+#       so a caller whose stderr is redirected can log it.
 #   ai_engine_fallback_policy
 #       `capacity` (default) or `always`; an unknown value is `capacity`.
 #   ai_engine_fallback_class <reason>
@@ -221,6 +223,8 @@ ai_engine_fallback()
 {
 	local role="${1:-unknown}" reason="${2:-unknown}" demote="${3:-}" class policy action record_role records_file
 	reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-60)"
+	# shellcheck disable=SC2034  # read by callers whose stderr is redirected
+	AI_ENGINE_LAST_FALLBACK_REASON="${reason}"
 	echo "AI_ENGINE_FALLBACK role=${role} reason=${reason}" >&2
 	class="$(ai_engine_fallback_class "${reason}")"
 	# The caller's class can only demote a capacity reason (D3), never promote.
@@ -263,7 +267,8 @@ ai_engine_fallback()
 			source "${_AI_ENGINE_DIR}/tg_helpers.sh"
 		fi
 		if type tg_send_msg >/dev/null 2>&1; then
-			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; ${fallback_action}." "WARNING" >/dev/null
+			# DEBUG: the role already fell back on its own.
+			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; ${fallback_action}." "DEBUG" >/dev/null
 		fi
 	) 2>/dev/null || true
 	return 0

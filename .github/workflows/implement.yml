@@ -468,7 +468,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           mkdir -p scripts
@@ -489,7 +489,8 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "WARNING"
+            # DEBUG: the existing PR carries on through review.
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
             echo "::warning::Telegram helper unavailable; skipping duplicate PR Telegram notification."
           fi
@@ -6086,7 +6087,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh" ]; then
@@ -6106,7 +6107,9 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_phase_failure >/dev/null 2>&1; then
-            tg_send_phase_failure implement "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+            # DEBUG: the heal-report job and the unblock judge pick this up
+            # and page when a person is needed.
+            tg_send_phase_failure implement "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi

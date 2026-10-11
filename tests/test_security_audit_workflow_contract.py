@@ -813,7 +813,7 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert workflow["on"]["workflow_call"]["secrets"]["TG_BOT_SECRET"]["required"] is False
 	assert steps("Run security audit")["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
 	assert steps("Run security audit")["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
-	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
+	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -2802,6 +2802,8 @@ def test_security_audit_claude_engine_clean_result_is_clean_without_codex() -> N
 def _assert_codex_fallback(proc, state: dict, payload: dict, reason: str, *, claude_called: bool) -> None:
 	assert proc.returncode == 0, proc.stderr
 	assert f"AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	# The poller sends the audit's stderr to a file, so the reason is on stdout too.
+	assert f"SECURITY_AUDIT_CLAUDE_FALLBACK reason={reason}" in proc.stdout
 	assert "security-audit: engine=codex" in proc.stdout
 	assert bool(state.get("claude_calls")) is claude_called
 	assert len(state.get("codex_calls", [])) == 1
@@ -2817,7 +2819,7 @@ def test_security_audit_claude_fallback_no_account() -> None:
 
 
 def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
-	# The pool step drops every account at or above gate_utilization (0.9)
+	# The pool step drops every account at or above gate_utilization (0.95)
 	# and reports all_gated; the audit must not start Claude at all.
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-gated-") as td:
 		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})
@@ -2846,12 +2848,39 @@ def test_security_audit_claude_fallback_timeout() -> None:
 
 
 def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> None:
+	finding = json.dumps([_finding_payload("cut-finding", file_path="file_b.py")])
 	cases = (
 		("not json at all", "malformed_output"),
-		("Here are the findings:\n```json\n[]\n```", "malformed_output"),
-		("```json\n[]\n```\n```json\n[]\n```", "malformed_output"),
-		# Only a ```json fence is stripped; an unlabeled fence falls back.
-		("```\n[]\n```", "malformed_output"),
+		# A "[]" inside prose, or one followed by more text, is never a clean audit.
+		("The list of issues is [] for now, but I still need to check file_b.py.", "malformed_output"),
+		("Findings:\n[]\nI will continue with the next file.", "malformed_output"),
+		# A cut-off reply: the outer array never closes, and the inner array
+		# that does parse has no finding_id.
+		('Findings:\n[{"finding_id": "x", "evidence": [{"path": "a.py"}, {"path": "b.py"}]', "malformed_output"),
+		(finding[:-10], "malformed_output"),
+		# Arrays of objects without a finding_id are not findings.
+		('Files checked: [{"path": "file_b.py"}]', "malformed_output"),
+		# A cut-off reply that ends in a nested empty array is not a clean audit.
+		('Findings:\n[{"finding_id": "x", "evidence": []', "malformed_output"),
+		('Results so far: {"counts": {"files": 3}, "findings": []', "malformed_output"),
+		# A line-start "[]" inside an unclosed value is not a clean audit either.
+		('Results:\n{"findings":\n[]', "malformed_output"),
+		('Findings so far.\n[\n[]', "malformed_output"),
+		# A mismatched closer must not turn a cut-off value into a clean audit.
+		('Findings so far.\n[\n}\n[]', "malformed_output"),
+		('Results:\n{\n]\n[]', "malformed_output"),
+		# A "]" inside a JSON string does not close the unclosed value around "[]".
+		('Results:\n{"note": "a]b}",\n"findings":\n[]', "malformed_output"),
+		# Nesting deeper than the JSON decoder's recursion limit falls back cleanly.
+		("[" * 5000, "malformed_output"),
+		# An array nested in a JSON object that parses is not top-level.
+		("Here: {\"findings\": " + finding + "}", "malformed_output"),
+		# A complete nested findings array inside a truncated wrapper is not
+		# top-level either, even when the array itself parses successfully.
+		('Result: {"findings": ' + finding, "malformed_output"),
+		('Findings:\n[\n' + finding, "malformed_output"),
+		('Checked [file_a.py].\nResult: {"findings": ' + finding, "malformed_output"),
+		('Result: {"findings": ' + finding + ', "summary": ', "malformed_output"),
 		("", "missing_output"),
 		(json.dumps({"findings": []}), "schema_mismatch"),
 		(json.dumps(["not an object"]), "schema_mismatch"),
@@ -2860,6 +2889,149 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		with tempfile.TemporaryDirectory(prefix="security-audit-claude-bad-") as td:
 			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text, "AI_ENGINE_FALLBACK_POLICY": "always"})
 			_assert_codex_fallback(proc, state, payload, reason, claude_called=True)
+			assert f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes=" in proc.stdout, (result_text, proc.stdout)
+
+
+def test_security_audit_claude_reply_parser_rejects_truncated_wrappers_without_docker() -> None:
+	parser_source = SCRIPT_PATH.read_text(encoding="utf-8").split('if ! claude_check_result=', 1)[1].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+	finding = json.dumps([{"finding_id": "scoped"}])
+	cases = (
+		('Result: {"findings": ' + finding, "malformed_output", None),
+		('Findings:\n[\n' + finding, "malformed_output", None),
+		('Checked [file_a.py].\nResult: {"findings": ' + finding, "malformed_output", None),
+		('Checked [file_a.py].\nResult: {"findings":\n[]', "malformed_output", None),
+		('Result: {"findings": ' + finding + ', "summary": ', "malformed_output", None),
+		('Checked [file_a.py].\nFindings:\n' + finding, "extracted items=1", [{"finding_id": "scoped"}]),
+		('Files checked: [foo.py, bar.py].\n[]', "extracted items=0", []),
+	)
+	with tempfile.TemporaryDirectory(prefix="security-audit-parser-") as td:
+		reply_path = Path(td) / "reply.txt"
+		output_path = Path(td) / "output.json"
+		for reply_text, expected_message, expected_output in cases:
+			reply_path.write_text(reply_text, encoding="utf-8")
+			output_path.unlink(missing_ok=True)
+			proc = subprocess.run(
+				[sys.executable, "-c", parser_source, str(reply_path), str(output_path)],
+				capture_output=True, text=True, check=False,
+			)
+			assert expected_message in proc.stdout, (reply_text, proc.stdout, proc.stderr)
+			assert (proc.returncode == 0) is (expected_output is not None), (reply_text, proc.stderr)
+			if expected_output is not None:
+				assert json.loads(output_path.read_text(encoding="utf-8")) == expected_output
+			else:
+				assert not output_path.exists()
+
+
+def test_security_audit_claude_engine_extracts_the_last_findings_array_from_prose() -> None:
+	first = [_finding_payload("draft-finding", file_path="file_b.py")]
+	final = [_finding_payload("prose-finding", file_path="file_b.py")]
+	cases = (
+		("I reviewed the scoped files.\n\n" + json.dumps(final), ["prose-finding"]),
+		("Here are the findings:\n```json\n" + json.dumps(final) + "\n```\nLet me know if you need more.", ["prose-finding"]),
+		# Two arrays: the last one wins, nested arrays never count.
+		("Draft: " + json.dumps(first) + "\nFinal:\n```json\n" + json.dumps(final) + "\n```", ["prose-finding"]),
+		("Checkpoint: done.\n```\n" + json.dumps(final) + "\n```", ["prose-finding"]),
+		("Checked [file_a.py].\nFindings:\n" + json.dumps(final), ["prose-finding"]),
+		# A trailing empty array never replaces the findings before it.
+		("Findings:\n" + json.dumps(final) + "\nRemaining after re-check:\n[]", ["prose-finding"]),
+		# An empty array that ends the reply (or its fence) is a clean audit.
+		("No issues met the confidence bar.\n```json\n[]\n```", []),
+		("```json\n[]\n```\n```json\n[]\n```", []),
+		("```\n[]\n```", []),
+		# Bracketed prose that is not JSON but closes does not block a clean audit.
+		("Files checked: [foo.py, bar.py].\n```json\n[]\n```", []),
+		("Checked ${RUNTIME_DIR}, a[i] and {file_a}.\n[]", []),
+	)
+	for result_text, expected in cases:
+		with tempfile.TemporaryDirectory(prefix="security-audit-claude-extract-") as td:
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text})
+			assert proc.returncode == 0, proc.stderr
+			assert "security-audit: engine=claude" in proc.stdout, (result_text, proc.stdout, proc.stderr)
+			assert "AI_ENGINE_FALLBACK" not in proc.stderr
+			assert not state.get("codex_calls")
+			assert f"SECURITY_AUDIT_CLAUDE_EXTRACTED items={len(expected)} leading_chars=" in proc.stdout
+			assert _kept_ids(payload) == expected
+
+
+def test_security_audit_claude_engine_whole_reply_json_is_not_reported_as_extracted() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-plain-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td))
+		assert "security-audit: engine=claude" in proc.stdout
+		assert "SECURITY_AUDIT_CLAUDE_EXTRACTED" not in proc.stdout
+		assert "SECURITY_AUDIT_CLAUDE_REJECTED" not in proc.stdout
+
+
+def test_security_audit_rejected_claude_reply_is_logged_and_kept() -> None:
+	reply = (
+		"Starting the audit.\x07\n::error::forged annotation\n"
+		"token ghp_abcdefghijklmnopqrstuvwxyz0123456789 seen\t\tin a log\n"
+		+ ("x" * 70000)
+		+ "\nThe last words of the reply."
+	)
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-rejected-") as td:
+		kept_path = Path(td) / "kept" / "rejected.txt"
+		proc, state, payload = _claude_engine_audit(
+			Path(td),
+			claude_env={"AI_ENGINE_FALLBACK_POLICY": "always", "MOCK_CLAUDE_RESULT": reply, "SECURITY_AUDIT_CLAUDE_REJECTED_OUT": str(kept_path)},
+		)
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+		lines = proc.stdout.splitlines()
+		rejected = next(line for line in lines if line.startswith("SECURITY_AUDIT_CLAUDE_REJECTED "))
+		assert f"reason=malformed_output bytes={len(reply.encode())} " in rejected
+		assert rejected.endswith(f" kept={kept_path}")
+		starts = next(line for line in lines if line.startswith("security-audit: rejected Claude reply starts: "))
+		ends = next(line for line in lines if line.startswith("security-audit: rejected Claude reply ends: "))
+		assert starts.startswith("security-audit: rejected Claude reply starts: Starting the audit. ::error::forged annotation token ghp_[redacted] seen in a log x")
+		assert len(starts) - len("security-audit: rejected Claude reply starts: ") <= 300
+		assert ends.endswith("x The last words of the reply.")
+		assert len(ends) - len("security-audit: rejected Claude reply ends: ") == 300
+		# Nothing from the reply can start a line (no workflow commands) or
+		# carry a control character into the job log.
+		assert not any(line.startswith("::error::forged") for line in lines)
+		assert "\x07" not in proc.stdout
+		assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in proc.stdout
+		kept = kept_path.read_bytes()
+		assert len(kept) == 65536
+		assert reply.encode().startswith(kept)
+
+
+def test_security_audit_rejected_claude_reply_short_and_unkept() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-short-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"AI_ENGINE_FALLBACK_POLICY": "always", "MOCK_CLAUDE_RESULT": "I could not finish the audit."})
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+		assert "SECURITY_AUDIT_CLAUDE_REJECTED reason=malformed_output bytes=29 chars=29 kept=none" in proc.stdout
+		assert "security-audit: rejected Claude reply starts: I could not finish the audit." in proc.stdout
+		assert "rejected Claude reply ends:" not in proc.stdout
+
+
+def test_security_audit_rejected_claude_reply_redacts_other_key_formats() -> None:
+	secrets = (
+		"sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123",
+		"AKIAABCDEFGHIJKLMNOP",
+		"xoxb-123456789012-abcdefghij",
+	)
+	reply = "Quoted from the code: " + " ".join(secrets) + " -----BEGIN RSA PRIVATE KEY----- MIIEabc -----END RSA PRIVATE KEY----- done."
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-redact-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"AI_ENGINE_FALLBACK_POLICY": "always", "MOCK_CLAUDE_RESULT": reply})
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+		for secret in secrets:
+			assert secret not in proc.stdout
+		assert "MIIEabc" not in proc.stdout
+		assert "[redacted private key] done." in proc.stdout
+
+
+def test_security_audit_rejected_claude_reply_redacts_a_token_at_the_excerpt_boundary() -> None:
+	token = "ghp_" + "a" * 36
+	reply = ("y" * 1000) + " " + token + " " + ("z" * 280)
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-boundary-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"AI_ENGINE_FALLBACK_POLICY": "always", "MOCK_CLAUDE_RESULT": reply})
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+		assert "a" * 10 not in proc.stdout
+
+
+def test_poller_keeps_a_rejected_security_audit_reply_in_its_runtime_dir() -> None:
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'SECURITY_AUDIT_CLAUDE_REJECTED_OUT="${RUNTIME_DIR}/security_pass_claude_rejected_${TRACKING_NUM}.txt" \\\n' in poller
 
 
 def _assert_refused(proc, state: dict, payload: dict, reason: str) -> None:

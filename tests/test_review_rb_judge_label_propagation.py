@@ -427,6 +427,7 @@ def _run_close_and_reissue(
 	pr_view_head_ref_oid: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
+	issue_create_should_fail: bool = False,
 	extra_env: dict[str, str] | None = None,
 	api_responses: dict[str, object] | None = None,
 	path_prefix: str | None = None,
@@ -453,6 +454,8 @@ def _run_close_and_reissue(
 		gh_state_file = runtime_dir / "gh_state.json"
 		_install_mock_gh(bin_dir, gh_state_file)
 		mock_state: dict[str, object] = {}
+		if issue_create_should_fail:
+			mock_state["issue_create_should_fail"] = True
 		run_cwd = tmp_path
 		repo_head_before = ""
 		repo_branch_before = ""
@@ -611,6 +614,16 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
 	)
+
+
+def test_close_and_reissue_create_failure_reports_missing_replacement() -> None:
+	state = _run_close_and_reissue([], issue_create_should_fail=True)
+	assert len(state.get("pr_close_args", [])) == 1
+	assert len(state.get("issue_create_args", [])) == 1
+	assert "Failed to create replacement issue for closed PR #42" in state["_stdout"]
+	assert state["_github_output"].splitlines() == [
+		"judge_handled=true", "judge_action=close_and_reissue", "judge_reissue_created=false",
+	]
 
 
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:

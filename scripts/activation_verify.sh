@@ -14,7 +14,10 @@
 #     closes such an issue is not verified again, so fixes never recurse);
 #   - `operator` gaps are written to the repository's ai:operator-step issue
 #     (scripts/operator_step_issue.py);
-#   - one Telegram message (WARNING when DORMANT, DEBUG when LIVE).
+#   - one Telegram message: WARNING when a person has to act (DORMANT with
+#     operator steps, or a code-gap fix issue that could not be checked or
+#     opened), DEBUG otherwise (LIVE, or DORMANT with only code gaps that
+#     went to the pipeline's fix issue).
 #
 # Usage:
 #   activation_verify.sh pr       issue_pr_status.yml, after a PR merged into
@@ -62,6 +65,18 @@ source "${SUPPORT_DIR}/scripts/gh_helpers.sh"
 activation_log()
 {
 	echo "ACTIVATION_VERIFY $*"
+}
+
+# Best-effort Telegram send through tg_helpers.sh (level filtering included).
+_activation_tg_send()
+{
+	local msg="$1" level="$2"
+	[ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ] || return 0
+	# shellcheck source=/dev/null
+	source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
+	if declare -F tg_send_msg >/dev/null 2>&1; then
+		tg_send_msg "${msg}" "${level}" >/dev/null 2>&1 || true
+	fi
 }
 
 # Validates and normalises the model's verdict; prints the clean JSON or nothing.
@@ -406,6 +421,7 @@ activation_main()
 			if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
 				echo "::warning::Could not open the activation-fix issue for ${key}."
 				activation_log "mode=${mode} item=${item} outcome=skip reason=fix_issue_failed"
+				_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${code_gaps} code gap(s), but the fix issue could not be opened; nothing will implement them until verification is re-run." "WARNING"
 				return 0
 			fi
 		fi
@@ -431,6 +447,7 @@ activation_main()
 			--source "Activation of ${item_label}" --steps-file "${steps_file}" "${activation_source_args[@]}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
 			echo "::warning::Could not update the ai:operator-step issue for ${key}: $(tr '\r\n' '  ' < "${RUNTIME_DIR}/operator_step_issue.log" | cut -c1-300)"
 			activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"
+			_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${operator_gaps} operator step(s), but the ai:operator-step issue could not be updated." "WARNING"
 			return 0
 		fi
 	fi
@@ -447,15 +464,14 @@ activation_main()
 		return 0
 	fi
 
-	if [ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
-		# shellcheck source=/dev/null
-		source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
-		tg_level="DEBUG"
-		[ "${verdict}" = "DORMANT" ] && tg_level="WARNING"
-		if declare -F tg_send_msg >/dev/null 2>&1; then
-			tg_send_msg "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s))" "${tg_level}" >/dev/null 2>&1 || true
-		fi
+	# DEBUG when the pipeline owns every gap: code gaps went to the fix issue
+	# the pipeline implements. WARNING only when a person has something to do:
+	# operator steps, or a code-gap fix issue that could not be checked/opened.
+	tg_level="DEBUG"
+	if [ "${verdict}" = "DORMANT" ] && { [ "${operator_gaps}" -gt 0 ] || [ "${activation_fix_lookup_ok}" = "false" ]; }; then
+		tg_level="WARNING"
 	fi
+	_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s))" "${tg_level}"
 	if [ "${activation_fix_lookup_ok}" = "false" ]; then
 		activation_log "mode=${mode} item=${item} verdict=${verdict} code_gaps=${code_gaps} operator_gaps=${operator_gaps} outcome=partial reason=fix_lookup_failed"
 	else

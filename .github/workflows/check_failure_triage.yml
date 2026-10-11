@@ -46,7 +46,7 @@ name: AI Check Failure Triage (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
 
 jobs:
   derive_check_name_key:
@@ -215,7 +215,7 @@ jobs:
       # with every Telegram send suppressed. SILENT > CRITICAL in
       # tg_helpers.sh, so scripts/check_failure_triage.sh and the
       # failure-notify step below both go quiet.
-      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'WARNING' }}
     steps:
       - name: Log trigger context
         env:
@@ -592,7 +592,7 @@ jobs:
             cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}" || exit 0
             source scripts/tg_helpers.sh 2>/dev/null || true
             type tg_send_msg >/dev/null 2>&1 && tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
-          elif [[ "${ALERT_MSG_LEVEL:-DEBUG}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+          elif [[ "${ALERT_MSG_LEVEL:-WARNING}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
             # No PR-checkout helper may run when trusted support staging failed.
             curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
               -d "chat_id=${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" -d 'disable_web_page_preview=true' \

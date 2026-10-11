@@ -249,7 +249,7 @@ def test_no_credential_falls_back_with_one_telegram_note(sandbox: dict) -> None:
 	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential" in result.stderr
 	lines = notes.read_text(encoding="utf-8").splitlines()
 	assert len(lines) == 1
-	assert "Claude unavailable for PLAN (no_credential)" in lines[0] and lines[0].endswith("|WARNING")
+	assert "Claude unavailable for PLAN (no_credential)" in lines[0] and lines[0].endswith("|DEBUG")
 	assert _calls(sandbox) == []
 
 

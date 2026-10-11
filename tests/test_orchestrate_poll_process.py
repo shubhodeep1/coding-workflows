@@ -414,6 +414,9 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	# The production block reads each issue's wave status with jq under
+	# `set -euo pipefail`; without jq the runner exits silently, so skip
+	# like the module's other jq-dependent tests (#6892).
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
@@ -4952,7 +4955,7 @@ def test_security_pass_failed_project_auto_resets_once_on_newer_engine() -> None
 	assert not any("re-security-pass-dedup:" in body for body in tracking_comment_bodies)
 	assert any(
 		notification["issue"] == "192"
-		and notification["level"] == "WARNING"
+		and notification["level"] == "DEBUG"
 		and "security pass reset automatically" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
@@ -6229,7 +6232,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert not any("Project security pass exhausted" in comment["body"] for comment in result["issues"]["192"]["comments"])
 	assert any(
 		notification["issue"] == "192"
-		and notification["level"] == "WARNING"
+		and notification["level"] == "DEBUG"
 		and "exhaustion judge accepted 1 remaining finding(s)" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
@@ -6704,11 +6707,14 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 		in judge_comments[0]
 	)
 	assert "| SEC-TEST-1 | low | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+	assert "need a human" not in judge_comments[0]
+	assert "cannot be accepted" not in judge_comments[0]
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
-	# Issue #6729 / #6539: the low finding's keep_fixing is converted to fail at the
-	# cap, and the high keep_fixing row still terminalizes the round with no waiver recorded.
+	# Issue #6729 / #6906: the low finding's keep_fixing is converted to an advisory
+	# at the cap, but the high keep_fixing row terminalizes the round before any
+	# waiver is written, so neither a waiver nor a follow-up is recorded.
 	low_finding = _security_pass_second_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6727,7 +6733,7 @@ def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -
 	assert "ai:security-pass-failed" in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "reason=blocking_findings_after_cap" in combined_log
-	# The low row is converted to fail before the blocking high row terminalizes the round.
+	# The low row is converted to an advisory but not recorded: the blocking high row terminalizes the round.
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_WAIVED" not in combined_log
 	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
@@ -7349,7 +7355,7 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert "- `unknown.id-1` (not among the reported findings; matched by exact id only)" in ack_comments[0]
 	assert "The bounded security-pass fix loop was reset." in ack_comments[0]
 	assert any(
-		notification["issue"] == "192" and notification["level"] == "WARNING" and "/security-pass-waive" in notification["message"]
+		notification["issue"] == "192" and notification["level"] == "DEBUG" and "/security-pass-waive" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
 
@@ -10616,7 +10622,8 @@ def test_review_blocked_fix_scope_rejects_unrelated_file():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_empty_staged_set():
@@ -10642,7 +10649,8 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out_automation_assets():
@@ -10690,7 +10698,8 @@ def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_template_outside_pr():
@@ -10832,7 +10841,8 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
@@ -10845,7 +10855,8 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
@@ -10887,7 +10898,8 @@ def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+	# The rejected fix is retried (then force-merged at the retry cap): DEBUG.
+	assert any(n.get("level") == "DEBUG" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_renamed_pr_source():
@@ -24406,6 +24418,9 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	PR whose body carries a close keyword, keep skipping non-open PRs,
 	and treat an API failure as unknown state — all with exactly one
 	``pulls/<n>`` request per candidate."""
+	# close_linked_pr reads each PR's state with jq; without it every PR
+	# reads as state=unknown and the assertions fail for an environment
+	# reason, so skip like the module's other jq-dependent tests (#6892).
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")

@@ -516,6 +516,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
 
+      - name: Telegram alert levels page only when a person must act
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_alert_levels_human_only.py
+
       - name: Memory maintenance extraction contract tests
         run: |
           set -euo pipefail
@@ -1129,6 +1134,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+
+      - name: Review conflict guard-hook template merge tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_guard_hook_template_merge.py
 
       - name: Review conflict folded-fragment keep test
         run: |
