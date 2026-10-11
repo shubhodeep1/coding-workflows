@@ -1671,7 +1671,7 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 		self.assertIn(
-			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | select(.status == \"completed\") | .conclusion // \"\"",
+			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then (.conclusion // \"\") else \"pending\" end",
 			calls,
 		)
 
@@ -1755,13 +1755,15 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 
 	def test_pending_newest_base_run_is_not_read_as_an_older_success(self) -> None:
 		# The query must not filter on status=completed: that would skip a pending
-		# newest run and return an older success, wrongly skipping triage.
+		# newest run and return an older success, wrongly skipping triage. A
+		# pending newest run reads as "pending", which defers (#7140).
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 		self.assertNotIn("&status=completed", source)
-		jq_filter = '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""'
+		jq_filter = '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end'
 		self.assertIn(jq_filter, source)
 		for payload, expected in (
-			({"workflow_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, ""),
+			({"workflow_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, "pending"),
+			({"workflow_runs": [{"status": "queued", "conclusion": None}]}, "pending"),
 			({"workflow_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
 			({"workflow_runs": []}, ""),
 		):
@@ -1773,14 +1775,16 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		# A pending base check run must not let an earlier completed success skip triage.
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 		jq_filter = ('[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) '
-			'or any($r[]; .status != "completed") then "" '
+			'or any($r[]; .status != "completed") then (if ($r | length) > 0 and (.total_count // 0) <= ($r | length) then "pending" else "" end) '
 			'elif all($r[]; .conclusion == "success") then "success" '
 			'else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end')
 		self.assertIn(jq_filter, source)
 		self.assertNotIn('select(.status == "completed")][0].conclusion', source)
 		for payload, expected in (
-			({"check_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, ""),
-			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "queued", "conclusion": None}]}, ""),
+			({"check_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, "pending"),
+			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "queued", "conclusion": None}]}, "pending"),
+			# A truncated page that also holds a pending run is unknown, not pending.
+			({"total_count": 3, "check_runs": [{"status": "queued", "conclusion": None}]}, ""),
 			({"check_runs": [{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}]}, "failure"),
 			({"check_runs": [{"status": "completed", "conclusion": "success"}]}, "success"),
 			({"check_runs": []}, ""),
@@ -1792,6 +1796,21 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 			with self.subTest(payload=payload):
 				out = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(payload), capture_output=True, text=True, check=True)
 				self.assertEqual(out.stdout.strip(), expected)
+
+	def test_pending_base_result_defers_instead_of_filing(self) -> None:
+		# #7140: main's newest CI run was still in progress, the gate read
+		# "unknown" and filed a PR-specific failure as a base-branch issue.
+		for base, extra in (
+			({"ref": "main", "workflow_id": "9", "conclusion": "pending"}, {}),
+			({"ref": "main", "check_conclusion": "pending"}, {"CHECK_TRIAGE_CHECK_RUN_ID": "55", "CHECK_TRIAGE_CHECK_NAME": "external / lint"}),
+		):
+			with self.subTest(base=base):
+				proc, outputs, metadata = _run_collect_stage(parent_body=PLAIN_SOURCE, base=base, extra_env=extra)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE skip reason=base_pending base=main pr=17", proc.stdout)
+				self.assertNotIn("base_gate outcome=file", proc.stdout)
+				self.assertNotIn("ready", outputs)
+				self.assertEqual(metadata, {})
 
 	def test_duplicate_issue_is_checked_before_the_base_gate(self) -> None:
 		# The gate's reads come after the open-issue dedup, so a duplicate costs nothing extra.
