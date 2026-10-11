@@ -704,7 +704,10 @@ def build_issue_payload(
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""), tracking_issue=_positive_int(issue.get("number")))
+	# Tracking issues are never pull requests; a PR sharing the number must not
+	# pick up that project's `[tracking:<N>]` validation runs.
+	tracking_issue = _positive_int(issue.get("number")) if kind == "issue" else None
+	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""), tracking_issue=tracking_issue)
 	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
 	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
 	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)

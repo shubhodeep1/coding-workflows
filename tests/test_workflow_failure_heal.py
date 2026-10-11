@@ -362,6 +362,12 @@ def test_select_failed_runs_picks_the_tracking_issues_validation_runs() -> None:
 		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
 	)
 	assert [ref["run_id"] for ref in payload["run_refs"]] == ["7", "8"]
+	pr_payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="pull_request", label="ai:harness-broken",
+		issue={**_issue(249, title="Unrelated PR", labels=["ai:harness-broken"])},
+		comments=[], runs=runs, wrapper_sha=SHA_A, reporter_run_url=None,
+	)
+	assert pr_payload["run_refs"] == []
 
 
 def _issue(number: int = 42, *, title: str = "Add retries to the poller", body: str = "body", labels: list[str] | None = None, state: str = "open") -> dict:
