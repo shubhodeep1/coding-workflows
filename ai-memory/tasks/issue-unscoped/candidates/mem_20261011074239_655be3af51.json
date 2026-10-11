@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2:16-20 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The comment incorrectly claims that this family's old defaults included `jsonschema`.\n  WHY: The old defaults were `[\"json\", \"pathlib\", \"yaml\", \"jinja2\"]`; `jsonschema` appeared only in the python-mongo-repo-checks family's defaults, so the comment misleads maintainers about this family's history.\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:17-21 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The fixture repeats the incorrect comment claiming that this family's old defaults included `jsonschema`.\n  WHY: The fixture carries the same misleading historical explanation as the template and must remain byte-identical to its rendered output.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2:16-20 | severity=NIT | confidence=5\n  PROBLEM: The explanatory comment claims `python-repo-checks`'s old defaults named the renderer's own modules `(yaml, jsonschema, jinja2)`. The actual old defaults for this family were `[\"json\", \"pathlib\", \"yaml\", \"jinja2\"]` \u2014 `jsonschema` was never in this family's default list; it was only in `python-mongo-repo-checks`'s old defaults `[\"yaml\", \"jsonschema\", \"jinja2\"]`. The LAST RUN DIFF correctly distinguishes the two families in `changelog.d/7147-import-audit-stdlib.md`, so the changelog and the template comment are internally inconsistent. The audit itself runs correctly; the comment is the only thing wrong.\n  WHY: No runtime defect \u2014 but a future maintainer reading the comment will believe `jsonschema` was previously audited in this family, which is false, and may chase the wrong historical lead when investigating a regression.\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:17-21 | severity=NIT | confidence=5\n  PROBLEM: The golden fixture carries the same factual error as the template \u2014 `jsonschema` listed among this family's old defaults. The fixture must stay byte-identical to the rendered template (asserted by `tests/test_family_python_repo_checks.py::test_python_repo_checks_invariants_regression_guards`), so the two files must be edited together.\n  WHY: No runtime defect \u2014 but the misleading historical explanation travels to every consumer's rendered audit.\n- tests/test_validation_import_audit_stdlib.py, bare_python fixture, lines 41-43 after the LAST RUN edit\n  PROBLEM: The fixture probes `yaml` and `jinja2` to confirm the bare venv has no third-party packages, but not `jsonschema`. The `python-mongo-repo-checks` template's old defaults were `[\"yaml\", \"jsonschema\", \"jinja2\"]`, so `jsonschema` is the third historical offender. A bare-venv CI runner image that happened to ship `jsonschema` (via system site-packages leaking through `PYTHONPATH` overrides) would pass the existing probes but still leave this test family at risk of regression to a non-stdlib default.\n  WHY: Add `\"jsonschema\"` to the `for module in (...)` tuple so the same per-module assertion message applies. No other change required.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2:16-20 | severity=NIT | confidence=5\n  PROBLEM: The comment states \"The earlier defaults named the renderer's own modules (yaml, jsonschema, jinja2)\" but this family's old defaults were `[\"json\", \"pathlib\", \"yaml\", \"jinja2\"]` \u2014 no `jsonschema`. That module only appeared in `python-mongo-repo-checks`'s old defaults.\n  WHY: No runtime failure \u2014 the audit behaves correctly. But the inaccurate historical explanation could mislead maintainers investigating future validation failures, causing them to look for `jsonschema` in the wrong family's history.\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:17-21 | severity=NIT | confidence=5\n  PROBLEM: The golden fixture repeats the same incorrect comment claiming `jsonschema` was among `python-repo-checks`'s old defaults.\n  WHY: No runtime failure \u2014 the fixture must remain byte-identical to the rendered template, and both carry the same misleading documentation.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2:16-20 | severity=NIT | confidence=5\n  PROBLEM: The comment claims the earlier defaults \"named the renderer's own modules (yaml, jsonschema, jinja2)\", but this family's removed default (visible in the PR diff hunk) was `[\"json\", \"pathlib\", \"yaml\", \"jinja2\"]` \u2014 `jsonschema` was only in the `python-mongo-repo-checks` family's old default (`[\"yaml\", \"jsonschema\", \"jinja2\"]`). The mongo-family template (`workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2:16-20`) is accurate; only the repo-checks template conflates the two families' histories. The default value itself (`[\"argparse\", \"json\", \"pathlib\", \"subprocess\"]`) is correct and the audit runs correctly; this is a misleading historical claim in shipped template documentation that will mislead maintainers debugging a consumer validation failure.\n  WHY: No runtime failure \u2014 the defect is the wrong per-family provenance in the explanatory comment shipped to every consumer that renders this family.\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:16-20 | severity=NIT | confidence=5\n  PROBLEM: The golden fixture repeats the identical incorrect `(yaml, jsonschema, jinja2)` provenance comment. It must stay byte-identical to the rendered template (`tests/test_family_python_repo_checks.py::test_python_repo_checks_golden_output_matches_fixture_tree`), so the two wrong mentions must be corrected together \u2014 dropping `jsonschema` from only one file makes the golden test fail.\n  WHY: No runtime failure; the fixture carries the same misleading historical claim as the template it mirrors.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1183265b606ca5da5a02d0e082e2c00ca8396083657b5510c352d4d06e6583ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7147,
+    "run_id": "38116331623",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38116331623",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011074239_655be3af51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7147,
+    "run_id": "38116331623"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T07:42:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
