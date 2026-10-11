@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7160_6107395973_approved",
   "issue_number": 7160,
   "metadata": {
+    "branch": "ai/issue-7160",
+    "changed_files": [
+      ".github/workflows/issue_pr_status.yml",
+      "agents.d/7160-unmerged-close-issue-binding.md",
+      "changelog.d/7160-unmerged-close-issue-binding.md",
+      "tests/test_issue_pr_status_payload_fallback_contract.py"
+    ],
+    "issue_number": 7160,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7160",
+    "pr_number": 7166,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7166",
+    "run_attempt": "1",
+    "run_id": "38127003852",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38127003852"
   },
   "run_attempt": 1,
   "run_id": "38127003852",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-11T09:06:17Z",
+  "status": "completed",
+  "timestamp": "2026-10-11T09:26:21Z",
   "workflow": "implement"
 }
