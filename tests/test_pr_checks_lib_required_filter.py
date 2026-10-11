@@ -189,6 +189,118 @@ def test_legacy_two_arg_mode_blocks_on_any_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cancelled conclusions block; only the newest run per name counts.
+# ---------------------------------------------------------------------------
+
+
+CI_REQUIRED_ENV = {**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"}
+
+
+def test_cancelled_required_check_blocks() -> None:
+	"""A cancelled required check is a settled failure: it blocks and does
+	not count as pending, so the auto-merge wait refuses instead of
+	waiting."""
+	runs = _page([{"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"}])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	res = _run(
+		'_pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_PENDING}"',
+		runs_json=runs,
+		env=CI_REQUIRED_ENV,
+	)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout.strip() == "0", res.stdout
+
+
+def test_cancelled_non_required_check_does_not_block_in_required_mode() -> None:
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+		{"id": 2, "name": "Copilot", "status": "completed", "conclusion": "cancelled"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_cancelled_run_superseded_by_newer_success_does_not_block() -> None:
+	"""A re-run creates a new check-run with the same name; the cancelled,
+	superseded run must not block, whatever the array order."""
+	older = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"}
+	newer = {"id": 2, "name": "CI", "status": "completed", "conclusion": "success"}
+	for order in ([older, newer], [newer, older]):
+		rc, reason = _gate(runs_json=_page(order), args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+		assert rc == 0 and reason == "ok", (order, rc, reason)
+
+
+def test_newer_cancelled_run_after_success_blocks() -> None:
+	older = {"id": 1, "name": "CI", "status": "completed", "conclusion": "success"}
+	newer = {"id": 2, "name": "CI", "status": "completed", "conclusion": "cancelled"}
+	for order in ([older, newer], [newer, older]):
+		rc, reason = _gate(runs_json=_page(order), args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+		assert rc == 1 and reason == "blocking", (order, rc, reason)
+
+
+def test_cancelled_check_blocks_in_star_mode() -> None:
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+		{"id": 2, "name": "advisory", "status": "completed", "conclusion": "cancelled"},
+	])
+	rc, reason = _gate(
+		runs_json=runs,
+		args='5 "abc1234" "main"',
+		env={**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*"},
+	)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_timed_out_and_action_required_required_checks_block() -> None:
+	for conclusion in ("timed_out", "action_required", "startup_failure"):
+		runs = _page([{"id": 1, "name": "CI", "status": "completed", "conclusion": conclusion}])
+		rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+		assert rc == 1 and reason == "blocking", (conclusion, rc, reason)
+
+
+def test_self_run_newest_hides_older_same_name_cancelled() -> None:
+	"""Dedupe runs before the self-run exclusion: when the caller's own job
+	is the newest run of its name, an older cancelled attempt of the same
+	job does not resurface."""
+	runs = _page([
+		{
+			"id": 1,
+			"name": "review / codex-agent",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"details_url": "https://github.com/owner/repo/actions/runs/111/job/1",
+		},
+		{
+			"id": 2,
+			"name": "review / codex-agent",
+			"status": "in_progress",
+			"conclusion": None,
+			"details_url": "https://github.com/owner/repo/actions/runs/999/job/9",
+		},
+	])
+	rc, reason = _gate(
+		runs_json=runs,
+		args='5 "abc1234" "main"',
+		env={**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*", "PR_CHECKS_SELF_RUN_ID": "999"},
+	)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_legacy_object_shape_is_deduped() -> None:
+	"""The legacy single-object check-runs shape gets the same dedupe."""
+	runs = json.dumps({"check_runs": [
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"},
+		{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+	]})
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+# ---------------------------------------------------------------------------
 # Sentinels + branch-protection precedence.
 # ---------------------------------------------------------------------------
 
