@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this issue wait for #6667 to merge and the `_AI_ENGINE_EXIT_REFUSED` check to pass on `main`, and then resume by itself?\nChoices:\nA) Add no new hold code. While the check fails, planning outputs a fixed `BLOCKED: waiting on #6667 (preflight _AI_ENGINE_EXIT_REFUSED absent on main)`, and the existing unblock judge's wait path resumes the issue once the check passes. This changes no code before #6667 merges. The risk is that the judge re-issues the issue again instead of waiting, which is how #7047 became this issue. (RECOMMENDED)\nB) Extend the existing dependency hold. A non-security issue could carry a `- Depends on PR: #<n>` line plus the preflight, and stay held in clarify, the implement gates and the standalone stall poller. Once the PR is merged into the default branch and the check passes on `main`, the poller posts `/reclarify`. This resumes deterministically, but it changes `scripts/` and `security_dependency.py` before #6667 merges, which conflicts with \"make no implementation changes while #6667 is unmerged\".\nC) Hand the wait to project #6664. When its final PR (#6667) is recorded as merged, the poller files or releases the follow-up work. This needs new poller code, and the same conflict as B applies.\nQ2: How do the four phases (capacity tiers, `MEMORY_LEARNINGS`, `SOFT_ERROR_ANALYZER`, `JUDGE_INTERIM`) each get their own PR?\nChoices:\nA) This issue delivers Phase 1 (capacity tiers). Once the preflight passes, planning files three separate standalone issues for Phases 2\u20134. Each one quotes its phase section of the plan doc, repeats the `_AI_ENGINE_EXIT_REFUSED` preflight, and does not depend on the others. (RECOMMENDED)\nB) Run the plan doc as an orchestrator project with four sub-issues (one per wave entry), as its \"The orchestrator must start each phase\" line suggests, and close this issue as tracked by that project. **Note:** if you pick Q1:A with this, the project has to be dispatched by an automated step after #6667 merges, and nothing in the repo does that today.\nC) This issue delivers all four phases one after another, opening a new PR from `main` after each previous one merges. One issue stays open for the whole sequence.\nMissing context: I couldn't read issue #7047's comments (the Q1/Q2 answers it mentions) or the live state of PR #6667, because this phase has no GitHub access. I relied on the plan doc saved in the repo, which records answers Q25\u2013Q34.",
+  "fingerprint": "7260788ef057946bf3207513cdbd239ebe98a5514c314138342b71b011748484",
+  "lineage": {
+    "issue_number": 7186,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38180410724",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38180410724",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011223214_ffb7625950",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7186,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38180410724"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7186 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T22:32:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
