@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which existing heal issues should the recovery path treat as \"the identified markerless issue\" that it may replace instead of recording a duplicate occurrence?\nChoices:\nA) Only an issue where `verify_heal_scope` returns `missing`: no `ai:workflow-heal-scope` marker at all, which is #7082's case. (RECOMMENDED)\nB) `missing` plus `malformed` and `duplicated`: a marker that is absent or broken.\nC) Any status other than `verified`, including `untrusted_author` and `edited`.\nQ2: What counts as an \"authenticated failed-run report\" for this path?\nChoices:\nA) Only a report whose GitHub Actions OIDC `report_identity` token passed `verify-report-identity`, even while `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false`. A report without a token, or with a rejected token, keeps today's duplicate handling. (RECOMMENDED)\nB) Any report that passes the existing provenance and claim-binding checks, with or without a token.\nQ3: How should `HEAL_SCOPE_RECOVERY_ENABLED` interact with `HEAL_INTAKE_SCOPE_GUARD_ENABLED`? Today, when the guard is off, `_heal_intake_scope_guard_permits_create` exits before verifying anything.\nChoices:\nA) Recovery creates a replacement only when both flags are `true`. The replacement body goes through the unchanged guard check and needs `verified`. With either flag off, today's behaviour is unchanged. (RECOMMENDED)\nB) Recovery runs `heal-scope verify` on the replacement even when the guard is off, so only `HEAL_SCOPE_RECOVERY_ENABLED` needs to be on. The ordinary create path still stays gated by the guard.\n**Note:** with B, the existing guard check cannot be reused as-is, because it exits when the guard is off.\nQ4: After the replacement is created, what should happen to the original markerless issue? Its body stays unedited in every option. The choice decides whether a later report for the same failure triggers recovery again.\nChoices:\nA) Post one pipeline-authored comment linking the replacement, with a dedupe marker such as `<!-- ai:heal-scope-recovery:v1 replaced_by=<n> -->`, then close the issue as \"not planned\". Later reports then match the replacement. (RECOMMENDED)\nB) Post the same pointer comment and marker but leave the issue open. The intake skips recovery whenever a trusted marker already exists.\nC) Leave the issue fully untouched and dedupe only through state kept on the replacement issue.",
+  "fingerprint": "9391c35fc07f65fc5cb94f18165581f5cd8454ce92bf531adc77505f3076c3a8",
+  "lineage": {
+    "issue_number": 7191,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38184189172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38184189172",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011233218_e10c4994bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7191,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38184189172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7191 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T23:32:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
