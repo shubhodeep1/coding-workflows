@@ -123,6 +123,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
 - `scripts/build_static_context.sh` — codex-cli phases.
+- `scripts/check_agents_md_direct_edits.py` — CI check that fails a pull request adding documentation to agents.md / AGENTS.md directly instead of an agents.d fragment (CLAUDE.md §30).
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
 - `scripts/check_failure_triage.sh` — Diagnose a failing pull-request check, enforce triage dedup/lineage rules, and open the follow-up triage issue.
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.

@@ -65,8 +65,8 @@
 #                                          wins over the flags when it is a valid reason token
 #   FINGERPRINT_CAP_REASON                 failure_reason the identical-failure cap repeats
 #                                          (default empty; inherited from the fingerprint-cap-block
-#                                          job env); sent as repeated_failure_reason so skip-reason
-#                                          drops a cap on the resolver's host-only stop
+#                                          job env); sent as repeated_failure_reason so the intake
+#                                          recognises a cap on the resolver's host-only stop
 #   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
 #                                          marker, sent as failure_fingerprint when 64 hex
 #   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
@@ -342,8 +342,8 @@ if grep -q 'classify-crash-ownership' "${HEAL_PY}" 2>/dev/null; then
 		BUILD_ARGS+=(--changed-files-file "${PR_CHANGED_FILES_FILE}")
 	fi
 fi
-# The failure reason an identical-failure cap report repeats, so skip-reason can
-# drop a cap that only repeats the resolver's host-only stop (#6738). Taken
+# The failure reason an identical-failure cap report repeats, so the intake can
+# recognise a cap that only repeats the resolver's host-only stop (#6738, #6756). Taken
 # from the gate's FINGERPRINT_CAP_REASON (job env of fingerprint-cap-block),
 # else from the trusted head markers already fetched; never from the evidence
 # text, which carries PR-influenced log tails. Empty keeps the old dispatch.
@@ -371,7 +371,11 @@ if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_
 	exit 0
 fi
 
-SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" 2>/dev/null || echo "")"
+# Host-only resolver stops (#6745) are forwarded, not dropped: the intake
+# verifies their provenance and posts one PR diagnosis with ai:needs-human
+# (#6756), falling back to its own host_only_conflict_manual_merge skip, so no
+# heal issue is filed for them either way.
+SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" --defer-host-only-autofix 2>/dev/null || echo "")"
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} pr=${PR} failure=${FAILURE_REASON}"
 	exit 0
