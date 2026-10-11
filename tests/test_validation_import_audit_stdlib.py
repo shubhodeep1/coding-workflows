@@ -41,8 +41,9 @@ def bare_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
 	env_dir = tmp_path_factory.mktemp("bare-venv")
 	venv.EnvBuilder(system_site_packages=False, with_pip=False).create(env_dir)
 	python = env_dir / "bin" / "python"
-	probe = subprocess.run([str(python), "-c", "import yaml"], capture_output=True, text=True, check=False)
-	assert probe.returncode != 0, "the bare venv must not see PyYAML"
+	for module in ("yaml", "jinja2"):
+		probe = subprocess.run([str(python), "-c", f"import {module}"], capture_output=True, text=True, check=False)
+		assert probe.returncode != 0, f"the bare venv must not see {module}"
 	return python
 
 
