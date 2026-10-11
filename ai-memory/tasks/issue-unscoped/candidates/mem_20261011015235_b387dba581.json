@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Explicitly clarify that required checks are still enforced before the final merge completes after the sync cap is reached.\n  expected_change_site: README.md\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The documentation states that after the cap is reached, it merges after a green CI run, but it should explicitly clarify that required checks are still enforced before the final merge completes to avoid ambiguity for operators.\n- requirement: Document that the `failed` log line for the marker prefix is wrapped in GitHub Actions `::warning::` syntax.\n  expected_change_site: agents.d/7084-freshness-sync-fast-path.md\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: The `Stable log prefixes (contractual)` entry for `MERGE_BASE_SYNC_MARKER` describes the field shape for `posted`, `failed`, and `skipped`, but does not mention the `::warning::` wrapper that is applied to the actual `failed` log line in `scripts/pr_checks_lib.sh`; `scripts/pr_checks_lib.sh:755` emits `echo \"::warning::MERGE_BASE_SYNC_MARKER pr=... outcome=failed (the synchronize run reviews normally)\"`, but the bullet documents only `outcome=posted|failed` and the separate `skipped` clause; it does not mention that the `failed` line carries the `::warning::` wrapper (unlike `posted`, which is a bare line). Grep-based log analysis still matches the prefix, so this is documentation completeness only.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Once MERGE_BASE_FRESHNESS_MAX_SYNCS updates have happened, a green CI run merges without another update.\"\n  Expected change site: agents.d/7084-freshness-sync-fast-path.md or README.md\n  Evidence of absence: The documentation states that after the cap is reached, it merges after a green CI run, but it should explicitly clarify that required checks are still enforced before the final merge completes to avoid ambiguity for operators.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n- TASK_GAP\n  Requirement: Document that the `failed` log line for the marker prefix is wrapped in GitHub Actions `::warning::` syntax.\n  Expected change site: agents.d/7084-freshness-sync-fast-path.md\n  Evidence of absence: The `Stable log prefixes (contractual)` entry for `MERGE_BASE_SYNC_MARKER` describes the field shape for `posted`, `failed`, and `skipped`, but does not mention the `::warning::` wrapper that is applied to the actual `failed` log line in `scripts/pr_checks_lib.sh`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: the stable-log-prefix contract entry for `MERGE_BASE_SYNC_MARKER` describes the log lines it registers; the `failed` log line is emitted wrapped in GitHub Actions workflow-command syntax.\n  Expected change site: agents.d/7084-freshness-sync-fast-path.md, line 5 (the `MERGE_BASE_SYNC_MARKER` bullet).\n  Evidence of absence: `scripts/pr_checks_lib.sh:755` emits `echo \"::warning::MERGE_BASE_SYNC_MARKER pr=... outcome=failed (the synchronize run reviews normally)\"`, but the bullet documents only `outcome=posted|failed` and the separate `skipped` clause; it does not mention that the `failed` line carries the `::warning::` wrapper (unlike `posted`, which is a bare line). Grep-based log analysis still matches the prefix, so this is documentation completeness only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash",
+  "fingerprint": "e75e08a9a32695340df877110053aa804a1145590c3435bfff82238a277e43f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7108,
+    "run_id": "38102292605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38102292605",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011015235_b387dba581",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7108,
+    "run_id": "38102292605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T01:52:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
