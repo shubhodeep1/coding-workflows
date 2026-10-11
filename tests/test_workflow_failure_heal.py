@@ -5686,6 +5686,11 @@ def test_latest_trusted_autofix_marker_is_host_only() -> None:
 	# A newer trusted failure comment whose marker failed to render ends the scan.
 	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR)
 	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": "AI review/autofix failed\n\nno marker"}], CAP_AUTHOR, SHA_B)
+	# A newer provider-outage comment (markerless or marked) never ends the scan (#6633).
+	outage_text = "AI review/autofix paused — model provider unavailable"
+	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": outage_text}], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_B, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_A, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
 	# The same markerless text from another author is ignored.
 	assert check([_host_only_cap_comment(), {"author_login": "contributor", "body": "AI review/autofix failed"}], CAP_AUTHOR)
 	assert not check([_host_only_cap_comment()], "")

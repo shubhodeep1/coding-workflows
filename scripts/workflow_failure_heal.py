@@ -2508,10 +2508,20 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 		for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE):
 			match = pattern.search(body)
 			if match is not None:
-				fields = _marker_fields(match)
-				if head and fields.get("head", "").lower() != head:
-					return False
-				return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+				break
+		else:
+			match = None
+		if match is not None:
+			fields = _marker_fields(match)
+			# Provider-outage markers are repo-wide events (#6633): like
+			# count_identical_failures, they never decide or end the scan.
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
+			if head and fields.get("head", "").lower() != head:
+				return False
+			return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body:
+			continue
 		# A newer trusted failure comment posted without a marker (the marker
 		# failed to render) is a different, later failure: it ends the scan,
 		# as in count_identical_failures, so an older host-only marker cannot
