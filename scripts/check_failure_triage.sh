@@ -436,9 +436,10 @@ fi
 # event costs one (that check's newest runs on the base branch tip, counted as
 # success only when every returned run has completed with success and the page
 # holds every run total_count reports, so an omitted failure cannot hide behind
-# a full page of successes). Fails open:
-# any read failure, a pending or missing base result, or a conclusion other
-# than success files the issue as before.
+# a full page of successes). A base run or check that is still in progress
+# defers the issue (skip reason=base_pending). Fails open: any read failure,
+# a missing base result, or a conclusion other than success files the issue
+# as before.
 BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
 BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
 if [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
@@ -462,7 +463,7 @@ else
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
-				--jq '.workflow_runs[0] | select(.status == "completed") | .conclusion // ""' 2>/dev/null || true)"
+				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end' 2>/dev/null || true)"
 			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
 		elif [ -z "${CHECK_DETAILS_URL}" ]; then
 			base_gate_reason="details_url_unavailable"
@@ -477,12 +478,23 @@ else
 		base_gate_ref_path="${BASE_REF//\//%2F}"
 		base_gate_conclusion="$(gh_retry gh api -X GET "repos/${REPO}/commits/${base_gate_ref_path}/check-runs" \
 			-f check_name="${CHECK_NAME}" -f filter=latest -f per_page=100 \
-			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) or any($r[]; .status != "completed") then "" elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
+			--jq '[.check_runs[]?] as $r | if ($r | length) == 0 or (.total_count // 0) > ($r | length) or any($r[]; .status != "completed") then (if ($r | length) > 0 and (.total_count // 0) <= ($r | length) then "pending" else "" end) elif all($r[]; .conclusion == "success") then "success" else ([$r[] | select(.conclusion != "success")][0].conclusion // "") end' 2>/dev/null || true)"
 		[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_check"
 	fi
 	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
 	if [ "${base_gate_conclusion}" = "success" ]; then
 		log "skip reason=pr_specific_failure base=${BASE_REF} base_conclusion=success pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+	# The base branch's newest run of this check is still in progress: its
+	# result is not known yet, so filing now could hand a PR-specific failure
+	# to a base-branch fix that has nothing to change (#7140 was filed for
+	# PR #7135 while main's CI run was in progress). Defer instead. The PR's
+	# own review/autofix loop owns a PR-specific failure, and a real
+	# base-branch breakage is filed by the next triage once the base run
+	# completes, because every PR then fails the same way.
+	if [ "${base_gate_conclusion}" = "pending" ]; then
+		log "skip reason=base_pending base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
 		exit 0
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
