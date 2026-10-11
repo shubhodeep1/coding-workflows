@@ -16940,7 +16940,7 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	main_end = main_start + main_end_match.start()
 	main_case_body = script[main_start:main_end]
 	legacy_flow_match = re.search(
-		r'echo "  Closing and re-issuing stalled issue #\$\{issue_num\}\.\.\."\n[ \t]+surface_reissue_closed_without_pr "\$\{issue_num\}"',
+		r'echo "  Closing and re-issuing stalled issue #\$\{issue_num\}\.\.\."',
 		main_case_body,
 	)
 	assert legacy_flow_match is not None, (
@@ -16951,6 +16951,9 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	assert 'close_linked_pr "${issue_num}"' in main_window, (
 		"close_linked_pr call missing in main_window"
 	)
+	assert main_window.index('new_url="$(gh_retry gh issue create') < main_window.index('surface_reissue_closed_without_pr "${issue_num}"'), (
+		"managed reissue must create a replacement before closing its source"
+	)
 	assert main_window.index('surface_reissue_closed_without_pr "${issue_num}"') < main_window.index('close_linked_pr "${issue_num}"'), (
 		"surface must run before close_linked_pr so the comment lands on an open issue"
 	)
@@ -16960,7 +16963,11 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	# no-op cap short-circuit — that short-circuit intentionally does
 	# *not* re-issue, and therefore must not call
 	# surface_reissue_closed_without_pr.
-	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck'
+	# Issue #6680: the close message now travels through
+	# _std_reissue_close_msg (retired-conflict reissues override it); the
+	# legacy text is its default.
+	assert '_std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck' in script
+	standalone_anchor = 'close_linked_pr "${issue_num}" "${_std_reissue_close_msg}"'
 	assert standalone_anchor in script, (
 		"Could not locate standalone close_and_reissue legacy close call"
 	)
@@ -25103,6 +25110,25 @@ def test_security_pass_waiver_cap_keeps_every_followup_pending_row() -> None:
 	assert sum(1 for row in after_record if not row.get("followup_pending")) == 100
 	# Normalization on the next tick keeps the same rows: no pending row lost.
 	assert after_normalize == after_record
+def test_stall_retired_conflict_reissue_is_wired_and_registered():
+	# Issue #6680: both stall-recovery paths consult the retired host-only
+	# conflict check before dispatching the conflict resolver; the helper's
+	# behaviour against a scratch origin is covered in
+	# tests/test_stall_retired_conflict_reissue.py.
+	poller_text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	# resolve_merge_conflict, standalone retrigger guard, managed open-PR
+	# guard, and the managed and standalone dispatch_rb_judge rungs.
+	assert poller_text.count("_stall_retired_host_only_conflict_check \"${issue_num}\"") == 5
+	assert '_stall_retired_host_only_conflict_check "${rb_issue}" "${RB_PR}" "${_rb_pr_json}"' in poller_text
+	helper_text = (REPO_ROOT / "scripts" / "orchestrate_stall_retired_conflict.sh").read_text(encoding="utf-8")
+	assert 'STALL_RETIRED_CONFLICT_REISSUE_ENABLED:-true' in helper_text
+	poll_workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}" in poll_workflow
+	agents_text = _agents_text_with_fragments(REPO_ROOT)
+	assert "LOG_PREFIX.name=STALL_RETIRED_CONFLICT_REISSUE" in agents_text
+	assert "- `STALL_RETIRED_CONFLICT_REISSUE`" in agents_text
+	readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+	assert "| `STALL_RETIRED_CONFLICT_REISSUE_ENABLED` | `true` |" in readme_text
 
 
 def test_integration_judge_invalid_answer_is_retried_within_lifetime_cap():

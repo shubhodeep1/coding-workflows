@@ -9,6 +9,15 @@
 #   MODEL_EDITOR, MODEL_REASONING_EFFORT_JUDGE,
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE
 
+# shellcheck extended-analysis=false
+# File-wide directive (must precede the first command). Issue #6680: on
+# this ~27,700-line poller, ShellCheck's extended dataflow analysis ran until
+# the CI static-checks runner shut down, with no diagnostic, on consecutive
+# PR heads. Turning it off for this file only keeps the parse and per-command
+# checks that `shellcheck --severity=error` relies on. ShellCheck releases
+# older than 0.10.0 ignore an unknown directive with a warning (SC1107), which
+# that error-level CI step does not fail on.
+
 set -euo pipefail
 
 # ---------------------------------------------------------------
@@ -10587,6 +10596,64 @@ _list_integration_conflict_files() {
   return 0
 }
 
+# _stall_retired_host_only_conflict_check <issue_num> <pr_num> [pr_json]
+#
+# Issue #6680. Stall recovery calls this before it would dispatch the
+# conflict resolver for an open PR. Returns 0 only when the PR conflicts with
+# its base on host-only file(s) (paths review_untrusted_workspace.allowed()
+# keeps out of the resolver sandbox) that are all listed in the trusted
+# workflow-templates/retired_files.txt manifest and absent from the base. The
+# sandboxed resolver can never merge such a conflict (it fails closed with
+# sandbox_path_host_only on every attempt), so the caller closes the PR and
+# re-issues the issue against the current base instead. On 0 it sets
+# STALL_RETIRED_CONFLICT_PATHS, STALL_RETIRED_CONFLICT_BASE,
+# STALL_REISSUE_EXTRA_GUIDANCE (appended once to the re-issue body) and
+# STALL_RETIRED_CONFLICT_CLOSE_MESSAGE. Any other outcome, including every
+# probe or trust failure, returns 1 and the caller keeps the existing
+# resolver dispatch; the resolver's own fail-closed check is unchanged.
+#
+# API budget (§14): none on the happy path. The PR payload comes from the
+# caller's cache; only a payload missing the head/base fields costs one
+# _fetch_pr_json. Conflicts, base presence and changed files are local git.
+# Kill switch: STALL_RETIRED_CONFLICT_REISSUE_ENABLED (default true).
+# Log prefix: STALL_RETIRED_CONFLICT_REISSUE.
+declare -g STALL_REISSUE_EXTRA_GUIDANCE=''
+declare -g STALL_RETIRED_CONFLICT_PATHS=''
+declare -g STALL_RETIRED_CONFLICT_BASE=''
+declare -g STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=''
+declare -g STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=''
+# The retired-conflict reroutes call execute_stall_recovery_action from
+# inside execute_stall_recovery_action and recover_stalled_issue. They go
+# through this variable so ShellCheck's dataflow analysis need not follow
+# that ~900-line function again at each new call site; this is a hedge
+# against the static-checks ShellCheck run not finishing on this file, not
+# a measured cause. Set here, never read from the environment.
+declare -g STALL_RETIRED_CONFLICT_REISSUE_FN='execute_stall_recovery_action'
+# The helper bodies live in scripts/orchestrate_stall_retired_conflict.sh,
+# which ShellCheck checks as its own file. Resolve it next to this script
+# first, then at the CWD-relative staged path. When it is missing (an older
+# staging list), fail-closed stubs keep the existing resolver dispatch.
+_OPP_RETIRED_CONFLICT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_OPP_RETIRED_CONFLICT_DIR}/orchestrate_stall_retired_conflict.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_OPP_RETIRED_CONFLICT_DIR}/orchestrate_stall_retired_conflict.sh"
+elif [ -f "scripts/orchestrate_stall_retired_conflict.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/orchestrate_stall_retired_conflict.sh
+fi
+unset _OPP_RETIRED_CONFLICT_DIR
+if ! type _stall_retired_host_only_conflict_check >/dev/null 2>&1; then
+  _stall_retired_host_only_conflict_check() {
+    echo "STALL_RETIRED_CONFLICT_REISSUE issue=${1:-} pr=${2:-} outcome=skip reason=helper_unavailable retired_paths=none"
+    return 1
+  }
+fi
+if ! type _stall_pr_json_may_conflict >/dev/null 2>&1; then
+  _stall_pr_json_may_conflict() {
+    return 0
+  }
+fi
+
 _iso8601_to_epoch() {
   local ts="$1"
   [ -n "${ts}" ] || return 1
@@ -15825,6 +15892,12 @@ STALL_EOF
           STALL_JUDGE_HEAD_REF="${head_ref}"
           local _rtr_rc=0
           execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rtr_rc=$?
+          if [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" = "close_and_reissue" ]; then
+            # Issue #6680: the conflict was on retired host-only file(s) and
+            # the issue was closed and re-issued; keep that outcome and its
+            # recovery accounting instead of the budget-neutral override.
+            return "${_rtr_rc}"
+          fi
           # Q3:B — conflict override does not consume a retrigger-style
           # recovery attempt.  resolve_merge_conflict sets
           # STALL_RECOVERY_SHOULD_INCREMENT="true" on its happy path (line
@@ -16144,7 +16217,7 @@ STALL_EOF
       local stall_anc_noop_count
       stall_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES}")"
       [[ "${stall_anc_noop_count}" =~ ^[0-9]+$ ]] || stall_anc_noop_count=0
-      if [ "${stall_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+      if [ "${stall_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}" ]; then
         echo "  [stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closing without re-issue — judge will verify."
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
@@ -16162,24 +16235,30 @@ STALL_EOF
       fi
 
       echo "  Closing and re-issuing stalled issue #${issue_num}..."
-      surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
-      close_linked_pr "${issue_num}" \
-        "Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
+      local _stall_reissue_extra="" _stall_reissue_close_msg=""
+      if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
+        _stall_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
+        _stall_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
+      fi
+      STALL_REISSUE_EXTRA_GUIDANCE=""
+      STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
+      STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
+      [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
       local orig_title orig_body orig_issue_json orig_issue_is_heal
       orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
       orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
       orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
-
-      ensure_label_exists "ai:closed"
-      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:done' --remove-label 'ai:implementing' \
-        --remove-label 'ai:planning' --remove-label 'ai:clarification' \
-        --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
-        --add-label 'ai:closed' 2>/dev/null || true
-      gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
+      if [ -z "${orig_title}" ]; then
+        echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
+        # Spend a recovery attempt so a persistent failure reaches skip/escalate.
+        STALL_RECOVERY_SHOULD_INCREMENT="true"
+        return 0
+      fi
+      if [ -n "${_stall_reissue_extra}" ]; then
+        orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
+      fi
 
       local new_body
       new_body="$(cat <<REISSUE_EOF
@@ -16196,6 +16275,9 @@ ${orig_body}
 - If the task encounters the same blocker, explain the specific failure in a comment.
 REISSUE_EOF
 )"
+      if [ -n "${_stall_reissue_extra}" ]; then
+        new_body="${new_body}"$'\n'"- ${_stall_reissue_extra}"
+      fi
 
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
@@ -16212,10 +16294,20 @@ REISSUE_EOF
         --body "${new_body}" \
         --label "ai:clarification" \
         --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
-      if [ -n "${new_url}" ]; then
-        new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
-        new_num="$(basename "${new_url_clean%%[?#]*}")"
-        if [[ "${new_num}" =~ ^[0-9]+$ ]] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+      new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+      new_num="$(basename "${new_url_clean%%[?#]*}")"
+      if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+        surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
+        close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}"
+        ensure_label_exists "ai:closed"
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+          --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
+        if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
           jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
             '.issue_number_map[$lid] = $new_num |
              (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
@@ -16224,7 +16316,11 @@ REISSUE_EOF
         fi
         tg_notify "Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")" "DEBUG"
       else
-        echo "::warning::Could not create replacement issue for stalled #${issue_num}."
+        echo "::warning::Could not confirm replacement issue for stalled #${issue_num}; keeping it and its PR open."
+        tg_notify_issue "${issue_num}" "Stall recovery: could not confirm replacement issue for #${issue_num}; source issue and PR remain open." "ERROR"
+        # Spend a recovery attempt so a persistent failure reaches skip/escalate.
+        STALL_RECOVERY_SHOULD_INCREMENT="true"
+        return 0
       fi
       ;;
 
@@ -16342,6 +16438,17 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       local head_sha
       local dispatch_rc=0
       pr_json="$(_fetch_pr_json "${target_pr}")"
+      # Issue #6680: a conflict on retired host-only file(s) the base no
+      # longer has can never be merged by the sandboxed resolver; close the
+      # PR and re-issue against the current base instead of re-dispatching.
+      if _stall_retired_host_only_conflict_check "${issue_num}" "${target_pr}" "${pr_json}"; then
+        add_healing_note "Issue #${issue_num}: PR #${target_pr} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; closing and re-issuing instead of dispatching the conflict resolver"
+        STALL_HEALING_CHANGED=true
+        local _rmc_reissue_rc=0
+        "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rmc_reissue_rc=$?
+        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        return "${_rmc_reissue_rc}"
+      fi
       head_sha="$(_jq_field "${pr_json}" '.head.sha')"
       if [ -n "${head_sha}" ]; then
 	gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${target_pr}/update-branch" \
@@ -16384,6 +16491,20 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         tg_notify "Stall recovery: dispatch_rb_judge for issue #${issue_num} could not find a linked PR (stuck ${stall_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt — will escalate to escalate_human at the end of the ladder."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         return 0
+      fi
+      # Issue #6680: a PR that conflicts with its base only on retired
+      # host-only file(s) the base no longer has can never be merged by the
+      # sandboxed resolver, and the judge cannot merge it either. Close and
+      # re-issue against the current base instead of dispatching the judge.
+      # Reuses the PR payload _resolve_issue_implementation_pr fetched.
+      if _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
+        && _stall_retired_host_only_conflict_check "${issue_num}" "${rb_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then
+        add_healing_note "Issue #${issue_num}: review-blocked PR #${rb_pr_num} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; closing and re-issuing instead of dispatching the review-blocked judge"
+        STALL_HEALING_CHANGED=true
+        local _rbj_reissue_rc=0
+        "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
+        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        return "${_rbj_reissue_rc}"
       fi
       local rb_dispatch_rc=0
 	      _dispatch_rb_judge_for_pr "${rb_pr_num}" "${issue_num}" || rb_dispatch_rc=$?
@@ -19129,7 +19250,22 @@ PY
         continue
       fi
 
-      if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
+      # Pass the full REST payload when this iteration already fetched it for
+      # the same PR, so the retired-conflict check needs no refetch.
+      local _std_retired_pr_json="${_std_conflict_linked}" _std_retired_pr_num=""
+      _std_retired_pr_num="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+      if [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ] && [[ "${_std_retired_pr_num}" =~ ^[0-9]+$ ]] && [ "${_STD_ITER_PR_NUM_CACHED:-}" = "${_std_retired_pr_num}" ]; then
+        _std_retired_pr_json="${_STD_ITER_PR_JSON_CACHED}"
+      fi
+      if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}" \
+        && _stall_retired_host_only_conflict_check "${issue_num}" "${STALL_CONFLICT_PR_NUM}" "${_std_retired_pr_json}"; then
+        # Issue #6680: the conflict is on retired host-only file(s) the base
+        # no longer has, which the sandboxed resolver can never merge. Route
+        # to the standalone close_and_reissue case below instead of
+        # dispatching the resolver.
+        echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_retired_host_only_conflict pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=close_and_reissue override_from=${action}"
+        action="close_and_reissue"
+      elif _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
         local _std_conflict_head_sha=""
         local _std_override_count="0"
         local _std_next_count="0"
@@ -19185,6 +19321,27 @@ PY
             continue
             ;;
         esac
+      fi
+    fi
+
+    # Issue #6680: the ai:review-blocked rung (dispatch_rb_judge). A PR that
+    # conflicts with its base only on retired host-only file(s) the base no
+    # longer has can never be merged by the sandboxed resolver or the judge,
+    # so route to the standalone close_and_reissue case below. The resolved
+    # implementation PR is reused by the dispatch_rb_judge case (no second
+    # lookup); the check reuses the PR payload the lookup fetched.
+    local _std_rb_pre_resolved="false" _std_rb_pre_pr_num="" _std_rb_pre_failure_reason=""
+    if [ "${action}" = "dispatch_rb_judge" ]; then
+      _std_rb_pre_resolved="true"
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        _std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"
+      fi
+      _std_rb_pre_failure_reason="${STALL_IMPL_PR_FAILURE_REASON}"
+      if [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] \
+        && _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
+        && _stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then
+        echo "STALL_RECOVERY issue=${issue_num} reason=review_blocked_retired_host_only_conflict pr=${_std_rb_pre_pr_num} phase=${phase} action=close_and_reissue override_from=${action}"
+        action="close_and_reissue"
       fi
     fi
 
@@ -19587,7 +19744,7 @@ STALL_EOF
         local standalone_anc_noop_count
         standalone_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES:-2}")"
         [[ "${standalone_anc_noop_count}" =~ ^[0-9]+$ ]] || standalone_anc_noop_count=0
-        if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ]; then
+        if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}" ]; then
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
@@ -19620,6 +19777,12 @@ STALL_EOF
         orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
         orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
 
+        local _std_reissue_extra="" _std_reissue_close_msg=""
+        if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
+          _std_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
+          _std_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
+          orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
+        fi
         new_body="$(cat <<REISSUE_EOF
 ${orig_body}
 
@@ -19633,6 +19796,13 @@ ${orig_body}
 - Proceed through clarify → plan → implement → review.
 REISSUE_EOF
 )"
+        STALL_REISSUE_EXTRA_GUIDANCE=""
+        STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
+        STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
+        if [ -n "${_std_reissue_extra}" ]; then
+          new_body="${new_body}"$'\n'"- ${_std_reissue_extra}"
+        fi
+        [ -n "${_std_reissue_close_msg}" ] || _std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
         ensure_label_exists "ai:clarification"
         local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
@@ -19640,13 +19810,19 @@ REISSUE_EOF
           ensure_label_exists 'ai:workflow-heal'
           _heal_reissue_label_args=(--label 'ai:workflow-heal')
         fi
-        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
-        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        new_url=""
+        if [ -n "${orig_title}" ]; then
+          mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+          new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        else
+          # Source read failed: skip the create; the failure branch keeps both open.
+          echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
+        fi
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
           surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${elapsed_minutes}" "${recovery_count}" "standalone"
-          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
+          close_linked_pr "${issue_num}" "${_std_reissue_close_msg}"
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
@@ -19698,7 +19874,10 @@ REISSUE_EOF
         # the mention-based linked-PR cache. The judge may merge, fix, or
         # close/reissue its target, so a mention-only PR is unsafe here.
         local _std_rb_pr_num=""
-        if _resolve_issue_implementation_pr "${issue_num}"; then
+        if [ "${_std_rb_pre_resolved}" = "true" ]; then
+          _std_rb_pr_num="${_std_rb_pre_pr_num}"
+          STALL_IMPL_PR_FAILURE_REASON="${_std_rb_pre_failure_reason}"
+        elif _resolve_issue_implementation_pr "${issue_num}"; then
           _std_rb_pr_num="${STALL_IMPL_PR_NUM}"
         fi
         if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]] && [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
@@ -20134,6 +20313,16 @@ recover_stalled_issue() {
 
         # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
         if { [ "${_opr_mergeable}" = "false" ] || [ "${_opr_mergeable_state}" = "dirty" ]; } && [ -n "${_opr_head_ref}" ]; then
+          # Issue #6680: retired host-only conflict -> close and re-issue.
+          if _stall_retired_host_only_conflict_check "${issue_num}" "${_lpr_num}" "${_opr_json}"; then
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_retired_host_only_conflict pr=${_lpr_num} phase=${phase} action=close_and_reissue override_from=${action}"
+            add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} conflicts with ${STALL_RETIRED_CONFLICT_BASE} on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS} (phase=${phase}); closing and re-issuing instead of '${action}'"
+            STALL_HEALING_CHANGED=true
+            local _opr_reissue_rc=0
+            "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _opr_reissue_rc=$?
+            STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+            return "${_opr_reissue_rc}"
+          fi
           local _opr_dispatch_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?
           if [ "${_opr_dispatch_rc}" -eq 0 ]; then
@@ -23637,6 +23826,19 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           RB_PREDISPATCH_REASON="external head commit ${RB_HEAD_SHA_PRECHECK:0:7} by ${_rb_head_author_login:-${_rb_head_author_name:-unknown}}"
         fi
 
+        # Issue #6680: a conflict only on retired host-only file(s) the base
+        # no longer has fails closed in the resolver sandbox on every run, and
+        # the judge cannot merge it. Skip the futile resolver dispatch and the
+        # judge; stall recovery's dispatch_rb_judge rung closes the PR and
+        # re-issues the issue against the current base. Reuses _rb_pr_json.
+        if [ "${RB_SHOULD_PREDISPATCH}" = "true" ] && [ "${RB_HEAD_IS_EXTERNAL}" != "true" ] \
+          && _stall_retired_host_only_conflict_check "${rb_issue}" "${RB_PR}" "${_rb_pr_json}"; then
+          echo "  [review-blocked] PR #${RB_PR} conflicts with ${STALL_RETIRED_CONFLICT_BASE} only on retired host-only file(s) ${STALL_RETIRED_CONFLICT_PATHS}; skipping resolver dispatch and judge, stall recovery will close and re-issue issue #${rb_issue}."
+          STALL_REISSUE_EXTRA_GUIDANCE=""
+          STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
+          STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
+          continue
+        fi
         if [ "${RB_SHOULD_PREDISPATCH}" = "true" ] && [ -n "${RB_HEAD_REF_PRECHECK}" ] && [ "${RB_HEAD_REF_PRECHECK}" != "null" ]; then
           echo "  [review-blocked] Pre-judge dispatch for PR #${RB_PR}: ${RB_PREDISPATCH_REASON}"
           _predispatch_rc=0
