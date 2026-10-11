@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13177-13180 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The jq dispatch-count update increments the raw persisted value without ensuring it is numeric, so a string value causes the update to fail.\n  WHY: The failed state update leaves the count unchanged and can allow repeated validation redispatches; minimax_minimax-m3 reports no finding and states that a string-typed value cannot reach the arithmetic in a reachable code path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:13177 | confidence=4\n  PROBLEM: The `jq` expression for incrementing `validation_cycle_dispatch_count` does not explicitly ensure the existing value is treated as a number.\n  WHY: If the persisted `validation_cycle_dispatch_count` in the JSON is somehow a string (e.g., due to a malformed update), the `jq` expression `(.validation_cycle_dispatch_count // 1) + 1` will fail because `+` cannot add a number to a string in `jq`. This causes the `jq` command to exit with an error, preventing the count from ever incrementing. Consequently, the dispatch cap will remain ineffective, allowing infinite validation re-dispatches. To fix this, use `(.validation_cycle_dispatch_count | tonumber // 1) + 1` to ensure numeric addition.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:13148-13150, 13177-13180 | severity=MAJOR | confidence=4\n  PROBLEM: The cap check treats a malformed persisted dispatch count as 1, but the successful-dispatch update increments the original unvalidated value.\n  WHY: If the stored count is a string such as \"2\", the check accepts it as 2, but jq fails on `\"2\" + 1`. The state update does not replace the state file, leaving the count and stale-dispatch timestamp unchanged. Subsequent poll ticks can keep redispatching without reaching the cap.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:13177-13180 (the jq update of validation_cycle_dispatch_count) | severity=MAJOR | confidence=4\n  PROBLEM: The cap check validates the dispatch count with a shell regex and defaults malformed values to 1, but the jq update reads the raw stored value and increments it without coercion.\n  WHY: The shell validation at lines 13148-13150 reads the value and defaults to 1 if it's not a number, but the jq expression at line 13178 reads directly from the state file. If the state file contains \"validation_cycle_dispatch_count\": \"2\" (a string), the jq expression ((.validation_cycle_dispatch_count // 1) + 1) attempts \"2\" + 1, which is a type error. The jq command exits non-zero, the .tmp file is not created or is empty, and the mv fails. The state is never updated, so the next poll reads the same string, passes the shell validation (defaulting to 1), attempts the same jq update, fails again, and dispatches indefinitely without reaching the cap. The fix is to coerce to number in the jq expression: ((.validation_cycle_dispatch_count // 1) | tonumber) + 1, or to pass the validated shell variable as a jq argument.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "eb5ad623e530bfef37cf0eca5f1ad263eaf76039b5e95ef6b183b274e7b27236",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7142,
+    "run_id": "38114371289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38114371289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011060220_5a474d0c0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7142,
+    "run_id": "38114371289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:02:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
