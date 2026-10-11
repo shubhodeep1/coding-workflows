@@ -41,6 +41,55 @@ _TEST_RUNNER_HEARTBEAT_INTERVAL_SEC = 60.0
 _TEST_RUNNER_HEARTBEAT_THREAD_PREFIX = "orchestrate-test-heartbeat:"
 _TEST_RUNNER_SLOWEST_LIMIT = 10
 _TEST_RUNNER_OUTPUT_LOCK = threading.Lock()
+# On GitHub Actions a failing test also prints an `::error` workflow command,
+# so the job's annotations name the test (issue #6859: run 37883807697 showed
+# only "orchestrate-poll shard 1 failed" and triage could not tell which test).
+_TEST_RUNNER_FAILURE_ANNOTATION_TITLE = "orchestrate-poll test failed"
+_TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS = 500
+
+
+def _test_runner_escape_workflow_command_data(text: str) -> str:
+	r"""Escape text for the data part of a GitHub workflow command.
+
+	`%` goes first so the later escapes are not double-escaped; escaping `\r`
+	and `\n` keeps untrusted failure text from starting a second command.
+	"""
+	return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _test_runner_failure_annotation(name: str, failure: object) -> str | None:
+	"""Return an `::error` annotation line for a failed test, or None.
+
+	Only emitted when `GITHUB_ACTIONS` is exactly `true`, so local runs keep
+	their output unchanged. The message is cut before escaping so an escape
+	sequence is never split; the full text stays on the FAIL line.
+	"""
+	if os.environ.get("GITHUB_ACTIONS") != "true":
+		return None
+	failure_text = str(failure)
+	if len(failure_text) > _TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS:
+		failure_text = failure_text[:_TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS] + "..."
+	escaped_name = _test_runner_escape_workflow_command_data(str(name))
+	escaped_failure = _test_runner_escape_workflow_command_data(failure_text)
+	return (
+		f"::error title={_TEST_RUNNER_FAILURE_ANNOTATION_TITLE}::"
+		f"{escaped_name}: {escaped_failure}"
+	)
+
+
+def _test_runner_neutralize_workflow_commands(text: str) -> str:
+	"""Prefix lines of a FAIL line that GitHub would read as workflow commands.
+
+	Only on GitHub Actions (`GITHUB_ACTIONS` exactly `true`); local output is
+	unchanged. Multi-line failure text stays readable, but a continuation line
+	starting with `::` gets a `| ` prefix so it cannot start a workflow command.
+	"""
+	if os.environ.get("GITHUB_ACTIONS") != "true":
+		return text
+	return "".join(
+		"| " + line if line.lstrip().startswith("::") else line
+		for line in text.splitlines(keepends=True)
+	)
 
 
 # Directories and top-level files that the poller script under test needs
@@ -23804,7 +23853,14 @@ def _run_selected_tests(
 			print(f"  PASS  {name}", file=runner_output, flush=True)
 			passed += 1
 		else:
-			print(f"  FAIL  {name}: {failure}", file=runner_output, flush=True)
+			print(
+				_test_runner_neutralize_workflow_commands(f"  FAIL  {name}: {failure}"),
+				file=runner_output,
+				flush=True,
+			)
+			failure_annotation = _test_runner_failure_annotation(name, failure)
+			if failure_annotation is not None:
+				print(failure_annotation, file=runner_output, flush=True)
 			failed += 1
 
 	for rank, (name, elapsed_ms, status) in enumerate(
@@ -23843,13 +23899,20 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	def synthetic_skip():
 		raise unittest.SkipTest("synthetic skip")
 
-	output = io.StringIO()
-	with contextlib.redirect_stdout(output):
-		exit_code = _run_selected_tests(
-			[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
-			heartbeat_interval_sec=0.005,
-			slowest_limit=2,
-		)
+	# Keep the exact-line assertions below valid on GitHub Actions, where the
+	# runner would otherwise add a failure annotation line.
+	saved_github_actions = os.environ.pop("GITHUB_ACTIONS", None)
+	try:
+		output = io.StringIO()
+		with contextlib.redirect_stdout(output):
+			exit_code = _run_selected_tests(
+				[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
+				heartbeat_interval_sec=0.005,
+				slowest_limit=2,
+			)
+	finally:
+		if saved_github_actions is not None:
+			os.environ["GITHUB_ACTIONS"] = saved_github_actions
 	assert exit_code == 1
 	assert "synthetic partial\nTEST_CASE_EVENT: " in output.getvalue()
 	lines = output.getvalue().splitlines()
@@ -23929,6 +23992,103 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		) == 0
 	assert '"event":"heartbeat"' not in pass_output.getvalue()
 	assert '"event":"slowest"' not in pass_output.getvalue()
+
+
+def test_custom_runner_emits_github_failure_annotation_only_on_actions():
+	import contextlib
+	import io
+
+	def synthetic_fail():
+		raise RuntimeError("a\nb%")
+
+	def synthetic_long_fail():
+		raise RuntimeError("x" * (_TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS * 4))
+
+	def synthetic_injection_fail():
+		raise RuntimeError("boom\r\n::error::fake")
+
+	annotation_prefix = f"::error title={_TEST_RUNNER_FAILURE_ANNOTATION_TITLE}::"
+	saved_github_actions = os.environ.pop("GITHUB_ACTIONS", None)
+	try:
+		os.environ["GITHUB_ACTIONS"] = "true"
+		output = io.StringIO()
+		with contextlib.redirect_stdout(output):
+			exit_code = _run_selected_tests(
+				[synthetic_fail], heartbeat_interval_sec=0, slowest_limit=0
+			)
+		assert exit_code == 1
+		lines = output.getvalue().splitlines()
+		fail_index = lines.index("  FAIL  synthetic_fail: a")
+		assert lines[fail_index + 1] == "b%"
+		assert lines[fail_index + 2] == f"{annotation_prefix}synthetic_fail: a%0Ab%25"
+		assert sum(1 for line in lines if line.startswith("::error")) == 1
+		assert lines[-1] == "0 passed, 1 failed, 1 total"
+
+		long_output = io.StringIO()
+		with contextlib.redirect_stdout(long_output):
+			assert _run_selected_tests(
+				[synthetic_long_fail], heartbeat_interval_sec=0, slowest_limit=0
+			) == 1
+		long_annotations = [
+			line for line in long_output.getvalue().splitlines()
+			if line.startswith("::error")
+		]
+		assert long_annotations == [
+			f"{annotation_prefix}synthetic_long_fail: "
+			+ "x" * _TEST_RUNNER_FAILURE_ANNOTATION_MAX_CHARS
+			+ "..."
+		]
+
+		injection_output = io.StringIO()
+		with contextlib.redirect_stdout(injection_output):
+			assert _run_selected_tests(
+				[synthetic_injection_fail], heartbeat_interval_sec=0, slowest_limit=0
+			) == 1
+		injection_annotations = [
+			line for line in injection_output.getvalue().splitlines()
+			if line.startswith("::error title=")
+		]
+		assert injection_annotations == [
+			f"{annotation_prefix}synthetic_injection_fail: boom%0D%0A::error::fake"
+		]
+		# The raw FAIL line must not start a forged command either.
+		assert [
+			line for line in injection_output.getvalue().splitlines()
+			if line.lstrip().startswith("::")
+		] == injection_annotations
+		assert "| ::error::fake" in injection_output.getvalue().splitlines()
+
+		saved_argv = sys.argv
+		try:
+			sys.argv = ["test_orchestrate_poll_process.py", "test_no_such_name\n::warning::forged"]
+			main_output = io.StringIO()
+			with contextlib.redirect_stdout(main_output):
+				assert main() == 1
+		finally:
+			sys.argv = saved_argv
+		main_lines = main_output.getvalue().splitlines()
+		assert main_lines == [
+			"  FAIL  test_no_such_name",
+			"| ::warning::forged: unknown test name",
+			f"{annotation_prefix}test_no_such_name%0A::warning::forged: unknown test name",
+		]
+
+		assert _test_runner_failure_annotation("bad\r\nname%", "x\ry") == (
+			f"{annotation_prefix}bad%0D%0Aname%25: x%0Dy"
+		)
+
+		del os.environ["GITHUB_ACTIONS"]
+		quiet_output = io.StringIO()
+		with contextlib.redirect_stdout(quiet_output):
+			assert _run_selected_tests(
+				[synthetic_fail], heartbeat_interval_sec=0, slowest_limit=0
+			) == 1
+		assert "::error" not in quiet_output.getvalue()
+		assert _test_runner_failure_annotation("synthetic_fail", "x") is None
+	finally:
+		os.environ.pop("GITHUB_ACTIONS", None)
+		if saved_github_actions is not None:
+			os.environ["GITHUB_ACTIONS"] = saved_github_actions
 
 
 def test_custom_runner_tests_need_no_pytest_arguments():
@@ -24088,7 +24248,13 @@ def main() -> int:
 	if selected_names:
 		missing = [name for name in selected_names if name not in tests_by_name]
 		for name in missing:
-			print(f"  FAIL  {name}: unknown test name", flush=True)
+			print(
+				_test_runner_neutralize_workflow_commands(f"  FAIL  {name}: unknown test name"),
+				flush=True,
+			)
+			missing_annotation = _test_runner_failure_annotation(name, "unknown test name")
+			if missing_annotation is not None:
+				print(missing_annotation, flush=True)
 		if missing:
 			return 1
 		test_funcs = [tests_by_name[name] for name in selected_names]
