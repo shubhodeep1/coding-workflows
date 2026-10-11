@@ -56,30 +56,30 @@ EXPECTED_STEP_DECLARATIONS = {
 	# 4 = the three clarify notification steps + "Standalone auto-decide"
 	# (replace-claude-sessions Phase 8b), whose answer poster's loop guard can
 	# alert. The Claude issue handoff step was retired in Phase 2.
-	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
+	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 4,
 	# 5 = four notification steps + "Auto-approve clear plan", whose
 	# automation-path hold (#6838) sends one WARNING.
-	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 5,
-	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
+	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 5,
+	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 2,
 	# Issue #6633 adds "Record Claude pool capacity", "Mark outage-caused
 	# review-blocked labels (autofix exhaustion)" and "Record model-provider
 	# outage" (first, third and sixth entries).
 	"review_autofix.yml": [
-		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
-		"${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
-		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}",
-		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
-		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
-		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 	],
-	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 1,
+	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 1,
 	# 5 = includes "Alert on Claude pool accounts at the usage gate" (#6951)
 	# and the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630).
-	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 5,
+	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 5,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
-	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,
+	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,
 }
 
 STEP_DECL_RE = re.compile(r"^\s+ALERT_MSG_LEVEL:\s*(\$\{\{.*\}\})\s*$")
@@ -163,8 +163,8 @@ def test_implement_precheck_silences_before_duplicate_pr_notification() -> None:
 def test_validate_alert_msg_level_input_is_declared_and_consumed() -> None:
 	validate = _read("validate.yml")
 	assert "      alert_msg_level:\n" in validate
-	assert "ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in validate
-	assert "ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}" not in validate
+	assert "ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}" in validate
+	assert "ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" not in validate
 
 	for wrapper in (
 		_read("internal-validate.yml"),
@@ -193,7 +193,7 @@ def test_check_failure_triage_silences_smoke_prs() -> None:
 	assert 'echo "smoke_pr=true" >> "$GITHUB_OUTPUT"' in wf
 	assert 'echo "smoke_pr=false" >> "$GITHUB_OUTPUT"' in wf
 	assert (
-		"ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
+		"ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'WARNING' }}"
 		in wf
 	)
 

@@ -410,32 +410,31 @@ def test_force_merge_skip_labels_include_force_review_and_e2e():
 	assert "force-review" in sweep
 
 
-def test_force_merge_gate_distinguishes_warning_and_error_levels():
-	"""Re-dispatches alert at WARNING (expected operational chatter).
-	Force-merge gate failures alert at ERROR (action needed —
-	something genuinely broken). This distinction is part of the
-	operator contract."""
+def test_force_merge_gate_distinguishes_debug_and_error_levels():
+	"""Re-dispatches and a successful force-merge are pipeline work and
+	alert at DEBUG (filtered by the default ALERT_MSG_LEVEL=WARNING).
+	Force-merge gate failures leave the PR for a person: they page at
+	ERROR through _noop_gate_failure_alert, once per PR head and gate.
+	This distinction is part of the operator contract."""
 	sweep = _sweep_block()
-	# Match `tg_send_msg <args...> "WARNING"` / `"ERROR"` on a single
-	# line — the calls use bash quote-concatenation for multi-segment
-	# bodies but the level token is always the last quoted argument
-	# on its own line.
-	warning_lines = [
+	debug_lines = [
+		line for line in sweep.splitlines()
+		if "tg_send_msg" in line and '"DEBUG"' in line
+	]
+	assert any("re-dispatched review_autofix" in line for line in debug_lines), debug_lines
+	assert any("Force-merging PR" in line for line in debug_lines), debug_lines
+	assert not [
 		line for line in sweep.splitlines()
 		if "tg_send_msg" in line and '"WARNING"' in line
-	]
-	assert warning_lines, (
-		"Sweep must emit at least one Telegram WARNING (the re-dispatch / "
-		"successful-force-merge path)."
+	], "Routine sweep chatter must not page at WARNING."
+	gate_lines = [line for line in sweep.splitlines() if "_noop_gate_failure_alert \"" in line]
+	assert gate_lines, (
+		"Sweep must page whenever a force-merge precondition fails, via the "
+		"once-per-head _noop_gate_failure_alert helper."
 	)
-	error_lines = [
-		line for line in sweep.splitlines()
-		if "tg_send_msg" in line and '"ERROR"' in line
-	]
-	assert error_lines, (
-		"Sweep must emit Telegram ERROR alerts whenever a force-merge "
-		"precondition fails — operators rely on the ERROR level to "
-		"distinguish 'stuck PR genuinely broken' from routine chatter."
+	assert 'tg_send_msg "${msg}" "ERROR"' in sweep, (
+		"The gate-failure helper must page at ERROR so operators can tell "
+		"'stuck PR genuinely broken' from routine chatter."
 	)
 
 

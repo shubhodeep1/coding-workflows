@@ -160,7 +160,8 @@ ai_engine_fallback()
 			source "${_AI_ENGINE_DIR}/tg_helpers.sh"
 		fi
 		if type tg_send_msg >/dev/null 2>&1; then
-			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; ${fallback_action}." "WARNING" >/dev/null
+			# DEBUG: the role already fell back on its own.
+			tg_send_msg "AI engine: Claude unavailable for ${role} (${reason}) in ${GITHUB_REPOSITORY:-unknown} run ${GITHUB_RUN_ID:-local}; ${fallback_action}." "DEBUG" >/dev/null
 		fi
 	) 2>/dev/null || true
 	return 0
