@@ -5675,6 +5675,16 @@ def test_managed_auto_approve_automation_path_gate_off_by_default() -> None:
 	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
 
 
+def test_managed_auto_approve_explicitly_disabled_gate_ignores_old_hold() -> None:
+	result = _run_managed_automation_gate(
+		comments=[_automation_gate_plan_comment(), _automation_gate_marker_comment(10)],
+		granted=[], env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
+	)
+	assert _automation_gate_approved(result, 10)
+	assert _automation_gate_holds(result, 10) == []
+	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
+
+
 def test_managed_auto_approve_automation_path_gate_holds_ungranted_plan() -> None:
 	result = _run_managed_automation_gate(
 		comments=[_automation_gate_plan_comment()],

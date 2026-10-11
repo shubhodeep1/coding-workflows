@@ -250,9 +250,10 @@ for _orch_fp_candidate in \
 done
 unset _orch_fp_candidate
 # Default-off automation-path gate for plan auto-approval (#6838); see
-# _automation_path_plan_auto_approval_gate. The grant guard is taken only from
-# the verified support checkout, never the PR or integration checkout.
-AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"
+# _automation_path_plan_auto_approval_gate. Keep an unset flag distinct from
+# explicit false: only the unset poller can recover a plan-step hold marker.
+# The grant guard is taken only from the verified support checkout.
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED-}"
 ORCH_AUTOMATION_PATH_GUARD=""
 for _orch_apg_candidate in \
   "$(pwd)/.codex-workflow-src/scripts/files_touched_scope_guard.py" \
@@ -14970,12 +14971,13 @@ _staged_support_comments_for_guard()
 # "Files ... change" section lists automation paths that the issue body does
 # not grant with a trusted exact files_touched entry. It then posts an
 # ai:automation-path-plan-hold:v1 marker. The stall-recovery auto_approve
-# branches below apply the same check when the env flag is on OR when a
-# trusted hold marker is newer than the latest trusted plan comment:
+# branches below apply the same check when the env flag is on OR, if the
+# flag is unset, when a trusted hold marker is newer than the latest plan:
 # orchestrate_poll.yml does not forward the repo variable yet, and without
 # the marker activation this poller would post /approved 60 minutes after
-# plan.yml held the issue. With the flag off and no marker the gate returns
-# before any API call, so behaviour is unchanged. The grant decision is the
+# plan.yml held the issue. Explicit false overrides old markers; with
+# the flag off and no marker the gate returns before any API call, so
+# behaviour is unchanged. The grant decision is the
 # unchanged scripts/files_touched_scope_guard.py from the verified support
 # checkout; a hold withholds the automatic /approved only (a human /approved
 # and the implement commit-time automation-path guard are unchanged).
@@ -15210,7 +15212,8 @@ _automation_path_plan_auto_approval_gate()
 
   if is_truthy "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"; then
     active="true"
-  elif printf '%s' "${comments_json}" | jq -e --arg issue "${issue_num}" \
+  elif [ -z "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED}" ] \
+    && printf '%s' "${comments_json}" | jq -e --arg issue "${issue_num}" \
     "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | length > 0' >/dev/null 2>&1; then
     active="true"
   fi
