@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:711 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer reports that when all fetched logs are empty, the fingerprint falls back to a shared label-only signature instead of including the source and escalated item.\n  WHY: The reviewer says READ_JOB_LOG_COUNT is 0 in this case; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dispute this diagnosis and report that execution reaches the per-item signature.\n- scripts/workflow_failure_heal_intake.sh:572-717 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: READ_JOB_LOG_COUNT increments even when `filter-log` fails and empties FILTERED_LOG, allowing the error-signature branch to produce the shared `no-error-lines` fingerprint instead of the per-item fallback.\n  WHY: This can make reports with the same workflow and failing step share a fingerprint; severity is the highest reported (MAJOR), while anthropic_claude-sonnet-5_5 rated it NIT, and z-ai_glm-5_3-flash noted the behavior is pre-existing and unchanged by this run.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A report that still links no run, or whose linked runs' job logs could not be read, is fingerprinted on the label and the escalated item (label:<label>|source:<repo>#<n>)\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Gemini identifies lines 705-715 as failing when fetched logs are empty; anthropic_claude-sonnet-5_5 reports the per-item fallback is implemented and covered by a test.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh\n  Line or code reference: lines 572-577. `READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))` runs after the `filter-log` if/fi block, so it also runs when `filter-log` fails.\n  Problem: When `filter-log` fails, the code logs `job_log_filter_failed` and empties `FILTERED_LOG`, yet the log still counts as read. For an issue or pull_request report where every fetched log hits that failure, `READ_JOB_LOG_COUNT` is above 0 and the `error-signature` branch runs on empty files. That produces the `no-error-lines` signature, which is the same for every item. The per-item fallback is skipped, and unrelated items with the same workflow and failing step share a lineage, which is the incident this PR fixes.\n  Why it fails at runtime: This needs `filter-log` to exit non-zero on a log that was fetched successfully. That is rare, and the fingerprint is no worse than before the PR. The fix is to move the increment into the success path, for example an `else` on the `if ! ... filter-log` block.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh\n  Line or code reference: line 711\n  Problem: The logic to select the specific fingerprint (label:<label>|source:<repo>#<n>) incorrectly falls back to the shared label-only signature when all fetched logs are empty.\n  Why it fails at runtime: The condition [ \"${READ_JOB_LOG_COUNT}\" -gt 0 ] evaluates to false when all logs fetched are empty, causing the script to skip the specific fingerprint branch and use the fallback, which re-introduces lineage collision risk across repositories for run-less or empty-log reports.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/workflow_failure_heal_intake.sh\n  Line or code reference: lines 572-577, 711-717\n  Problem: READ_JOB_LOG_COUNT increments regardless of whether a log actually contains useful content.\n  Why it fails at runtime: If log filtering results in an empty file, the log is still counted as \"readable\", breaking the fingerprinting logic in the elif branch at 711 and causing reports with unreadable logs to be treated as readable, bypassing the specific fingerprint fallback.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"A report that still links no run, or whose linked runs' job logs could not be read, is fingerprinted on the label and the escalated item (label:<label>|source:<repo>#<n>)\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: The fix in scripts/workflow_failure_heal_intake.sh (lines 705-715) fails to correctly account for cases where fetched logs exist but are empty, causing it to incorrectly fall back to the shared fingerprint instead of the required source-keyed one.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh\n  Line or code reference: 572-577, 711-717\n  Problem: A failed `filter-log` call empties `FILTERED_LOG`, but `READ_JOB_LOG_COUNT` is still incremented.\n  Why it fails at runtime: For an issue or pull-request report, the increment selects the log-signature branch even though filtering failed. `error-signature` on the empty file returns `no-error-lines`, bypassing the per-item `label:<label>|source:<repo>#<n>` fallback. Reports with the same workflow and failing step can therefore still share a fingerprint despite their logs being unreadable.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89f9576ce974e785b81133a7221c4a55847e0a4ea7de544933a43fb45bd5f2ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7152,
+    "run_id": "38119311310",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38119311310",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011075118_28bad0e17d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7152,
+    "run_id": "38119311310"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T07:51:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
