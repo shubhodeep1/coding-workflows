@@ -257,22 +257,68 @@ def _approved(result: dict) -> bool:
 	return "auto_approved=true" in result["output"] and any("/approved [auto-approved-by-plan]" in post for post in result["posts"])
 
 
-def test_automation_path_gate_is_off_by_default() -> None:
+def test_automation_path_gate_is_on_by_default() -> None:
+	# Regression for #7181: an unset or empty flag withholds an ungranted plan.
 	issue = _issue_with_grant([])
-	for flag in (None, "false", ""):
+	for flag in (None, "", "garbled"):
 		result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag=flag)
-		assert _approved(result), result
+		assert not _approved(result), (flag, result)
+		assert "automation_path_hold=true" in result["output"], flag
+		assert "reason=automation_path_ungranted outcome=defer" in result["stdout"], flag
+	for flag in ("false", "0", "off", "no", "FALSE"):
+		result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag=flag)
+		assert _approved(result), (flag, result)
 		assert result["calls"] == []
 		assert "automation_path_hold" not in result["output"]
 	block = _step_block(_workflow_text(), "Auto-approve clear plan")
 	assert "ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}" in block
-	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}" in _workflow_text()
+	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}" in _workflow_text()
+	assert "|| 'false' }}" not in _workflow_text().split("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ", 1)[1].splitlines()[0]
 
 
 def test_automation_path_gate_flag_is_forwarded_to_poller() -> None:
 	poller_workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8"))
 	step = next(step for step in poller_workflow["jobs"]["poll"]["steps"] if step.get("name") == "Process each tracking issue")
-	assert step["env"]["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] == "${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}"
+	assert step["env"]["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] == "${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}"
+
+
+SECURITY_FINDING_PLAN = """Implementation Plan
+
+1. Files likely to change
+- `scripts/review_untrusted_sandbox.sh`
+- `.github/workflows/review_autofix.yml`
+- `tests/test_review_untrusted_sandbox.py`
+
+2. Functions / modules
+"""
+
+
+def test_automation_path_gate_withholds_no_grant_security_finding_by_default() -> None:
+	# A trusted human (not the mocked pipeline login) filed the finding with
+	# no files_touched block, so no automation path is granted.
+	issue = {
+		"number": 123, "state": "open",
+		"body": "Security finding: sandbox credential path.\n\n<!-- ai:security-finding:sandbox-credential-path -->\n",
+		"labels": [{"name": "ai:security"}],
+		"user": {"type": "User", "login": "maintainer"}, "author_association": "COLLABORATOR",
+	}
+	result = _run_gate_case(plan=SECURITY_FINDING_PLAN, issue=issue, flag=None)
+	assert not _approved(result), result
+	assert "automation_path_hold=true" in result["output"]
+	assert "reason=automation_path_ungranted outcome=defer issue=123 paths=2" in result["stdout"]
+	assert len(result["posts"]) == 1
+	post = result["posts"][0]
+	assert "reason=automation_path_ungranted source=plan" in post
+	assert "`scripts/review_untrusted_sandbox.sh`" in post
+	assert "`.github/workflows/review_autofix.yml`" in post
+	assert "tests/test_review_untrusted_sandbox.py" not in post
+
+
+def test_automation_path_gate_approves_fully_granted_plan_by_default() -> None:
+	issue = _issue_with_grant([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
+	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag=None)
+	assert _approved(result), result
+	assert "automation_path_hold" not in result["output"]
 
 
 def test_automation_path_gate_approves_fully_granted_plan() -> None:

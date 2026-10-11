@@ -58,9 +58,10 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
-      # Default off (#6838): when true, a clear plan that lists automation paths
-      # is auto-approved only with a trusted exact files_touched grant for each.
-      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
+      # Default on (#6838, #7181): a clear plan that lists automation paths is
+      # auto-approved only with a trusted exact files_touched grant for each.
+      # Only false/0/no/off turns the gate off; any other value keeps it on.
+      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -2149,10 +2150,10 @@ jobs:
             exit 0
           fi
 
-          # Default-off automation-path gate (#6838). Unless
-          # AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is truthy these functions are
-          # never called, so the step behaves and calls the API exactly as before.
-          # When on, a plan whose "Files ... change" section lists automation paths
+          # Default-on automation-path gate (#6838, #7181). Only an explicit
+          # AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED of false/0/no/off skips these
+          # functions; unset, empty or unrecognised values keep the gate on (fail
+          # closed). When on, a plan whose "Files ... change" section lists automation paths
           # (.github/, .claude/, scripts/, prompts/, workflow-templates/) is
           # auto-approved only when the issue body carries a trusted exact
           # files_touched grant for every one of them. The unchanged
@@ -2379,9 +2380,12 @@ jobs:
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
-              automation_path_gate_flag="$(printf '%s' "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
+              automation_path_gate_flag="$(printf '%s' "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)"
               case "${automation_path_gate_flag}" in
-                1|true|yes|on)
+                0|false|no|off)
+                  echo "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED=${automation_path_gate_flag}; skipping the automation-path plan gate."
+                  ;;
+                *)
                   automation_path_gate_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/automation_path_gate.XXXXXX" 2>/dev/null)" || automation_path_gate_dir=""
                   if [ -z "${automation_path_gate_dir}" ]; then
                     AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"

@@ -249,10 +249,10 @@ for _orch_fp_candidate in \
   fi
 done
 unset _orch_fp_candidate
-# Default-off automation-path gate for plan auto-approval (#6838); see
-# _automation_path_plan_auto_approval_gate. Keep an unset flag distinct from
-# explicit false: direct script callers without the flag can still recover a
-# plan-step hold marker. The workflow forwards an explicit default of false.
+# Default-on automation-path gate for plan auto-approval (#6838, #7181); see
+# _automation_path_plan_auto_approval_gate. Only an explicit false/0/no/off
+# turns it off; unset, empty or unrecognised values keep it on (fail closed).
+# The workflow forwards a default of true.
 # The grant guard is taken only from the verified support checkout.
 AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED-}"
 ORCH_AUTOMATION_PATH_GUARD=""
@@ -15076,18 +15076,18 @@ _staged_support_comments_for_guard()
 }
 
 # ---------------------------------------------------------------
-# Default-off automation-path gate for stall-recovery auto-approval (#6838)
+# Default-on automation-path gate for stall-recovery auto-approval (#6838, #7181)
 # ---------------------------------------------------------------
-# plan.yml withholds its automatic /approved when
-# AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is on and the plan's
+# plan.yml withholds its automatic /approved when the plan's
 # "Files ... change" section lists automation paths that the issue body does
 # not grant with a trusted exact files_touched entry. It then posts an
 # ai:automation-path-plan-hold:v1 marker. The stall-recovery auto_approve
-# branches below apply the same check when the workflow-forwarded flag is on.
-# For direct script callers without that flag, a trusted hold marker newer
-# than the latest plan also activates the check. Explicit false overrides
-# old markers; with the flag off the gate returns before any API call, so
-# behaviour is unchanged. The grant decision is the
+# branches below apply the same check. The gate is on unless
+# AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is explicitly false/0/no/off;
+# unset, empty or unrecognised values keep it on (fail closed). Hold markers
+# only deduplicate the hold comment; they never turn the gate on or off.
+# With the flag off the gate returns before any API call and ignores old
+# markers. The grant decision is the
 # unchanged scripts/files_touched_scope_guard.py from the verified support
 # checkout; a hold withholds the automatic /approved only (a human /approved
 # and the implement commit-time automation-path guard are unchanged).
@@ -15318,15 +15318,14 @@ _automation_path_plan_auto_approval_gate()
   local comments_json="$2"
   local phase="$3"
   local mode="$4"
-  local active="false" gate_dir="" gate_rc=0
+  local active="true" gate_dir="" gate_rc=0
 
-  if is_truthy "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"; then
-    active="true"
-  elif [ -z "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED}" ] \
-    && printf '%s' "${comments_json}" | jq -e --arg issue "${issue_num}" \
-    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | length > 0' >/dev/null 2>&1; then
-    active="true"
-  fi
+  # Default on (#7181): only an explicit false/0/no/off disables the gate.
+  case "$(printf '%s' "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    0|false|no|off)
+      active="false"
+      ;;
+  esac
   if [ "${active}" != "true" ]; then
     return 0
   fi

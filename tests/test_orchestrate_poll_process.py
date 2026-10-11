@@ -3578,6 +3578,9 @@ sys.exit(proc.returncode)
 		)
 
 		env = os.environ.copy()
+		# Exercise the script default of the automation-path plan gate (#7181)
+		# unless a test sets the flag through env_overrides.
+		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
 		env.update(
 			{
 				"HOME": str(home_dir),
@@ -5656,7 +5659,15 @@ def _automation_gate_body(granted: list[str]) -> str:
 	return "Do the thing.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in granted)
 
 
-def _run_managed_automation_gate(*, comments: list, granted: list[str] | None, env: dict[str, str]) -> dict:
+def _run_managed_automation_gate(
+	*,
+	comments: list,
+	granted: list[str] | None,
+	env: dict[str, str],
+	body: str | None = None,
+	labels: list[str] | None = None,
+	support_guard_copy: bool = True,
+) -> dict:
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1, "stall_recovery_count": 0})
@@ -5664,13 +5675,29 @@ def _run_managed_automation_gate(*, comments: list, granted: list[str] | None, e
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed", *(labels or [])]},
 		issue_comments={10: comments},
-		issue_bodies={10: _automation_gate_body(granted or [])},
+		issue_bodies={10: body if body is not None else _automation_gate_body(granted or [])},
 		env_overrides=env,
-		support_guard_copy=True,
+		support_guard_copy=support_guard_copy,
 		mock_store_extra={"issue_authors": {"10": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
 	)
+
+
+# A security-finding issue filed by a trusted human (not the pipeline login,
+# which the mock reports as github-actions[bot]) with no files_touched block.
+_AUTOMATION_GATE_SECURITY_FINDING_BODY = (
+	"Security finding: the review sandbox leaks a credential path.\n\n"
+	"<!-- ai:security-finding:sandbox-credential-path -->\n"
+)
+_AUTOMATION_GATE_SECURITY_PLAN = (
+	"Implementation Plan\n\n"
+	"1. Files likely to change\n"
+	"- `scripts/review_untrusted_sandbox.sh`\n"
+	"- `.github/workflows/review_autofix.yml`\n"
+	"- `tests/test_review_untrusted_sandbox.py`\n\n"
+	"2. Functions / modules\n"
+)
 
 
 def _automation_gate_approved(result: dict, issue_num: int) -> bool:
@@ -5681,21 +5708,54 @@ def _automation_gate_holds(result: dict, issue_num: int) -> list[dict]:
 	return [c for c in result["issues"][str(issue_num)]["comments"] if "ai:automation-path-plan-hold:v1" in c["body"] and "source=poller" in c["body"]]
 
 
-def test_managed_auto_approve_automation_path_gate_off_by_default() -> None:
+def test_managed_auto_approve_automation_path_gate_on_by_default() -> None:
+	# Regression for #7181: with the flag unset, an ungranted plan is held.
 	result = _run_managed_automation_gate(comments=[_automation_gate_plan_comment()], granted=None, env={})
-	assert _automation_gate_approved(result, 10)
-	assert _automation_gate_holds(result, 10) == []
-	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in combined_log
+	assert not _automation_gate_approved(result, 10)
+	assert len(_automation_gate_holds(result, 10)) == 1
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_managed_auto_approve_automation_path_gate_empty_flag_stays_on() -> None:
+	for value in ("", "maybe"):
+		result = _run_managed_automation_gate(
+			comments=[_automation_gate_plan_comment()], granted=None,
+			env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": value},
+		)
+		assert "reason=automation_path_ungranted" in result["stdout"] + result["stderr"], value
+		assert not _automation_gate_approved(result, 10), value
 
 
 def test_managed_auto_approve_explicitly_disabled_gate_ignores_old_hold() -> None:
+	for value in ("false", "0", "OFF", "no"):
+		result = _run_managed_automation_gate(
+			comments=[_automation_gate_plan_comment(), _automation_gate_marker_comment(10)],
+			granted=[], env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": value},
+		)
+		assert _automation_gate_approved(result, 10), value
+		assert _automation_gate_holds(result, 10) == [], value
+		assert "reason=automation_path_" not in result["stdout"] + result["stderr"], value
+
+
+def test_managed_auto_approve_holds_no_grant_security_finding_by_default() -> None:
 	result = _run_managed_automation_gate(
-		comments=[_automation_gate_plan_comment(), _automation_gate_marker_comment(10)],
-		granted=[], env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
+		comments=[_automation_gate_plan_comment(_AUTOMATION_GATE_SECURITY_PLAN)],
+		granted=None,
+		env={},
+		body=_AUTOMATION_GATE_SECURITY_FINDING_BODY,
+		labels=["ai:security"],
 	)
-	assert _automation_gate_approved(result, 10)
-	assert _automation_gate_holds(result, 10) == []
-	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in combined_log
+	assert not _automation_gate_approved(result, 10)
+	holds = _automation_gate_holds(result, 10)
+	assert len(holds) == 1
+	assert "`scripts/review_untrusted_sandbox.sh`" in holds[0]["body"]
+	assert "`.github/workflows/review_autofix.yml`" in holds[0]["body"]
+	assert "tests/test_review_untrusted_sandbox.py" not in holds[0]["body"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
 
 
 def test_managed_auto_approve_automation_path_gate_holds_ungranted_plan() -> None:
@@ -5717,72 +5777,140 @@ def test_managed_auto_approve_automation_path_gate_approves_granted_or_plain_pla
 	granted = _run_managed_automation_gate(
 		comments=[_automation_gate_plan_comment()],
 		granted=[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
-		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+		env={},
 	)
 	assert _automation_gate_approved(granted, 10)
 	assert _automation_gate_holds(granted, 10) == []
 	plain = _run_managed_automation_gate(
 		comments=[_automation_gate_plan_comment(_AUTOMATION_GATE_PLAN_NO_AUTOMATION)],
 		granted=None,
-		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+		env={},
 	)
 	assert _automation_gate_approved(plain, 10)
 	assert "reason=automation_path_" not in plain["stdout"] + plain["stderr"]
 
 
 def test_managed_auto_approve_automation_path_gate_fails_closed_without_plan() -> None:
+	result = _run_managed_automation_gate(comments=["routine comment"], granted=None, env={})
+	assert "STALL_SKIP issue=10 reason=automation_path_check_unavailable phase=ai:awaiting-approval action=none" in result["stdout"] + result["stderr"]
+	assert not _automation_gate_approved(result, 10)
+
+
+def test_managed_auto_approve_fails_closed_without_guard_by_default() -> None:
 	result = _run_managed_automation_gate(
-		comments=["routine comment"], granted=None, env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+		comments=[_automation_gate_plan_comment()],
+		granted=[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
+		env={},
+		support_guard_copy=False,
 	)
 	assert "STALL_SKIP issue=10 reason=automation_path_check_unavailable phase=ai:awaiting-approval action=none" in result["stdout"] + result["stderr"]
 	assert not _automation_gate_approved(result, 10)
 
 
-def test_standalone_auto_approve_honours_trusted_plan_hold_marker() -> None:
-	stall_state_comment = (
-		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
-		+ json.dumps({
-			"schema_version": 1,
-			"last_seen_phase": "ai:awaiting-approval",
-			"status_since_ts": 1,
-			"stall_recovery_count": 0,
-		})
-		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+_STANDALONE_AUTOMATION_GATE_STALL_STATE = (
+	"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+	+ json.dumps({
+		"schema_version": 1,
+		"last_seen_phase": "ai:awaiting-approval",
+		"status_since_ts": 1,
+		"stall_recovery_count": 0,
+	})
+	+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+)
+
+
+def _run_standalone_automation_gate(
+	comments: list,
+	granted: list[str] | None,
+	*,
+	env: dict[str, str] | None = None,
+	body: str | None = None,
+	labels: list[str] | None = None,
+	support_guard_copy: bool = True,
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:awaiting-approval", *(labels or [])]},
+		issue_comments={700: [_STANDALONE_AUTOMATION_GATE_STALL_STATE, *comments]},
+		issue_bodies={700: body if body is not None else _automation_gate_body(granted or [])},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows", **(env or {})},
+		support_guard_copy=support_guard_copy,
+		mock_store_extra={"issue_authors": {"700": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
 	)
 
-	def run(comments: list, granted: list[str]) -> dict:
-		state = _base_state(status="in_progress")
-		state["waves"][0]["issues"][0]["status"] = "merged"
-		return _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			issue_labels={10: ["ai:merged"], 700: ["ai:awaiting-approval"]},
-			issue_comments={700: [stall_state_comment, *comments]},
-			issue_bodies={700: _automation_gate_body(granted)},
-			mock_gh_issue_list_label_filter=True,
-			env_overrides={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"},
-			support_guard_copy=True,
-			mock_store_extra={"issue_authors": {"700": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
-		)
 
-	held = run([_automation_gate_plan_comment(), _automation_gate_marker_comment(700)], [".github/workflows/plan.yml"])
+def test_standalone_auto_approve_gate_ignores_marker_trust_when_default_on() -> None:
+	held = _run_standalone_automation_gate([_automation_gate_plan_comment(), _automation_gate_marker_comment(700)], [".github/workflows/plan.yml"])
 	assert "STALL_SKIP issue=700 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in held["stdout"] + held["stderr"]
 	assert not _automation_gate_approved(held, 700)
 	assert len(_automation_gate_holds(held, 700)) == 1
 
-	granted = run(
+	granted = _run_standalone_automation_gate(
 		[_automation_gate_plan_comment(), _automation_gate_marker_comment(700)],
 		[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
 	)
 	assert _automation_gate_approved(granted, 700)
 
-	untrusted = run([_automation_gate_plan_comment(), _automation_gate_marker_comment(700, "NONE")], [])
-	assert _automation_gate_approved(untrusted, 700)
-	assert "reason=automation_path_" not in untrusted["stdout"] + untrusted["stderr"]
+	# Marker trust and age no longer decide whether the gate runs.
+	untrusted = _run_standalone_automation_gate([_automation_gate_plan_comment(), _automation_gate_marker_comment(700, "NONE")], [])
+	assert not _automation_gate_approved(untrusted, 700)
+	assert "reason=automation_path_ungranted" in untrusted["stdout"] + untrusted["stderr"]
+	stale = _run_standalone_automation_gate([_automation_gate_marker_comment(700), _automation_gate_plan_comment()], [])
+	assert not _automation_gate_approved(stale, 700)
 
-	stale = run([_automation_gate_marker_comment(700), _automation_gate_plan_comment()], [])
-	assert _automation_gate_approved(stale, 700)
+	disabled_env = {"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"}
+	for comments in (
+		[_automation_gate_plan_comment(), _automation_gate_marker_comment(700, "NONE")],
+		[_automation_gate_marker_comment(700), _automation_gate_plan_comment()],
+	):
+		disabled = _run_standalone_automation_gate(comments, [], env=disabled_env)
+		assert _automation_gate_approved(disabled, 700)
+		assert "reason=automation_path_" not in disabled["stdout"] + disabled["stderr"]
+
+
+def test_standalone_auto_approve_holds_no_grant_security_finding_by_default() -> None:
+	# Regression for #7181 on the standalone stall-recovery path.
+	result = _run_standalone_automation_gate(
+		[_automation_gate_plan_comment(_AUTOMATION_GATE_SECURITY_PLAN)],
+		None,
+		body=_AUTOMATION_GATE_SECURITY_FINDING_BODY,
+		labels=["ai:security"],
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=700 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in combined_log
+	assert not _automation_gate_approved(result, 700)
+	holds = _automation_gate_holds(result, 700)
+	assert len(holds) == 1
+	assert "`scripts/review_untrusted_sandbox.sh`" in holds[0]["body"]
+	assert "`.github/workflows/review_autofix.yml`" in holds[0]["body"]
+
+
+def test_standalone_auto_approve_approves_fully_granted_plan_by_default() -> None:
+	result = _run_standalone_automation_gate(
+		[_automation_gate_plan_comment()],
+		[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
+	)
+	assert _automation_gate_approved(result, 700)
+	assert _automation_gate_holds(result, 700) == []
+	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
+
+
+def test_standalone_auto_approve_fails_closed_without_plan_or_guard() -> None:
+	no_plan = _run_standalone_automation_gate(["routine comment"], None)
+	assert "STALL_SKIP issue=700 reason=automation_path_check_unavailable phase=ai:awaiting-approval action=none" in no_plan["stdout"] + no_plan["stderr"]
+	assert not _automation_gate_approved(no_plan, 700)
+	no_guard = _run_standalone_automation_gate(
+		[_automation_gate_plan_comment()],
+		[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
+		support_guard_copy=False,
+	)
+	assert "STALL_SKIP issue=700 reason=automation_path_check_unavailable phase=ai:awaiting-approval action=none" in no_guard["stdout"] + no_guard["stderr"]
+	assert not _automation_gate_approved(no_guard, 700)
 
 
 def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -> None:
@@ -6026,6 +6154,8 @@ def test_staged_support_release_guard_is_comment_order_independent() -> None:
 		# Deliberately newest-first, matching the former REST fallback shape.
 		issue_comments={501: [release_comment, latch_comment, standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
+		# No plan comment: opt out of the default-on automation-path gate (#7181).
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 
 	combined_log = result["stdout"] + result["stderr"]
@@ -19404,6 +19534,8 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 			"target_pr": None,
 			"head_ref": None,
 		},
+		# No plan comment: opt out of the default-on automation-path gate (#7181).
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
@@ -19724,6 +19856,8 @@ def test_managed_stall_recovery_skips_destructive_blocked_latch():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		# No plan comment: opt out of the default-on automation-path gate (#7181).
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
 	assert any("/approved" in body for body in issue_comments), result["stdout"]
