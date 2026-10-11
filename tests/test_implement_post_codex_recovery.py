@@ -1520,8 +1520,9 @@ def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 
 	for block in (stage_block, preflight_block):
 		assert 'wf_source="shubhodeep1/coding-workflows"' in block
-		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
-		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
+		assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in block
+		assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in block
+		assert '${{ github.repository }}' not in block
 
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
