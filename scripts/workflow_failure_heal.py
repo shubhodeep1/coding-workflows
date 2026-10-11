@@ -204,6 +204,21 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"conflict_resolver_sandbox_support_missing",
 	}
 )
+# The resolver's host-only conflict stop is an intentional fail-closed state
+# that needs a human merge: review_conflict_resolve.sh already prints the
+# "host-only conflicted path(s) need a manual merge" ::error:: line and the
+# identical-failure cap posts its comment, so a heal issue adds nothing and
+# only files more heal issues (#6738). skip_reason() drops the per-run report,
+# the cap report repeating this reason, and the ai:needs-human report on an
+# item whose newest trusted autofix marker names it. Since #6756 the
+# review/autofix reporter and the intake defer the first two
+# (defer_host_only_autofix) so the intake can post a provenance-verified PR
+# diagnosis (non_retryable_route); the intake still ends every undiagnosed
+# host-only report in this skip. With that routing off, the other
+# non-retryable resolver reasons are still healed.
+HOST_ONLY_CONFLICT_FAILURE_REASON = "conflict_resolver_sandbox_path_host_only"
+HOST_ONLY_CONFLICT_SKIP_REASON = "host_only_conflict_manual_merge"
+IDENTICAL_FAILURE_CAP_REASON = "identical_failure_cap"
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -279,6 +294,9 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+# Own-line variant of _FAILURE_MARKER_RE for latest_trusted_autofix_marker_is_host_only:
+# a marker quoted inline in PR-influenced text (the "First error" code span) is not one.
+_FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -790,6 +808,7 @@ def build_autofix_failure_payload(
 	script_ref: str | None = None,
 	changed_files: Iterable[str] | None = None,
 	failure_marker_author: str | None = None,
+	repeated_failure_reason: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
@@ -807,6 +826,11 @@ def build_autofix_failure_payload(
 	ownership facts the intake's self-inflicted routing uses; each is sent only
 	when it validates. ``crash_file`` is extracted from the full (untruncated)
 	evidence before it is bounded.
+
+	``repeated_failure_reason`` is the failure reason an identical-failure cap
+	report repeats (the gate's trusted ``fingerprint_cap_reason`` or the
+	trusted head markers). It is sent only for ``identical_failure_cap``
+	reports and only when it is a well-formed reason token.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -861,6 +885,9 @@ def build_autofix_failure_payload(
 	crash = extract_crash_file(failure_evidence)
 	if crash:
 		payload["crash_file"] = crash
+	repeated = str(repeated_failure_reason or "").strip()
+	if failure_reason == IDENTICAL_FAILURE_CAP_REASON and _FAILURE_REASON_RE.match(repeated):
+		payload["repeated_failure_reason"] = repeated
 	return payload
 
 
@@ -1260,6 +1287,13 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	changed_files = normalize_changed_files(changed_raw) if isinstance(changed_raw, list) else []
 	crash_file = payload.get("crash_file") if kind == "autofix_failure" else None
 	crash_file = crash_file if is_valid_repo_path(crash_file) else None
+	repeated_failure_reason = payload.get("repeated_failure_reason") if kind == "autofix_failure" else None
+	if not (
+		failure_reason == IDENTICAL_FAILURE_CAP_REASON
+		and isinstance(repeated_failure_reason, str)
+		and _FAILURE_REASON_RE.match(repeated_failure_reason)
+	):
+		repeated_failure_reason = None
 	normalized = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -1294,6 +1328,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"script_ref": script_ref,
 			"changed_files": changed_files,
 			"crash_file": crash_file,
+			"repeated_failure_reason": repeated_failure_reason,
 		})
 	return normalized
 
@@ -1332,10 +1367,37 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
-	"""Return a stable skip reason when a validated payload must not be healed."""
+def skip_reason(
+	payload: dict[str, Any],
+	*,
+	registered_repos: Iterable[str],
+	self_repo: str,
+	heal_scope_unverified: bool = False,
+	non_retryable_diagnosed: bool = False,
+	host_only_conflict: bool = False,
+	defer_host_only_autofix: bool = False,
+) -> str:
+	"""Return a stable skip reason when a validated payload must not be healed.
+
+	``host_only_conflict`` is set by the label reporter only after the newest
+	trusted autofix marker on the labeled item named the host-only resolver
+	stop (``latest_trusted_autofix_marker_is_host_only``).
+
+	``defer_host_only_autofix`` leaves an ``autofix_failure`` host-only report
+	to the intake's provenance-verified non-retryable routing (#6756), which
+	posts the PR diagnosis and falls back to HOST_ONLY_CONFLICT_SKIP_REASON
+	itself, so no heal issue is filed either way. Label reports are unaffected.
+	"""
 	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
 		return "heal_scope_unverified"
+	# The heal intake applied ai:needs-human itself after diagnosing a
+	# non-retryable review/autofix failure; reporting that label would loop.
+	if non_retryable_diagnosed and payload.get("label") == "ai:needs-human":
+		return "non_retryable_diagnosed"
+	if is_host_only_conflict_report(payload, host_only_conflict=host_only_conflict) and not (
+		defer_host_only_autofix and payload.get("source_kind") == "autofix_failure"
+	):
+		return HOST_ONLY_CONFLICT_SKIP_REASON
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -1348,6 +1410,22 @@ def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], sel
 	if SELF_WORKFLOW_FRAGMENT.lower() in workflow_name.lower():
 		return "self_workflow"
 	return ""
+
+
+def is_host_only_conflict_report(payload: dict[str, Any], *, host_only_conflict: bool = False) -> bool:
+	"""True when the report is the resolver's host-only conflict stop.
+
+	Covers the per-run autofix report, the identical-failure cap report that
+	repeats that reason, and (with ``host_only_conflict``, verified by the
+	caller against trusted markers) the ``ai:needs-human`` label report.
+	"""
+	if payload.get("source_kind") == "autofix_failure":
+		reason = payload.get("failure_reason")
+		if reason == HOST_ONLY_CONFLICT_FAILURE_REASON:
+			return True
+		if reason == IDENTICAL_FAILURE_CAP_REASON and payload.get("repeated_failure_reason") == HOST_ONLY_CONFLICT_FAILURE_REASON:
+			return True
+	return bool(host_only_conflict) and payload.get("label") == "ai:needs-human"
 
 
 # ---------------------------------------------------------------------------
@@ -2423,6 +2501,67 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
+def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_login: str, head_sha: str | None = None) -> bool:
+	"""True when the newest trusted autofix marker names the host-only stop.
+
+	``comments`` is oldest first. Only comments by ``author_login`` (the
+	pipeline account) count; the author is read from ``author_login``,
+	``user.login`` or ``author`` (the label reporter's rows). Scanning newest
+	first, the first trusted ``review-autofix-failure:v1`` or
+	``review-autofix-failure-cap:v1`` marker decides; a trusted editor summary
+	seen first means the host-only stop is no longer current. Markers from any
+	other author are ignored, so a forged marker cannot suppress a heal.
+	Provider-outage markers (``reason=provider_unavailable``) and markerless
+	pause comments (header line only) are repo-wide events (#6633): they are
+	skipped and never decide or end the scan.
+
+	``head_sha`` (the labeled PR's current head, when known) binds the
+	deciding marker to that head, so a host-only marker left from an older head
+	cannot suppress a later, unrelated escalation.
+	"""
+	author = str(author_login or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
+	if not author:
+		return False
+	for comment in reversed([item for item in comments if isinstance(item, dict)]):
+		login = _comment_author(comment) or str(comment.get("author") or "").strip().lower()
+		if login != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		# Own-line markers only: the pipeline writes its marker on its own line,
+		# while PR-influenced "First error" text can quote a forged one inline.
+		for pattern in (_FAILURE_MARKER_LINE_RE, _FAILURE_CAP_MARKER_LINE_RE):
+			match = pattern.search(body)
+			if match is not None:
+				break
+		else:
+			match = None
+		if match is not None:
+			fields = _marker_fields(match)
+			# Provider-outage markers are repo-wide events (#6633): like
+			# count_identical_failures, they never decide or end the scan.
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
+			if head and fields.get("head", "").lower() != head:
+				return False
+			return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+		# A markerless outage pause is recognised by its header line only: a
+		# failure comment can quote the pause phrase in its PR-influenced
+		# "First error" line and must still end the scan below.
+		header = next((line.strip().strip("*").strip() for line in body.splitlines() if line.strip()), "")
+		if header.startswith(PROVIDER_UNAVAILABLE_COMMENT_MARKER):
+			continue
+		# A newer trusted failure comment posted without a marker (the marker
+		# failed to render) is a different, later failure: it ends the scan,
+		# as in count_identical_failures, so an older host-only marker cannot
+		# decide for it.
+		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
+			return False
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			return False
+	return False
+
+
 def _run_workflow_file(run: dict[str, Any]) -> str | None:
 	path = run.get("path")
 	if not isinstance(path, str):
@@ -2667,6 +2806,216 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	return result
+
+
+def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> str:
+	"""Return the reason of the newest trusted failure marker for ``head_sha``.
+
+	Same trust rules as ``count_identical_failures`` (author, head, valid
+	``fp``, and ``support`` when given), but ``provider_unavailable`` markers
+	are not skipped. The force_rb_judge host-only conflict skip (issue #6743)
+	uses it so a newer failure with any other reason keeps the conflict steps.
+	Returns "" when no trusted marker exists.
+	"""
+	support = _normalized_support_sha(support_sha)
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	if not head or not author:
+		return ""
+	for comment in reversed([comment for comment in comments if isinstance(comment, dict)]):
+		match = _FAILURE_MARKER_RE.search(sanitize_text(comment.get("body")))
+		if match is None or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(match)
+		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
+		return fields.get("reason") or "unknown"
+	return ""
+
+
+# ---------------------------------------------------------------------------
+# Non-retryable review/autofix failures (heal intake routing)
+# ---------------------------------------------------------------------------
+
+# Durable PR-comment marker the heal intake posts when it routes a verified
+# non-retryable autofix_failure report to a manual merge instead of a heal
+# issue. Trusted only when written by the intake's authenticated account;
+# keyed on (pr, head, reason) so a duplicate report stays silent and a new
+# head earns a fresh diagnosis.
+NON_RETRYABLE_DIAGNOSIS_MARKER_TAG = "ai:workflow-heal-non-retryable:v1"
+NON_RETRYABLE_MAX_PATHS = 20
+_NON_RETRYABLE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(NON_RETRYABLE_DIAGNOSIS_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+_FIRST_ERROR_LINE_RE = re.compile(r"\*\*First error:\*\* `(?P<error>[^`\n]{1,400})`")
+_HOST_ONLY_PATHS_PREFIX = "host-only conflicted path(s) need a manual merge: "
+
+
+def _non_retryable_comment_author(comment: dict[str, Any]) -> str:
+	"""Author login of a comment, also accepting the reporter's flat ``author`` string."""
+	login = _comment_author(comment)
+	if not login and isinstance(comment.get("author"), str):
+		login = comment["author"].strip().lower()
+	return login
+
+
+def non_retryable_suffix(reason: str) -> str:
+	"""Short log token for a non-retryable reason (``host_only`` for the host-only resolver refusal)."""
+	text = str(reason or "")
+	for prefix in ("conflict_resolver_sandbox_path_", "conflict_resolver_sandbox_"):
+		if text.startswith(prefix):
+			return safe_token(text[len(prefix):]) or "unknown"
+	return safe_token(text) or "unknown"
+
+
+def render_non_retryable_marker(pr_number: Any, head_sha: str, reason: str) -> str:
+	return f"<!-- {NON_RETRYABLE_DIAGNOSIS_MARKER_TAG} pr={safe_token(pr_number, 20)} head={safe_token(head_sha, 40).lower()} reason={safe_token(reason)} -->"
+
+
+def _non_retryable_host_only_paths(comments: list[dict[str, Any]], *, head_sha: str, author: str) -> list[str]:
+	"""Paths named by the newest trusted failure comment for ``head_sha``.
+
+	Only the ``**First error:**`` line of a ``review-autofix-failure:v1``
+	comment the trusted account wrote on this head is read; every entry must
+	pass ``is_valid_repo_path`` and at most NON_RETRYABLE_MAX_PATHS are kept.
+	"""
+	for comment in reversed(comments):
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
+		if fields.get("head", "").lower() != head_sha:
+			continue
+		match = _FIRST_ERROR_LINE_RE.search(body)
+		if match is None:
+			return []
+		error = match.group("error")
+		index = error.find(_HOST_ONLY_PATHS_PREFIX)
+		if index < 0:
+			return []
+		entries = error[index + len(_HOST_ONLY_PATHS_PREFIX):].split(", ")
+		if len(error) >= FAILURE_HEADLINE_LIMIT:
+			# failure_headline() truncates at this length, so the last entry may
+			# be a cut-off path; never name a file that may not exist.
+			entries = entries[:-1]
+		paths: list[str] = []
+		for raw in entries:
+			path = raw.strip()
+			if path == "..." or not is_valid_repo_path(path) or path in paths:
+				continue
+			paths.append(path)
+			if len(paths) >= NON_RETRYABLE_MAX_PATHS:
+				break
+		return paths
+	return []
+
+
+def non_retryable_route(payload: dict[str, Any], *, comments: Iterable[dict[str, Any]], trusted_login: str) -> dict[str, Any]:
+	"""Decide whether a provenance-verified autofix_failure report is non-retryable.
+
+	The caller must have verified the report's run provenance first. A report
+	routes when its ``failure_reason`` is in NON_RETRYABLE_FAILURE_REASONS, or
+	when it is an ``identical_failure_cap`` report whose trailing trusted
+	failure markers on the head carry such a reason (payload evidence text is
+	never consulted). ``already_diagnosed`` is true when the trusted account
+	already posted the non-retryable marker for the same pr, head and reason.
+	"""
+	result: dict[str, Any] = {"route": False, "reason": "", "suffix": "", "paths": [], "already_diagnosed": False, "detail": ""}
+	author = str(trusted_login or "").strip().lower()
+	head = str(payload.get("head_sha") or "").strip().lower()
+	pr_number = str(payload.get("issue_number") or "").strip()
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	if payload.get("source_kind") != "autofix_failure":
+		result["detail"] = "not_autofix_failure"
+		return result
+	if not pr_number.isdigit() or not is_valid_sha(head) or not author:
+		result["detail"] = "missing_inputs"
+		return result
+	failure_reason = str(payload.get("failure_reason") or "")
+	reason = ""
+	if failure_reason in NON_RETRYABLE_FAILURE_REASONS:
+		reason = failure_reason
+	elif failure_reason == "identical_failure_cap":
+		counted = count_identical_failures(ordered, head_sha=head, author_login=author)
+		if counted["non_retryable"]:
+			reason = counted["reason"]
+	if not reason:
+		result["detail"] = "retryable"
+		return result
+	result.update({"route": True, "reason": reason, "suffix": non_retryable_suffix(reason), "detail": "non_retryable"})
+	result["paths"] = _non_retryable_host_only_paths(ordered, head_sha=head, author=author)
+	for comment in ordered:
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		for match in _NON_RETRYABLE_MARKER_RE.finditer(sanitize_text(comment.get("body"))):
+			fields = _marker_fields(match)
+			if fields.get("pr") == pr_number and fields.get("head", "").lower() == head and fields.get("reason") == reason:
+				result["already_diagnosed"] = True
+				break
+		if result["already_diagnosed"]:
+			break
+	return result
+
+
+# Reason-specific remediation text: only the host-only stop is a host-executed
+# path; an unsupported path is a symlink or a name the sandbox cannot carry,
+# and missing support is a workflow-support defect, not a PR defect.
+_NON_RETRYABLE_EXPLANATIONS = {
+	"conflict_resolver_sandbox_path_host_only": "Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+	"conflict_resolver_sandbox_path_unsupported": "Another review/autofix run cannot resolve this: the conflicted path(s) are symlinks or have names the resolver sandbox cannot carry, so it refuses them. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+	"conflict_resolver_sandbox_support_missing": "Another review/autofix run cannot resolve this: the verified workflow support commit is missing the conflict resolver's sandbox support files, so no resolver run can start until workflow support is fixed. Ask a maintainer to fix workflow support, or merge the conflict by hand and push, then remove `ai:needs-human`.",
+}
+_NON_RETRYABLE_EXPLANATION_DEFAULT = "Another review/autofix run cannot resolve this failure. Resolve it by hand, push, then remove `ai:needs-human`."
+
+
+def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, head_sha: str, intake_run_url: str = "") -> str:
+	"""Render the PR diagnosis comment for a routed non-retryable failure, ending with its marker."""
+	reason = safe_token(decision.get("reason"))
+	head = safe_token(head_sha, 40).lower()
+	lines = [
+		"**Workflow failure heal: this review/autofix failure cannot be fixed by another run**",
+		"",
+		f"Failure reason: `{reason}` on head `{head[:12]}`.",
+		"",
+	]
+	paths = [path for path in decision.get("paths") or [] if is_valid_repo_path(path)][:NON_RETRYABLE_MAX_PATHS]
+	if paths:
+		lines.append("Conflicted path(s) that need a manual merge:")
+		lines.append("")
+		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
+	elif reason != "conflict_resolver_sandbox_support_missing":
+		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
+	lines.extend(["", _NON_RETRYABLE_EXPLANATIONS.get(reason, _NON_RETRYABLE_EXPLANATION_DEFAULT), "", "No heal issue was opened."])
+	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
+	if run_match:
+		lines.extend(["", f"Heal intake run: {run_match.group(0)}"])
+	lines.extend(["", render_non_retryable_marker(pr_number, head, reason)])
+	return "\n".join(lines) + "\n"
+
+
+def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, trusted_login: str) -> bool:
+	"""True when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker.
+
+	The heal intake posts that marker immediately before it applies
+	``ai:needs-human``, so the resulting label event must not produce another
+	heal report. A newer trusted ``review-autofix-failure:v1`` comment means
+	the PR failed again since, and a newer trusted editor summary means a
+	later review ran; either way normal escalation resumes, so an old
+	diagnosis cannot suppress a later, unrelated escalation.
+	"""
+	author = str(trusted_login or "").strip().lower()
+	if not author:
+		return False
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	for comment in reversed(ordered):
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		if _NON_RETRYABLE_MARKER_RE.search(body):
+			return True
+		if _FAILURE_MARKER_RE.search(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			return False
+	return False
 
 
 # ---------------------------------------------------------------------------
@@ -3350,6 +3699,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		script_ref=args.script_ref or None,
 		changed_files=_read_path_list(args.changed_files_file),
 		failure_marker_author=args.failure_marker_author or None,
+		repeated_failure_reason=args.repeated_failure_reason or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -3485,6 +3835,8 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
+	newest_reason = newest_trusted_failure_reason(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
+	sys.stdout.write(f"newest_reason={safe_token(newest_reason) if newest_reason else ''}\n")
 	return 0
 
 
@@ -3528,7 +3880,51 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	sys.stdout.write(
+		skip_reason(
+			payload,
+			registered_repos=registered,
+			self_repo=args.self_repo,
+			heal_scope_unverified=args.heal_scope_unverified,
+			non_retryable_diagnosed=args.non_retryable_diagnosed,
+			host_only_conflict=args.host_only_conflict,
+			defer_host_only_autofix=args.defer_host_only_autofix,
+		)
+		+ "\n"
+	)
+	return 0
+
+
+def _cmd_non_retryable_route(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(payload, dict) or not isinstance(comments, list):
+		raise ValueError("payload JSON must be an object and comments JSON a list")
+	decision = non_retryable_route(payload, comments=comments, trusted_login=args.trusted_login)
+	decision["comment"] = ""
+	if decision["route"]:
+		decision["comment"] = render_non_retryable_comment(
+			decision, pr_number=payload.get("issue_number"), head_sha=str(payload.get("head_sha") or ""), intake_run_url=args.intake_run_url,
+		)
+	_write_json(decision)
+	return 0
+
+
+def _cmd_non_retryable_label_suppressed(args: argparse.Namespace) -> int:
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(comments, list):
+		raise ValueError("comments JSON must be a list")
+	sys.stdout.write(("true" if non_retryable_label_suppressed(comments, trusted_login=args.trusted_login) else "false") + "\n")
+	return 0
+
+
+def _cmd_host_only_conflict_marker(args: argparse.Namespace) -> int:
+	try:
+		comments = _load_json_file(args.comments_json)
+	except (OSError, ValueError):
+		comments = None
+	result = isinstance(comments, list) and latest_trusted_autofix_marker_is_host_only(comments, args.author_login, args.head_sha or None)
+	sys.stdout.write(("true" if result else "false") + "\n")
 	return 0
 
 
@@ -3989,6 +4385,11 @@ def build_parser() -> argparse.ArgumentParser:
 		default="",
 		help="list the runs of this author's review-autofix-failure:v1 markers for the PR head in run_refs",
 	)
+	p.add_argument(
+		"--repeated-failure-reason",
+		default="",
+		help="for identical_failure_cap reports: the failure reason the cap repeats",
+	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
 	p = sub.add_parser("build-phase-payload", help="Build the payload for a failed clarify / plan / implement run on an issue")
@@ -4030,12 +4431,24 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
+	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / newest_reason= for the trailing identical failures on a head")
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
 	p.add_argument("--support-sha", default="", help="verified review-support SHA; markers from other support versions are ignored (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
+
+	p = sub.add_parser("non-retryable-route", help="Decide whether a provenance-verified autofix_failure report is non-retryable; prints JSON with the rendered PR comment")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.add_argument("--intake-run-url", default="")
+	p.set_defaults(func=_cmd_non_retryable_route)
+
+	p = sub.add_parser("non-retryable-label-suppressed", help="Print true when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.set_defaults(func=_cmd_non_retryable_label_suppressed)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
 	p.add_argument("--repo", required=True)
@@ -4060,7 +4473,16 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.add_argument("--heal-scope-unverified", action="store_true")
+	p.add_argument("--non-retryable-diagnosed", action="store_true")
+	p.add_argument("--host-only-conflict", action="store_true", help="the newest trusted autofix marker on the labeled item names the host-only resolver stop")
+	p.add_argument("--defer-host-only-autofix", action="store_true", help="leave autofix_failure host-only reports to the intake's non-retryable routing (#6756)")
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("host-only-conflict-marker", help="Print true when the newest trusted autofix marker names the host-only resolver stop")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--author-login", required=True)
+	p.add_argument("--head-sha", default="", help="require the deciding marker to name this head")
+	p.set_defaults(func=_cmd_host_only_conflict_marker)
 
 	p = sub.add_parser("redact-stream")
 	p.add_argument("--secret-env", default="GH_PAT,GH_TOKEN,GITHUB_TOKEN,OPENROUTER_API_KEY")

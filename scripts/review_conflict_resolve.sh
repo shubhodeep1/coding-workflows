@@ -3187,7 +3187,9 @@ if [ -n "$(git status --porcelain)" ]; then
     fi
 
     # Hard guardrail against hallucinated merge resolutions.
-    # check_resolver_diff.sh enforces three invariants:
+    # check_resolver_diff.sh enforces four invariants (the fourth,
+    # no untouched conflicted path left unmerged, names the path
+    # the index guard below would otherwise refuse later):
     #   1. touched ⊆ conflicted  — the resolver may only edit
     #      files that actually had merge markers.  This is what
     #      catches the PR #912 failure mode where the resolver
