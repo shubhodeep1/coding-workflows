@@ -99,9 +99,11 @@ and list it as an assumption instead. A decision is a clear winner only when
   action outside the repository.
 - It is not about what the user wants built (feature intent, scope, target
   repo or environment) and not a tradeoff the user should weigh.
-- It is not ask-first anywhere else in this file: §6 renames and removals,
-  §10 DB / index / contract changes, §12.D, §18.A manual scripts, §18.D gates,
-  §22.B, §23.C, §24.D and §29.B operations, or any deletion of data.
+- It is not ask-first anywhere else in this file, including: the PRE-TASK
+  stop for missing or unclear context, §6 renames and removals, §10 DB /
+  index / contract changes, §12.D, §18.A manual scripts, §18.D gates, §22.B,
+  §23.C, §24.D and §29.B operations, §22.C / §24.F missing resource IDs, or
+  any deletion of data.
 
 Assumptions share the Q-ID sequence with the open questions and appear in the
 same message, under an **Assumed** heading, before any work starts:
