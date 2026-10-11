@@ -1742,13 +1742,18 @@ jobs:
           # it cannot supply this grant's pipeline identity before the editor.
           pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
           automation_grant_path="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_grant.json"
+          # --origin-repo (Q82): for a pipeline-authored re-issue or unblock
+          # fix-up the guard reads each source issue once (gh api, at most 8
+          # reads) so an untrusted author's request never becomes an
+          # automation-path grant. Plain issues cost no extra call.
           python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
             --emit-automation-grant "${automation_grant_path}" \
-            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" || true
+            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" \
+            --origin-repo "${GITHUB_REPOSITORY:-}" || true
           echo "AUTOMATION_PATH_GRANT_FILE=${automation_grant_path}" >> "$GITHUB_ENV"
           if [ -f "${automation_grant_path}" ]; then
             jq -r --arg issue "${ISSUE_NUMBER}" \
-              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association)"' \
+              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association) origin_issues=\((.origin_issues // []) | map(tostring) | join(",") | if . == "" then "none" else . end)"' \
               "${automation_grant_path}" || echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_error paths=0"
           else
             echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_unavailable paths=0"

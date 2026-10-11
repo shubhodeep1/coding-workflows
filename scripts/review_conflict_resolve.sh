@@ -582,6 +582,230 @@ _resolver_fail_closed()
   exit 1
 }
 
+# Host-only paths the PR's linked issue declares in `files_touched:` (issue
+# #6748). review_conflict_prepare.sh classifies every host-only conflicted
+# path into host_only_conflict_scope.tsv (`in_scope|take_base<TAB><path>`)
+# and resolves take_base paths with the base branch's version when nothing
+# is in scope. Succeeds only when every host_only path in the check-paths
+# report $1 was classified and at least one is in_scope: the PR set out to
+# change host-executed code, so it is closed and its issue re-issued.
+_resolver_host_only_scope_requires_reissue()
+{
+  local scope_report="$1" scope_file="${RUNTIME_DIR}/host_only_conflict_scope.tsv"
+  [ -f "${scope_file}" ] && [ ! -L "${scope_file}" ] || return 1
+  awk -F'\t' '
+    NR == FNR { if ($1 == "in_scope" || $1 == "take_base") class[$2] = $1; next }
+    $1 == "host_only" { seen = 1; if (!($2 in class)) missing = 1; else if (class[$2] == "in_scope") hit = 1 }
+    END { exit (seen && hit && !missing) ? 0 : 1 }
+  ' "${scope_file}" "${scope_report}"
+}
+
+# Runs unblock ops ($1, an `{"ops": [...]}` file) through the unblock judge's
+# executor in a subshell, so its `set -uo pipefail`, SUPPORT_DIR and
+# RUNTIME_DIR stay out of the resolver shell.
+_resolver_run_unblock_ops()
+{
+  (
+    set +e
+    SUPPORT_DIR="$(cd "${SUPPORT_SCRIPTS_DIR:-scripts}/.." && pwd)"
+    RUNTIME_DIR="${RESOLVER_HOST_ONLY_REISSUE_DIR}"
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR:-scripts}/unblock_judge.sh"
+    REPOSITORY="${GITHUB_REPOSITORY}"
+    ITEM="${PR_NUMBER}"
+    ITEM_KIND="pr"
+    UNBLOCK_CREATED_ISSUES_FILE="${RESOLVER_HOST_ONLY_REISSUE_DIR}/created_issues.txt"
+    unblock_run_ops "$1"
+  )
+}
+
+# Close the PR and re-issue its issue on the current base branch, reusing
+# scripts/unblock_actions.py's `reissue` ops for a pull request (trusted
+# author and same-repo head only; an untrusted PR is closed without an
+# issue) and scripts/unblock_judge.sh:unblock_run_ops to carry them out.
+# Order: create the replacement, post this PR's explanation with the
+# `ai:host-only-conflict-reissue:v1` marker, name the failure reason, then
+# close (the close may cancel this run through cancel_on_pr_close). A failed
+# create never closes anything. $1 is the check-paths report, $2 the
+# printable path list. Prints the run's ::error:: headline.
+# Log: CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr= issue= paths= outcome= reason=
+_resolver_reissue_for_host_only_scope()
+{
+  local reissue_report="$1" reissue_paths="$2" reissue_count reissue_dir reissue_base reissue_head reissue_issue=""
+  local reissue_linked_file="${LINKED_ISSUES_RAW_FILE:-${RUNTIME_DIR}/linked_issues_raw.json}"
+  local reissue_unblock_py="${SUPPORT_SCRIPTS_DIR:-scripts}/unblock_actions.py"
+  local reissue_manual_error="::error::Conflict resolver: host-only conflicted path(s) are in the PR's declared files_touched scope; re-issue failed, manual merge needed: ${reissue_paths}"
+  reissue_count="$(grep -c $'^host_only\t' "${reissue_report}" || true)"
+  if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || [ -z "${GITHUB_REPOSITORY:-}" ] || [ ! -f "${PR_PAYLOAD_FILE:-/nonexistent}" ] \
+     || [ ! -f "${reissue_unblock_py}" ] || [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/unblock_judge.sh" ]; then
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER:-none} issue=none paths=${reissue_count} outcome=skip reason=inputs_missing"
+    echo "${reissue_manual_error}" >&2
+    return 1
+  fi
+  # Only a marker from a trusted author (OWNER/MEMBER/COLLABORATOR; the
+  # pipeline account is one) counts, so an outside commenter cannot suppress
+  # the re-issue by pasting it.
+  if [ -f "${PR_ISSUE_COMMENTS_FILE:-/nonexistent}" ] && \
+     PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+try:
+    comments = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+marker = "<!-- ai:host-only-conflict-reissue:v1 pr=" + sys.argv[2] + " "
+found = isinstance(comments, list) and any(
+    isinstance(c, dict) and isinstance(c.get("body"), str) and marker in c["body"]
+    and c.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+    for c in comments
+)
+raise SystemExit(0 if found else 1)
+' "${PR_ISSUE_COMMENTS_FILE}" "${PR_NUMBER}" 2>/dev/null; then
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=skip reason=already_reissued"
+    echo "::error::Conflict resolver: host-only conflicted path(s) are in the PR's declared files_touched scope; a re-issue is already recorded on this PR, manual follow-up needed if it is still open: ${reissue_paths}" >&2
+    return 1
+  fi
+  reissue_base="${BASE_BRANCH:-}"
+  [[ "${reissue_base}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || reissue_base="the base branch"
+  reissue_head="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+  RESOLVER_HOST_ONLY_REISSUE_DIR="$(mktemp -d "${RUNTIME_DIR}/host_only_reissue.XXXXXX")"
+  reissue_dir="${RESOLVER_HOST_ONLY_REISSUE_DIR}"
+  if [ -f "${reissue_linked_file}" ] && [ "$(cat "${reissue_linked_file}.status" 2>/dev/null || true)" = "ok" ] \
+     && jq -e 'type == "array"' "${reissue_linked_file}" >/dev/null 2>&1; then
+    cp -- "${reissue_linked_file}" "${reissue_dir}/linked.json"
+  else
+    printf '[]\n' > "${reissue_dir}/linked.json"
+  fi
+  # pr_base_branch: a non-default PR base becomes the replacement's
+  # Integration branch when the linked issue declares none (validated again
+  # in unblock_actions.py), so the re-issue lands on the PR's current base.
+  if ! jq -n --slurpfile pr "${PR_PAYLOAD_FILE}" --slurpfile linked "${reissue_dir}/linked.json" \
+      --arg repo "${GITHUB_REPOSITORY}" --argjson item "${PR_NUMBER}" '
+      ($pr[0] // {}) as $p | ($linked[0] // []) as $l
+      | {
+          repo: $repo, kind: "pr", item: $item, stop: "conflict-host-only", labels: [],
+          tracking: null, has_plan: false,
+          linked_issue: (if ($l | length) == 1 and (($l[0].number // 0) | type) == "number" and $l[0].number > 0 then $l[0].number else null end),
+          title: ($p.title // ""),
+          pr_trusted: (
+            (($p.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            and ((($p.head.repo.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))
+          ),
+          pr_author: ($p.user.login // ""),
+          pr_head_repo: ($p.head.repo.full_name // ""),
+          pr_head_sha: ($p.head.sha // ""),
+          pr_base_branch: (($p.base.ref // "") as $b
+            | if $b != "" and $b != ($p.base.repo.default_branch // "") then $b else null end)
+        }
+      + (if ($l | length) == 1 then {source_issue_body: ($l[0].body // ""), source_issue_labels: ($l[0].labels // [])} else {} end)
+    ' > "${reissue_dir}/context.json" 2>/dev/null; then
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=skip reason=context_failed"
+    echo "${reissue_manual_error}" >&2
+    return 1
+  fi
+  jq -n --arg pr "${PR_NUMBER}" --arg base "${reissue_base}" --arg paths "${reissue_paths}" '{
+      verdict: "reissue", round: 1,
+      instructions: ("Re-implement the change of PR #" + $pr + " on the current " + $base + " branch; its merge with " + $base + " conflicted on host-only path(s) it declares in files_touched: " + $paths + "."),
+      reason: "Host-only conflicted paths cannot be merged by the sandboxed conflict resolver."
+    }' > "${reissue_dir}/verdict.json"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "${reissue_unblock_py}" plan --verdict-file "${reissue_dir}/verdict.json" \
+      --context-file "${reissue_dir}/context.json" > "${reissue_dir}/ops.json" 2>/dev/null \
+     || ! jq -e '.ops | type == "array" and length > 0' "${reissue_dir}/ops.json" >/dev/null 2>&1; then
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=skip reason=plan_failed"
+    echo "${reissue_manual_error}" >&2
+    return 1
+  fi
+  if [ "$(jq -r '.ops[0].op' "${reissue_dir}/ops.json")" != "create_issue" ]; then
+    # Untrusted PR (closed without an issue) or linked-issue metadata that
+    # cannot be carried safely (no close): run the planned ops unchanged.
+    local reissue_outcome="metadata_unsafe"
+    if jq -e 'any(.ops[]; .op == "close")' "${reissue_dir}/ops.json" >/dev/null 2>&1; then
+      reissue_outcome="untrusted_closed"
+    fi
+    echo "::error::Conflict resolver: host-only conflicted path(s) are in the PR's declared files_touched scope; no re-issue was created (${reissue_outcome}), manual follow-up needed: ${reissue_paths}" >&2
+    _resolver_run_unblock_ops "${reissue_dir}/ops.json" || reissue_outcome="${reissue_outcome}_write_failed"
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=${reissue_outcome} reason=not_reissuable"
+    return 1
+  fi
+  jq '{ops: ((.ops | map(.op) | index("close")) as $c | if $c == null then .ops else .ops[:$c] end)}' "${reissue_dir}/ops.json" > "${reissue_dir}/ops_prefix.json"
+  jq '{ops: ((.ops | map(.op) | index("close")) as $c | if $c == null then [] else .ops[$c:] end)}' "${reissue_dir}/ops.json" > "${reissue_dir}/ops_suffix.json"
+  : > "${reissue_dir}/created_issues.txt"
+  if ! _resolver_run_unblock_ops "${reissue_dir}/ops_prefix.json"; then
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=create_failed reason=create_issue_failed"
+    echo "${reissue_manual_error}" >&2
+    return 1
+  fi
+  reissue_issue="$(grep -E '^[0-9]+$' "${reissue_dir}/created_issues.txt" | tail -n 1 || true)"
+  if ! [[ "${reissue_issue}" =~ ^[0-9]+$ ]]; then
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=none paths=${reissue_count} outcome=create_failed reason=created_number_missing"
+    echo "${reissue_manual_error}" >&2
+    return 1
+  fi
+  {
+    printf '%s\n\n' "### Host-only merge conflict: pull request re-issued"
+    printf '%s\n\n' "The merge with \`origin/${reissue_base}\` conflicted on host-only path(s) the sandboxed conflict resolver may never edit, and this PR's linked issue lists them in its \`files_touched:\` allowlist, so taking ${reissue_base}'s version would drop the change this PR set out to make: ${reissue_paths}."
+    printf '%s\n\n' "This pull request is closed as not planned and its change is re-issued on the current \`${reissue_base}\` branch as #${reissue_issue}. Failure reason: \`conflict_resolver_sandbox_path_host_only\` (non-retryable)."
+    printf '%s\n' "<!-- ai:host-only-conflict-reissue:v1 pr=${PR_NUMBER} issue=${reissue_issue} head=${reissue_head} -->"
+  } > "${reissue_dir}/pr_comment.md"
+  # A create: gh_retry makes one attempt (no idempotency marker), so a lost
+  # response can never post a second copy of the comment.
+  local reissue_comment_posted=false
+  if type gh_retry >/dev/null 2>&1; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
+  else
+    gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${reissue_dir}/pr_comment.md" >/dev/null 2>&1 && reissue_comment_posted=true
+  fi
+  if [ "${reissue_comment_posted}" != "true" ]; then
+    # Close anyway: the replacement exists and its provenance line names this
+    # PR; leaving the PR open without the marker would let the next run
+    # create a second replacement.
+    echo "::warning::Host-only re-issue: failed to post the explanation on PR #${PR_NUMBER}; closing anyway (replacement #${reissue_issue})."
+  fi
+  echo "::error::Conflict resolver: host-only conflicted path(s) are in the PR's declared files_touched scope; PR closed and re-issued as #${reissue_issue}: ${reissue_paths}" >&2
+  # Name the failure before the close: cancel_on_pr_close may end this run.
+  if [ -n "${GITHUB_ENV:-}" ] && [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    echo "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_host_only" >> "${GITHUB_ENV}" || true
+  fi
+  # The original issue (one linked issue, trusted PR) would otherwise be
+  # stall-recovered alongside its replacement; orchestrator-managed issues
+  # only get the note, their wave state stays with the poller.
+  local reissue_source="" reissue_managed="false"
+  reissue_source="$(jq -r 'if .pr_trusted == true and (.linked_issue | type) == "number" then .linked_issue else "" end' "${reissue_dir}/context.json" 2>/dev/null || true)"
+  if [[ "${reissue_source}" =~ ^[0-9]+$ ]] && [ "${reissue_source}" != "${reissue_issue}" ]; then
+    if jq -e '.[0].labels | index("ai:orchestrator-managed") != null' "${reissue_dir}/linked.json" >/dev/null 2>&1; then
+      reissue_managed="true"
+    fi
+    jq --argjson src "${reissue_source}" --arg managed "${reissue_managed}" \
+      --arg body "Superseded by #${reissue_issue}: pull request #${PR_NUMBER} was closed because its merge with ${reissue_base} conflicted on host-only path(s) this issue declares in files_touched (${reissue_paths})." '
+      .ops += ([{op: "comment", issue: $src, body: $body}]
+        + (if $managed == "true" then [] else [{op: "close", issue: $src, reason: "not_planned", pr: false}] end))
+    ' <<< '{"ops": []}' > "${reissue_dir}/ops_source.json" || rm -f -- "${reissue_dir}/ops_source.json"
+  fi
+  # The PR close and the source-issue ops run separately, so a source-issue
+  # failure after a successful PR close is not reported as a failed PR close.
+  # The source ops run only after the PR closed, as before.
+  if _resolver_run_unblock_ops "${reissue_dir}/ops_suffix.json"; then
+    if [ -s "${reissue_dir}/ops_source.json" ] && ! _resolver_run_unblock_ops "${reissue_dir}/ops_source.json"; then
+      echo "::warning::Host-only re-issue: PR #${PR_NUMBER} was closed, but updating its source issue #${reissue_source} failed (replacement #${reissue_issue})."
+      echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=reissued reason=source_issue_update_failed"
+    else
+      echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=reissued reason=declared_in_files_touched"
+    fi
+  else
+    if [ "${reissue_comment_posted}" = "true" ]; then
+      echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} failed after creating #${reissue_issue}; the re-issue marker prevents a duplicate."
+    else
+      # Neither the marker nor the close landed: a later run on this open PR
+      # could create a second replacement, so an operator must close it.
+      echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} failed and its re-issue marker was not posted; close it by hand (replacement #${reissue_issue}) to avoid a duplicate re-issue."
+      if type tg_send_msg >/dev/null 2>&1; then
+        tg_send_msg "Host-only re-issue: PR #${PR_NUMBER} in ${GITHUB_REPOSITORY} is still open without its re-issue marker (replacement #${reissue_issue}); close it by hand to avoid a duplicate re-issue." WARNING >/dev/null 2>&1 || true
+      fi
+    fi
+    echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=close_failed reason=close_failed"
+  fi
+  return 0
+}
+
 # Fail closed on a rejected conflict path set (check-paths exit 1).
 # $1 is the report check-paths wrote: `host_only<TAB><path>` per path the
 # sandbox policy keeps on the host (generated files under .ai/, host-executed
@@ -591,7 +815,11 @@ _resolver_fail_closed()
 # line (the failure comment's "First error") and stop with
 # sandbox_path_host_only; the model never sees any of the conflict set,
 # because a merge commit needs every path resolved. Anything else keeps the
-# nameless sandbox_path_unsupported.
+# nameless sandbox_path_unsupported. When review_conflict_prepare.sh found a
+# host-only path inside the PR's declared files_touched scope (issue #6748;
+# out-of-scope ones were already resolved to the base version there), the PR
+# is closed and re-issued first; the failure reason stays
+# sandbox_path_host_only.
 _resolver_fail_closed_for_conflict_paths()
 {
   local conflict_path_report="$1" conflict_host_only_paths=""
@@ -600,6 +828,11 @@ _resolver_fail_closed_for_conflict_paths()
     conflict_host_only_paths="$(awk -F'\t' 'NR <= 20 { printf "%s%s", (NR > 1 ? ", " : ""), $2 } NR == 21 { printf ", ..." }' "${conflict_path_report}")" || conflict_host_only_paths=""
   fi
   if [ -n "${conflict_host_only_paths}" ]; then
+    if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] && \
+       _resolver_host_only_scope_requires_reissue "${conflict_path_report}"; then
+      _resolver_reissue_for_host_only_scope "${conflict_path_report}" "${conflict_host_only_paths}" || true
+      _resolver_fail_closed sandbox_path_host_only
+    fi
     echo "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: ${conflict_host_only_paths}" >&2
     _resolver_fail_closed sandbox_path_host_only
   fi
@@ -3350,6 +3583,23 @@ if [ -n "$(git status --porcelain)" ]; then
   # ============================================================
 
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
+  # Host-only paths the prepare step resolved to the base version (issue
+  # #6748): show the dropped PR-side changes on the PR. Fail-open.
+  _resolver_take_base_comment="${RUNTIME_DIR}/host_only_take_base_comment.md"
+  if [ -f "${_resolver_take_base_comment}" ] && [ ! -L "${_resolver_take_base_comment}" ] && \
+     [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    _resolver_take_base_posted=false
+    if type gh_retry >/dev/null 2>&1; then
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_resolver_take_base_comment}" >/dev/null 2>&1 && _resolver_take_base_posted=true
+    else
+      gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_resolver_take_base_comment}" >/dev/null 2>&1 && _resolver_take_base_posted=true
+    fi
+    if [ "${_resolver_take_base_posted}" = "true" ]; then
+      mv -f -- "${_resolver_take_base_comment}" "${_resolver_take_base_comment}.posted" 2>/dev/null || true
+    else
+      echo "::warning::Host-only take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
+    fi
+  fi
   git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
