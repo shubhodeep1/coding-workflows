@@ -7,6 +7,10 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -158,7 +162,7 @@ def _materialize_opencode_reviewer_text(log_text: str) -> tuple[subprocess.Compl
 
 
 def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	stage_step_block = _step_block(workflow, "Stage workflow support files")
 	stage_helper = _stage_helper_text()
 	init_block = _step_block(workflow, "Initialize runtime workspace")
@@ -205,7 +209,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py"'
 	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
@@ -272,7 +276,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 
 
 def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	uv_block = _step_block(workflow, "Setup uv for Semble")
 	install_block = _step_block(workflow, "Install semble")
 	index_block = _step_block(workflow, "Build semble index")
@@ -320,7 +324,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 
 
 def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	reviewers = _read(REVIEWERS)
 	assemble_start = reviewers.index("assemble_reviewer_prompt()")
 	assemble_end = reviewers.index("# Assemble the default", assemble_start)
@@ -341,7 +345,7 @@ def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_ser
 
 
 def test_reviewer_checklist_prompt_contract_and_gate() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	checklist = _read(REVIEWER_CHECKLIST_PROMPT)
 	reviewers = _read(REVIEWERS)
 	stage_helper = _stage_helper_text()

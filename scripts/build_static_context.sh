@@ -84,15 +84,46 @@ _static_context_regular_file() {
 	[ -f "$1" ]
 }
 
+# agents.md with pending agents.d/ fragments folded in (CLAUDE.md §30), so a
+# model sees documentation that is still waiting for the release fold. Uses
+# the assembler staged next to this script; any failure falls back to the
+# plain file. The assembler only parses text and never executes fragment content.
+_static_context_cat_agents() {
+	local agents_file="$1" static_context_assembler
+	static_context_assembler="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/assemble_agents.py"
+	if [ -d agents.d ] && [ ! -L agents.d ] && [ -f "${static_context_assembler}" ]; then
+		if PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${static_context_assembler}" render --repo-root . --agents-file "${agents_file}" 2>/dev/null; then
+			return 0
+		fi
+	fi
+	cat "${agents_file}"
+}
+
+# Print the local agents file to read: agents.md keeps precedence, and a
+# consumer repo that only has AGENTS.md (the casing update_workflows.yml folds
+# agents.d/ fragments into) falls back to it. Symlinks are refused with a warning.
+_static_context_local_agents_file() {
+	if _static_context_regular_file agents.md; then
+		echo agents.md
+		return 0
+	fi
+	if _static_context_regular_file AGENTS.md; then
+		echo AGENTS.md
+		return 0
+	fi
+	return 1
+}
+
 emit_agents_md() {
 	# Implement phase: include canonical-from-coding-workflows agents_canonical.md
 	# (staged from .codex-workflow-src) followed by the consumer repo's own
-	# agents.md if present. Other phases just emit the local agents.md.
+	# agents.md (or AGENTS.md) if present. Other phases just emit the local file.
 	# Guard RUNTIME_DIR explicitly under set -u.
-	local local_agents_regular
+	local local_agents_regular local_agents_file=""
+	local_agents_file="$(_static_context_local_agents_file)" || local_agents_file=""
 	case "${phase}" in
 		implement)
-			if _static_context_regular_file agents.md; then
+			if [ -n "${local_agents_file}" ]; then
 				local_agents_regular=true
 			else
 				local_agents_regular=false
@@ -105,15 +136,15 @@ emit_agents_md() {
 				fi
 				if [ "$local_agents_regular" = true ]; then
 					echo "=== REPO-SPECIFIC AGENTS.MD ==="
-					cat agents.md
+					_static_context_cat_agents "${local_agents_file}"
 					echo
 				fi
 			fi
 			;;
 		*)
-			if _static_context_regular_file agents.md; then
+			if [ -n "${local_agents_file}" ]; then
 				echo "=== AGENTS.MD ==="
-				cat agents.md
+				_static_context_cat_agents "${local_agents_file}"
 				echo
 			fi
 			;;

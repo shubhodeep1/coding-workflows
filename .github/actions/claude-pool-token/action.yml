@@ -28,6 +28,12 @@ outputs:
     description: Number of usable accounts.
   pool_dir:
     description: The pool directory (order, token, tokens/<NAME>).
+  probes:
+    description: |
+      JSON list of the probe records (account, five_hour, seven_day, the
+      reset times, status, error; never a token), one per pool account,
+      written even when every account is gated. `[]` before the probes ran.
+      Read by scripts/claude_pool_health_alert.sh for the hourly near-cap alert.
 
 runs:
   using: node24

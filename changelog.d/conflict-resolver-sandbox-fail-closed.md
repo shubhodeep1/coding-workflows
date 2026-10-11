@@ -1,2 +1,0 @@
-<!-- changelog: security -->
-- **Claude-selected conflict resolution now fails closed when isolation is unavailable.** Unsupported conflict paths, cleanup failures and failed transfers cannot route untrusted PR content to host OpenCode with runner credentials; Claude unavailability retries OpenCode in a fresh credential-free sandbox. Repeated same-head isolation failures count toward resolver escalation without relaxing fingerprint verification, and a symlinked workflow-support directory cannot supply the engine SHA for security-pass auto-reset.

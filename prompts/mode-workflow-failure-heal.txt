@@ -144,6 +144,16 @@ Hard rules:
   "inconclusive -- here is what to check next".
 - Do not propose changes that would weaken a security control, delete data,
   skip a test, or disable the escalation / guard that surfaced the failure.
+- When a failing test and the code it covers disagree, decide which side is
+  wrong from the documented behaviour, never from "the test should match what
+  the code does now": read the README / agents.md sections and the
+  changelog.d fragments for that behaviour, and the issues or pull requests
+  that introduced each side (git log / git blame in the diagnosis checkout).
+  Fix the side that contradicts the documented or most recently decided
+  behaviour; when the two sides come from two merged changes that contradict
+  each other, say so under Root cause and name the decision the fix follows.
+  The scope marker lists the subject files the failing tests cover, so the
+  code side is editable too.
 - A failure that repeated with the same fingerprint (the report's failure
   reason is `identical_failure_cap`) or that came back after an earlier heal
   of this lineage merged a fix is deterministic. Never classify it

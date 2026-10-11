@@ -3,11 +3,18 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "issue_pr_status.yml"
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
 def _workflow_text() -> str:
@@ -355,14 +362,19 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	) in text, "Loop must consult MANAGED_ISSUES for the current issue"
 	assert "is_managed_child=true" in text, "Loop must flip is_managed_child when matched"
 
-	# Close gate must include the managed-child branch — closing the
-	# issue when its PR merges into orchestrator/project-N (base != main).
+	# Issue #6631: a managed child merged into orchestrator/project-N still
+	# counts when its own body declares no integration branch (the branch
+	# lives on the tracking issue), so waves are not stranded.
 	assert (
-		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then'
-	) in text, (
-		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==main, "
-		"OR is_managed_child==true"
+		'elif [ "${is_managed_child}" = "true" ] && [ -z "${declared_branch}" ]; then'
+	) in text, "Managed-child fallback must accept a merge when the child declares no branch"
+	assert 'target_merge_reason="managed_no_child_metadata"' in text
+	assert '[[ "${PR_BASE_REF}" == orchestrator/project-* ]]' in text
+	assert 'if [ "${PR_MERGED}" != "true" ]; then' in text, (
+		"Completion gate must hold on PR_MERGED!=true, PR_BASE_REF==default branch, "
+		"OR a managed child merged into its integration branch"
 	)
+	assert 'target_merge_reason="closed_unmerged"' in text
 	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (
 		"Managed-child close path must emit a distinguishing log line"
 	)
@@ -377,6 +389,456 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	assert managed_classify_pos < loop_check_pos < label_call_pos
 
 
+def test_merged_pr_counts_only_for_default_or_declared_integration_branch() -> None:
+	"""Issue #6631 (incident #4688 / PR #4748): a merged PR only labels the
+	issue ai:merged and closes it when its base is the repository default
+	branch, the issue's declared integration branch, or (managed child with
+	no declared branch) any base. Other merges leave labels unchanged."""
+	text = _workflow_text()
+	update_step = _step_script("Update linked issue labels when PR closes")
+	fetch_step = _step_script("Fetch memory helper scripts")
+
+	assert "PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in text
+	assert 'REPO_DEFAULT_BRANCH="${PR_DEFAULT_BRANCH:-}"' in update_step
+	assert '[ "${PR_BASE_REF}" = "main" ]' not in update_step, (
+		"The close gate must use the repository default branch, not a literal main"
+	)
+	assert '[ "${PR_BASE_REF}" != "main" ]' not in update_step
+
+	assert '[ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ]' in update_step
+	assert 'target_merge_reason="default_branch"' in update_step
+	assert '[ -n "${declared_branch}" ] && [ "${PR_BASE_REF}" = "${declared_branch}" ]' in update_step
+	assert 'target_merge_reason="declared_integration_branch"' in update_step
+	assert "labels, state and lineage left unchanged (not a target merge" in update_step
+
+	# The declared branch comes from bodies already fetched (no new API call)
+	# and is parsed by the shared orchestrate_lib.py parser.
+	assert "python3 scripts/orchestrate_lib.py extract-integration-branch" in update_step
+	assert update_step.count("add_issue_bodies_from_json \"$(printf") == 3
+	assert 'fetch_from_ref_or_local "scripts/orchestrate_lib.py" "scripts/orchestrate_lib.py"' in fetch_step
+	assert '_fetched_scripts+=("orchestrate_lib.py")' in fetch_step
+
+	# The target-merge decision must precede the label and close calls, and
+	# a non-target merge must `continue` before either.
+	decision_pos = update_step.find('declared_branch="$(declared_branch_for_issue "${issue_number}")"')
+	skip_pos = update_step.find("labels, state and lineage left unchanged (not a target merge")
+	continue_pos = update_step.find("continue", skip_pos)
+	label_pos = update_step.find('set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"')
+	close_pos = update_step.find('gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"')
+	assert -1 not in (decision_pos, skip_pos, continue_pos, label_pos, close_pos)
+	assert decision_pos < skip_pos < continue_pos < label_pos < close_pos
+
+
+# ---------------------------------------------------------------------------
+# Behavioural harness (#5776 / #6632): run the real "Update linked issue labels
+# when PR closes" and "Finalize linked issue lineage state" step scripts with a
+# fake `gh`, stub label/memory helpers and the real gh_helpers.sh.
+# ---------------------------------------------------------------------------
+
+_FAKE_GH = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FAKE_GH_LOG}"
+args="$*"
+if [ "$1" = "issue" ] && [ "$2" = "close" ]; then
+  printf 'close %s\n' "$3" >> "${CALLS_LOG}"
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  case "${args}" in
+    *closingIssuesReferences*) printf '%s' "${FAKE_CLOSING_JSON}"; exit 0 ;;
+    *"i0: issue("*) printf '%s' "${FAKE_CLASSIFY_JSON}"; exit 0 ;;
+  esac
+fi
+printf '{}'
+"""
+
+_LABEL_HELPERS_STUB = """ensure_label_exists() { printf 'ensure %s\\n' "$1" >> "${CALLS_LOG}"; }
+set_issue_phase_label_resilient() { printf 'label %s %s\\n' "$1" "$2" >> "${CALLS_LOG}"; }
+"""
+
+_MEMORY_HELPERS_STUB = """memory_ensure_branch() { printf 'ensure_branch\\n' >> "${CALLS_LOG}"; }
+memory_finalize_task() { printf 'finalize %s\\n' "$*" >> "${CALLS_LOG}"; }
+"""
+
+
+def _closing_json(nodes: list[dict]) -> str:
+	return json.dumps(
+		{"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": nodes}}}}}
+	)
+
+
+def _issue_node(number: int, labels: list[str] | None = None, body: str = "") -> dict:
+	return {"number": number, "body": body, "labels": {"nodes": [{"name": n} for n in (labels or [])]}}
+
+
+def _parse_github_env(path: Path) -> dict[str, str]:
+	result: dict[str, str] = {}
+	lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+	i = 0
+	while i < len(lines):
+		line = lines[i]
+		if "<<" in line:
+			key, delim = line.split("<<", 1)
+			i += 1
+			buf: list[str] = []
+			while i < len(lines) and lines[i] != delim:
+				buf.append(lines[i])
+				i += 1
+			result[key] = "\n".join(buf)
+		elif "=" in line:
+			key, value = line.split("=", 1)
+			result[key] = value
+		i += 1
+	return result
+
+
+def _run_status_sync(
+	*,
+	merged: bool,
+	base_ref: str,
+	default_branch: str,
+	head_ref: str = "feature/x",
+	body: str = "",
+	title: str = "Change",
+	closing_nodes: list[dict] | None = None,
+	classify_nodes: list[dict] | None = None,
+) -> dict:
+	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-"))
+	try:
+		(tmp / "scripts").mkdir()
+		(tmp / "bin").mkdir()
+		shutil.copy(GH_HELPERS, tmp / "scripts" / "gh_helpers.sh")
+		(tmp / "scripts" / "label_helpers.sh").write_text(_LABEL_HELPERS_STUB, encoding="utf-8")
+		(tmp / "scripts" / "memory_helpers.sh").write_text(_MEMORY_HELPERS_STUB, encoding="utf-8")
+		fake_gh = tmp / "bin" / "gh"
+		fake_gh.write_text(_FAKE_GH, encoding="utf-8")
+		fake_gh.chmod(0o755)
+		calls_log = tmp / "calls.log"
+		calls_log.touch()
+		github_env = tmp / "github_env"
+		github_env.touch()
+
+		classify = {
+			"data": {
+				"repository": {f"i{idx}": node for idx, node in enumerate(classify_nodes or [])}
+			}
+		}
+		env = {
+			"PATH": f"{tmp / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+			"HOME": str(tmp),
+			"TMPDIR": str(tmp),
+			"GITHUB_ENV": str(github_env),
+			"CALLS_LOG": str(calls_log),
+			"FAKE_GH_LOG": str(tmp / "gh.log"),
+			"FAKE_CLOSING_JSON": _closing_json(closing_nodes or []),
+			"FAKE_CLASSIFY_JSON": json.dumps(classify),
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"GH_TOKEN": "dummy",
+			"REPOSITORY": "o/r",
+			"PR_NUMBER": "5649",
+			"PR_HEAD_REF": head_ref,
+			"PR_BASE_REF": base_ref,
+			"PR_DEFAULT_BRANCH": default_branch,
+			"PR_MERGED": "true" if merged else "false",
+			"PR_TITLE": title,
+			"PR_BODY": body,
+			"FINAL_LABEL": "ai:merged" if merged else "ai:closed",
+		}
+		update = subprocess.run(
+			["bash", "-c", _step_script("Update linked issue labels when PR closes")],
+			cwd=tmp, env=env, capture_output=True, text=True, timeout=120,
+		)
+		assert update.returncode == 0, update.stdout + update.stderr
+
+		exported = _parse_github_env(github_env)
+		lineage_env = dict(env)
+		lineage_env.update(exported)
+		lineage_env.update(
+			{
+				"AI_MEMORY_ENABLED": "true",
+				"MEMORY_HELPERS_READY": "1",
+				"PR_URL": "https://github.com/o/r/pull/5649",
+				"WORKFLOW_NAME": "AI Issue PR Status Sync",
+				"RUN_ID": "1",
+				"RUN_ATTEMPT": "1",
+				"ACTOR": "tester",
+			}
+		)
+		lineage_script = (
+			_step_script("Finalize linked issue lineage state")
+			.replace("${{ github.event.pull_request.merged }}", "true" if merged else "false")
+			.replace("${{ github.server_url }}", "https://github.com")
+		)
+		lineage = subprocess.run(
+			["bash", "-c", lineage_script],
+			cwd=tmp, env=lineage_env, capture_output=True, text=True, timeout=120,
+		)
+		assert lineage.returncode == 0, lineage.stdout + lineage.stderr
+		return {
+			"calls": calls_log.read_text(encoding="utf-8").splitlines(),
+			"env": exported,
+			"update_out": update.stdout,
+			"lineage_out": lineage.stdout,
+		}
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _jq_missing(test_name: str) -> bool:
+	"""Return True (and skip) when jq is unavailable; the step scripts need it."""
+	if shutil.which("jq") is not None:
+		return False
+	message = f"{test_name}: jq not installed; behavioural status-sync test skipped"
+	if "pytest" in sys.modules:
+		import pytest
+
+		pytest.skip(message)
+	print(f"SKIP {message}")
+	return True
+
+
+def _label_calls(result: dict) -> list[str]:
+	return [c for c in result["calls"] if c.startswith("label ")]
+
+
+def _close_calls(result: dict) -> list[str]:
+	return [c for c in result["calls"] if c.startswith("close ")]
+
+
+def _finalize_calls(result: dict) -> list[str]:
+	return [c for c in result["calls"] if c.startswith("finalize ")]
+
+
+def test_non_default_merge_with_refs_and_comment_url_leaves_issue_untouched() -> None:
+	"""Incident shape of PR #5649 (#5776): Refs #N plus a comment URL, merged into a project branch."""
+	if _jq_missing("test_non_default_merge_with_refs_and_comment_url_leaves_issue_untouched"):
+		return
+	result = _run_status_sync(
+		merged=True,
+		base_ref="claude/implement-plan-x",
+		default_branch="main",
+		head_ref="claude/implement-plan-x",
+		body=(
+			"Refs #4867\n"
+			"See https://github.com/o/r/issues/4867#issuecomment-5908534539 for context."
+		),
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert '"reason":"no_linked_issues"' in result["lineage_out"], result["lineage_out"]
+
+
+def test_non_default_merge_with_closing_ref_does_not_label_or_finalize() -> None:
+	if _jq_missing("test_non_default_merge_with_closing_ref_does_not_label_or_finalize"):
+		return
+	result = _run_status_sync(
+		merged=True,
+		base_ref="claude/implement-plan-x",
+		default_branch="main",
+		closing_nodes=[_issue_node(12)],
+		classify_nodes=[_issue_node(12)],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert result["env"].get("LINEAGE_FINALIZE_ISSUE_NUMBERS", "") == ""
+	assert result["env"].get("LINKED_ISSUE_NUMBERS", "").strip() == "12"
+	assert "issue #12 labels, state and lineage left unchanged" in result["update_out"]
+	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
+
+
+def test_managed_child_integration_merge_still_labels_closes_and_finalizes() -> None:
+	if _jq_missing("test_managed_child_integration_merge_still_labels_closes_and_finalizes"):
+		return
+	managed = _issue_node(34, labels=["ai:orchestrator-managed"])
+	result = _run_status_sync(
+		merged=True,
+		base_ref="orchestrator/project-9",
+		default_branch="main",
+		head_ref="ai/issue-34",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == ["label 34 ai:merged"], result
+	assert _close_calls(result) == ["close 34"], result
+	finalize = _finalize_calls(result)
+	assert len(finalize) == 1 and "--issue-number 34" in finalize[0], finalize
+	assert "--final-state merged" in finalize[0], finalize
+
+
+def test_managed_child_non_integration_merge_leaves_issue_untouched() -> None:
+	"""A managed child merged into a branch that is not its integration branch is no completion."""
+	if _jq_missing("test_managed_child_non_integration_merge_leaves_issue_untouched"):
+		return
+	managed = _issue_node(
+		35,
+		labels=["ai:orchestrator-managed"],
+		body="- Integration branch: `orchestrator/project-9`",
+	)
+	result = _run_status_sync(
+		merged=True,
+		base_ref="claude/implement-plan-x",
+		default_branch="main",
+		head_ref="ai/issue-35",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
+
+
+def test_managed_child_other_project_branch_merge_leaves_issue_untouched() -> None:
+	"""A declared integration branch wins over the orchestrator/project-* prefix rule."""
+	if _jq_missing("test_managed_child_other_project_branch_merge_leaves_issue_untouched"):
+		return
+	managed = _issue_node(
+		37,
+		labels=["ai:orchestrator-managed"],
+		body="- Integration branch: `orchestrator/project-9`",
+	)
+	result = _run_status_sync(
+		merged=True,
+		base_ref="orchestrator/project-10",
+		default_branch="main",
+		head_ref="ai/issue-37",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
+
+
+def test_managed_child_declared_custom_integration_merge_completes() -> None:
+	"""A managed child merged into the custom integration branch its body declares completes."""
+	if _jq_missing("test_managed_child_declared_custom_integration_merge_completes"):
+		return
+	managed = _issue_node(
+		36,
+		labels=["ai:orchestrator-managed"],
+		body="**Orchestrator metadata**\n- Integration branch: `release/integration-2`\n",
+	)
+	result = _run_status_sync(
+		merged=True,
+		base_ref="release/integration-2",
+		default_branch="main",
+		head_ref="ai/issue-36",
+		closing_nodes=[managed],
+		classify_nodes=[managed],
+	)
+	assert _label_calls(result) == ["label 36 ai:merged"], result
+	assert _close_calls(result) == ["close 36"], result
+	assert len(_finalize_calls(result)) == 1, result
+
+
+def test_default_branch_merge_with_fixes_labels_closes_and_finalizes() -> None:
+	if _jq_missing("test_default_branch_merge_with_fixes_labels_closes_and_finalizes"):
+		return
+	for default in ("trunk", "main"):
+		result = _run_status_sync(
+			merged=True,
+			base_ref=default,
+			default_branch=default,
+			body="Fixes #56",
+			classify_nodes=[_issue_node(56)],
+		)
+		assert _label_calls(result) == ["label 56 ai:merged"], (default, result)
+		assert _close_calls(result) == ["close 56"], (default, result)
+		finalize = _finalize_calls(result)
+		assert len(finalize) == 1 and "--issue-number 56" in finalize[0], (default, finalize)
+		assert "--final-state merged" in finalize[0], (default, finalize)
+
+
+def test_unmerged_close_keeps_closed_label_close_and_lineage() -> None:
+	if _jq_missing("test_unmerged_close_keeps_closed_label_close_and_lineage"):
+		return
+	result = _run_status_sync(
+		merged=False,
+		base_ref="feature-x",
+		default_branch="main",
+		closing_nodes=[_issue_node(78)],
+		classify_nodes=[_issue_node(78)],
+	)
+	assert _label_calls(result) == ["label 78 ai:closed"], result
+	assert _close_calls(result) == ["close 78"], result
+	finalize = _finalize_calls(result)
+	assert len(finalize) == 1 and "--final-state closed" in finalize[0], finalize
+
+
+def test_tracking_issue_never_labelled_closed_or_lineage_finalized() -> None:
+	"""Tracking issues stay poller-owned on every completion path, lineage included."""
+	if _jq_missing("test_tracking_issue_never_labelled_closed_or_lineage_finalized"):
+		return
+	tracking = _issue_node(90, labels=["ai:orchestrator-tracking"])
+	for merged in (True, False):
+		result = _run_status_sync(
+			merged=merged,
+			base_ref="main",
+			default_branch="main",
+			closing_nodes=[tracking],
+			classify_nodes=[tracking],
+		)
+		assert _label_calls(result) == [], (merged, result)
+		assert _close_calls(result) == [], (merged, result)
+		assert _finalize_calls(result) == [], (merged, result)
+		assert result["env"].get("LINEAGE_FINALIZE_ISSUE_NUMBERS", "") == "", (merged, result)
+		assert '"reason":"non_completion_merge"' in result["lineage_out"], (merged, result["lineage_out"])
+
+
+def _extract_refs(text: str) -> str:
+	proc = subprocess.run(
+		[
+			"bash",
+			"-c",
+			'source "$1" >/dev/null 2>&1; extract_repo_scoped_issue_refs_from_text o/r "$2"',
+			"_",
+			str(GH_HELPERS),
+			text,
+		],
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert proc.returncode == 0, proc.stderr
+	return proc.stdout.strip()
+
+
+def test_extract_helper_ignores_fragment_urls_but_keeps_issue_links() -> None:
+	cases = {
+		"https://github.com/o/r/issues/4867#issuecomment-5908534539": "",
+		"o/r/issues/9#discussion_r1": "",
+		"https://github.com/o/r/issues/9?view=plain#issuecomment-1": "",
+		"[x](https://github.com/o/r/issues/9#issuecomment-1)": "",
+		"https://github.com/o/r/issues/9": "9",
+		"o/r/issues/9.": "9",
+		"Fixes #9": "9",
+		"Refs #9": "",
+	}
+	for text, expected in cases.items():
+		assert _extract_refs(text) == expected, (text, expected)
+
+
+def test_completion_gate_uses_event_default_branch_without_run_interpolation() -> None:
+	text = _workflow_text()
+	update_step = _step_script("Update linked issue labels when PR closes")
+	lineage_step = _step_script("Finalize linked issue lineage state")
+
+	assert "PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in text
+	assert '"${PR_BASE_REF}" = "main"' not in text
+	assert "${{" not in update_step and "github.event.repository.default_branch" not in update_step, (
+		"The default branch must reach the script only through env:"
+	)
+	assert 'REPO_DEFAULT_BRANCH="${PR_DEFAULT_BRANCH:-}"' in update_step
+	assert 'done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS}"' in lineage_step
+	non_completion_pos = lineage_step.find("non_completion_merge")
+	helpers_ready_pos = lineage_step.find('MEMORY_HELPERS_READY:-0')
+	assert non_completion_pos != -1 and helpers_ready_pos != -1
+	assert non_completion_pos < helpers_ready_pos
+
+
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
 	test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas()
@@ -387,4 +849,16 @@ if __name__ == "__main__":
 	test_merged_alert_fallback_preserves_managed_label_or_body_detection()
 	test_orchestrator_tracking_issues_are_skipped_in_label_close_loop()
 	test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge()
+	test_merged_pr_counts_only_for_default_or_declared_integration_branch()
+	test_non_default_merge_with_refs_and_comment_url_leaves_issue_untouched()
+	test_non_default_merge_with_closing_ref_does_not_label_or_finalize()
+	test_managed_child_integration_merge_still_labels_closes_and_finalizes()
+	test_managed_child_non_integration_merge_leaves_issue_untouched()
+	test_managed_child_other_project_branch_merge_leaves_issue_untouched()
+	test_managed_child_declared_custom_integration_merge_completes()
+	test_default_branch_merge_with_fixes_labels_closes_and_finalizes()
+	test_unmerged_close_keeps_closed_label_close_and_lineage()
+	test_tracking_issue_never_labelled_closed_or_lineage_finalized()
+	test_extract_helper_ignores_fragment_urls_but_keeps_issue_links()
+	test_completion_gate_uses_event_default_branch_without_run_interpolation()
 	print("PASS")
