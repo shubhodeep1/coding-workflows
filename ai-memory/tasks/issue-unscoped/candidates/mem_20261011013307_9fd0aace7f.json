@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md \"Stable log prefixes (contractual)\" section (around line 2388 onward) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: `MERGE_BASE_SYNC_MARKER` is emitted but missing from the contractual stable log-prefix registry, so workflow-log-analysis tooling may fail to detect it.\n  WHY: The registry is the canonical anchor for workflow-log-analysis and API-hygiene reporting; severity differed (MAJOR vs NIT), so the higher severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md / agents.d/7084-freshness-sync-fast-path.md | severity=MAJOR | confidence=4\n  PROBLEM: The new `_pr_base_sync_marker_post` in `scripts/pr_checks_lib.sh:745,753,755` emits `MERGE_BASE_SYNC_MARKER` outcomes, but the prefix is not registered in the contractual \"Stable log prefixes (contractual)\" section.\n  WHY: Workflow-log-analysis greps over the centralized registry, so a prefix only mentioned inline under \"Isolated Codex agents\" may be missed by the report's stable-prefix filtering.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.md | severity=NIT | confidence=4\n  PROBLEM: `MERGE_BASE_SYNC_MARKER` is emitted by `scripts/pr_checks_lib.sh:_pr_base_sync_marker_post` (lines 745, 753, 755) but is not enumerated in the contractual log-prefix list.\n  WHY: Workflow-log-analysis greps are anchored on the central list, so a future regen could miss the prefix.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh | severity=NIT | confidence=4\n  PROBLEM: The new stable log prefix `MERGE_BASE_SYNC_MARKER` is emitted on three outcome paths but is not registered in the contractual registry; agents.md's \"Stable log prefixes (contractual)\" section has neither a `- \\`MERGE_BASE_SYNC_MARKER\\`` bullet nor a `LOG_PREFIX.name=MERGE_BASE_SYNC_MARKER` line, and the PR's agents.d fragment targets \"Isolated Codex agents\" instead, so the prefix never reaches the registry even after `assemble_agents.py` folds it.\n  WHY: The section's contract states workflow-log-analysis and API-hygiene reporting anchor on that central list; an unregistered prefix can be silently dropped or missed by a future log-analysis regen, and a later rename would not be flagged as breaking.\n=== END FINDINGS FROM z-ai_glm-5_3-flash",
+  "fingerprint": "cd2990d8f209433a767b44f667023574bb1c620f9753474a14229c7136f51bed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7108,
+    "run_id": "38100465907",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38100465907",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011013307_9fd0aace7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7108,
+    "run_id": "38100465907"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T01:33:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
