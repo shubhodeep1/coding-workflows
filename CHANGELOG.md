@@ -1731,6 +1731,49 @@ When the `ai:validated` label is missing, the poller falls back to the conclusio
 
 What this means for consumer repos: the updated `ai-validate.yml` wrapper arrives with the next workflow sync. Until then, a lost `ai:validated` label is no longer recovered from an unmarked successful run; the project waits for the label or the next validation cycle instead of completing on unproven evidence.
 
+- **Activation verification no longer reports tracked symlinks as missing.** The verifier now tells the model which symbolic links the repository tracks, so a link such as `workflow-templates/CLAUDE.md` is no longer filed as an activation gap.
+
+The activation verifier's model reads a read-only snapshot of the merged checkout. That snapshot leaves out symbolic links, and so does its synthetic git history, so the model never saw `workflow-templates/CLAUDE.md -> ../CLAUDE.md`. After PR #6435 it opened #6561 asking for a link that was already committed. `scripts/activation_verify.sh` now lists the tracked symlinks on the host from git objects, without following any link, and adds them to the context the model gets as `tracked_symlinks` (path, target, and `target_exists`, which is false for a link whose target is not a tracked file or directory, so a dangling link can still be reported). Both copies of `prompts/mode-activation-verify.txt` tell the model the snapshot is filtered and that a listed path is never missing. The sandbox's isolation is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New context keys | `tracked_symlinks`, `tracked_symlinks_truncated` |
+| Links listed | at most 200; paths and targets over 1,024 bytes, not UTF-8, or with control characters are dropped |
+| Extra GitHub API calls | none (local git only) |
+| On a git failure | an empty list and `::warning::ACTIVATION_VERIFY tracked_symlinks unavailable reason=git_failed\|parse_failed`; verification goes on as before |
+
+### For contributors
+
+Tests: the `test_tracked_symlinks_*` cases and `test_prompt_tells_model_snapshot_omits_symlinks` in `tests/test_activation_verify.py`.
+
+- **The merged-PR guard now checks PR state live for every push.** Before, a `git push` or a GitHub MCP push could be allowed by PR state the guard had cached up to 300 seconds earlier. If the branch's open PR merged in that time, the push went through to a branch no open PR tracked any more. A cache file planted in the temp directory could do the same.
+
+A push now never reads the cache. It makes one live lookup per branch per guarded command, and a `git commit && git push` in one command still costs one call. If that lookup fails, the push follows CLAUDE.md §21.C (block when git history shows stranded work, otherwise ask for confirmation) and never falls back to cached data. A bare `git commit` may still be allowed from the cache, because nothing reaches origin until a push re-checks. Consumer repos get the change with the next `@stable` sync of `.claude/hooks/pr_merge_status_guard.py`.
+
+What this means for operators: a push right after a PR merges is blocked instead of slipping through, and a push while GitHub is unreachable asks for confirmation even when the cache shows an open PR.
+
+- **This repository's live merged-PR guard hook matches the copy consumer repos receive again, so the stable release gate no longer fails on it.** `.claude/hooks/pr_merge_status_guard.py` had fallen behind `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, and `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical`, which the release gate's Claude asset tests run, failed.
+
+The live copy is now byte-identical to the template. Interactive sessions in this repository therefore check `git` commands in a heredoc piped into a shell reader (`cat <<'EOF' | bash`). They treat `|&` as a pipe like `|`, and they keep every line visible when a heredoc delimiter cannot be read in full (`<<EOF-1`, `<<\EOF`). Wrappers such as `env` or `timeout` count only through the command they run. Consumers already have this version through the `.claude/` sync, so nothing changes for them. Activation verification of #6605 also reported `workflow-templates/CLAUDE.md` as missing. That path is a tracked symlink to `../CLAUDE.md`, and the sandbox snapshot the verifier read leaves symlinks out, so the report was a false positive and the file is unchanged.
+
+What this means for operators: the stable release is no longer blocked by guard drift, and this repository's sessions now ask or block on the same git commands that consumer sessions already do.
+
+- **The merged-PR commit guard now checks Git commands run through a shell wrapper.** Before this fix, `bash -c 'git push origin HEAD:<branch>'` pushed to a branch whose pull request had already merged, and the guard did not check it at all. Security finding `merged-pr-guard-misses-wrapped-git` (#6558, re-issued as #6755 after its pipeline PR could not merge).
+
+Both copies of `pr_merge_status_guard.py` (`workflow-templates/.claude/hooks/` and this repository's `.claude/hooks/`) now parse the script given to `bash`, `sh`, `zsh` or `dash` with `-c`, the arguments of `eval`, and `$(...)`, backtick and `<(...)` bodies, up to three levels deep. Each Git commit or push found there gets the normal merged-PR check, so it is blocked on a merged branch and allowed on an open one. When the wrapped text cannot be read and could run a Git write, the guard asks for confirmation: for example `eval "$x"`, `bash -c "$CMD"`, an unterminated `$(`, or nesting deeper than three levels. Heredoc commit messages written as `git commit -m "$(cat <<'EOF' ... EOF)"` are still read as a single commit. Prefix wrappers such as `sudo`, `timeout` and `xargs`, and piping a script into a shell, are still not inspected.
+
+What this means for operators: interactive sessions here and in consumer repositories (after their next template sync) can no longer get past the merged-PR guard by wrapping a push in `bash -c` or `eval`. A wrapped Git write the guard cannot read now shows a confirmation prompt.
+
+- **The merged-PR guard now checks Git writes inside a nested shell that reads its script from a heredoc.** After #6777, `bash -c "bash <<'EOF' ... git push ... EOF"` still passed unchecked because inner scripts lost their heredoc bodies before the Git scan; the reviewers of #6777 found it and the sandboxed editor could not fix a host-only file.
+
+Both copies of `pr_merge_status_guard.py` keep heredoc bodies at every wrapper depth and let the segment parser drop only data heredocs, the same rule the top level already used, so a nested shell fed by a heredoc gets the normal merged-PR check while `git commit -F - <<'EOF'` messages inside a wrapper still read as one commit.
+
+What this means for operators: wrapping a push in a heredoc-fed inner shell no longer bypasses the guard in interactive sessions; consumer repositories pick the change up with their next template sync.
+
+- **The merged-PR guard no longer treats a data heredoc inside a shell wrapper as a Git write.** After #6791, `bash -c "python3 <<'EOF' ... git push ... EOF"` made the guard's subcommand scan report a push that would never run, so a Bash call combining such a heredoc with an allowlisted API write was wrongly blocked as "API write plus git push in one call".
+
+Both copies of `pr_merge_status_guard.py` now drop data heredoc bodies before the subcommand scan, the same step the invocation walker already took, so the two scans agree at every wrapper depth: shell-fed heredocs are still checked, data heredocs are ignored.
+
 ### For contributors
 
 `has_active_validation_run` still counts any in-progress validation run in the repository, so another project's run can delay a dispatch; it cannot produce a verdict, so it is unchanged here. Tests: the `test_validation_run_*` cases in `tests/test_orchestrate_poll_process.py`.
@@ -4176,6 +4219,89 @@ The head-ref dispatch existed so the duplicate-run guards could see sweep runs (
 | New calls in `check_in_status.py` (`--hand-back`, and `--pr N`'s stuck check) | 1 REST read of `internal-review.yml` dispatch runs, only when no head-branch run was found |
 
 What this means for operators: sweep-dispatched review runs now show `main` as their branch in the Actions list, with the PR in the run name (`Internal: AI Review & Autofix [pr:<N>]`). Pull request and push runs keep their usual names. Nothing changes for consumer repos.
+
+- Require a trusted issue author, an exact `files_touched` entry, and `ALLOW_WORKFLOW_EDITS=true` for implement commits touching automation paths. Missing grants now block `.github/`, `.claude/`, `scripts/`, `prompts/`, and `workflow-templates/` changes even when the general scope guard is disabled. Ordinary edits retain their existing scope behavior; blocked issues need their exact grant corrected and `ai:scope-blocked` removed before redispatch.
+
+- **Release diagnostics no longer expose checkout credentials in Actions logs.** The checkout probe prints Git configuration key names without values, and the PAT-backed release job no longer runs the probe.
+
+- **API-write permissions now require confirmation outside session-owned Cloudflare Worker scripts.** DigitalOcean writes always prompt; Cloudflare DNS, zone, route, secret and other account operations prompt too.
+
+Only canonical Worker script writes whose account ID matches `FUNTOKEN_IO_CF` or `FT_GAMES_CF` retain the silent path. This ships to consumer repos on their next `@stable` sync. The hook does not inspect request bodies: a Worker upload or settings update can still declare a secret binding in its body. Refs #3576.
+
+- **Once the security-pass `keep_fixing` round cap is spent, a remaining `keep_fixing` decision now fails the project instead of accepting the finding.** Security finding #6539 (`security-pass-forced-waiver`, high) is closed.
+
+`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default `2`) bounds how many exhaustion-judge rounds may grant another fix cycle. Past the cap, `security_pass_exhaustion_judge` in `scripts/orchestrate_poll_process.sh` rewrote every `keep_fixing` decision to `accept_with_followup`, so a finding the judge wanted fixed, including a high-severity one, was recorded as a waiver, the security pass was marked passed, and the project could merge into the default branch with the finding open. The rewrite now targets `fail`: the round posts the judge comment and the project terminalizes as `ai:security-pass-failed`, with no waiver rows or advisory follow-ups, including for findings the judge accepted in the same verdict. The cap still stops the unbounded fix loop from project #3965.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Findings accepted by the cap | 0 (was: every `keep_fixing` decision past the cap) |
+| New GitHub API calls | 0 |
+| New state fields or env vars | 0 |
+
+What this means for operators: a project that used to complete at the cap now parks in `ai:security-pass-failed`. It recovers through the unblock judge or the engine-change auto-reset without a human, or through `/re-security-pass` and `/security-pass-waive <finding_id>`. The log line `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED` keeps its fields; the justification prefix now reads `[keep_fixing capped after <c> judge round(s); converted to fail — needs a fix or a human waiver]`. The judge prompt now tells the judge to use `fail` when `keep_fixing` is no longer available and it cannot accept a finding. A judge's own `accept_with_followup` decision is unchanged.
+
+- **The unblock judge no longer waives security findings with a follow-up.** A blocked `ai:security` issue could get `accept_with_followup`, which opened an unlabelled follow-up issue and posted `/approved` on the finding. That verdict is now left off the judge's menu for `ai:security` issues, and if a model returns it anyway it is refused and the issue stays open and blocked. To split a security finding, the judge uses `reissue`, which carries the finding marker and the `ai:security` label onto the replacement. In an orchestrator project, the re-issued fix-up now also carries the finding marker and the `ai:security` label. A project security issue with no valid finding marker is no longer split, and stays open with a warning.
+
+- **The release workflows now accept only an exact `refs/heads/stable` dispatch, and only for a commit in `stable`'s history.**
+
+`mark-stable.yml` and `test-and-mark-stable.yml` used to put `${{ github.ref_name }}` straight into the shell of their `source` job. A writer could dispatch from a branch named `$(echo${IFS}stable)`: the shell expanded the name, the check passed, and the release job then checked out that branch's commit with `GH_PAT` and ran its scripts. The ref now reaches the shell only through an environment variable and must equal `refs/heads/stable`. This also rejects a dispatch from the `stable` tag. A new `Verify dispatched commit is on stable` step then confirms through the API, without checking anything out, that the dispatched commit is the `stable` tip or an ancestor of it. It fails closed with `RELEASE_UNTESTED_HEAD` otherwise.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Accepted release ref | `refs/heads/stable` only |
+| API reads added per release dispatch | 1, or 2 when the branch has moved since dispatch |
+| `source` job `timeout-minutes` | 3 (was 1) |
+
+What this means for operators: `promote-main-to-stable.yml` and `auto-release-stable.yml` now dispatch with `--ref refs/heads/stable`. Use the same form for a manual release (`gh workflow run test-and-mark-stable.yml --ref refs/heads/stable`). `gate_only` runs still accept any ref and never release. If you edit the workflow file itself on your own branch, these in-file checks can be bypassed; branch protection on `stable` is still required to close that path.
+
+- **The release gate now runs its smoke tests only against this repository or a repository listed in `.github/ai/smoke_test_repos.json` on the default branch.** Security finding `smoke-target-cross-repo-write` (high) is closed. Refs #3576.
+
+`test-and-mark-stable.yml` accepted any `test_repo` that looked like `owner/repo`, and seven of its jobs then used `GH_PAT` to create issues, labels, comments, file commits and workflow dispatches in that repository. A new `Validate smoke-test target repository` step in the `source` job, which every one of those jobs depends on, now stops the run first. An empty `test_repo` or this repository's own name (any letter case) passes without an API call. Any other value must be listed in `.github/ai/smoke_test_repos.json`, read from the default branch rather than the dispatched ref, because `gate_only` runs accept any ref. A missing, unreadable or malformed allowlist fails the run. The step reads the file with `github.token`, not `GH_PAT`. The value the orchestrator poller takes from a tracking issue's `test repo:` metadata line goes through the same check.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Repositories a dispatcher can make the gate write to | this one, plus the allowlist (was: any repository `GH_PAT` reaches) |
+| Allowlist entries shipped | 0 |
+| New GitHub API calls | 1 contents read, only for a `test_repo` that is not this repository |
+
+What this means for operators: if you run the release gate against another repository, add it to `.github/ai/smoke_test_repos.json` on `main` through a pull request first. Otherwise the run fails in `source` with `SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=not_listed`. Runs that leave `test_repo` empty are unchanged. The token itself is still `GH_PAT`: a short-lived token scoped to the target repository needs a GitHub App credential this repository does not have.
+
+- **The unblock judge's model can no longer close or abandon a blocked item or project.** Closure now happens only after the fixed round and time limits, and only after the judge has re-read the item and confirmed it is still blocked.
+
+The judge reads public issue and PR comments as evidence. Before this change, `close` was on its menu from the first round, so a comment that talked the model into choosing it could get a blocked issue closed, or a failed project abandoned, without its failure ever being fixed. `scripts/unblock_ledger.py` now offers `close` only once a deterministic terminal condition holds, and refuses a `close` verdict on any decision without one, even when that decision lists it. `scripts/unblock_judge.sh` re-reads the item just before it records a close, and stops without posting a verdict if the item was closed, unblocked, or moved to a different stop while the model ran, or if the read fails.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `close` offered when | item cap (2 rounds), project cap, 24 hours still blocked after the last round, or no other verdict left |
+| `close` from the model before that | refused (`reason=invalid_verdict`); the item waits for the next round |
+| Extra GitHub API calls | one issue read per run, only when closing |
+| New log reasons | `block_state_changed` (`detail=closed\|unblocked\|stop_changed`), `block_state_recheck_unavailable` |
+
+What this means for consumer repos: nothing to configure. Blocked items stay with the judge for its remaining rounds instead of being closed on the first one.
+
+### For contributors
+
+`prompts/mode-judge-unblock.txt` no longer lists `close` in the model's output schema. Tests: the close and terminal cases in `tests/test_unblock_judge.py`.
+
+- **The workflow failure heal intake now checks which repository a report really came from.** A report that names another registered repository as its source is rejected before anything is filed.
+
+Until now the intake only checked that a report's `source_repo` was in `.github/ai/consumer_repos.json`. Anything able to send the `repository_dispatch` could claim to be any registered repository and get a heal issue opened from made-up evidence (security finding `heal-dispatch-source-spoofing`). Both reporters now request a GitHub Actions OIDC token, audience `coding-workflows-heal-report`, and send it as `client_payload.report_identity`. The intake checks the token's signature against GitHub's JWKS. It also requires that the token names the claimed repository, comes from this repository's own reporter workflow (`workflow_failure_heal.yml` or `review_autofix.yml`), and matches the reporting run. It then confirms through the GitHub API that the claimed issue or pull request, the label and the failed runs all belong to that repository. For a label escalation, runs from elsewhere or runs that did not fail are dropped before any log is read, and a report left with none of the runs it claimed is rejected. Its title, link and body excerpt are taken from the fetched issue or pull request rather than the report, and an unauthenticated report's comments excerpt is dropped. A review/autofix report gets the same treatment from its fetched pull request. Phase, review/autofix and release-run reports keep their runs with the existing provenance gate, which already checks the run's repository, workflow, failure and issue or pull request link.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API reads per report | 1 issue or pull request read; 1 events or compare read only when the label is gone or the PR head moved |
+| Extra run reads | 0 (the existing per-run jobs read is made once and reused) |
+| New dependencies | 0 (RS256 is verified with the Python standard library) |
+
+What this means for operators: the consumer `ai-workflow-failure-heal.yml` wrapper now grants `id-token: write`, and it arrives with the next workflow sync. Until a consumer syncs, its reports carry no token. Those reports are still accepted once the binding checks pass, with a Telegram WARNING, while the new `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` variable is `false` (the default). Set it to `true` once every consumer has synced. Clarify, plan and implement failure reports stay accepted when it is `true`: their `heal-report` job runs with `permissions: {}` and cannot request a token, and the provenance gate binds them instead. `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` (default 3600) bounds how old a token may be when the intake gets to it. A rejected report logs `WORKFLOW_HEAL report_auth=rejected reason=<reason>`, sends a Telegram WARNING, and files nothing.
+
+### For contributors
+
+The phase reporter also requests an identity and attaches it when its job is granted `id-token: write`. `scripts/workflow_failure_heal.py` gains `request-report-identity`, `extract-report-identity`, `verify-report-identity` and `bind-report`. `wrap-dispatch` gains `--report-identity-file`; without it the dispatch body is byte-identical to before. The intake's materialize step now reads `client_payload` from `GITHUB_EVENT_PATH` instead of an env binding, so the token is never echoed in the step's env block, and it hands the intake only the token's state. `WORKFLOW_HEAL_OIDC_JWKS_FILE` is a test hook (empty by default).
+
+- **The merged-PR guard still does not inspect Git writes wrapped in nested shell text.** Commits and pushes inside `bash -c`, `eval`, `$(…)`, backticks or process substitution are not checked yet.
+
+The fix is recorded as an operator step, `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP`, for a person to make in a trusted checkout, because the pipeline cannot edit the live `.claude/hooks/` copy. No hook behaviour changes, nothing reads the placeholder, and finding #6755 stays open. Refs #6755.
 
 ### For contributors
 

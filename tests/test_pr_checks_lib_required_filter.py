@@ -153,6 +153,22 @@ def test_required_failing_check_blocks() -> None:
 	assert rc == 1 and reason == "blocking", (rc, reason)
 
 
+def test_default_required_set_blocks_failing_ci_aggregate_job() -> None:
+	"""The built-in default must name the real CI check-run. The CI workflow
+	reports its jobs (`lint` is the aggregate that requires every other job to
+	succeed), never a check-run called `CI`, so a failing `lint` with every
+	other listed check green has to block under the default set (PR #6643
+	merged red on 2026-10-09 because it did not)."""
+	runs = _page([
+		{"name": "lint", "status": "completed", "conclusion": "failure"},
+		{"name": "static-checks", "status": "completed", "conclusion": "success"},
+		{"name": "Integration PR readiness check", "status": "completed", "conclusion": "success"},
+		{"name": "review / gate", "status": "completed", "conclusion": "success"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
 def test_pending_check_always_blocks_even_if_not_required() -> None:
 	"""Pending check-runs always block (an in-flight workflow must not race
 	the merge), regardless of whether they are in the required set."""
@@ -338,7 +354,7 @@ def test_required_names_uses_env_default_when_unset() -> None:
 	)
 	assert res.returncode == 0, res.stderr
 	assert res.stdout.strip() == (
-		"CI,Integration PR readiness check,"
+		"CI,lint,Integration PR readiness check,"
 		"Lint plan-archival completeness,"
 		"Lint PR body for auto-close keywords against orchestrator-tracking issues,"
 		"review / gate"

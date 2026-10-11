@@ -763,6 +763,37 @@ discover_tests()
 	fi
 }
 
+# Generated validation tests are untrusted (rendered from repository-controlled
+# .ai/validate.yml or written by a model). Run each one without any credential
+# the calling job may have exported: GitHub tokens, model/Telegram keys,
+# runner-command files, and git config injected via GIT_CONFIG_* (which can
+# carry the checkout's http.extraheader). Global/system git config is also
+# masked so a persisted credential helper cannot be reached. Defence in depth:
+# validate.yml additionally runs the whole harness as a separate unprivileged
+# user (scripts/validation_harness_sandbox.sh).
+run_test_without_credentials()
+{
+	local -a scrub_args=()
+	local var_name
+	while IFS= read -r var_name; do
+		case "${var_name}" in
+			# Synthetic app-test credentials the driver itself exports.
+			VALIDATION_TEST_USERNAME|VALIDATION_TEST_PASSWORD|VALIDATION_TEST_API_KEY|TEST_USERNAME|TEST_PASSWORD|TEST_API_KEY)
+				;;
+			GH_TOKEN|GH_PAT|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|OPENROUTER_API_KEY|TG_BOT_SECRET|TG_ADMIN_CHAT_ID|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY \
+			|GIT_CONFIG_*|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|ACTIONS_*|GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY \
+			|*_TOKEN|*_SECRET|*_PAT|*_API_KEY)
+				scrub_args+=("-u" "${var_name}")
+				;;
+		esac
+	done < <(compgen -e)
+	env "${scrub_args[@]}" \
+		GIT_CONFIG_NOSYSTEM=1 \
+		GIT_CONFIG_GLOBAL=/dev/null \
+		GIT_TERMINAL_PROMPT=0 \
+		bash "$@"
+}
+
 run_single_test()
 {
 	local test_file="$1"
@@ -787,7 +818,7 @@ run_single_test()
 	fi
 
 	set +e
-	bash "${test_file}" > "${test_log}" 2>&1
+	run_test_without_credentials "${test_file}" > "${test_log}" 2>&1
 	exit_code=$?
 	set -e
 

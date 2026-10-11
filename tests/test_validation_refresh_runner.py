@@ -22,6 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # helper (scripts/codex_isolated_exec.sh, read-only snapshot of the clone).
 ISOLATED_CODEX_PREFIX = ("bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "run", "--mode", "read-only")
 MODULE_PATH = REPO_ROOT / "scripts" / "validation_refresh_runner.py"
+# The consumer self-test runs only through the harness sandbox (separate
+# user, rootless Docker): provision once per runner, then selfcheck + run.
+SANDBOX_SCRIPT = str(REPO_ROOT / "scripts" / "validation_harness_sandbox.sh")
+SANDBOX_PROVISION_PREFIX = ("bash", SANDBOX_SCRIPT, "provision")
+SANDBOX_SELF_TEST_PREFIX = ("bash", SANDBOX_SCRIPT, "checked-run")
 
 spec = importlib.util.spec_from_file_location("validation_refresh_runner", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -184,7 +189,8 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
 			]
 		)
@@ -278,11 +284,13 @@ def test_process_repository_pipeline_failure_no_drift_is_red_not_error() -> None
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
 				PlannedCall(
-					("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh")),
+					SANDBOX_SELF_TEST_PREFIX,
 					returncode=1,
 					stderr="self test failed",
 				),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -320,7 +328,8 @@ def test_process_repository_no_changes_skips_pr_operations() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -355,7 +364,8 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -366,15 +376,30 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 		pipeline_commands = {
 			str(REPO_ROOT / "scripts" / "render_validation_templates.py"),
 			str(REPO_ROOT / "scripts" / "validation_lint.py"),
-			str(REPO_ROOT / "scripts" / "validate_driver.sh"),
 		}
 		expected_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
+		saw_self_test = False
 		for command, _cwd, _check, env_overrides in executor.seen:
 			if any(item in command for item in pipeline_commands):
 				assert env_overrides is not None
 				assert env_overrides.get("GH_TOKEN") == ""
 				assert env_overrides.get("GITHUB_TOKEN") == ""
 				assert env_overrides.get("LOG_DIR") == str(expected_log_dir)
+			if tuple(command[:3]) == SANDBOX_SELF_TEST_PREFIX:
+				saw_self_test = True
+				# selfcheck targets this (credential-holding) process.
+				assert command[3] == str(os.getpid())
+				assert command[4] == str(REPO_ROOT / "scripts" / "validate_driver.sh")
+				assert env_overrides is not None
+				assert env_overrides.get("GH_TOKEN") == ""
+				assert env_overrides.get("GITHUB_TOKEN") == ""
+				# The driver logs inside the sandbox copy; the helper copies
+				# them back outside the clone so drift detection is unchanged.
+				assert env_overrides.get("LOG_DIR") == "validation/logs"
+				assert env_overrides.get("VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST") == str(expected_log_dir)
+		assert saw_self_test
+		# The driver is never launched directly on the host.
+		assert all(command[:2] != ["bash", str(REPO_ROOT / "scripts" / "validate_driver.sh")] for command, *_ in executor.seen)
 		executor.assert_consumed()
 
 
@@ -404,7 +429,8 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=bootstrapped_untracked_status),
 			]
 		)
@@ -546,7 +572,8 @@ def test_discovery_dispatch_skips_when_dedup_hits() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -603,7 +630,8 @@ def test_discovery_dispatch_opens_seed_pr_when_manifest_missing() -> None:
 				# Drift monitoring pipeline (no manifest committed → bootstrap):
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -648,7 +676,8 @@ def test_discovery_dispatch_reports_agree_when_types_match() -> None:
 				# No PR — agree path skips push and gh pr create.
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -708,7 +737,8 @@ def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -752,7 +782,8 @@ def test_discovery_dispatch_records_dry_run_outcome_without_codex() -> None:
 				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -795,7 +826,8 @@ def test_discovery_dispatch_records_failed_when_codex_exhausts() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)

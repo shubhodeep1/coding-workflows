@@ -1,12 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl -q -sS -X PUT https://api.digitalocean.com/*)",
-      "Bash(curl -q -sS -X POST https://api.digitalocean.com/*)",
-      "Bash(curl -q -sS -X PATCH https://api.digitalocean.com/*)",
-      "Bash(curl -q -sS -X PUT https://api.cloudflare.com/*)",
-      "Bash(curl -q -sS -X POST https://api.cloudflare.com/*)",
-      "Bash(curl -q -sS -X PATCH https://api.cloudflare.com/*)",
+      "Bash(curl -q -sS -X PUT https://api.cloudflare.com/client/v4/accounts/*)",
+      "Bash(curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/*)",
+      "Bash(curl -q -sS -X PATCH https://api.cloudflare.com/client/v4/accounts/*)",
       "Edit",
       "Write",
       "Bash(git fetch *)",

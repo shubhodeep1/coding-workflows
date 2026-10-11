@@ -4,9 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
-COMPOSE_FILE="${COMPOSE_FILE:-out/docker-compose.test.yml}"
+_default_compose_file=out/docker-compose.test.yml
+COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"
 APP_SERVICE="${APP_SERVICE:-app}"
-CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/out/tests/_lib/import_audit.py}"
+_default_container_import_audit=/workspace/out/tests/_lib/import_audit.py
+CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-${_default_container_import_audit}}"
 
 echo "1..1"
 
