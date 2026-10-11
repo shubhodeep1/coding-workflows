@@ -97,10 +97,22 @@ ORIGIN_REFERENCE_PATTERNS = (
 	re.compile(r"Re-issued by the unblock judge from #([1-9][0-9]{0,9})\b"),  # unblock reissue
 	re.compile(r"<!--\s*ai:unblock-fixup:v1\s+item=([1-9][0-9]{0,9})\b"),  # unblock descope / operator_step
 	re.compile(r"^-\s*Replaces:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked re-issue footer
+	re.compile(r"^-\s*Source issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # implement-diagnose fix-up
+	re.compile(r"Accepted with this follow-up by the unblock judge \(#([1-9][0-9]{0,9})\)"),  # unblock accept_with_followup
+	re.compile(r"^-\s*Parent issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked merge_with_followup
 )
-# A review-blocked re-issue without an issue to replace names only its PR, so
-# its source cannot be checked: it gets no automation paths.
+# A review-blocked re-issue or follow-up whose metadata footer names no issue
+# names only its PR, so its source cannot be checked: it gets no automation
+# paths. The named-source line must sit in the same `---`-delimited block as
+# the last `- Type:` line of that kind (the pipeline-written footer); a match
+# in the model-written prose above it only adds a check, never names a source.
 ORIGIN_UNNAMED_PATTERN = re.compile(r"^-\s*Type:\s*review-blocked-reissue\s*$", re.MULTILINE)
+ORIGIN_FOOTER_KINDS = (
+	(ORIGIN_UNNAMED_PATTERN, re.compile(r"^-\s*Replaces:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+	(re.compile(r"^-\s*Type:\s*review-blocked-followup\b.*$", re.MULTILINE),
+		re.compile(r"^-\s*Parent issue:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+)
+ORIGIN_FOOTER_RULE = re.compile(r"^---\s*$", re.MULTILINE)
 ORIGIN_MAX_DEPTH = 4
 ORIGIN_MAX_ISSUES = 8
 ORIGIN_REASONS = ("untrusted_origin", "origin_unverified")
@@ -209,7 +221,18 @@ def origin_references(body: str) -> tuple[list[int], bool]:
 			number = int(match.group(1))
 			if number not in numbers:
 				numbers.append(number)
-	unnamed = bool(ORIGIN_UNNAMED_PATTERN.search(body)) and not ORIGIN_REFERENCE_PATTERNS[3].search(body)
+	unnamed = False
+	for type_pattern, named_pattern in ORIGIN_FOOTER_KINDS:
+		type_matches = list(type_pattern.finditer(body))
+		if not type_matches:
+			continue
+		last = type_matches[-1]
+		rules_before = [rule.end() for rule in ORIGIN_FOOTER_RULE.finditer(body, 0, last.start())]
+		block_start = rules_before[-1] if rules_before else 0
+		rule_after = ORIGIN_FOOTER_RULE.search(body, last.end())
+		block_end = rule_after.start() if rule_after else len(body)
+		if not named_pattern.search(body[block_start:block_end]):
+			unnamed = True
 	return numbers, unnamed
 
 
@@ -228,6 +251,8 @@ def fetch_issue_with_gh(repo: str, number: int) -> dict | None:
 				data = None
 			if isinstance(data, dict):
 				return data
+		if completed is not None and "HTTP 404" in (completed.stderr or ""):
+			break  # a missing source will not appear on retry; fail closed now
 		if attempt == 0:
 			time.sleep(2)
 	return None

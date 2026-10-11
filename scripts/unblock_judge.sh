@@ -48,7 +48,9 @@
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
-# the planned operations (at most about six writes). A failed project marker
+# the planned operations (at most about six writes). A scope re-grant also
+# reads the source issues a pipeline-authored item names (files_touched_scope_guard.py
+# --origin-repo: at most 8 issues, two attempts each). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,

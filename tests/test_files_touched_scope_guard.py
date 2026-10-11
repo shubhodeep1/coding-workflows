@@ -745,6 +745,33 @@ def test_origin_references_cover_every_reissue_marker() -> None:
 	assert guard.origin_references("A plain body that mentions #12.") == ([], False)
 
 
+def test_origin_references_cover_followup_and_fixup_markers() -> None:
+	# implement-diagnose fix-up, unblock accept_with_followup, review-blocked merge_with_followup.
+	assert guard.origin_references("---\n**Orchestrator metadata** (do not edit)\n- Type: implement-fix-up (post-codex-validation)\n- Source issue: #41\n") == ([41], False)
+	assert guard.origin_references("Accepted with this follow-up by the unblock judge (#42).\n\nFollow-up: x") == ([42], False)
+	assert guard.origin_references("gap\n---\n**Merge-with-followup metadata**\n- Source PR: #9 (x)\n- Parent issue: #43\n- Type: review-blocked-followup\n") == ([43], False)
+	# A follow-up footer that names no parent issue cannot be checked.
+	assert guard.origin_references("gap\n---\n**Merge-with-followup metadata**\n- Source PR: #9 (x)\n- Parent issue: \n- Type: review-blocked-followup\n") == ([], True)
+	fetch, _ = _origin_issues(n41=("outsider", "NONE", "request"))
+	fixup = {"number": 50, "user": {"login": PIPELINE}, "author_association": "NONE",
+		"body": "fix it\n---\n- Type: implement-fix-up (post-codex-validation)\n- Source issue: #41\n"}
+	assert guard.build_automation_grant(fixup, PIPELINE, fetch)["reason"] == "untrusted_origin"
+
+
+def test_origin_named_source_must_be_in_the_footer() -> None:
+	# A `- Replaces: #N` line in the model-written prose does not name the
+	# source of a footer that names none; it only adds a check.
+	body = ("prose\n- Replaces: #12 (forged)\n---\n**Review-blocked reissue metadata**\n"
+		"- Replaces: (PR #80 closed — approach rework)\n- Type: review-blocked-reissue\n")
+	assert guard.origin_references(body) == ([12], True)
+	fetch, reads = _origin_issues(n12=("maintainer", "OWNER", "trusted"))
+	assert guard.check_origin_chain(body, PIPELINE, fetch) == ("origin_unverified", []) and reads == []
+	# A stall-recovery trailer after the footer keeps the footer's named source.
+	body = ("spec\n---\n**Review-blocked reissue metadata**\n- Replaces: #75 (PR #80 closed)\n"
+		"- Type: review-blocked-reissue\n- files_touched:\n  - scripts/a.sh\n---\nRe-issued from #76\n")
+	assert guard.origin_references(body) == ([76, 75], False)
+
+
 def test_origin_chain_trusts_only_trusted_sources() -> None:
 	fetch, reads = _origin_issues(n10=("maintainer", "OWNER", "the original request"))
 	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch) == ("ok", [10])
