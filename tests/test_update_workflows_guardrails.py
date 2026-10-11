@@ -11,6 +11,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+
 
 UPDATE_WORKFLOWS_WF = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
 WORKFLOW_TEMPLATES_DIR = REPO_ROOT / "workflow-templates"
@@ -84,7 +87,7 @@ def test_install_profile_docs_and_agents_contracts() -> None:
 	assert "[`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt)" in readme
 	assert "Profile downgrades are non-destructive:" in readme
 
-	agents = AGENTS_MD.read_text(encoding="utf-8")
+	agents = _agents_text_with_fragments()
 	assert "## Workflow install profiles" in agents
 	assert "PROFILE.default=full" in agents
 	assert _agents_profile_line("core") in agents
