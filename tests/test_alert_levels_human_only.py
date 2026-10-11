@@ -37,11 +37,11 @@ HEAD_B = "b" * 40
 HARNESS_PROLOGUE = (
 	"set -euo pipefail\n"
 	"GITHUB_REPOSITORY=o/r\n"
-	'tg_send_msg() { printf \'%s\\t%s\\n\' "${2:-CRITICAL}" "$1" >> "${TG_LOG}"; }\n'
+	'tg_send_msg() { [ "${TG_SEND_FAIL:-false}" != true ] || return 0; printf \'%s\\t%s\\n\' "${2:-CRITICAL}" "$1" >> "${TG_LOG}"; printf 123; }\n'
 	'tg_notify() { tg_send_msg "$1" "${2:-CRITICAL}"; }\n'
 	'gh_retry() { "$@"; }\n'
 	# One log line per gh call: newlines inside a comment body become \\n.
-	'gh() { local gh_call="$*"; printf \'%s\\n\' "${gh_call//$\'\\n\'/\\\\n}" >> "${GH_LOG}"; }\n'
+	'gh() { local gh_call="$*"; printf \'%s\\n\' "${gh_call//$\'\\n\'/\\\\n}" >> "${GH_LOG}"; if [[ "${gh_call}" == *"alerted=1 -->"* ]] && [ "${GH_CONFIRM_FAIL:-false}" = true ]; then return 1; fi; printf \'{"id":55}\\n\'; }\n'
 	'_gh_url() { printf \'https://github.com/o/r/%s\' "$1"; }\n'
 )
 
@@ -179,7 +179,7 @@ def test_reported_auto_handled_alerts_are_debug():
 # ---------------------------------------------------------------------------
 
 
-def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool | str = True, login: str = "bot", write_fails: bool = False) -> tuple:
+def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool | str = True, login: str = "bot", write_fails: bool = False, send_fails: bool = False, confirmation_fails: bool = False) -> tuple:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	function = _extract_bash_function(script, "_standalone_conflict_count_attempt() {")
 	marker_constant = next(l for l in script.splitlines() if l.startswith("STANDALONE_CONFLICT_ATTEMPTS_MARKER="))
@@ -187,6 +187,8 @@ def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, 
 		marker_constant + "\n"
 		f"STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS={threshold}\n"
 		f"UNBLOCK_TRUSTED_LOGIN={login!r}\n"
+		f"TG_SEND_FAIL={'true' if send_fails else 'false'}\n"
+		f"GH_CONFIRM_FAIL={'true' if confirmation_fails else 'false'}\n"
 		"unblock_trusted_login() { printf '%s' \"${UNBLOCK_TRUSTED_LOGIN}\"; }\n"
 		"declare -A _STANDALONE_CONFLICT_ATTEMPTS_STATE=()\n"
 		"declare -A _STANDALONE_CONFLICT_STATE_LOADED=()\n"
@@ -216,8 +218,9 @@ def test_conflict_threshold_attempt_pages_once_and_patches_marker():
 	level, message = sends[0]
 	assert level == "WARNING"
 	assert "Standalone PR #7 is still in merge conflict after 3 automatic resolution attempt(s)" in message
-	assert len(calls) == 1 and calls[0].startswith("api repos/o/r/issues/comments/55 -X PATCH -f body=")
-	assert f"head={HEAD_A} attempts=3 alerted=1 -->" in calls[0]
+	assert len(calls) == 2 and all(call.startswith("api repos/o/r/issues/comments/55 -X PATCH -f body=") for call in calls)
+	assert f"head={HEAD_A} attempts=3 alerted=0 -->" in calls[0]
+	assert f"head={HEAD_A} attempts=3 alerted=1 -->" in calls[1]
 	assert "outcome=alerted" in out
 
 
@@ -232,6 +235,33 @@ def test_conflict_does_not_page_until_alert_marker_is_saved():
 	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", write_fails=True)
 	assert sends == [] and calls == []
 	assert "outcome=write_failed" in out
+
+
+def test_conflict_failed_telegram_delivery_leaves_marker_retryable():
+	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", send_fails=True)
+	assert sends == []
+	assert len(calls) == 1 and f"head={HEAD_A} attempts=3 alerted=0 -->" in calls[0]
+	assert "outcome=send_failed" in out
+	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|3|0")
+	assert len(sends) == 1 and sends[0][0] == "WARNING"
+	assert f"head={HEAD_A} attempts=4 alerted=1 -->" in calls[1]
+	assert "outcome=alerted" in out
+
+
+def test_conflict_confirmation_failure_retries_delivery_next_tick():
+	sends, calls, out = _conflict_harness(marker=f"55|bot|{HEAD_A}|2|0", confirmation_fails=True)
+	assert len(sends) == 1
+	assert len(calls) == 2 and "alerted=0 -->" in calls[0] and "alerted=1 -->" in calls[1]
+	assert "outcome=confirmation_failed" in out
+
+
+def test_conflict_threshold_one_creates_comment_before_confirming_delivery():
+	_require_jq()
+	sends, calls, out = _conflict_harness(marker="", threshold="1")
+	assert len(sends) == 1 and sends[0][0] == "WARNING"
+	assert len(calls) == 2 and calls[0].startswith("api repos/o/r/issues/7/comments -f body=")
+	assert calls[1].startswith("api repos/o/r/issues/comments/55 -X PATCH -f body=")
+	assert "outcome=alerted" in out
 
 
 def test_conflict_new_head_restarts_count():

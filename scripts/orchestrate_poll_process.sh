@@ -26395,16 +26395,18 @@ STANDALONE_CONFLICT_ATTEMPTS_MARKER="<!-- ai:standalone-conflict-attempts:v1 "
 # dispatch) for a conflicted standalone PR, keyed on its head commit. A
 # successful resolution pushes a new head, which restarts the count. When the
 # count reaches STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS on one head, sends a
-# single WARNING: the pipeline kept trying and the PR still conflicts.
+# WARNING after confirmation: the pipeline kept trying and the PR still
+# conflicts. A failed confirmation PATCH can result in a repeated warning.
 # State lives in one marker comment on the PR, read from the sweep's GraphQL
 # batch above (no extra read) and written with one PATCH (or one POST the
-# first time) per attempt; attempts only happen when a dispatch was tried, so
-# this adds at most one write per resolver run. Fails open: without the batch
+# first time) per attempt, plus a confirmation PATCH after Telegram delivers
+# the warning. Fails open: without the batch
 # data, a resolvable head SHA, or the pipeline's own login, it logs and
 # leaves the dispatch path unchanged. A marker from another author is ignored.
 _standalone_conflict_count_attempt() {
 	local pr="$1" head="$2" dispatch_rc="$3"
 	local raw comment_id="" author="" marker_head="" attempts="0" alerted="0" body
+	local created_comment="" alert_msg_id=""
 	if [ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" = "0" ]; then
 		echo "STANDALONE_CONFLICT_STUCK pr=${pr} outcome=skip reason=disabled"
 		return 0
@@ -26451,20 +26453,24 @@ _standalone_conflict_count_attempt() {
 	fi
 	attempts=$((attempts + 1))
 	local outcome="counted"
-	if [ "${attempts}" -ge "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" ] && [ "${alerted}" != "1" ]; then
-		alerted="1"
-		outcome="alerted"
-	fi
 	body="Automatic merge-conflict resolution attempts on \`${head:0:7}\`: ${attempts}.
 
 ${STANDALONE_CONFLICT_ATTEMPTS_MARKER}head=${head} attempts=${attempts} alerted=${alerted} -->"
 	if [ -n "${comment_id}" ]; then
 		gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -X PATCH -f body="${body}" >/dev/null 2>&1 || outcome="write_failed"
 	else
-		gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1 || outcome="write_failed"
+		created_comment="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f body="${body}" 2>/dev/null)" || outcome="write_failed"
+		comment_id="$(printf '%s' "${created_comment}" | jq -r '.id // empty' 2>/dev/null || true)"
 	fi
-	if [ "${outcome}" = "alerted" ]; then
-		tg_send_msg "Standalone PR #${pr} is still in merge conflict after ${attempts} automatic resolution attempt(s) on head ${head:0:7}. Resolve the conflicts by hand or close the PR."$'\n'"PR: $(_gh_url "pull/${pr}")" "WARNING" >/dev/null 2>&1 || true
+	if [ "${outcome}" = "counted" ] && [ "${attempts}" -ge "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" ] && [ "${alerted}" != "1" ]; then
+		alert_msg_id="$(tg_send_msg "Standalone PR #${pr} is still in merge conflict after ${attempts} automatic resolution attempt(s) on head ${head:0:7}. Resolve the conflicts by hand or close the PR."$'\n'"PR: $(_gh_url "pull/${pr}")" "WARNING" 2>/dev/null)" || true
+		if [ -z "${alert_msg_id}" ]; then
+			outcome="send_failed"
+		elif [[ "${comment_id}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -X PATCH -f body="${body%alerted=0 -->}alerted=1 -->" >/dev/null 2>&1; then
+			outcome="alerted"
+		else
+			outcome="confirmation_failed"
+		fi
 	fi
 	echo "STANDALONE_CONFLICT_STUCK pr=${pr} head=${head} attempts=${attempts} threshold=${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS} dispatch_rc=${dispatch_rc} outcome=${outcome}"
 }

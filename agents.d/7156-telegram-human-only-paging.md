@@ -12,7 +12,9 @@ stuck alert, not a page per attempt. The existing once-only helpers in
 - `_standalone_conflict_count_attempt`: one `WARNING` after
   `STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS` (default 3) resolution attempts on
   one PR head, counted in an `<!-- ai:standalone-conflict-attempts:v1 -->`
-  PR comment read from the sweep's GraphQL batch;
+  PR comment read from the sweep's GraphQL batch; the marker records
+  `alerted=1` only after Telegram returns a message ID, so failed sends retry
+  (a failed confirmation write can cause a duplicate page);
 - `_noop_gate_failure_alert`: one `ERROR` per PR head and force-merge gate,
   deduplicated by an `<!-- ai:noop-force-merge-gate-alert:v1 -->` PR comment;
 - `_merge_deferral_cap_alert`: one notice when `MAX_MERGE_DEFERRALS` is
@@ -25,7 +27,7 @@ pins the default, the helpers, and the ban on invalid level strings
 (`WARN`, `INFO`, …).
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
-- `STANDALONE_CONFLICT_STUCK` (`scripts/orchestrate_poll_process.sh`: `pr= head= attempts= threshold= dispatch_rc= outcome=counted|alerted|restart|skip|write_failed reason=`; a failed marker write does not page, so the next tick can retry)
+- `STANDALONE_CONFLICT_STUCK` (`scripts/orchestrate_poll_process.sh`: `pr= head= attempts= threshold= dispatch_rc= outcome=counted|alerted|restart|skip|write_failed|send_failed|confirmation_failed reason=`; failed writes or sends leave the marker retryable, while a failed confirmation can duplicate a page)
 - `NOOP_FORCE_MERGE_GATE_ALERT` (`scripts/orchestrate_poll_process.sh`: `pr= head= gate= outcome=alerted|skip reason=`)
 - `COMPREHENSIVE_RELEASE_DISPATCH_FAILED` (`scripts/orchestrate_poll_process.sh`: `tracking_issue= alerted=`)
 LOG_PREFIX.name=STANDALONE_CONFLICT_STUCK
