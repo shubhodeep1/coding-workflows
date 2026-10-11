@@ -851,6 +851,9 @@ def _run_poller(
 	# A coding-workflows origin skips the consumer artifact cleanup.
 	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
+	# Copy files_touched_scope_guard.py into the sandbox's verified support
+	# checkout (.codex-workflow-src/scripts/), where the poller resolves it.
+	support_guard_copy: bool = False,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -934,6 +937,10 @@ def _run_poller(
 			_make_poller_sandbox(sandbox, sandbox_origin_url)
 		else:
 			_make_poller_sandbox(sandbox)
+		if support_guard_copy:
+			support_scripts = sandbox / ".codex-workflow-src" / "scripts"
+			support_scripts.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(REPO_ROOT / "scripts" / "files_touched_scope_guard.py", support_scripts / "files_touched_scope_guard.py")
 		if mock_local_integration_content_conflict:
 			# The GitHub-side 409 alone does not make the local git merge conflict.
 			# Both branches must add different content at an admitted source path.
@@ -2346,9 +2353,12 @@ if args[0] == 'api':
 				sys.exit(p.returncode)
 			print(p.stdout, end='')
 		else:
-			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state,
+			issue_payload = {'body': issue.get('body', ''), 'state': issue_state,
 				'number': num, 'repository_url': 'https://api.github.com/repos/owner/repo',
-				'labels': [{'name': label} for label in issue.get('labels', [])]}))
+				'labels': [{'name': label} for label in issue.get('labels', [])]}
+			# Opt-in author fields (automation-path gate tests, #6838).
+			issue_payload.update(store.get('issue_authors', {}).get(m.group(1), {}))
+			print(json.dumps(issue_payload))
 		save()
 		sys.exit(0)
 
@@ -5611,6 +5621,167 @@ def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
 	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
 
 
+_AUTOMATION_GATE_PLAN = (
+	"Implementation Plan\n\n"
+	"1. Files likely to change\n"
+	"- `.github/workflows/plan.yml`\n"
+	"- `scripts/orchestrate_poll_process.sh`\n"
+	"- `tests/test_x.py`\n\n"
+	"2. Functions / modules\n"
+)
+_AUTOMATION_GATE_PLAN_NO_AUTOMATION = (
+	"Implementation Plan\n\n1. Files likely to change\n- `tests/test_x.py`\n- `README.md`\n\n2. Functions\n"
+)
+
+
+def _automation_gate_plan_comment(body: str = _AUTOMATION_GATE_PLAN) -> dict:
+	return {"body": body, "author_association": "OWNER", "user": {"login": "workflow-owner"}}
+
+
+def _automation_gate_marker_comment(issue_num: int, association: str = "OWNER") -> dict:
+	return {
+		"body": (
+			"**Automatic approval withheld.**\n\n"
+			f"<!-- ai:automation-path-plan-hold:v1 issue={issue_num} reason=automation_path_ungranted source=plan paths=W10= -->"
+		),
+		"author_association": association,
+		"user": {"login": "workflow-owner" if association == "OWNER" else "stranger"},
+	}
+
+
+def _automation_gate_body(granted: list[str]) -> str:
+	return "Do the thing.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in granted)
+
+
+def _run_managed_automation_gate(*, comments: list, granted: list[str] | None, env: dict[str, str]) -> dict:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1, "stall_recovery_count": 0})
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: comments},
+		issue_bodies={10: _automation_gate_body(granted or [])},
+		env_overrides=env,
+		support_guard_copy=True,
+		mock_store_extra={"issue_authors": {"10": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
+	)
+
+
+def _automation_gate_approved(result: dict, issue_num: int) -> bool:
+	return any(c["body"].startswith("/approved") for c in result["issues"][str(issue_num)]["comments"])
+
+
+def _automation_gate_holds(result: dict, issue_num: int) -> list[dict]:
+	return [c for c in result["issues"][str(issue_num)]["comments"] if "ai:automation-path-plan-hold:v1" in c["body"] and "source=poller" in c["body"]]
+
+
+def test_managed_auto_approve_automation_path_gate_off_by_default() -> None:
+	result = _run_managed_automation_gate(comments=[_automation_gate_plan_comment()], granted=None, env={})
+	assert _automation_gate_approved(result, 10)
+	assert _automation_gate_holds(result, 10) == []
+	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
+
+
+def test_managed_auto_approve_explicitly_disabled_gate_ignores_old_hold() -> None:
+	result = _run_managed_automation_gate(
+		comments=[_automation_gate_plan_comment(), _automation_gate_marker_comment(10)],
+		granted=[], env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
+	)
+	assert _automation_gate_approved(result, 10)
+	assert _automation_gate_holds(result, 10) == []
+	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
+
+
+def test_managed_auto_approve_automation_path_gate_holds_ungranted_plan() -> None:
+	result = _run_managed_automation_gate(
+		comments=[_automation_gate_plan_comment()],
+		granted=[".github/workflows/plan.yml"],
+		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "STALL_SKIP issue=10 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in combined_log
+	assert not _automation_gate_approved(result, 10)
+	holds = _automation_gate_holds(result, 10)
+	assert len(holds) == 1
+	assert "`scripts/orchestrate_poll_process.sh`" in holds[0]["body"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_managed_auto_approve_automation_path_gate_approves_granted_or_plain_plans() -> None:
+	granted = _run_managed_automation_gate(
+		comments=[_automation_gate_plan_comment()],
+		granted=[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
+		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	assert _automation_gate_approved(granted, 10)
+	assert _automation_gate_holds(granted, 10) == []
+	plain = _run_managed_automation_gate(
+		comments=[_automation_gate_plan_comment(_AUTOMATION_GATE_PLAN_NO_AUTOMATION)],
+		granted=None,
+		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	assert _automation_gate_approved(plain, 10)
+	assert "reason=automation_path_" not in plain["stdout"] + plain["stderr"]
+
+
+def test_managed_auto_approve_automation_path_gate_fails_closed_without_plan() -> None:
+	result = _run_managed_automation_gate(
+		comments=["routine comment"], granted=None, env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	assert "STALL_SKIP issue=10 reason=automation_path_check_unavailable phase=ai:awaiting-approval action=none" in result["stdout"] + result["stderr"]
+	assert not _automation_gate_approved(result, 10)
+
+
+def test_standalone_auto_approve_honours_trusted_plan_hold_marker() -> None:
+	stall_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+	def run(comments: list, granted: list[str]) -> dict:
+		state = _base_state(status="in_progress")
+		state["waves"][0]["issues"][0]["status"] = "merged"
+		return _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 700: ["ai:awaiting-approval"]},
+			issue_comments={700: [stall_state_comment, *comments]},
+			issue_bodies={700: _automation_gate_body(granted)},
+			mock_gh_issue_list_label_filter=True,
+			env_overrides={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"},
+			support_guard_copy=True,
+			mock_store_extra={"issue_authors": {"700": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
+		)
+
+	held = run([_automation_gate_plan_comment(), _automation_gate_marker_comment(700)], [".github/workflows/plan.yml"])
+	assert "STALL_SKIP issue=700 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in held["stdout"] + held["stderr"]
+	assert not _automation_gate_approved(held, 700)
+	assert len(_automation_gate_holds(held, 700)) == 1
+
+	granted = run(
+		[_automation_gate_plan_comment(), _automation_gate_marker_comment(700)],
+		[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
+	)
+	assert _automation_gate_approved(granted, 700)
+
+	untrusted = run([_automation_gate_plan_comment(), _automation_gate_marker_comment(700, "NONE")], [])
+	assert _automation_gate_approved(untrusted, 700)
+	assert "reason=automation_path_" not in untrusted["stdout"] + untrusted["stderr"]
+
+	stale = run([_automation_gate_marker_comment(700), _automation_gate_plan_comment()], [])
+	assert _automation_gate_approved(stale, 700)
+
+
 def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -> None:
 	latch_comment = _staged_support_latch_comment()
 	latch_comment["body"] = (
@@ -6532,8 +6703,8 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
-	# Issue #6729: a low finding converted at the cap must not ride through as a
-	# waiver when a high keep_fixing finding terminalizes the same round.
+	# Issue #6729 / #6539: the low finding's keep_fixing is converted to fail at the
+	# cap, and the high keep_fixing row still terminalizes the round with no waiver recorded.
 	low_finding = _security_pass_second_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6552,7 +6723,7 @@ def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -
 	assert "ai:security-pass-failed" in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "reason=blocking_findings_after_cap" in combined_log
-	# The low/medium rewrite runs before the terminal check; its result is discarded.
+	# The low row is converted to fail before the blocking high row terminalizes the round.
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_WAIVED" not in combined_log
 	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]

@@ -247,7 +247,26 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py check --repo-root .
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py tests/test_check_agents_md_direct_edits.py
+
+      # CLAUDE.md §30 (Q68): a pull request may not add documentation to
+      # agents.md directly. Direct additions are what made orchestrator
+      # integration branches conflict with main there (#6902's final PR).
+      # The merge commit is compared with its first parent (the base tip it
+      # was built on). A project's final PR (head orchestrator/project-*) is
+      # skipped: its sub-issue PRs were checked when they targeted the
+      # integration branch. A forward-merge fallback PR
+      # (auto/forward-merge-stable-*) is skipped too: it carries the release
+      # fold's generated agents.md text. Both skips apply only to a
+      # same-repository head targeting the default branch, so a branch name
+      # alone does not exempt an ordinary PR.
+      - name: agents.md direct-edit check (CLAUDE.md §30)
+        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
+            --base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"
 
       - name: Install actionlint
         env:

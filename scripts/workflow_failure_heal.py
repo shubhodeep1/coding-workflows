@@ -299,6 +299,22 @@ _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MAR
 _FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+# Authorship facts on ai:scope-blocked reports (Q81): the automation-path
+# guard grants by author, so the diagnosis needs the issue author, its
+# association and the pipeline login. Invalid values are dropped, never fatal.
+_SCOPE_AUTHOR_LABEL = "ai:scope-blocked"
+_SCOPE_AUTHOR_LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$")
+_SCOPE_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", "NONE"})
+
+
+def _scope_author_login(value: Any) -> str | None:
+	return value if isinstance(value, str) and _SCOPE_AUTHOR_LOGIN_RE.fullmatch(value) else None
+
+
+def _scope_author_association(value: Any) -> str | None:
+	return value if isinstance(value, str) and value in _SCOPE_AUTHOR_ASSOCIATIONS else None
+
+
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 _ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
@@ -591,8 +607,27 @@ def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comment
 	return decision(True, "ok")
 
 
-def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int = MAX_RUN_REFS, since: datetime | None = None) -> list[dict[str, Any]]:
-	"""Pick recent failed runs whose display title matches the issue title."""
+# Validate wrappers' run-name: `AI Validate [tracking:<N>]` (internal:
+# `Internal: AI Validate [tracking:<N>]`), see select_failed_runs.
+_TRACKING_RUN_TITLE_RE = re.compile(r"\[tracking:([1-9][0-9]{0,9})\]$")
+
+
+def select_failed_runs(
+	runs: Iterable[dict[str, Any]],
+	*,
+	title: str,
+	limit: int = MAX_RUN_REFS,
+	since: datetime | None = None,
+	tracking_issue: int | None = None,
+) -> list[dict[str, Any]]:
+	"""Pick recent failed runs whose display title matches the issue title.
+
+	With ``tracking_issue``, a failed run titled ``… [tracking:<tracking_issue>]``
+	also matches: the validate wrappers name their runs that way
+	(``AI Validate [tracking:N]``), never after the project's title, so an
+	orchestrator project's validation failure (binance-blessings#249) was
+	reported with no runs and fell back to the label-only fingerprint.
+	"""
 	wanted = single_line(title, 500)
 	picked: list[dict[str, Any]] = []
 	for run in runs:
@@ -600,7 +635,9 @@ def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int
 			continue
 		if str(run.get("conclusion") or "") not in ("failure", "timed_out", "cancelled"):
 			continue
-		if single_line(run.get("display_title"), 500) != wanted:
+		display_title = single_line(run.get("display_title"), 500)
+		tracking_match = _TRACKING_RUN_TITLE_RE.search(display_title) if tracking_issue else None
+		if display_title != wanted and not (tracking_match and int(tracking_match.group(1)) == tracking_issue):
 			continue
 		created = _parse_iso(run.get("created_at"))
 		if since is not None and created is not None and created < since:
@@ -682,12 +719,22 @@ def build_issue_payload(
 	wrapper_sha: str | None,
 	reporter_run_url: str | None,
 	now: datetime | None = None,
+	pipeline_login: str | None = None,
 ) -> dict[str, Any]:
-	"""Build the dispatch payload for an escalation label on an issue / PR."""
+	"""Build the dispatch payload for an escalation label on an issue / PR.
+
+	An ``ai:scope-blocked`` report also carries the issue author, its
+	association and ``pipeline_login`` (the reporter's identity), so the
+	diagnosis can tell whether the automation-path guard treats the item as
+	pipeline-authored.
+	"""
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
+	# Tracking issues are never pull requests; a PR sharing the number must not
+	# pick up that project's `[tracking:<N>]` validation runs.
+	tracking_issue = _positive_int(issue.get("number")) if kind == "issue" else None
+	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""), tracking_issue=tracking_issue)
 	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
 	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
 	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)
@@ -726,6 +773,18 @@ def build_issue_payload(
 		"conclusion": None,
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
+		**_scope_author_facts(label, issue, pipeline_login),
+	}
+
+
+def _scope_author_facts(label: str, issue: dict[str, Any], pipeline_login: str | None) -> dict[str, Any]:
+	if label != _SCOPE_AUTHOR_LABEL:
+		return {}
+	user = issue.get("user") if isinstance(issue.get("user"), dict) else {}
+	return {
+		"issue_author_login": _scope_author_login(user.get("login")),
+		"issue_author_association": _scope_author_association(issue.get("author_association")),
+		"reporter_pipeline_login": _scope_author_login(pipeline_login),
 	}
 
 
@@ -1322,6 +1381,10 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
+		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
+		normalized["issue_author_association"] = _scope_author_association(payload.get("issue_author_association"))
+		normalized["reporter_pipeline_login"] = _scope_author_login(payload.get("reporter_pipeline_login"))
 	if kind == "autofix_failure":
 		normalized.update({
 			"base_branch": base_branch,
@@ -3668,6 +3731,7 @@ def _cmd_build_issue_payload(args: argparse.Namespace) -> int:
 		runs=runs if isinstance(runs, list) else [],
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
+		pipeline_login=args.pipeline_login or None,
 	)
 	validate_payload(payload)
 	encoded = json.dumps(payload)
@@ -4362,6 +4426,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--runs-json")
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--pipeline-login", default="", help="Reporter identity; recorded on ai:scope-blocked reports only")
 	p.set_defaults(func=_cmd_build_issue_payload)
 
 	p = sub.add_parser("build-autofix-payload", help="Build the payload for a failed review/autofix run on a PR")
