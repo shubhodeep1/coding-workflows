@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A+B\n\nRATIONALE:\nQ1: The gate from #6838 is in place but defaults to `false` in three spots: `plan.yml:63`, `orchestrate_poll.yml:936`, and `scripts/orchestrate_poll_process.sh:15323`. The test `test_managed_auto_approve_automation_path_gate_off_by_default` in `tests/test_orchestrate_poll_process.py:5684` pins that default. So with no repository variable set, automatic `/approved` still fires on plans that list automation paths nobody granted. The issue says to withhold that approval, and to record a no-grant regression that fails before the fix and passes after it; that is only possible if the default flips, which is option A. The issue also asks for a no-grant security-finding regression and a fully granted-plan regression on both stall-recovery paths. The existing managed-path tests are at lines 5701\u20135738, but there is no equivalent for the standalone path, so option B's missing tests are added as well. Options C and D both leave the default-off gap open, and C also adds an operator step (\u00a720.A).\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/plan.yml:63 (`vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false'`) and :2382 (`${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}`)\n    - .github/workflows/orchestrate_poll.yml:936 (same `|| 'false'` fallback)\n    - scripts/orchestrate_poll_process.sh:257, :15323-15325 (the poller's handling of an unset flag)\n    - tests/test_plan_auto_approve_safe_state_fetch.py:230-275 (asserts the `'false'` fallback)\n    - tests/test_orchestrate_poll_process.py:5627-5760 (managed gate helpers and tests; `test_standalone_auto_approve_honours_trusted_plan_hold_marker`)\n    - scripts/files_touched_scope_guard.py (`--emit-automation-grant` / `--check-automation-paths`, used as is)\n    - README.md:2154, agents.d/6838-automation-path-plan-auto-approval.md, changelog.d/\n  steps:\n    - Change the fallback from `'false'` to `'true'` in `plan.yml` (both the env default and the shell `:-false` at line 2382) and in `orchestrate_poll.yml`.\n    - In `orchestrate_poll_process.sh`, treat an unset or empty flag as enabled; only an explicit `false` turns the gate off.\n    - Keep the explicit-`false` opt-out exactly as it is today, including ignoring old hold markers (see `test_managed_auto_approve_explicitly_disabled_gate_ignores_old_hold`).\n    - Rename or replace `test_managed_auto_approve_automation_path_gate_off_by_default` with a test asserting that an unset flag now holds an ungranted plan. This is the no-grant regression: it fails under the old default and passes under the new one. Update the fallback assertions in `test_plan_auto_approve_safe_state_fetch.py`.\n    - Add standalone stall-recovery tests:\n      - A no-grant security-finding issue (`ai:security` label, body without `files_touched`, plan listing `scripts/\u2026` and `.github/workflows/\u2026`). It is held, gets one hold marker naming the missing paths, logs `STALL_SKIP \u2026 reason=automation_path_ungranted`, and gets no `/approved`.\n      - A fully granted plan. It is auto-approved.\n      - A missing plan comment or a missing guard helper. The gate fails closed with `reason=automation_path_check_unavailable`.\n    - Add matching managed-path tests for the no-grant security finding and the unset-flag case.\n    - Leave the implement-time automation-path guard and approvals of plans without automation paths unchanged; the existing plain-plan test covers the latter.\n    - Do not edit `agents.md` directly. Add a new fragment at `agents.d/<issue>-automation-path-plan-gate-default-on.md` that records the new default, and add a changelog fragment. Update the README variable row default to `true`.\n    - Record in the PR body that the no-grant regression fails on the base and passes on the head.\n    - This issue's edits touch protected automation paths (`.github/workflows/*`, `scripts/*`). They proceed only if implement's automation-path guard finds a valid trusted grant for them. If it rejects them, the issue stays `ai:scope-blocked` as the spec requires; it must not bypass the guard or add grants.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Turning the gate on by default makes \"withhold automatic /approved for ungranted automation paths\" the actual behavior, which gives the required fails-before/passes-after evidence. The new tests cover both stall-recovery paths, missing-path reporting, and fail-closed handling, all using the existing classifier and grant parser.\n  reversibility: Any repo, consumer repos included, can set the `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` variable to `false` to get today's behavior back, with no code change. Reverting the PR restores the old default.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "ee31db94bfa207ec641bc998905a7827e02e5423f0f4f72428eb214f9c429f94",
+  "lineage": {
+    "issue_number": 7181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38169453910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38169453910",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7181"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011195453_df10da4665",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38169453910"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7181",
+  "timestamps": {
+    "created_at": "2026-10-11T19:54:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
