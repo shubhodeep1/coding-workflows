@@ -130,7 +130,8 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	# Opt-in bound on the optional installs and pytest bootstrap below (#6835).
 	# Off by default, so the dependency container behaves as before. Only
 	# normalized scalars cross into the container; the 780s ceiling keeps a
-	# bounded run inside the outer 900s isolation timeout, which stays fatal.
+	# bounded run inside the outer 900s container budget, whose expiry ends
+	# every install still pending (warned, not fatal; see the dep_rc case below).
 	bounded_deps_enabled=false
 	case "$(printf '%s' "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on) bounded_deps_enabled=true ;;
@@ -227,8 +228,9 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					echo "::warning::Review dependency install skipped (step=$bounded_step): dependency install budget of ${deps_budget}s exhausted; continuing."
 					return 124
 				fi
-				# Callers pass the bounded_install function, which timeout cannot
-				# exec; cap its per-command budget at the shared deadline instead.
+				# Callers pass the bounded_install shell function, which timeout(1)
+				# cannot run (it only execs programs); so cap the per-command budget
+				# bounded_install already applies at the time left before the deadline.
 				bounded_limit="${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}"
 				[ "$bounded_remaining" -ge "$bounded_limit" ] || bounded_limit="$bounded_remaining"
 				bounded_rc=0
@@ -236,7 +238,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 				DEPENDENCY_INSTALL_TIMEOUT_SECONDS="$bounded_limit" "$@" || bounded_rc=$?
 				# Exit 137 before the limit elapsed is an OOM kill, not a timeout.
 				if [ "$bounded_rc" -eq 124 ] || { [ "$bounded_rc" -eq 137 ] && [ $(( $(date +%s) - bounded_started_at )) -ge "$bounded_limit" ]; }; then
-					echo "::warning::Review dependency install timed out (step=$bounded_step, budget=${deps_budget}s); continuing without it."
+					echo "::warning::Review dependency install timed out (step=$bounded_step, limit=${bounded_limit}s, budget=${deps_budget}s); continuing without it."
 				fi
 				return "$bounded_rc"
 			}
