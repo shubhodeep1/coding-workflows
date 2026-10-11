@@ -1526,21 +1526,38 @@ else:
 		sys.exit(1)
 	accept(findings, "ok")
 
-# Top-level arrays only: after a parsed array the scan resumes past its end,
-# so an array nested in one that parsed is never a candidate.
+# Top-level arrays only: after a parsed array or object the scan resumes past
+# its end, so an array nested in a JSON value that parsed is never a candidate.
+# An empty array never replaces a non-empty one, and it counts only when it
+# starts a line and nothing but a closing fence follows it, so a "[]" nested
+# in a cut-off reply (`"evidence": []`) is not read as a clean audit.
 decoder = json.JSONDecoder()
+opener = re.compile(r"[\[{]")
+
+
+def next_open(start: int) -> int:
+	match = opener.search(text, start)
+	return match.start() if match else -1
+
+
 candidate = None
-position = text.find("[")
+position = next_open(0)
 while position != -1:
 	try:
 		value, end = decoder.raw_decode(text, position)
 	except ValueError:
-		position = text.find("[", position + 1)
+		position = next_open(position + 1)
 		continue
 	if isinstance(value, list) and all(isinstance(item, dict) and "finding_id" in item for item in value):
-		if value or re.fullmatch(r"\s*(```)?\s*", text[end:]):
+		if value:
 			candidate = (value, position, end)
-	position = text.find("[", end)
+		elif (
+			candidate is None
+			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
+			and re.fullmatch(r"\s*(```)?\s*", text[end:])
+		):
+			candidate = (value, position, end)
+	position = next_open(end)
 if candidate is None:
 	print("malformed_output")
 	sys.exit(1)
@@ -1596,14 +1613,23 @@ def redact(value: str) -> str:
 	value = re.sub(r"([Bb]earer\s+)\S+", r"\1[redacted]", value)
 	value = re.sub(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+", r"\1[redacted]", value)
 	value = re.sub(r"(sk-or-)[A-Za-z0-9_-]+", r"\1[redacted]", value)
+	# Further key formats an audit reply may quote from the audited code.
+	value = re.sub(r"(sk-)[A-Za-z0-9_-]{20,}", r"\1[redacted]", value)
+	value = re.sub(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", r"\1[redacted]", value)
+	value = re.sub(r"\b(AIza)[0-9A-Za-z_-]{35}", r"\1[redacted]", value)
+	value = re.sub(r"\b(xox[abposr]-)[A-Za-z0-9-]+", r"\1[redacted]", value)
+	value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[redacted private key]", value)
 	return value
 
 
+# Redact before slicing, so a token cut by the 300-character boundary is
+# still recognised by its prefix.
+redacted_source = redact(excerpt_source)
 print(f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes={len(raw)} chars={len(excerpt_source)} kept={kept}")
-if excerpt_source:
-	print("security-audit: rejected Claude reply starts: " + redact(excerpt_source[:300]))
-if len(excerpt_source) > 300:
-	print("security-audit: rejected Claude reply ends: " + redact(excerpt_source[-300:]))
+if redacted_source:
+	print("security-audit: rejected Claude reply starts: " + redacted_source[:300])
+if len(redacted_source) > 300:
+	print("security-audit: rejected Claude reply ends: " + redacted_source[-300:])
 PY
 }
 

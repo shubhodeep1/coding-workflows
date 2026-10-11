@@ -2860,6 +2860,11 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		(finding[:-10], "malformed_output"),
 		# Arrays of objects without a finding_id are not findings.
 		('Files checked: [{"path": "file_b.py"}]', "malformed_output"),
+		# A cut-off reply that ends in a nested empty array is not a clean audit.
+		('Findings:\n[{"finding_id": "x", "evidence": []', "malformed_output"),
+		('Results so far: {"counts": {"files": 3}, "findings": []', "malformed_output"),
+		# An array nested in a JSON object that parses is not top-level.
+		("Here: {\"findings\": " + finding + "}", "malformed_output"),
 		("", "missing_output"),
 		(json.dumps({"findings": []}), "schema_mismatch"),
 		(json.dumps(["not an object"]), "schema_mismatch"),
@@ -2880,6 +2885,8 @@ def test_security_audit_claude_engine_extracts_the_last_findings_array_from_pros
 		# Two arrays: the last one wins, nested arrays never count.
 		("Draft: " + json.dumps(first) + "\nFinal:\n```json\n" + json.dumps(final) + "\n```", ["prose-finding"]),
 		("Checkpoint: done.\n```\n" + json.dumps(final) + "\n```", ["prose-finding"]),
+		# A trailing empty array never replaces the findings before it.
+		("Findings:\n" + json.dumps(final) + "\nRemaining after re-check:\n[]", ["prose-finding"]),
 		# An empty array that ends the reply (or its fence) is a clean audit.
 		("No issues met the confidence bar.\n```json\n[]\n```", []),
 		("```json\n[]\n```\n```json\n[]\n```", []),
@@ -2945,6 +2952,31 @@ def test_security_audit_rejected_claude_reply_short_and_unkept() -> None:
 		assert "SECURITY_AUDIT_CLAUDE_REJECTED reason=malformed_output bytes=29 chars=29 kept=none" in proc.stdout
 		assert "security-audit: rejected Claude reply starts: I could not finish the audit." in proc.stdout
 		assert "rejected Claude reply ends:" not in proc.stdout
+
+
+def test_security_audit_rejected_claude_reply_redacts_other_key_formats() -> None:
+	secrets = (
+		"sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123",
+		"AKIAABCDEFGHIJKLMNOP",
+		"xoxb-123456789012-abcdefghij",
+	)
+	reply = "Quoted from the code: " + " ".join(secrets) + " -----BEGIN RSA PRIVATE KEY----- MIIEabc -----END RSA PRIVATE KEY----- done."
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-redact-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": reply})
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+		for secret in secrets:
+			assert secret not in proc.stdout
+		assert "MIIEabc" not in proc.stdout
+		assert "[redacted private key] done." in proc.stdout
+
+
+def test_security_audit_rejected_claude_reply_redacts_a_token_at_the_excerpt_boundary() -> None:
+	token = "ghp_" + "a" * 36
+	reply = ("y" * 1000) + " " + token + " " + ("z" * 280)
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-boundary-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": reply})
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+		assert "a" * 10 not in proc.stdout
 
 
 def test_poller_keeps_a_rejected_security_audit_reply_in_its_runtime_dir() -> None:
