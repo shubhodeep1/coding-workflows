@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:2214-2223 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The regression test does not cover a successfully fetched job log for which `filter-log` exits non-zero.\n  WHY: The existing test exercises only the fetch-failure path, so reverting the counter increment to its previous unconditional position would pass the suite while reintroducing the shared `no-error-lines` signature for items whose logs all fail filtering.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_failure_heal.py:2214-2223 | severity=NIT | confidence=4\n  PROBLEM: The last run moved the `READ_JOB_LOG_COUNT` increment into a new `else` branch of the `filter-log` check so a fetched-but-filter-failed log is not counted as readable evidence. The only test of the new gate, `test_intake_unreadable_run_logs_fingerprint_is_per_escalated_item`, passes `job_logs={}` (`:2218`), which takes the fetch-failure path (intake lines 583-586, `(job log unavailable)` placeholder) and never reaches the counter increment inside the fetch-success branch (lines 572-578). No test exercises a job log that fetches successfully but makes `filter-log` exit non-zero.\n  WHY: Not a runtime failure; a coverage gap. Reverting the increment to its pre-last-run unconditional position (counting a filter-failed log as read) would pass the entire existing suite while re-opening the exact defect the run fixed: an issue/pull_request report with all-filter-failed logs would take the shared `no-error-lines` signature instead of the per-item `label:<label>|source:<repo>#<n>` fingerprint, so unrelated items would again share one heal lineage.\n=== END FINDINGS FROM z-ai_glm-5_3-flash",
+  "fingerprint": "3567f0ee46445dd066ba3871d1b27a33bee02eebc1e379ca901f78f9d7447491",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7152,
+    "run_id": "38122896650",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38122896650",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011090907_dbeecefe05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7152,
+    "run_id": "38122896650"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T09:09:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
