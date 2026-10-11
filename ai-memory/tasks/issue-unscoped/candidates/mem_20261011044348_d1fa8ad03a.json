@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5322-5326 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The rejected-output log reports `kept_bytes` and `truncated` from the source file size even when the best-effort copy to the rejected-output file fails or is partial.\n  WHY: Because copy errors are suppressed, operators may be told evidence was kept when the corresponding file is missing or incomplete.\n- changelog.d/7132-reviewer-rejected-output-diagnostics.md:paragraph 2, sentence 3 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The changelog says both files are uploaded with the reviewer logs and failure logs, but the crash detail is a job-log line rather than a separately uploaded file.\n  WHY: Operators may look for an uploaded artifact containing the crash result text, which does not exist.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_run_reviewers.sh | severity=NIT | confidence=3\n  PROBLEM: `kept_bytes=` and `truncated=` are computed from the size of the source attempt output. The copy's result is not checked, because `head -c 65536 ... > file 2>/dev/null || true` swallows write errors.\n  WHY: the log line can say evidence was kept when the `rejected_*.txt` file is missing or short (for example a full disk or an unwritable `PREVIOUS_REVIEWS_DIR`). An operator would then look for an artifact that does not exist. The log is not misleading in normal runs; the effect is limited to a diagnostics-only log field.\n- changelog.d/7132-reviewer-rejected-output-diagnostics.md | severity=NIT | confidence=3\n  PROBLEM: The preceding sentences name `rejected_<pass>_<slot>_attempt<N>.txt` and a `CLAUDE_POOL crash_detail` log line. Only the `rejected_*.txt` file is uploaded as an artifact, and the crash detail is a job-log line.\n  WHY: not a runtime failure. The operator-facing note can send someone looking for a second uploaded file. `agents.d/7132-...md` describes this correctly.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh | severity=NIT | confidence=4\n  PROBLEM: `kept_bytes=` and `truncated=` are computed from `pool_rejected_bytes`, which is the size of the source output file, not the size actually written to `${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt`.\n  WHY: When the keep-write fails (the `head` redirection returns non-zero), operators reading the job log see `kept_bytes=65536 truncated=true` and look for the corresponding `rejected_review_<safe_name>_attempt<N>.txt` in the reviewer-logs / failure-logs artifact, but the file is not present (or has different content than the line claims). The new diagnostic advertises evidence that does not exist on disk.\n- changelog.d/7132-reviewer-rejected-output-diagnostics.md | severity=NIT | confidence=3\n  PROBLEM: The changelog's \"Both files are uploaded\" conflates two different surfaces. The only files added to artifact upload / failure-log staging are `rejected_<pass>_<slot>_attempt<N>.txt` (via the `.github/workflows/review_autofix.yml` upload glob and `scripts/review_autofix_step_stage_codex_logs.sh`); `CLAUDE_POOL crash_detail ... result=<text>` is a job-log stderr line printed from `scripts/review_untrusted_sandbox.sh` and is not uploaded as a separate file. The intermediate `crash_result.txt` is created inside the sandbox root and is not separately uploaded.\n  WHY: Operators following \"Both files are uploaded\" will look for an uploaded artifact containing the crash result text. That artifact does not exist; the only persistence for the crash result is the `CLAUDE_POOL crash_detail` line captured in the job log. This makes the operator-facing summary technically inaccurate and may send operators hunting for a missing file during the next incident of this class.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh | severity=NIT | confidence=4\n  PROBLEM: The rejected-output copy ignores write failures with `|| true`, but `kept_bytes` and `truncated` are calculated from the source file size rather than the destination file.\n  WHY: If the destination cannot be written or only a partial copy is written, the job log still reports the expected retained size. Operators are told evidence was kept when the artifact is missing or incomplete.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_run_reviewers.sh | severity=NIT | confidence=3\n  PROBLEM: The REVIEWER_POOL_REJECTED_OUTPUT log line added by the last run computes kept_bytes and truncated purely from pool_rejected_bytes (the source file's wc -c size), independently of whether the preceding `head -c 65536 ... > rejected_...txt 2>/dev/null || true` write succeeded. That write suppresses all errors, so a failed or partial write (e.g. ENOSPC, transient unwritable dir) still yields a log line like `kept_bytes=26 truncated=false` while no (or an incomplete) rejected_ file exists next to the per-reviewer log.\n  WHY: head's redirect fails with a suppressed error; `|| true` lets the loop continue; the log then asserts the file exists with a specific size, but artifact upload (which globs rejected_*.txt, if-no-files-found: ignore) skips the missing file, so the operator is told evidence was kept when none was.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7c5100d361227ab82d12d56198cdd120bfe5bc9db5f1a6b535229a4c65b65128",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7132,
+    "run_id": "38109909593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38109909593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011044348_d1fa8ad03a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7132,
+    "run_id": "38109909593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T04:43:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
