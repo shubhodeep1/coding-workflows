@@ -5323,7 +5323,7 @@ run_pool_reviewer() {
     else
       rm -f "${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt${pool_attempt}.txt" 2>/dev/null || true
     fi
-    pool_log "REVIEWER_POOL_REJECTED_OUTPUT slot=${model} pass=${output_prefix} attempt=${pool_attempt} model=${pool_attempt_model} bytes=${pool_rejected_bytes:-0} reason=${pool_skip_reason:-${pool_last_reason:-unknown}}"
+    pool_log "REVIEWER_POOL_REJECTED_OUTPUT slot=${model} pass=${output_prefix} attempt=${pool_attempt} model=${pool_attempt_model} bytes=${pool_rejected_bytes:-0} reason=${pool_skip_reason:-${pool_last_reason:-unknown}} kept_bytes=$(( ${pool_rejected_bytes:-0} > 65536 ? 65536 : ${pool_rejected_bytes:-0} )) truncated=$([ "${pool_rejected_bytes:-0}" -gt 65536 ] && echo true || echo false)"
     [ -z "${pool_skip_reason}" ] || break
   done
 
