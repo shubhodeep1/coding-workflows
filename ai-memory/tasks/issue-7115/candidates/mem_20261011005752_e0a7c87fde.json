@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for overwriting `tests/e2e_smoke_canary.txt` with the three lines the issue specifies\n\nPlanning ref: `main` @ `04bf619ad2a5463a698aae93eac23cf84f99cdd8` (no integration branch metadata, so there is no mismatch).\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the task: overwrite one existing file with three exact lines. The file is already there; its current content is `status: ok` / `run_id: 26151428977` / `updated-by: ai-pipeline`, with a trailing newline. Only the `run_id` value changes. No helper, pattern or new code is needed, and growing the scope would break the issue's constraint to \"only modify\" this file.\n\nAutomation / scheduler wiring (\u00a720.E):\n- The change only edits an existing file. It adds or extends no script.\n- No scheduler or PR-push entry point is touched; the existing release-gate smoke flow consumes the file.\n- No long-running supervisor is needed.\n- There is no database work.\n- Nothing needs an entry in `docs/scripts-pending-removal.md`.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (modify only; nothing is created).\n\n2. Functions or modules to implement\n- None. Replace the whole file content with exactly these bytes:\n  `status: ok\\nrun_id: 38099435388\\nupdated-by: ai-pipeline\\n`\n\n3. Data structures affected\n- None.\n\n4. API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file rather than patch one line\n- Chosen: Write the full three-line content (equivalent to `printf 'status: ok\\nrun_id: 38099435388\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`).\n- Alternatives considered: Editing only the `run_id` line in place.\n- Why: The issue requires the file to be exactly these three lines. A full overwrite guarantees that whatever the file holds now, and it is still a one-line diff.\n\n## Security considerations\n- Trust boundaries: none touched. This is a static text fixture with no executable content.\n- Authorization: there are no new endpoints or surfaces.\n- External input: the run ID is a fixed literal taken from the issue body, not executed or interpolated anywhere.\n- Abuse cases: the only realistic one is an editor going beyond scope. The `files_touched` / scope guards limit the change to this one path.\n\n5. Risks and edge cases\n- A missing trailing newline, or an extra blank line, would break the \"exactly\" requirement. Check the bytes with `cat -A` (each line should end in `$`, with three lines in total).\n- CRLF line endings must not be introduced.\n- No conflicts were found between the issue and the codebase: the file exists, as the issue says.\n\n6. Testing considerations\n- `cat -A tests/e2e_smoke_canary.txt` should show exactly three lines ending in `$`.\n- `git diff --stat` should show only this file, with 1 insertion and 1 deletion.\n- No other tests are needed.\n\n7. Pre-execution self-check\n- Every requirement in the issue maps to the single overwrite above, the change stays inside the declared scope, and no external inputs are missing.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "314ffbf9d8ec5120e9fdaaeb6193c718b924c6599efd1c1462436c60f7bdeec6",
+  "lineage": {
+    "issue_number": 7115,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38099774578",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38099774578",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7115"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261011005752_e0a7c87fde",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7115,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38099774578"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7115",
+  "timestamps": {
+    "created_at": "2026-10-11T00:57:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
