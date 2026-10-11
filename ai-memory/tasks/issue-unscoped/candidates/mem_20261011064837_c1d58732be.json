@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_resolver_diff.sh:55 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The hardcoded `sed -n '2,30p'` range in the `--help` arm ends before the Usage block, omitting the invocation and argument descriptions.\n  WHY: Running `check_resolver_diff.sh --help` no longer shows how to invoke the script; reviewers classified the finding as NIT.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/check_resolver_diff.sh: line 55 | severity=NIT | confidence=4\n  PROBLEM: The `--help` range does not cover the Usage block.\n  WHY: `check_resolver_diff.sh --help` no longer shows how to call the script, including the invocation or the `--conflicted-set`, `--touched-set` and `--repo-root` arguments.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_resolver_diff.sh: Help usage display (sed range) | confidence=4\n  PROBLEM: The usage instruction display prints a hardcoded range (2-30) that no longer covers the entire usage block due to added header lines.\n  WHY: The --help output is truncated, omitting the invocation arguments and invariant descriptions for the user.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/check_resolver_diff.sh: 55 | severity=NIT | confidence=5\n  PROBLEM: The `--help` arm prints lines 2-30, but the Usage block moved to lines 31-38 and is therefore excluded from `--help` output.\n  WHY: Running `check_resolver_diff.sh --help` prints only the four invariants and stops before showing how to invoke the script.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/check_resolver_diff.sh: line 55 (`sed -n '2,30p' \"$0\"`) vs the header that now ends with the Usage block at lines 31-38 | severity=NIT | confidence=4\n  PROBLEM: The `--help` arm still prints only lines 2-30, omitting the invocation and all three argument descriptions.\n  WHY: Any operator or harness that calls `--help` gets incomplete help text; this is not caught by any test.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62da9c6650ed92f306c3bf51003e534c97f96ad5071f19bf6d6e6b74df33ffcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7150,
+    "run_id": "38117031663",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38117031663",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011064837_c1d58732be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7150,
+    "run_id": "38117031663"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:48:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
