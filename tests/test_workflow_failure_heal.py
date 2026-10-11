@@ -1957,7 +1957,7 @@ def test_intake_targets_the_default_branch_when_stable_lacks_the_pinned_release(
 	state = _intake_state(compare=_compare(0, [], status=status), branches=["stable", "main"])
 	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
 	assert result.returncode == 0, result.stderr + result.stdout
-	created = state_after["issues_created"][0]
+	created = _composed_issues(state_after)[0]
 	match = TARGET_BRANCH_RE.search(created["body"])
 	assert match and (match.group(1) or match.group(2)) == "main"
 	assert f"target_branch_retarget from=stable to=main reason=wrapper_pin_not_on_target pin={SHA_A} compare_status={status}" in result.stdout
@@ -1965,15 +1965,16 @@ def test_intake_targets_the_default_branch_when_stable_lacks_the_pinned_release(
 	# No extra API call: the branch-progress compare already answered it.
 	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
 	assert len(compare_calls) == 1 and any(f"compare/{SHA_A}...stable" in part for part in compare_calls[0])
-	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"]
-	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
+	# Scope guard off (default, #6871): the intake stops before creating, so no outcome comment.
+	assert f"skip reason=scope_guard_disabled repo={SELF_REPO} " in result.stdout
+	assert not any(c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments" for c in state_after.get("comments_posted", []))
 
 
 @pytest.mark.parametrize("compare", (_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")], status="ahead"), _compare(0, [], status="identical"), None))
 def test_intake_keeps_stable_when_it_contains_the_pin_or_the_compare_is_unavailable(compare) -> None:
 	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
 	assert result.returncode == 0, result.stderr + result.stdout
-	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	match = TARGET_BRANCH_RE.search(_composed_issues(state_after)[0]["body"])
 	assert match and (match.group(1) or match.group(2)) == "stable"
 	assert "target_branch_retarget" not in result.stdout
 	assert "target_branch_source=default" in result.stdout
@@ -1985,7 +1986,7 @@ def test_intake_retarget_uses_the_configured_default_branch_for_consumer_issue_r
 	state = _intake_state(compare=_compare(0, [], status="behind"), branches=["stable", "main", "develop"])
 	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "develop"})
 	assert result.returncode == 0, result.stderr + result.stdout
-	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	match = TARGET_BRANCH_RE.search(_composed_issues(state_after)[0]["body"])
 	assert match and (match.group(1) or match.group(2)) == "develop"
 	assert "target_branch_retarget from=stable to=develop" in result.stdout
 
@@ -1994,7 +1995,7 @@ def test_intake_retarget_falls_back_to_main_without_a_known_default_branch() -> 
 	state = _intake_state(compare=_compare(0, [], status="behind"))
 	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": ""})
 	assert result.returncode == 0, result.stderr + result.stdout
-	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	match = TARGET_BRANCH_RE.search(_composed_issues(state_after)[0]["body"])
 	assert match and (match.group(1) or match.group(2)) == "main"
 
 
@@ -2246,7 +2247,7 @@ def test_intake_label_only_fingerprint_is_per_escalated_item() -> None:
 	expected_fp = heal.fingerprint("label:ai:needs-human", "", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
 	assert f"fingerprint fp={expected_fp} workflow=label:ai:needs-human" in result.stdout
 	assert "reason=lineage_cap" not in result.stdout
-	created = state_after["issues_created"][0]
+	created = _composed_issues(state_after)[0]
 	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
 
 
@@ -2664,10 +2665,14 @@ def test_intake_scope_guard_off_by_default_files_no_issue() -> None:
 	assert open_issue.index("compose-issue") < call
 
 
-def test_intake_scope_guard_refuses_unverified_marker() -> None:
+def test_intake_scope_guard_refuses_unverified_marker(tmp_path: Path) -> None:
 	# No git checkout: the scope marker cannot resolve, so compose-issue drops it.
-	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=SCOPE_GUARD_ON)
+	tg_log = tmp_path / "tg.log"
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=SCOPE_GUARD_ON, setup_git=_nr_tg_setup(tg_log))
 	assert result.returncode != 0, result.stderr + result.stdout
+	# The refusal actually pages CRITICAL.
+	critical = [line for line in (tg_log.read_text() if tg_log.exists() else "").splitlines() if line.startswith("CRITICAL\t")]
+	assert len(critical) == 1 and "scope marker could not be verified (missing)" in critical[0], critical
 	assert f"::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=missing repo={SELF_REPO} " in result.stderr
 	assert "WORKFLOW_HEAL error reason=scope_marker_unverified status=missing" in result.stdout
 	assert "issues_created" not in state and "issues_composed" not in state
@@ -2680,7 +2685,7 @@ def test_intake_scope_guard_refuses_unverified_marker() -> None:
 	assert "reason=scope_marker_unverified" in result.stderr
 	assert "issues_created" not in state
 	assert "scripts/evil.py" not in state["composed_issue"]["body"]
-	# The refusal pages CRITICAL (tg_helpers is not staged in this harness).
+	# The refusal returns nonzero right after paging CRITICAL.
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
 	gate = intake[intake.index("_heal_intake_scope_guard_permits_create()\n"):intake.index("_open_issue()\n")]
 	refusal = gate[gate.index("reason=scope_marker_unverified"):]
@@ -5512,7 +5517,7 @@ def test_intake_files_heal_issue_for_failed_ci_push_on_default_branch(tmp_path) 
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "provenance_rejected" not in result.stdout
 		assert "provenance_verified" in result.stdout
-		created = state_after["issues_created"][0]
+		created = _composed_issues(state_after)[0]
 		assert created["repo"] == SELF_REPO
 		match = TARGET_BRANCH_RE.search(created["body"])
 		assert match and (match.group(1) or match.group(2)) == "main"
@@ -6107,13 +6112,13 @@ def test_intake_non_retryable_duplicate_report_stays_silent(tmp_path: Path) -> N
 def test_intake_retryable_and_disabled_routing_still_file_heal_issues() -> None:
 	result, state, _ = _run_intake(_autofix_payload(), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	assert "non_retryable" not in result.stdout and len(_composed_issues(state)) == 1
 	disabled = {"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"}
 	unsupported = "conflict_resolver_sandbox_path_unsupported"
 	result, state, _ = _run_intake(_autofix_payload(failure_reason=unsupported), _nr_state([_nr_failure_comment(reason=unsupported)]),
 		diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=disabled)
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	assert "non_retryable" not in result.stdout and len(_composed_issues(state)) == 1
 	# With routing off, a host-only stop keeps #6745's early skip: no heal issue.
 	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=disabled)
 	assert result.returncode == 0, result.stderr + result.stdout
@@ -6128,7 +6133,7 @@ def test_intake_identical_failure_cap_routes_only_on_trusted_non_retryable_marke
 	assert "skip reason=non_retryable_host_only outcome=diagnosed" in result.stdout and "issues_created" not in state
 	result, state, _ = _run_intake(cap_payload, _nr_state([_nr_failure_comment(reason="editor_empty_noop")]), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	assert "non_retryable" not in result.stdout and len(_composed_issues(state)) == 1
 
 
 def test_intake_non_retryable_comment_failure_adds_no_label_or_issue(tmp_path: Path) -> None:

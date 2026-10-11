@@ -1449,7 +1449,10 @@ _heal_intake_scope_guard_permits_create()
 		fi
 		exit 0
 	fi
-	if jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
+	if [ ! -s "${scope_guard_body_file}" ]; then
+		# Name the cause: a missing/empty composed body is not a marker problem.
+		scope_guard_status="body_missing"
+	elif jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
 		'{body: $body, author_login: "heal-intake-precreate", pipeline_login: "heal-intake-precreate", labels: [$label], last_edited_at: null}' \
 		> "${scope_guard_input}" 2>/dev/null; then
 		scope_guard_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_PY}" heal-scope verify --input-json "${scope_guard_input}" 2>/dev/null \
