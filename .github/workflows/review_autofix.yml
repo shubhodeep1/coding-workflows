@@ -321,6 +321,7 @@ jobs:
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
       fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
+      force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}
     steps:
       - name: Bootstrap GitHub API retry helper
         continue-on-error: true
@@ -438,7 +439,9 @@ jobs:
       # autofix-identical-failure-count subcommand.
       - name: Checkout fingerprint cap helper
         id: checkout_fingerprint_cap
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -451,7 +454,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify fingerprint cap support identity
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         env:
           WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
           WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
@@ -568,6 +573,10 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          # Freshness-update fast path (#7084, Q60): a head that is only
+          # GitHub's merge of an already-approved head with the base skips the
+          # reviewers and goes to deterministic-skip-merge (CI wait, then merge).
+          MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
@@ -583,6 +592,7 @@ jobs:
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).
           FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
+          REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
           # Skip the reviewer panel + editor cycle when:
           #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
@@ -969,7 +979,7 @@ jobs:
             # shellcheck disable=SC2016
             if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
               -f per_page=100 \
-              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:"))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
               2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
               && [ -s "${gate_marker_comments_file}" ]; then
               gate_marker_fetch_state="ok"
@@ -1209,14 +1219,18 @@ jobs:
           FINGERPRINT_CAP_ALREADY_APPLIED="false"
           FINGERPRINT_CAP_NON_RETRYABLE="false"
           FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
+          FORCE_RB_JUDGE_CONFLICT_SKIP="false"
           case "${FINGERPRINT_CAP_MAX}" in
             ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
           esac
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${pr_base_retargeted}" != "true" ] \
-            && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+            && { [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] || [ "${FORCE_RB_JUDGE:-false}" = "true" ]; } \
             && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
             && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            # force_rb_judge runs enter even with the cap disabled: they never
+            # evaluate the cap, only the host-only conflict skip below (#6743),
+            # which has its own kill switch.
             fingerprint_cap_helper=""
             for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
               if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
@@ -1226,6 +1240,50 @@ jobs:
             done
             if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
               echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
+              # Issue #6743 (#6733): the newest trusted same-head marker with
+              # reason conflict_resolver_sandbox_path_host_only means the
+              # resolver will refuse again; skip it so the judge can run.
+              # Anything unverifiable keeps the conflict steps.
+              frj_skip_reason=""
+              frj_marker_reason="none"
+              if [ "${REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED:-true}" = "false" ]; then
+                frj_skip_reason="disabled"
+              elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+                frj_skip_reason="head_sha_unavailable"
+              elif [ -z "${fingerprint_cap_helper}" ]; then
+                frj_skip_reason="helper_missing"
+              else
+                gate_fetch_marker_comments
+                if [ "${gate_marker_fetch_state}" != "ok" ]; then
+                  frj_skip_reason="${gate_marker_fetch_state}"
+                else
+                  frj_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
+                    --comments-json "${gate_marker_comments_file}" \
+                    --head-sha "${pr_head_sha_gate}" \
+                    --author-login "${gate_marker_author_login}" \
+                    --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)" || frj_decision=""
+                  frj_count="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
+                  frj_marker_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+                  frj_newest_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "newest_reason" { print $2 }' | tail -n 1)"
+                  [ -n "${frj_marker_reason}" ] || frj_marker_reason="none"
+                  if ! [[ "${frj_count}" =~ ^[0-9]+$ ]]; then
+                    frj_skip_reason="parse_error"
+                  elif [ "${frj_count}" -eq 0 ]; then
+                    frj_skip_reason="no_trusted_marker"
+                  elif [ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+                    frj_skip_reason="reason_mismatch"
+                  elif [ "${frj_newest_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+                    # A newer trusted marker (e.g. provider_unavailable, which
+                    # the counter passes over) has another reason.
+                    frj_skip_reason="newest_reason_mismatch"
+                    frj_marker_reason="${frj_newest_reason:-none}"
+                  else
+                    frj_skip_reason="host_only_marker"
+                    FORCE_RB_JUDGE_CONFLICT_SKIP="true"
+                  fi
+                fi
+              fi
+              echo "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} outcome=$([ "${FORCE_RB_JUDGE_CONFLICT_SKIP}" = "true" ] && echo skip || echo run) reason=${frj_skip_reason} marker_reason=${frj_marker_reason}"
             elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
               echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
             elif [ -z "${fingerprint_cap_helper}" ]; then
@@ -1295,8 +1353,43 @@ jobs:
             fi
             FORCE_FULL_REVIEW_TIER="${FORCE_REVIEW}"
 
+            # Freshness-update fast path (#7084, Q60): see
+            # scripts/review_head_gate.sh freshness-sync. Reuses the marker
+            # comments read above; a missing helper or comments read keeps
+            # the normal review.
+            gate_freshness_sync_fast_path()
+            {
+              [ "${MERGE_BASE_SYNC_FAST_PATH_ENABLED:-true}" != "false" ] || return 1
+              [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
+              [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
+              # Same suppressors as the doc-only / small-diff skip: the skip
+              # job runs no conflict resolver and no single-issue security
+              # pass, and the updated head has no audit of its own.
+              if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
+                return 1
+              fi
+              if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+                && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
+                && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
+                && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
+                && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
+                return 1
+              fi
+              gate_fetch_marker_comments
+              [ "${gate_marker_fetch_state}" = "ok" ] || return 1
+              bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
+                "${pr_head_sha_gate}" "${pr_base_ref_gate:-${pr_base_ref:-}}" "${gate_marker_author_login}" "${gate_marker_comments_file}"
+            }
             if [ "${FORCE_REVIEW}" = "true" ]; then
               echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
+            elif gate_freshness_sync_fast_path; then
+              DETERMINISTIC_SKIP="true"
+              DET_SKIP_REASON="freshness_sync"
+              SHOULD_RUN="false"
+              SKIP_REASON="deterministic_skip_freshness_sync"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
             else
               # Size check uses the .additions/.deletions totals already
               # returned by the PR-state fetch above (no extra API call).
@@ -1780,6 +1873,7 @@ jobs:
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+          echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"
 
       - name: Withdraw stale auto-merge and publish head-gate status
         id: head_gate
@@ -2164,6 +2258,7 @@ jobs:
       # decision Q35: A), read from the same verified support commit the
       # gate resolved.
       MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+      MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
       # Required-checks wait before `gh pr merge --auto` (pr_checks_lib.sh):
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
@@ -2880,6 +2975,8 @@ jobs:
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
       AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Issue #6743: skip conflict detection + resolver on force_rb_judge runs.
+      AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}
       REVIEW_CHECKOUT_SHA: ${{ needs.gate.outputs.review_checkout_sha }}
       RETARGETED_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       RETARGETED_BASE_UPDATED_AT: ${{ needs.gate.outputs.retargeted_base_updated_at }}
@@ -4455,6 +4552,7 @@ jobs:
             ${{ env.PREVIOUS_REVIEWS_DIR }}/status_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/review_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/rejected_*.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -5180,6 +5278,8 @@ jobs:
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Detect merge conflicts
+        # Skipped on force_rb_judge runs after a trusted same-head host-only
+        # resolver refusal (#6743, #6733): the resolver would refuse again.
         # The pre-review gate above only short-circuits deterministic stale/
         # structurally-unmergeable cases before reviewer spend. This late step
         # remains the authoritative MERGE_CONFLICT + resolver entry point for
@@ -5210,7 +5310,7 @@ jobs:
         # conflict sweep re-dispatched a no-op run every tick. The editor and
         # "Commit changes" still skip on terminal resume, so the only commit a
         # terminal run can push is a resolved merge.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -5243,7 +5343,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # Kill switch for deterministic resolution of conflicts on the generated
@@ -5252,6 +5352,9 @@ jobs:
           # Default true; set the repo var to 'false' to route manifest
           # conflicts back through the Codex resolver.
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
+          # Keep the PR's copy of a changelog.d / agents.d fragment that the
+          # base branch folded and deleted (modify/delete, #7130).
+          CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED: ${{ vars.CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
@@ -5283,7 +5386,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -5535,6 +5638,7 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
@@ -5711,6 +5815,7 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
