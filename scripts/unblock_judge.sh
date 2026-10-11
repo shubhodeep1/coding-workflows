@@ -33,6 +33,8 @@
 # UNBLOCK_JUDGE_REASONING, UNBLOCK_JUDGE_TIMEOUT_SECS (default 1500),
 # UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
 # only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
+# UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
+# appends each issue number it creates to this file.
 #
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
@@ -48,7 +50,9 @@
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
-# the planned operations (at most about six writes). A failed project marker
+# the planned operations (at most about six writes). A scope re-grant also
+# reads the source issues a pipeline-authored item names (files_touched_scope_guard.py
+# --origin-repo: at most 8 issues, two attempts each). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
@@ -250,6 +254,11 @@ unblock_run_ops()
 					fi
 				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
 				[ "${ops_failed}" != "true" ] || continue
+				# Opt-in record of created issue numbers (default unset: no-op); the
+				# conflict resolver's host-only re-issue names the replacement with it.
+				if [ -n "${UNBLOCK_CREATED_ISSUES_FILE:-}" ]; then
+					printf '%s\n' "${created}" >> "${UNBLOCK_CREATED_ISSUES_FILE}" 2>/dev/null || true
+				fi
 				number="$(jq -r ".ops[${idx}].wait_on // empty" "${ops_file}")"
 				if [[ "${number}" =~ ^[0-9]+$ ]]; then
 					gh api "repos/${REPOSITORY}/issues/${number}/comments" \
@@ -478,8 +487,11 @@ unblock_try_regrant()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=rejection_unreadable"
 		return 1
 	fi
+	# --origin-repo (Q82): a re-grant re-checks a re-issue's source chain too
+	# (one gh api read per source issue, at most 8).
 	if ! unblock_py "${SUPPORT_DIR}/scripts/files_touched_scope_guard.py" --emit-automation-grant "${grant_file}" \
-		--issue-meta-file "${RUNTIME_DIR}/item.json" --pipeline-login "${UNBLOCK_LOGIN}" >/dev/null 2>&1; then
+		--issue-meta-file "${RUNTIME_DIR}/item.json" --pipeline-login "${UNBLOCK_LOGIN}" \
+		--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=skip reason=grant_unavailable"
 		return 1
 	fi
