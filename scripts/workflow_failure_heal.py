@@ -2910,6 +2910,7 @@ def count_identical_failures(
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	current_support = str(current_support_sha or "").strip().lower()
+	fallback_cap_applied = False
 	if support and is_valid_sha(current_support) and result["count"] == 0:
 		# #6911: the support filter above hides a non-retryable stop recorded
 		# under an older (or no) support version. For the re-arm decision the
@@ -2919,6 +2920,7 @@ def count_identical_failures(
 		if older["non_retryable"]:
 			for key in ("count", "fp", "reason", "support", "non_retryable"):
 				result[key] = older[key]
+			fallback_cap_applied = bool(older["cap_applied"])
 	try:
 		rearm_limit = int(max_rearms)
 	except (TypeError, ValueError):
@@ -2929,6 +2931,11 @@ def count_identical_failures(
 		and current_support not in recorded_supports
 		and len(recorded_supports) < rearm_limit
 	)
+	if fallback_cap_applied and not result["rearm"]:
+		# The older stop was already capped (under an older support SHA): keep
+		# reporting it so the gate does not re-post the cap once the bound is
+		# spent, one comment / label / heal report per new support commit.
+		result["cap_applied"] = True
 	return result
 
 

@@ -3213,6 +3213,15 @@ def test_count_identical_failures_rearms_a_non_retryable_cap_once_per_support_sh
 	result = gate_decide([_supported_failure_comment(run="19", support=SUPPORT_S1), outage])
 	assert result["non_retryable"] is True and result["rearm"] is True and result["support"] == SUPPORT_S1
 	assert decide([*bounded[:2], outage, _supported_failure_comment(run="20", support="5" * 40, reason="provider_unavailable")], SUPPORT_S2)["rearm"] is True
+	# 12. Bound spent: an older support's cap marker still counts as applied, so
+	# the cap job does not re-post on every new support commit.
+	host_fp = _cap_fp("conflict_resolver_sandbox_path_host_only")
+	old_cap = {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={host_fp} reason=conflict_resolver_sandbox_path_host_only count=1 support={SUPPORT_S1} -->"}
+	result = gate_decide([*bounded, old_cap])
+	assert result["rearm"] is False and result["cap_applied"] is True
+	# A re-armed run does not inherit the older cap, so its own failure is capped again.
+	result = gate_decide([_supported_failure_comment(run="21", support=SUPPORT_S1), old_cap])
+	assert result["rearm"] is True and result["cap_applied"] is False
 	with tempfile.TemporaryDirectory(prefix="heal-rearm-cli-") as tmp_name:
 		tmp = Path(tmp_name)
 		(tmp / "comments.json").write_text(json.dumps([_supported_failure_comment(run="14", support=SUPPORT_S1)]), encoding="utf-8")
