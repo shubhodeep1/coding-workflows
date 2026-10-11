@@ -738,6 +738,10 @@ jobs:
               gate_wait_secs=600
               ;;
           esac
+          # Drop leading zeros first so a zero-padded in-range value (`002400`)
+          # is not mistaken for an oversized one by the length check below.
+          gate_wait_secs="${gate_wait_secs#"${gate_wait_secs%%[!0]*}"}"
+          gate_wait_secs="${gate_wait_secs:-0}"
           # Same range as RELEASE_CI_GATE_WAIT_SECS (0..2400); the length check
           # runs first so a huge value never reaches shell arithmetic.
           if [ "${#gate_wait_secs}" -gt 4 ] || [ "$((10#${gate_wait_secs}))" -gt 2400 ]; then
@@ -747,7 +751,8 @@ jobs:
           # Force base 10: a leading zero (`0900`, `08`) would be read as octal.
           gate_wait_secs=$((10#${gate_wait_secs}))
           gate_poll_secs=30
-          gate_polls_left=$((gate_wait_secs / gate_poll_secs))
+          # Round up so any positive budget below one poll interval still re-checks once.
+          gate_polls_left=$(((gate_wait_secs + gate_poll_secs - 1) / gate_poll_secs))
           gate_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate.XXXXXX")"
           gate_runs_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate_runs.XXXXXX")"
           trap 'rm -f "${gate_response_file}" "${gate_runs_file}"' EXIT

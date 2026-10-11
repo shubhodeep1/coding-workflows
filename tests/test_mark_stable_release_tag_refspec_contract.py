@@ -1065,6 +1065,19 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 				assert "is above 2400; using 600" in capped.stdout, (oversized, capped.stdout)
 				assert capped_calls.count("sleep:30") == 20, (oversized, capped_calls.count("sleep:30"))
 
+			# Zero-padded in-range values keep their value; positive budgets below one
+			# 30-second poll still re-check once; 0 never waits.
+			for padded_wait, expected_sleeps in (("00060", 2), ("002400", 80), ("10", 1), ("29", 1), ("000", 0)):
+				padded, padded_calls = _run_ci_lint_gate_scenario(
+					working_directory,
+					workflow_path,
+					[_check_runs_body(_lint_run(status="queued", conclusion=None))],
+					wait_secs=padded_wait,
+				)
+				assert padded.returncode != 0, (padded_wait, padded.stdout)
+				assert "is above 2400" not in padded.stdout, (padded_wait, padded.stdout)
+				assert padded_calls.count("sleep:30") == expected_sleeps, (padded_wait, padded_calls.count("sleep:30"))
+
 			bad_sha, bad_sha_calls = _run_ci_lint_gate_scenario(
 				working_directory, workflow_path, [_check_runs_body(_lint_run())], tested_sha="not-a-sha"
 			)
