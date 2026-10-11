@@ -7455,7 +7455,8 @@ _STALLING_PIP_STUB = (
 
 def test_dependency_install_stalled_optional_install_times_out_when_bounded() -> None:
 	"""A stalled optional install warns and continues instead of eating the
-	outer 900s isolation timeout (which is fatal) when the flag is on."""
+	outer 900s container budget (whose expiry ends every pending install with
+	a warning) when the flag is on."""
 	result = _run_dependency_install_step(
 		{
 			"requirements.txt": "requests\n",
