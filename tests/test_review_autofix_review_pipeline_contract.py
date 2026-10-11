@@ -6922,9 +6922,13 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 		bin_dir.mkdir()
 		fake_gh = bin_dir / "gh"
 		# Every call is recorded; the required-checks wait reads one green check-run.
+		# The merge-base freshness gate defers when it cannot resolve the base
+		# (#6988), so the PR read names one and the compare reports it up to date.
 		fake_gh.write_text(
 			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
-			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;; esac\n',
+			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;;\n'
+			f'  *compare/*) printf \'{{"ahead_by":0,"files":[]}}\' ;;\n'
+			f'  *pulls/42*) printf \'{{"head":{{"sha":"{head_sha}"}},"base":{{"ref":"main"}}}}\' ;;\nesac\n',
 			encoding="utf-8",
 		)
 		fake_gh.chmod(0o755)

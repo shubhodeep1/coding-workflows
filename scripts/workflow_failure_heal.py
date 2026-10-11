@@ -2936,7 +2936,7 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> str:
 	"""Return the reason of the newest trusted failure marker for ``head_sha``.
 
-	Same trust rules as ``count_identical_failures`` (author, head, valid
+	Same trust rules as ``count_identical_failures`` (author, trailing marker, head, valid
 	``fp``, and ``support`` when given), but ``provider_unavailable`` markers
 	are not skipped. The force_rb_judge host-only conflict skip (issue #6743)
 	uses it so a newer failure with any other reason keeps the conflict steps.
@@ -2948,7 +2948,8 @@ def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sh
 	if not head or not author:
 		return ""
 	for comment in reversed([comment for comment in comments if isinstance(comment, dict)]):
-		match = _FAILURE_MARKER_RE.search(sanitize_text(comment.get("body")))
+		# Only the trailing standalone marker counts, as in count_identical_failures.
+		match = _canonical_failure_marker(sanitize_text(comment.get("body")))
 		if match is None or _comment_author(comment) != author:
 			continue
 		fields = _marker_fields(match)
