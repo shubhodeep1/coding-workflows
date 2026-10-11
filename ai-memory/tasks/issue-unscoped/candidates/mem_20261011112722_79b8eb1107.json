@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run support Python helpers from a verified directory outside the branch checkout, with Python safe-path isolation and imports limited to trusted support code.\" (Issue #7159 recommendation)\n  expected_change_site: .github/workflows/clarify.yml and .github/workflows/implement.yml (specifically for load_workflow_overlay.py)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The clarify.yml step running security_dependency.py, and the load_workflow_overlay.py loader steps in both clarify.yml and implement.yml still run the support Python helpers from the branch checkout scripts/ directory, rather than from a verified staging directory outside the checkout; The clarify workflow adds `-I -B` isolation flags to `python3 scripts/security_dependency.py` but continues running the helper from the branch checkout's `scripts/` directory. Unlike implement.yml, which runs the trusted copy from `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` with fail-closed guards for missing or symlinked helpers, clarify.yml relies solely on Python's isolated mode.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Run support Python helpers from a verified directory outside the branch checkout, with Python safe-path isolation and imports limited to trusted support code.\" (Issue #7159 recommendation).\n  Expected change site: .github/workflows/clarify.yml and .github/workflows/implement.yml (specifically for load_workflow_overlay.py).\n  Evidence of absence: The clarify.yml step running security_dependency.py, and the load_workflow_overlay.py loader steps in both clarify.yml and implement.yml still run the support Python helpers from the branch checkout scripts/ directory, rather than from a verified staging directory outside the checkout. The added -I -B isolation is insufficient because Python still adds the script's parent directory to sys.path even with -I -B, allowing branch-controlled modules (e.g. json.py, sitecustomize.py) in scripts/ to be imported by the security/loader helper while GH_PAT or other sensitive credentials/context are active.\n  Severity: BLOCKER\n  Issue confidence: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Run support Python helpers from a verified directory outside the branch checkout, with Python safe-path isolation and imports limited to trusted support code.\" (Issue #7159 recommendation)\n  Expected change site: .github/workflows/clarify.yml (security-dependency gate around line 507)\n  Evidence of absence: The clarify workflow adds `-I -B` isolation flags to `python3 scripts/security_dependency.py` but continues running the helper from the branch checkout's `scripts/` directory. Unlike implement.yml, which runs the trusted copy from `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` with fail-closed guards for missing or symlinked helpers, clarify.yml relies solely on Python's isolated mode. While `-I` prevents branch-module imports by removing the script directory from sys.path, this is a single-layer defense. The issue recommendation explicitly calls for both \"a verified directory outside the branch checkout\" AND \"Python safe-path isolation\" as complementary safeguards. The agents.d fragment documents this as intentional (\"Calls that run before the run dir exists...keep the freshly staged in-tree copy under `python3 -I -B`\"), but `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` is implement-specific and clarify.yml could stage its own verified copy or use a shared staging path.\n  Severity: MAJOR\n  Issue confidence: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e20b73107069980b968020c1cc84bf1b32e76a8c95c7575c8618904a5a5d1db5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7164,
+    "run_id": "38131564818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38131564818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011112722_79b8eb1107",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7164,
+    "run_id": "38131564818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T11:27:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
