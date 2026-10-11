@@ -2,10 +2,16 @@
 name: CI
 
 "on":
+  # Orchestrator integration branches (Q45): a sub-issue PR into
+  # `orchestrator/project-*` is checked before it merges, not only at the
+  # project's final PR into main. Pushes to those branches run too, so
+  # check-failure triage has a base-branch result to compare a failing PR
+  # against (a green base means the failure is the PR's own and is left to
+  # its autofix). Heal intake and budget-watch act on main pushes only.
   pull_request:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
   push:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -405,13 +411,31 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare template-only PR live copies for parity tests
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        if: >-
+          (github.event_name == 'pull_request' &&
+           (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))) ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD --keep-committed-security-paths
+          # Live copies are synced only after a push to main, so an
+          # orchestrator integration branch can carry template changes that
+          # earlier sub-issue PRs merged. The sync's drift recovery copies
+          # those too (template committed after its live copy), but only
+          # when --before is a reachable commit: the script skips an empty,
+          # all-zero or unreachable one. A push has no PR base, so it passes
+          # its own before; a branch-creation or force push falls back to
+          # the merge-base with main.
+          before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
+          if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            echo "::warning::Template parity preparation: before=${before:-empty} is not a reachable commit; using merge-base with main (${fallback:-unavailable})."
+            before="${fallback}"
+          fi
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${before}" --after HEAD --keep-committed-security-paths
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -882,7 +906,8 @@ jobs:
             tests/test_validate_process_render_recovery.py \
             tests/test_verify_integration_fingerprints_partial_removal.py \
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
