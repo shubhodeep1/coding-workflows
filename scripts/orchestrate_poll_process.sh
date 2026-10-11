@@ -13479,13 +13479,13 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   fi
   post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
+  # Project completion stays visible at the default WARNING threshold
+  # (operator decision): every completion path sends at the same level.
   MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
   MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
-  # Project completion stays visible at the default WARNING threshold
-  # (operator decision): every completion path sends at the same level.
   if ! _smoke_fixture_alert_silenced "CRITICAL"; then
     tg_send_msg "${MSG}" "CRITICAL" >/dev/null
   fi
@@ -25721,13 +25721,13 @@ PRs to revert: ${REVERT_COUNT}"
         post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review."
 
         tg_cleanup_msgs "${TRACKING_NUM}"
+        # Project completion stays visible at the default WARNING threshold
+        # (operator decision): every completion path sends at the same level.
         MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."
         MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
         if [ -n "${GITHUB_RUN_ID:-}" ]; then
           MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
         fi
-        # Project completion stays visible at the default WARNING threshold
-        # (operator decision): every completion path sends at the same level.
         if ! _smoke_fixture_alert_silenced "CRITICAL"; then
           tg_send_msg "${MSG}" "CRITICAL" >/dev/null
         fi
@@ -26713,21 +26713,21 @@ NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 # log. A new head SHA re-arms the alert. Fails open: when the pipeline's own
 # login cannot be resolved the marker is not trusted and the alert is sent.
 _noop_gate_failure_alert() {
-	local gate="$1" msg="$2" head="${N_HEAD_SHA:-${N_HEAD_OID:-}}" marker trusted
+	local gate="$1" msg="$2" pr="${N_PR}" head="${N_HEAD_SHA:-${N_HEAD_OID:-}}" marker trusted
 	[[ "${head}" =~ ^[0-9a-f]{40}$ ]] || head="unknown"
-	marker="<!-- ai:noop-force-merge-gate-alert:v1 pr=${N_PR} head=${head} gate=${gate} -->"
+	marker="<!-- ai:noop-force-merge-gate-alert:v1 pr=${pr} head=${head} gate=${gate} -->"
 	unblock_trusted_login >/dev/null
 	trusted="${UNBLOCK_TRUSTED_LOGIN}"
 	if [ -n "${trusted}" ] && printf '%s' "${N_COMMENTS_JSON:-[]}" | jq -e --arg m "${marker}" --arg login "${trusted}" \
 		'any(.[]?; ((.body // "") | contains($m)) and ((.user.login // "") == $login))' >/dev/null 2>&1; then
-		echo "NOOP_FORCE_MERGE_GATE_ALERT pr=${N_PR} head=${head} gate=${gate} outcome=skip reason=already_alerted"
+		echo "NOOP_FORCE_MERGE_GATE_ALERT pr=${pr} head=${head} gate=${gate} outcome=skip reason=already_alerted"
 		return 0
 	fi
-	gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments" \
+	gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
 		-f body="Force-merge fallback stopped at gate \`${gate}\` on \`${head}\`; leaving this PR for human review. This is reported once per head commit.
 
 ${marker}" >/dev/null 2>&1 || true
-	echo "NOOP_FORCE_MERGE_GATE_ALERT pr=${N_PR} head=${head} gate=${gate} outcome=alerted"
+	echo "NOOP_FORCE_MERGE_GATE_ALERT pr=${pr} head=${head} gate=${gate} outcome=alerted"
 	tg_send_msg "${msg}" "ERROR" >/dev/null 2>&1 || true
 }
 

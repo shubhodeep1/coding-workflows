@@ -169,7 +169,7 @@ unblock_run_ops()
 		issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}")"
 		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ] \
 			&& ! { [ "${op}" = "add_labels" ] && [ "${close_succeeded}" = "true" ] && [ "${ITEM_KIND}" = "pr" ] \
-				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
+				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; }; then
 			continue
 		fi
 		case "${op}" in
@@ -333,7 +333,7 @@ PY
 				;;
 			close)
 				if [ "${ops_failed}" = "true" ] && ! { [ "${ITEM_KIND}" = "pr" ] \
-					&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
+					&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; }; then
 					unblock_log "item=${ITEM} op=close issue=${issue} outcome=skip reason=prerequisite_failed"
 					continue
 				fi
@@ -362,7 +362,9 @@ PY
 						&& jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
 						# A failed terminal-label write cannot hide an unresolved finding.
 						unblock_tg "CRITICAL" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
-					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; then
+					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; then
+						# The untrusted-PR close (unblock_actions.py) reports at DEBUG when it
+						# lands; a failed close leaves the PR open, which needs a person.
 						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
 					fi
 					continue
