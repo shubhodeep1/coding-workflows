@@ -1546,7 +1546,7 @@ def next_open(start: int) -> int:
 
 def closes_before(start: int, stop: int) -> bool:
 	for quoted in (False, True):
-		depth = 0
+		bracket_stack = []
 		in_string = escaped = False
 		for ch in text[start:stop]:
 			if quoted and in_string:
@@ -1559,10 +1559,14 @@ def closes_before(start: int, stop: int) -> bool:
 			elif quoted and ch == '"':
 				in_string = True
 			elif ch in "[{":
-				depth += 1
+				bracket_stack.append(ch)
 			elif ch in "]}":
-				depth -= 1
-				if depth == 0:
+				if not bracket_stack or bracket_stack[-1] != (
+					"[" if ch == "]" else "{"
+				):
+					return False
+				bracket_stack.pop()
+				if not bracket_stack:
 					break
 		else:
 			return False

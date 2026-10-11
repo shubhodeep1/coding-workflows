@@ -2866,6 +2866,9 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		# A line-start "[]" inside an unclosed value is not a clean audit either.
 		('Results:\n{"findings":\n[]', "malformed_output"),
 		('Findings so far.\n[\n[]', "malformed_output"),
+		# A mismatched closer must not turn a cut-off value into a clean audit.
+		('Findings so far.\n[\n}\n[]', "malformed_output"),
+		('Results:\n{\n]\n[]', "malformed_output"),
 		# A "]" inside a JSON string does not close the unclosed value around "[]".
 		('Results:\n{"note": "a]b}",\n"findings":\n[]', "malformed_output"),
 		# Nesting deeper than the JSON decoder's recursion limit falls back cleanly.
