@@ -692,6 +692,7 @@ RESOLVER_ALLOWLIST_FILE={allowlist!s}
 RESOLVER_FINGERPRINT_ONLY_PATHS_FILE={runtime_dir / "resolver_fingerprint_only_paths.txt"!s}
 git diff --name-only --diff-filter=U | sort -u > "${{RESOLVER_ALLOWLIST_FILE}}"
 _resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
+_ff_defer_commit=false
 {union_block if union_block is not None else _union_block(text)}
 CONFLICTED_FILES_RAW=""
 IS_INTEGRATION_SYNC=true

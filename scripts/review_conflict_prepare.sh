@@ -227,6 +227,9 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEE
     esac
     case "${_ff_path#*/}" in
       */*) continue ;;
+      # The assemblers never fold README.md (FRAGMENT_EXCLUDED_NAMES), so a
+      # base-side deletion of it is deliberate: leave it to the resolver.
+      README.md) continue ;;
     esac
     _ff_stages="$(git ls-files -u -- "${_ff_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
     if [ "${_ff_stages}" != "1 2 " ] || [ ! -f "${_ff_path}" ] || [ -L "${_ff_path}" ]; then

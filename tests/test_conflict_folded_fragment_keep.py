@@ -141,6 +141,7 @@ def test_other_shapes_and_the_kill_switch_leave_the_fragment_alone() -> None:
 	cases = (
 		({"reverse": True}, None),  # the PR deleted it, main changed it: stages 1 3
 		({"fragment": "changelog.d/nested/6763.md"}, None),  # not a top-level fragment
+		({"fragment": "agents.d/README.md"}, None),  # never folded by the assemblers
 		({}, "false"),  # kill switch
 	)
 	for kwargs, enabled in cases:
