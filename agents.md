@@ -1091,11 +1091,6 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A missing proxy skips dependency installation without restoring direct
   container network access; review preparation continues, but validations
   needing those dependencies may be unverified.
-  With `REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true` (default `false`) the
-  review container's optional installs and pytest bootstrap share one
-  `REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS` deadline (default 600, 30-780); a
-  timeout warns and preparation continues, while venv, proxy, isolation and
-  snapshot-refresh failures stay fatal.
   Each review install command runs under `DEPENDENCY_INSTALL_TIMEOUT_SECONDS`
   (default 600) inside the container; a command that exceeds it is killed and
   reported as a failed install, and a dependency container that still exceeds

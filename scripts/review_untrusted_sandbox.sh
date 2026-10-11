@@ -232,8 +232,10 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 				bounded_limit="${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}"
 				[ "$bounded_remaining" -ge "$bounded_limit" ] || bounded_limit="$bounded_remaining"
 				bounded_rc=0
+				bounded_started_at=$(date +%s)
 				DEPENDENCY_INSTALL_TIMEOUT_SECONDS="$bounded_limit" "$@" || bounded_rc=$?
-				if [ "$bounded_rc" -eq 124 ] || [ "$bounded_rc" -eq 137 ]; then
+				# Exit 137 before the limit elapsed is an OOM kill, not a timeout.
+				if [ "$bounded_rc" -eq 124 ] || { [ "$bounded_rc" -eq 137 ] && [ $(( $(date +%s) - bounded_started_at )) -ge "$bounded_limit" ]; }; then
 					echo "::warning::Review dependency install timed out (step=$bounded_step, budget=${deps_budget}s); continuing without it."
 				fi
 				return "$bounded_rc"

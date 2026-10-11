@@ -7479,8 +7479,13 @@ def test_dependency_install_stalled_optional_install_times_out_when_bounded() ->
 
 
 def test_dependency_install_unbounded_when_flag_disabled() -> None:
-	"""Off by default: no `timeout` wrapper and the same stub calls as before."""
-	timeout_stub = '#!/bin/sh\necho "timeout $*" >> "$STUB_CALL_LOG"\nexit 99\n'
+	"""Off by default: only the existing per-command `timeout` (unchanged 600s
+	limit, no shared deadline) and the same stub calls as before."""
+	# Records the call, then runs the command like `timeout` would.
+	timeout_stub = (
+		'#!/bin/sh\necho "timeout $*" >> "$STUB_CALL_LOG"\n'
+		"shift 3\nexec \"$@\"\n"
+	)
 	repo = {"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"}
 	for extra_env in ({}, {"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}):
 		result = _run_dependency_install_step(
@@ -7490,7 +7495,12 @@ def test_dependency_install_unbounded_when_flag_disabled() -> None:
 			extra_stubs={"timeout": timeout_stub},
 		)
 		assert result["returncode"] == "0", result["output"]
-		assert "timeout " not in result["calls"], result["calls"]
+		assert (
+			"timeout --signal=TERM --kill-after=10s 600 pip install -r requirements.txt"
+			in result["calls"]
+		), result["calls"]
+		assert "(step=" not in result["output"], result["output"]
+		assert "dependency install budget" not in result["output"], result["output"]
 		assert "pip install -r requirements.txt" in result["calls"], result["calls"]
 		assert "python3 -m pip install pytest" in result["calls"], result["calls"]
 		assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
@@ -7522,7 +7532,7 @@ def test_review_sandbox_bounded_install_flag_contract() -> None:
 	# Isolation failures stay fatal.
 	assert "python3 -m venv --system-site-packages /source/.review-venv || exit 1" in helper
 	assert "timeout --signal=TERM --kill-after=10s 900s env -i" in helper
-	assert "|| { echo '::error::Review dependency isolation failed' >&2; exit 1; }" in helper
+	assert "\t\t*)\n\t\t\techo '::error::Review dependency isolation failed' >&2\n\t\t\texit 1\n" in helper
 	assert 'review_untrusted_workspace.py" refresh "${workspace}"' in helper
 	block = _step_block("Install project dependencies (best-effort)")
 	assert (
