@@ -134,7 +134,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 	"cli_version": "2.1.289",
 	"broker_url": "",
 	"oidc_audience": "coding-workflows-claude-pool",
-	"gate_utilization": 0.9,
+	"gate_utilization": 0.95,
 	"probe_model": "claude-haiku-4-5-20251001",
 	"default_model": "claude-opus-5-5",
 	"utility_model": "claude-sonnet-5-5",

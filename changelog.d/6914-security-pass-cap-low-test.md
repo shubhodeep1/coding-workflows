@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The orchestrate-poll test for a low-severity finding at the security-pass `keep_fixing` cap now expects the project to fail, as the poller does.** The test, renamed `test_security_pass_cap_converts_low_keep_fixing_to_fail`, still expected the retired behaviour where the cap waived the finding and passed the project, so CI failed. Since #6539 the cap converts a low or medium `keep_fixing` decision to `fail` and never records a waiver or advisory follow-up. The test now checks for exactly that. The poller is unchanged.
