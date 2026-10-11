@@ -2549,6 +2549,14 @@ jobs:
           the edit. The post-Codex commit step diffs the worktree against
           HEAD; an empty diff is treated as no-actionable-output even if the
           assistant message describes the change.
+          `BLOCKED: <reason>` means an obstacle stopped you (scope-lock
+          violation, unavailable tooling, contradictory requirements). It is
+          NOT the marker for "there was nothing to do". When the approved
+          plan requires no repository edits because the requested state is
+          already present on the branch, end your final message with exactly
+          `No changes needed.` on its own line instead of a `BLOCKED:` line.
+          Automation closes that as done; a `BLOCKED:` line, or the same
+          news in other words, fails the run.
           </completeness_contract>
 
           Output: repository changes only.
@@ -3026,6 +3034,11 @@ jobs:
           - Describing the new content does not write it. The workflow's
             stuck-detection counts an empty worktree diff as no-actionable
             output regardless of how detailed the assistant message is.
+          - The one exception: if the approved plan itself says no
+            repository edit is required (verification only, or the
+            requested state is already present on the branch) and you have
+            confirmed that, do not invent an edit. End your final message
+            with exactly `No changes needed.` on its own line.
 
           RETRY_EOF
                 if [ -n "${prior_exec_history}" ]; then
