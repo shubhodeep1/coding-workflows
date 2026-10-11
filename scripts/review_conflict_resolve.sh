@@ -785,7 +785,16 @@ raise SystemExit(0 if found else 1)
   if _resolver_run_unblock_ops "${reissue_dir}/ops_suffix.json"; then
     echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=reissued reason=declared_in_files_touched"
   else
-    echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} (or its source issue) failed after creating #${reissue_issue}; the re-issue marker prevents a duplicate."
+    if [ "${reissue_comment_posted}" = "true" ]; then
+      echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} (or its source issue) failed after creating #${reissue_issue}; the re-issue marker prevents a duplicate."
+    else
+      # Neither the marker nor the close landed: a later run on this open PR
+      # could create a second replacement, so an operator must close it.
+      echo "::warning::Host-only re-issue: closing PR #${PR_NUMBER} failed and its re-issue marker was not posted; close it by hand (replacement #${reissue_issue}) to avoid a duplicate re-issue."
+      if type tg_send_msg >/dev/null 2>&1; then
+        tg_send_msg "Host-only re-issue: PR #${PR_NUMBER} in ${GITHUB_REPOSITORY} is still open without its re-issue marker (replacement #${reissue_issue}); close it by hand to avoid a duplicate re-issue." WARNING >/dev/null 2>&1 || true
+      fi
+    fi
     echo "CONFLICT_RESOLVER_HOST_ONLY_REISSUE pr=${PR_NUMBER} issue=${reissue_issue} paths=${reissue_count} outcome=close_failed reason=close_failed"
   fi
   return 0
