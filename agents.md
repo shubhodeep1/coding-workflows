@@ -590,11 +590,13 @@ and so does the `command` builtin: `command git push ...`, bare or inside
 `bash -c`, is not yet inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack
 it; the fix needs both hook copies, which the pipeline cannot write). The live
 hook runs on every Bash call through its `PreToolUse` settings entry; no
-variable or operator step enables it. Tests run against both copies in
-`tests/test_pr_merge_status_guard.py`. The interactive session applied the
-change because the pipeline's editors cannot write `.claude/hooks/**`; the
-former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder is retired
-and nothing reads it. The full rules are in the "Merged-PR guard" bullet under
+variable or operator step enables it. `CLAUDE_PR_MERGE_GUARD=off` disables
+only the merged-PR check, not the API-write confirmation safeguard. Tests run
+against both copies in `tests/test_pr_merge_status_guard.py`. The interactive
+session applied the change because the pipeline's editors cannot write
+`.claude/hooks/**`; the former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP`
+placeholder is retired and nothing reads it. The full rules are in the
+"Merged-PR guard" bullet under
 "Isolated Codex agents".
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
