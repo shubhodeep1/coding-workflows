@@ -788,7 +788,7 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]], *, author_l
 		if author and _comment_author(comment) != author:
 			continue
 		body = sanitize_text(comment.get("body"))
-		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_FAILURE_MARKER_RE.search(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_canonical_failure_marker(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
 			# A provider outage neither adds to nor ends the streak.
 			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):

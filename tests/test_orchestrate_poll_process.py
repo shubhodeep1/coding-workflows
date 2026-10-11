@@ -2057,7 +2057,7 @@ if args[0] == 'api':
 					'mergedAt': pr.get('merged_at', None),
 					'headRefName': pr.get('headRefName', ''),
 					'baseRefName': pr.get('baseRefName', ''),
-					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+					'headRefOid': pr.get('headRefOid', pr.get('headSha', format(int(linked_pr_num), '040x') if str(linked_pr_num).isdigit() else f'mocksha{linked_pr_num}')),
 								'mergeable': pr.get('mergeable', None),
 								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 								'mergeCommit': {
@@ -2451,8 +2451,11 @@ if args[0] == 'api':
 				print('false')
 			else:
 				print('null')
+		# Default PR heads are 40-hex so the head-bound merges (#6991,
+		# _orch_squash_merge_bound / --match-head-commit) accept them; pass
+		# headSha to model an unresolvable head.
 		elif jq == '.head.sha':
-			print(pr.get('headSha', f'mocksha{pr_num}'))
+			print(pr.get('headSha', format(int(pr_num), '040x') if str(pr_num).isdigit() else f'mocksha{pr_num}'))
 		elif jq == '.head.ref':
 			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
@@ -2473,7 +2476,7 @@ if args[0] == 'api':
 					'ref': pr.get('baseRefName', ''),
 				},
 				'head': {
-					'sha': pr.get('headSha', f'mocksha{pr_num}'),
+					'sha': pr.get('headSha', format(int(pr_num), '040x') if str(pr_num).isdigit() else f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
 					'repo': (
 						None if pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo')) is None
@@ -12379,7 +12382,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12451,7 +12454,7 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12461,7 +12464,7 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-11",
 			"headRefFromApi": "ai/issue-11",
-			"headSha": "sha911",
+			"headSha": "0000000000000000000000000000000000000911",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12512,7 +12515,7 @@ def test_integration_backpressure_size_aware_floor_does_not_self_deadlock_large_
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12567,7 +12570,7 @@ def test_integration_backpressure_uses_wave_issue_count_when_total_issues_missin
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12613,7 +12616,7 @@ def test_integration_backpressure_falls_back_to_floor_on_non_numeric_total_issue
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12687,7 +12690,7 @@ def test_backward_scan_backpressure_log_reports_floor_and_effective_threshold():
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-35",
 			"headRefFromApi": "ai/issue-35",
-			"headSha": "sha935",
+			"headSha": "0000000000000000000000000000000000000935",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -13134,7 +13137,7 @@ def test_standalone_conflict_sweep_no_longer_special_cases_draft_claude_prs():
 			"headRefName": "claude/implement-plan-some-project",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha415",
+			"headSha": "0000000000000000000000000000000000000415",
 		},
 	]
 	result = _run_poller(
@@ -13157,7 +13160,7 @@ def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 			"headRefName": "claude/issue-10",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha411",
+			"headSha": "0000000000000000000000000000000000000411",
 		},
 	]
 	result = _run_poller(
@@ -13179,7 +13182,7 @@ def test_standalone_conflict_sweep_sees_named_pending_dispatch():
 	result = _run_poller(
 		state=state, enable_validation="false", max_validate_cycles="3",
 		prs=[{"number": 411, "state": "open", "baseRefName": "main",
-		      "headRefName": "claude/issue-10", "headSha": "sha411",
+		      "headRefName": "claude/issue-10", "headSha": "0000000000000000000000000000000000000411",
 		      "mergeable": False, "mergeable_state": "dirty"}],
 		update_branch_fail_for_prs=[411],
 		active_autofix_runs=[{
@@ -13202,7 +13205,7 @@ def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
 			"headRefName": "ai/issue-10",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha412",
+			"headSha": "0000000000000000000000000000000000000412",
 		},
 	]
 	result = _run_poller(
@@ -13231,7 +13234,7 @@ def test_standalone_conflict_sweep_skips_merge_train_queued_prs():
 				"baseRefName": "main",
 				"headRefName": "ai/issue-10",
 				"headRefFromApi": "ai/issue-10",
-				"headSha": "sha417",
+				"headSha": "0000000000000000000000000000000000000417",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"labels": ["ai:merge-queued"],
@@ -13255,7 +13258,7 @@ def test_standalone_conflict_sweep_skips_closed_pr_on_detail_fetch():
 			"headRefName": "claude/issue-13",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha413",
+			"headSha": "0000000000000000000000000000000000000413",
 		},
 	]
 	result = _run_poller(
@@ -13278,7 +13281,7 @@ def test_standalone_conflict_sweep_active_run_guard_skips_dispatch():
 			"headRefName": "claude/issue-14",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha414",
+			"headSha": "0000000000000000000000000000000000000414",
 		},
 	]
 	result = _run_poller(
@@ -13306,7 +13309,7 @@ def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues()
 			"headRefFromApi": "",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha415",
+			"headSha": "0000000000000000000000000000000000000415",
 		},
 	]
 	result = _run_poller(
@@ -13390,7 +13393,7 @@ def test_standalone_stall_recovery_skips_merge_train_queued_pr_without_judge():
 				"baseRefName": "main",
 				"headRefName": "ai/issue-501",
 				"headRefFromApi": "ai/issue-501",
-				"headSha": "sha418",
+				"headSha": "0000000000000000000000000000000000000418",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"labels": ["ai:merge-queued"],
@@ -13560,7 +13563,7 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 				"baseRefName": "main",
 				"headRefName": head_ref,
 				"headRefFromApi": head_ref,
-				"headSha": "sha416",
+				"headSha": "0000000000000000000000000000000000000416",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -13622,7 +13625,7 @@ def test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt():
 				"baseRefName": "main",
 				"headRefName": "claude/unrelated-fix",
 				"headRefFromApi": "claude/unrelated-fix",
-				"headSha": "sha416",
+				"headSha": "0000000000000000000000000000000000000416",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -13729,7 +13732,7 @@ def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejec
 				"baseRefName": "main",
 				"headRefName": "claude/unrelated-fix",
 				"headRefFromApi": "claude/unrelated-fix",
-				"headSha": "sha417",
+				"headSha": "0000000000000000000000000000000000000417",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -14082,7 +14085,7 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 				"baseRefName": "main",
 				"headRefName": head_ref,
 				"headRefFromApi": head_ref,
-				"headSha": "sha417",
+				"headSha": "0000000000000000000000000000000000000417",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -15382,7 +15385,7 @@ def _backpressure_3928_shape_prs() -> list[dict]:
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
