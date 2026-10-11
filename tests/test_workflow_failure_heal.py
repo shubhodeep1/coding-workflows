@@ -2211,6 +2211,17 @@ def test_intake_label_only_fingerprint_is_per_escalated_item() -> None:
 	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
 
 
+def test_intake_unreadable_run_logs_fingerprint_is_per_escalated_item() -> None:
+	"""A report whose linked runs' job logs all failed to fetch carries only
+	"(job log unavailable)" placeholders, whose `no-error-lines` signature is
+	the same for every item; it is keyed on the escalated item instead."""
+	result, _state_after, _ = _run_intake(_consumer_payload(), _intake_state(job_logs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_fetch_failed" in result.stdout
+	expected_fp = heal.fingerprint("AI Implement", "Run codex", f"label:ai:needs-human|source:{CONSUMER_REPO}#42")
+	assert f"fingerprint fp={expected_fp} workflow=AI Implement" in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # Autofix-failure reports (review_autofix.yml failure path)
 # ---------------------------------------------------------------------------

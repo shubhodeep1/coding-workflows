@@ -1882,8 +1882,8 @@ through `clarify → plan → implement → review`.
   project, ends in `[tracking:<issue number>]` (the validate wrappers' run name,
   `AI Validate [tracking:N]`); run URLs in comments can
   prioritize those runs but cannot introduce an unverified run ID. A run absent
-  from the recent listing is omitted. A report that still links no run is
-  fingerprinted on the label and the escalated item
+  from the recent listing is omitted. A report that still links no run, or whose
+  linked runs' job logs could not be read, is fingerprinted on the label and the escalated item
   (`label:<label>|source:<repo>#<n>`), so run-less reports from different
   issues or repositories never share one lineage. Lineage markers in the source issue are
   inherited only from an `ai:workflow-heal` issue with a canonical header
