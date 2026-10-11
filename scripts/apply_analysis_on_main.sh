@@ -26,12 +26,18 @@
 #   APPLY_ANALYSIS_SKIPPED reason=all_docs_processed         every doc is recorded in
 #                                                            the processing report or
 #                                                            was dispatched before
+#   APPLY_ANALYSIS_SKIPPED reason=source_doc_removed         every unprocessed doc was
+#                                                            already deleted on the
+#                                                            dispatch branch tip
+#                                                            (APPLY_ANALYSIS_DOC_GONE
+#                                                            names each one)
 #   APPLY_ANALYSIS_SKIPPED reason=guard_unavailable          the dispatch-history
 #                                                            search, a candidate's
 #                                                            comment read, or the
 #                                                            workflow-runs list
 #                                                            failed; fail closed
 #   APPLY_ANALYSIS_CANDIDATES count=<n> docs=<a,b>           list-only mode
+#   APPLY_ANALYSIS_IN_FLIGHT_DOCS count=<n> docs=<a,b>       in-flight-docs mode
 #   APPLY_ANALYSIS_DISPATCHED doc=<path> role=<role>
 #
 # Loop guard: the marker comment carries "apply-analysis-source-doc: <path>";
@@ -44,7 +50,25 @@
 # candidate doc until the first unprocessed one: 1 search plus 1
 # issue-comments read per search hit (the trusted-author check; up to 20
 # hits per doc), and 1 dispatch. The common marker-present path therefore
-# costs 2 + 2·(docs already dispatched) + 1 calls.
+# costs 2 + 2·(docs already dispatched) + 1 calls, plus one contents read per
+# unprocessed doc checked on the dispatch branch tip (normally 1).
+#
+# Branch-tip check: a promote cycle reads the docs from the checkout it pinned
+# when it started, but the daily log analysis purges reports older than its
+# retention window from main in the meantime. Project #7021 was dispatched at
+# 02:59 on 2026-10-10 for analysis/workflow-optimization-2026-09-09.md, which
+# the 01:03 purge had already deleted, and its plan blocked with "source doc
+# unavailable" (issue #7022). A doc must still exist on GITHUB_REF_NAME's tip
+# before it is dispatched; a removed doc logs APPLY_ANALYSIS_DOC_GONE and the
+# next unprocessed doc is tried.
+#
+# In-flight-docs mode (APPLY_ANALYSIS_IN_FLIGHT_DOCS=true) prints, one per
+# line, every doc a trusted marker comment on an OPEN tracking issue names,
+# so the log analysis purge can keep the docs live projects still read: 1 issue
+# list call per page, 1 comments read per page per open tracking issue, and 1
+# orchestrator runs read. Exit 2 when any read fails, or while an orchestrator
+# run is queued or running (a just-dispatched project's tracking issue and
+# marker comment do not exist until that run creates them).
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)  owner/repo
@@ -63,6 +87,7 @@
 #   APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE     tracking issue number the in-flight
 #                                              guard ignores (the completing proving run)
 #   APPLY_ANALYSIS_LIST_ONLY                   true: print the unprocessed docs, no dispatch
+#   APPLY_ANALYSIS_IN_FLIGHT_DOCS              true: print the docs open projects use, no dispatch
 #   APPLY_ANALYSIS_DOC_GLOB                    default analysis/workflow-optimization-*.md
 #   APPLY_ANALYSIS_REPORT_PATH                 default analysis/recommendation-processing-report.md
 #   APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE   default internal-orchestrate.yml
@@ -86,6 +111,7 @@ APPLY_ANALYSIS_PROMOTE_SHA="${APPLY_ANALYSIS_PROMOTE_SHA:-}"
 APPLY_ANALYSIS_PROVING_MERGE_SHA="${APPLY_ANALYSIS_PROVING_MERGE_SHA:-}"
 APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE:-}"
 APPLY_ANALYSIS_LIST_ONLY="${APPLY_ANALYSIS_LIST_ONLY:-false}"
+APPLY_ANALYSIS_IN_FLIGHT_DOCS="${APPLY_ANALYSIS_IN_FLIGHT_DOCS:-false}"
 APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimization-*.md}"
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
@@ -151,7 +177,9 @@ is_truthy()
 
 # open_tracking_issue_numbers [extra-label]
 # JSON array of open ai:orchestrator-tracking issue numbers, optionally
-# narrowed to issues that also carry <extra-label>. One API call.
+# narrowed to issues that also carry <extra-label>. One API call per page of
+# 100; every page is read so the purge's in-flight list cannot drop a project
+# past the first 100 open tracking issues.
 open_tracking_issue_numbers()
 {
 	local labels="ai:orchestrator-tracking"
@@ -160,8 +188,8 @@ open_tracking_issue_numbers()
 	fi
 	local encoded_labels
 	encoded_labels="$(printf '%s' "${labels}" | sed 's/:/%3A/g; s/,/%2C/g')"
-	gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=${encoded_labels}&per_page=100" \
-		| jq -c '[.[] | select(has("pull_request") | not) | .number] | sort'
+	gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=${encoded_labels}&per_page=100" \
+		| jq -c '[.[][] | select(has("pull_request") | not) | .number] | sort'
 }
 
 # trusted_marker_comment_present <issue-number> <marker-line>
@@ -219,6 +247,56 @@ doc_dispatched_before()
 	return 1
 }
 
+# doc_exists_on_ref <path> <ref>
+# 0 when <path> is a file on <ref> of the repository, 1 when GitHub answers
+# 404 (the doc was deleted there), 2 when the read failed otherwise.
+doc_exists_on_ref()
+{
+	local doc_path="$1"
+	local ref="$2"
+	local doc_type rc=0 stderr_file
+	[[ "${doc_path}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${doc_path}" != *..* ]] || return 2
+	[[ "${ref}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 2
+	stderr_file="$(mktemp)"
+	doc_type="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${doc_path}?ref=${ref}" --jq '.type' 2>"${stderr_file}")" || rc=$?
+	if [ "${rc}" -ne 0 ]; then
+		# Only an explicit 404 means the doc is gone; any other error fails closed.
+		if grep -qF 'HTTP 404' "${stderr_file}"; then
+			rm -f "${stderr_file}"
+			return 1
+		fi
+		rm -f "${stderr_file}"
+		return 2
+	fi
+	rm -f "${stderr_file}"
+	[ "${doc_type}" = "file" ] && return 0
+	return 1
+}
+
+# in_flight_docs
+# Prints every doc path a trusted marker comment on an open tracking issue
+# names, one per line, sorted and unique. Returns 2 when a read failed.
+in_flight_docs()
+{
+	local open_json issue_number comments_json
+	local docs=""
+	open_json="$(open_tracking_issue_numbers)" || return 2
+	printf '%s' "${open_json}" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
+	while IFS= read -r issue_number; do
+		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
+		# Every page: a marker past the first 100 comments must still keep its doc.
+		comments_json="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" 2>/dev/null)" || return 2
+		docs+="$(printf '%s' "${comments_json}" | jq -r --arg prefix "${APPLY_ANALYSIS_SOURCE_DOC_MARKER}: " --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+			($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
+			| .[]? | .[]?
+			| select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)
+			| (.body // "") | split("\n")[] | select(startswith($prefix)) | ltrimstr($prefix)
+			| select(test("^[A-Za-z0-9._/-]+$"))' 2>/dev/null)" || return 2
+		docs+=$'\n'
+	done < <(printf '%s' "${open_json}" | jq -r '.[]')
+	printf '%s\n' "${docs}" | sed '/^$/d' | sort -u
+}
+
 # orchestrate_run_in_flight
 # 0 when the orchestrator workflow has a queued or running run, 1 when it has
 # none, 2 when the runs list could not be read (callers fail closed).
@@ -270,6 +348,36 @@ unprocessed_docs()
 	done
 	return 0
 }
+
+# Runs whatever the kill switch says: it only reads, and the purge relies on it.
+if is_truthy "${APPLY_ANALYSIS_IN_FLIGHT_DOCS}"; then
+	set +e
+	in_flight_output="$(in_flight_docs)"
+	in_flight_rc=$?
+	set -e
+	if [ "${in_flight_rc}" -ne 0 ]; then
+		echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable" >&2
+		exit 2
+	fi
+	# A dispatched project gets its tracking issue and marker comment from the
+	# orchestrator run, after dispatch, so its doc is not listed above yet.
+	# While such a run is queued or running, report unavailable so the purge
+	# skips this run instead of deleting that doc.
+	set +e
+	orchestrate_run_in_flight
+	in_flight_run_rc=$?
+	set -e
+	if [ "${in_flight_run_rc}" -eq 0 ]; then
+		echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_run_in_flight" >&2
+		exit 2
+	elif [ "${in_flight_run_rc}" -ne 1 ]; then
+		echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_runs_unreadable" >&2
+		exit 2
+	fi
+	printf '%s\n' "${in_flight_output}" | sed '/^$/d'
+	echo "APPLY_ANALYSIS_IN_FLIGHT_DOCS count=$(printf '%s\n' "${in_flight_output}" | sed '/^$/d' | wc -l | tr -d ' ') docs=$(printf '%s\n' "${in_flight_output}" | sed '/^$/d' | paste -sd, -)" >&2
+	exit 0
+fi
 
 if ! is_truthy "${APPLY_ANALYSIS_ON_MAIN_ENABLED}"; then
 	skip_dispatch disabled
@@ -326,9 +434,44 @@ set -e
 if [ "${docs_rc}" -ne 0 ]; then
 	skip_dispatch guard_unavailable
 fi
-selected_doc="$(printf '%s\n' "${docs_output}" | sed -n '1p')"
-if [ -z "${selected_doc}" ]; then
+if [ -z "$(printf '%s\n' "${docs_output}" | sed '/^$/d')" ]; then
 	skip_dispatch all_docs_processed
+fi
+# The first unprocessed doc that still exists on the dispatch branch tip; the
+# plan and implement stages read the doc from that branch, not from this
+# cycle's pinned checkout.
+# Accepted residual race: this read, the dispatch below, and the purge's
+# in-flight check (APPLY_ANALYSIS_IN_FLIGHT_DOCS) are separate point-in-time
+# reads. A purge whose orchestrator-runs read lands in the few seconds between
+# `gh workflow run` returning and the new run becoming listable can still
+# delete the doc. Closing that fully needs a cross-workflow lock (a shared
+# concurrency group would hold the daily log analysis behind the up-to-340-
+# minute promote cycle); the outcome is a blocked plan the unblock judge
+# handles, as in #7022, not lost work.
+selected_doc=""
+gone_count=0
+while IFS= read -r candidate_doc; do
+	[ -n "${candidate_doc}" ] || continue
+	set +e
+	doc_exists_on_ref "${candidate_doc}" "${GITHUB_REF_NAME}"
+	doc_exists_rc=$?
+	set -e
+	case "${doc_exists_rc}" in
+		0)
+			selected_doc="${candidate_doc}"
+			break
+			;;
+		1)
+			gone_count=$((gone_count + 1))
+			echo "APPLY_ANALYSIS_DOC_GONE doc=${candidate_doc} ref=${GITHUB_REF_NAME}"
+			;;
+		*)
+			skip_dispatch guard_unavailable "lookup=contents:${candidate_doc}"
+			;;
+	esac
+done <<< "${docs_output}"
+if [ -z "${selected_doc}" ]; then
+	skip_dispatch source_doc_removed "ref=${GITHUB_REF_NAME} docs=${gone_count}"
 fi
 
 selected_basename="$(basename "${selected_doc}")"
