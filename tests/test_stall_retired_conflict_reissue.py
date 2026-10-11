@@ -252,8 +252,8 @@ def test_retired_reissue_retargets_stale_issue_header(base: str, expected_header
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for issue JSON parsing")
 @pytest.mark.parametrize("recovery_mode", ["managed", "standalone"])
 @pytest.mark.parametrize("base", ["main", "orchestrator/project-7"])
-@pytest.mark.parametrize(("retired_guidance", "create_fails"), [(True, False), (False, False), (True, True)])
-def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: Path, recovery_mode: str, base: str, retired_guidance: bool, create_fails: bool) -> None:
+@pytest.mark.parametrize(("retired_guidance", "create_fails", "empty_title"), [(True, False, False), (False, False, False), (True, True, False), (True, False, True)])
+def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: Path, recovery_mode: str, base: str, retired_guidance: bool, create_fails: bool, empty_title: bool) -> None:
 	if recovery_mode == "managed":
 		start = POLLER_TEXT.index("    close_and_reissue)\n      # Belt-and-braces ancestor-chain")
 		stop = POLLER_TEXT.index("    skip)\n", start)
@@ -262,7 +262,7 @@ def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: 
 		stop = POLLER_TEXT.index("      skip)\n", start)
 	case_body = POLLER_TEXT[start:stop]
 	issue_body = "- **Target branch:** `ai/issue-7`\nKeep this work."
-	issue_json = json.dumps({"title": "Original", "body": issue_body, "heal": False})
+	issue_json = json.dumps({"title": "" if empty_title else "Original", "body": issue_body, "heal": False})
 	script = """set -euo pipefail
 count_noop_ancestors() { printf '2\\n'; }
 ensure_label_exists() { :; }
@@ -277,6 +277,7 @@ gh_retry() {
   if [ "$1" = _safe_gh_jq ]; then
     printf '%s\\n' "$ORIG_ISSUE_JSON"
   elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = create ]; then
+    printf 'create\n' >> "$CAPTURED_CREATES_FILE"
     if [ "$CREATE_FAILS" = true ]; then return 1; fi
     while [ "$#" -gt 0 ]; do
       if [ "$1" = --body ]; then
@@ -296,7 +297,7 @@ reissue_case() {
   local elapsed_minutes=70 labels_json='[]' updated_state='{}' state_comment_id=''
   local STALL_REISSUE_EXTRA_GUIDANCE_ISSUE="$RETIRE_ISSUE" STALL_REISSUE_EXTRA_GUIDANCE='Review changed files'
   local STALL_RETIRED_CONFLICT_CLOSE_MESSAGE='Retired conflict' STALL_RETIRED_CONFLICT_BASE="$PR_BASE"
-  local STALL_RECOVERY_SHOULD_INCREMENT='' took_action=''
+  local took_action=''
   local MAX_IMPL_NOOP_REISSUES=2 GITHUB_REPOSITORY=o/r WAVE_IDX=0
   for REISSUE_TEST_PASS in 1; do
     case close_and_reissue in
@@ -304,20 +305,28 @@ reissue_case() {
     esac
   done
 }
+STALL_RECOVERY_SHOULD_INCREMENT=''
 reissue_case
+printf 'INCREMENT=%s\n' "${STALL_RECOVERY_SHOULD_INCREMENT}"
 """
 	created_body_file = tmp_path / "replacement-body.txt"
 	actions_file = tmp_path / "actions.txt"
+	creates_file = tmp_path / "creates.txt"
 	result = subprocess.run(
 		["bash", "-c", script], capture_output=True, text=True, check=False,
 		env={**os.environ, "ORIG_ISSUE_JSON": issue_json, "PR_BASE": base,
 			"RETIRE_ISSUE": "7" if retired_guidance else "8", "CAPTURED_ISSUE_BODY_FILE": str(created_body_file),
-			"CAPTURED_ACTIONS_FILE": str(actions_file), "CREATE_FAILS": "true" if create_fails else "false"},
+			"CAPTURED_ACTIONS_FILE": str(actions_file), "CAPTURED_CREATES_FILE": str(creates_file), "CREATE_FAILS": "true" if create_fails else "false"},
 	)
-	if create_fails:
-		assert result.returncode == (1 if recovery_mode == "managed" else 0), result.stderr + result.stdout
+	if create_fails or empty_title:
+		assert result.returncode == 0, result.stderr + result.stdout
 		assert not created_body_file.exists()
 		assert not actions_file.exists(), "failed creation must not close the PR or source issue"
+		# An unreadable source title skips the create call entirely.
+		assert creates_file.exists() == (not empty_title)
+		if recovery_mode == "managed":
+			# A failed managed reissue spends one recovery attempt.
+			assert "INCREMENT=true" in result.stdout
 		return
 	assert result.returncode == 0, result.stderr + result.stdout
 	if not retired_guidance:

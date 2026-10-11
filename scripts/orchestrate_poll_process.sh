@@ -15677,7 +15677,9 @@ STALL_EOF
       orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
       if [ -z "${orig_title}" ]; then
         echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
-        return 1
+        # Spend a recovery attempt so a persistent failure reaches skip/escalate.
+        STALL_RECOVERY_SHOULD_INCREMENT="true"
+        return 0
       fi
       if [ -n "${_stall_reissue_extra}" ]; then
         orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
@@ -15741,7 +15743,9 @@ REISSUE_EOF
       else
         echo "::warning::Could not confirm replacement issue for stalled #${issue_num}; keeping it and its PR open."
         tg_notify_issue "${issue_num}" "Stall recovery: could not confirm replacement issue for #${issue_num}; source issue and PR remain open." "ERROR"
-        return 1
+        # Spend a recovery attempt so a persistent failure reaches skip/escalate.
+        STALL_RECOVERY_SHOULD_INCREMENT="true"
+        return 0
       fi
       ;;
 
@@ -19102,7 +19106,13 @@ REISSUE_EOF
           _heal_reissue_label_args=(--label 'ai:workflow-heal')
         fi
         mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
-        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        new_url=""
+        if [ -n "${orig_title}" ]; then
+          new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        else
+          # Source read failed: skip the create; the failure branch keeps both open.
+          echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
+        fi
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
