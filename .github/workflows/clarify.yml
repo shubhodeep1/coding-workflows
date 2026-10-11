@@ -246,6 +246,11 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
 
+          # Host Python helpers run outside the issue branch checkout.
+          CLARIFY_HOST_PYTHON_DIR="${RUNNER_TEMP}/clarify-host-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p -- "${CLARIFY_HOST_PYTHON_DIR}"
+          echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
+
           _fetched_scripts=()
           for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
@@ -257,6 +262,10 @@ jobs:
               exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            case "${f}" in
+              load_workflow_overlay.py|security_dependency.py)
+                install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}" ;;
+            esac
             _fetched_scripts+=("${f}")
           done
 
@@ -332,7 +341,8 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # Isolated mode also excludes PYTHONPATH and the checkout's cwd.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -502,7 +512,8 @@ jobs:
           # /answer write until the issue it depends on has merged (issue
           # #4934). The target is already fetched; only a dependent issue
           # costs one additional issue read (scripts/security_dependency.py).
-          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
+          # The runner-temp copy is staged from verified support, not the issue branch.
+          DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
           if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
@@ -1249,7 +1260,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
         run: |
           set -euo pipefail
@@ -1353,7 +1364,7 @@ jobs:
           ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           AUTO_DECIDE_CLARIFICATION_COMMENT_ID: ${{ steps.post_questions.outputs.comment_id }}
         run: |
           set -euo pipefail
@@ -1492,7 +1503,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           CLARIFY_AUTO_DECIDE_ANSWERED: ${{ steps.standalone_auto_decide.outputs.answered || 'false' }}
           CLARIFY_AUTO_DECIDE_DELEGATED: ${{ steps.standalone_auto_decide.outputs.delegated || 'false' }}
         run: |
@@ -1653,7 +1664,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1668,7 +1679,9 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+          # DEBUG: the heal-report job and the unblock judge (ai:clarify-failed)
+          # pick this up and page when a person is needed.
+          tg_send_phase_failure clarify "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
 
       - name: Record GH_PAT budget at clarify end
         if: always()

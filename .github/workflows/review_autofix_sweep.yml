@@ -171,7 +171,7 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -uo pipefail
           helper=".ci-rerun-support/scripts/provider_outage.py"
@@ -186,7 +186,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" sweep --repo "${REPOSITORY}" "${sweep_mode_args[@]}" --alert-out "${alert_file}" || true
           if [ -s "${alert_file}" ] && [ -f .ci-rerun-support/scripts/tg_helpers.sh ]; then
             source .ci-rerun-support/scripts/tg_helpers.sh
-            tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null || true
+            # DEBUG: the only sweep alert is "provider recovered", sent after
+            # the sweep already re-dispatched the PRs (nothing left to do).
+            tg_send_msg "$(cat "${alert_file}")" "DEBUG" >/dev/null || true
           fi
           rm -f -- "${alert_file}"
 

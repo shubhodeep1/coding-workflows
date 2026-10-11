@@ -6358,3 +6358,83 @@ def test_intake_skips_host_only_conflict_reports() -> None:
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL skip reason={HOST_ONLY_SKIP}" in result.stdout and "stage=after_provenance" in result.stdout, result.stdout
 	assert "issues_created" not in state and "comments_posted" not in state and prompt == ""
+
+
+def test_scope_blocked_report_carries_validated_authorship_facts() -> None:
+	# hylifegroup.com#75 (Q81): the heal saw no author and classified a guard
+	# rejection that main already grants as consumer-config.
+	issue = dict(_issue(labels=["ai:scope-blocked"]), user={"login": "shubhodeep1"}, author_association="OWNER")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:scope-blocked", issue=issue, comments=[], runs=[],
+		wrapper_sha=SHA_A, reporter_run_url=None, pipeline_login="shubhodeep1",
+	)
+	normalized = heal.validate_payload(payload)
+	assert normalized["issue_author_login"] == "shubhodeep1"
+	assert normalized["issue_author_association"] == "OWNER"
+	assert normalized["reporter_pipeline_login"] == "shubhodeep1"
+	# Invalid values are dropped, never fatal; an older reporter sends none.
+	bad = dict(issue, user={"login": "x y\n<!--"}, author_association="ROOT")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:scope-blocked", issue=bad, comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None, pipeline_login="--evil",
+	)
+	normalized = heal.validate_payload(payload)
+	assert (normalized["issue_author_login"], normalized["issue_author_association"], normalized["reporter_pipeline_login"]) == (None, None, None)
+	legacy = {key: value for key, value in payload.items() if not key.startswith(("issue_author", "reporter_pipeline"))}
+	assert heal.validate_payload(legacy)["issue_author_login"] is None
+	forged = dict(legacy, issue_author_login="a\nb", reporter_pipeline_login="c" * 50)
+	normalized = heal.validate_payload(forged)
+	assert normalized["issue_author_login"] is None and normalized["reporter_pipeline_login"] is None
+	# Other labels carry no authorship facts.
+	other = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=issue, comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None, pipeline_login="shubhodeep1",
+	)
+	assert "issue_author_login" not in other and "issue_author_login" not in heal.validate_payload(other)
+
+
+def test_scope_blocked_reporter_and_intake_wire_the_authorship_facts() -> None:
+	report = REPORT_SCRIPT.read_text(encoding="utf-8")
+	identity = report.index('if [ "${LABEL}" = "ai:needs-human" ] || [ "${LABEL}" = "ai:scope-blocked" ]; then')
+	assert identity < report.index('build-issue-payload \\')
+	# One shared read; the only other is the retry the non-retryable-marker
+	# check takes when that read came back empty.
+	assert report.count("gh api user") == 2
+	assert 'if [ -z "${HEAL_REPORTER_LOGIN}" ]; then\n\t\tHEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login' in report
+	assert report.index("gh api user") < report.index('build-issue-payload \\')
+	assert '--pipeline-login "${HEAL_REPORTER_LOGIN}" \\' in report
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert "echo \"Issue author: $(_pf '.issue_author_login // \"unknown\"') (association: $(_pf '.issue_author_association // \"unknown\"'))\"" in intake
+	assert "echo \"Pipeline account (the reporter's identity): $(_pf '.reporter_pipeline_login // \"unknown\"')\"" in intake
+	for path in (PROMPT_FILE, REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt"):
+		text = " ".join(path.read_text(encoding="utf-8").split())
+		assert "When the newer guard would grant this author's rejected paths, the cause is `already-fixed`" in text, path
+		assert "Never suggest adding a `files_touched` block that lists only the rejected automation paths to an issue that has none" in text, path
+
+
+def test_build_issue_payload_cli_accepts_pipeline_login(tmp_path: Path) -> None:
+	issue_file = tmp_path / "issue.json"
+	issue_file.write_text(json.dumps(dict(_issue(labels=["ai:scope-blocked"]), user={"login": "bot-user"}, author_association="NONE")), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(LIB_PATH), "build-issue-payload", "--repo", CONSUMER_REPO, "--kind", "issue", "--label", "ai:scope-blocked",
+			"--issue-json", str(issue_file), "--pipeline-login", "pipeline-bot"],
+		capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+	)
+	assert result.returncode == 0, result.stderr
+	payload = json.loads(result.stdout)
+	assert (payload["issue_author_login"], payload["issue_author_association"], payload["reporter_pipeline_login"]) == ("bot-user", "NONE", "pipeline-bot")
+
+
+def test_scope_blocked_intake_prompt_names_the_author_and_pipeline_account() -> None:
+	payload = _consumer_payload(label="ai:scope-blocked", labels=["ai:scope-blocked"], issue_author_login="shubhodeep1",
+		issue_author_association="OWNER", reporter_pipeline_login="shubhodeep1")
+	result, _state, prompt = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "Issue author: shubhodeep1 (association: OWNER)" in prompt
+	assert "Pipeline account (the reporter's identity): shubhodeep1" in prompt
+	legacy = _consumer_payload(label="ai:scope-blocked", labels=["ai:scope-blocked"])
+	result, _state, prompt = _run_intake(legacy, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "Issue author: unknown (association: unknown)" in prompt
+	result, _state, prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "Issue author:" not in prompt

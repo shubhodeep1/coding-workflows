@@ -16,6 +16,9 @@ else
 fi
 if [ -s "${alert_file}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
   source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
-  tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null || true
+  # DEBUG: capacity gating falls back to codex/OpenCode automatically, and
+  # the recovery message needs no action. A rejected token still pages
+  # through scripts/claude_pool_health_alert.sh.
+  tg_send_msg "$(cat "${alert_file}")" "DEBUG" >/dev/null || true
 fi
 rm -f -- "${alert_file}"

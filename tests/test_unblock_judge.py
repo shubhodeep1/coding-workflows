@@ -790,7 +790,8 @@ def test_untrusted_pr_issue_creating_verdicts_fail_closed(name: str, untrusted: 
 	assert [op["op"] for op in ops] == ["comment", "close", "add_labels", "telegram"]
 	assert ops[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": True}
 	assert ops[2]["labels"] == ["ai:unblock-closed"]
-	assert ops[3]["level"] == "WARNING"
+	assert ops[3]["level"] == "DEBUG"
+	assert ops[3]["text"].startswith("Unblock judge closed untrusted PR #7 ")
 	assert all(op.get("issue", 7) == 7 for op in ops)
 	assert all("model spec" not in str(op) and "model instructions" not in str(op) and "because" not in str(op) for op in ops)
 	assert all(not line.startswith("/") for line in ops[0]["body"].splitlines())
@@ -960,6 +961,9 @@ if os.environ.get("FAKE_GH_OPERATOR_TRACKER") and endpoint.startswith("repos/o/r
 		"body": "<!-- ai:operator-step:v1 -->\nSteps", "html_url": "https://example.test/950"}]))
 if os.environ.get("FAKE_GH_OPERATOR_TRACKER") and endpoint == "repos/o/r/issues/950/comments?per_page=100":
 	done("[[]]")
+if endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
+	# Like GitHub, the label listing shows the trackers this fake created.
+	done(json.dumps(state.get("operator_trackers", [])))
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
@@ -1001,12 +1005,24 @@ if method == "POST" and endpoint.endswith("/issues"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	state["created"].append(f)
+	if f.get("labels[]") == "ai:operator-step":
+		# A distinct number keeps the tracker apart from fix-up issue 901.
+		state.setdefault("operator_trackers", []).append({"number": 902, "title": f.get("title"), "body": f.get("body", ""),
+			"state": "open", "user": {"login": "pipeline-bot"}, "author_association": "OWNER",
+			"html_url": "https://github.com/o/r/issues/902", "labels": [{"name": "ai:operator-step"}]})
+		done("902\t" + f.get("labels[]", "") if jq else json.dumps({"number": 902}))
 	created_labels = os.environ.get("FAKE_GH_CREATE_LABELS", f.get("labels[]", ""))
 	done("901\t" + created_labels if jq else json.dumps({"number": 901}))
 if endpoint.endswith("/comments?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_COMMENTS"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	tracker_numbers = {str(t["number"]) for t in state.get("operator_trackers", [])}
+	tracker_number = endpoint[len("repos/o/r/issues/"):].split("/", 1)[0]
+	if endpoint.startswith("repos/o/r/issues/") and tracker_number in tracker_numbers:
+		# The writer reads with --paginate --slurp: one page holding the posted entries.
+		posted = [c for c in state["comments"] if c["endpoint"] == f"repos/o/r/issues/{tracker_number}/comments"]
+		done(json.dumps([[{"id": 1000 + i, "user": {"login": "pipeline-bot"}, "body": c["body"]} for i, c in enumerate(posted)]]))
 	if endpoint == "repos/o/r/issues/40/comments?per_page=100":
 		done(os.environ.get("FAKE_GH_PROJECT_COMMENTS", "[]"))
 	if endpoint == "repos/o/r/issues/7/comments?per_page=100":
@@ -1728,8 +1744,11 @@ def test_untrusted_pr_write_failure_still_warns(tmp_path: Path, failure: str, cl
 	assert state["created"] == []
 	assert any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"]) == closed
 	assert [label for _, label in state["labels_added"]] == (["ai:unblock-closed"] if closed else [])
-	assert alerts.read_text(encoding="utf-8").startswith("WARNING|Unblock judge ")
-	assert ("could not close" in alerts.read_text(encoding="utf-8")) != closed
+	# A landed close is finished work (DEBUG); a failed close leaves the
+	# untrusted PR open and pages a person (WARNING).
+	sent = alerts.read_text(encoding="utf-8")
+	assert sent.startswith("DEBUG|Unblock judge closed untrusted PR #7 " if closed else "WARNING|Unblock judge could not close untrusted PR #7")
+	assert ("could not close" in sent) != closed
 
 
 def test_untrusted_project_pr_does_not_dispatch_review(tmp_path: Path) -> None:
@@ -1933,6 +1952,16 @@ def test_failed_operator_step_does_not_send_success_notification(tmp_path: Path)
 	assert "op=operator_step outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["created"]
+
+
+def test_operator_step_success_writes_tracker_entry(tmp_path: Path) -> None:
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "set the secret"}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict)
+	assert "op=operator_step outcome=failed" not in result.stdout
+	assert "verdict=operator_step round=1 outcome=acted" in result.stdout
+	assert [f for f in state["created"] if f.get("labels[]") == "ai:operator-step"]
+	entries = [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/902/comments"]
+	assert len(entries) == 1 and entries[0]["body"].startswith("<!-- ai:operator-step:entry key=")
 
 
 def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:

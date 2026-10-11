@@ -1080,7 +1080,7 @@ jobs:
           VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           bash scripts/validate_process.sh
