@@ -728,13 +728,18 @@ class FreshnessSyncCap(unittest.TestCase):
 				self.assertIn(f"MERGE_BASE_SYNC_MARKER pr=7 head_sha={HEAD} outcome=skipped reason={reason}", out)
 				self.assertEqual(_posted(calls), [])
 
-	def test_a_truncated_commit_list_checks_the_base_parent_against_the_base(self) -> None:
-		for status, posted in (("ahead", True), ("identical", True), ("diverged", False), ("", False)):
+	def test_a_truncated_commit_list_posts_no_marker(self) -> None:
+		# Containment in the base would also accept a web conflict-resolver
+		# merge against a newer base tip, so an unknown compared tip fails
+		# safe: no head poll, no marker, the next run reviews in full.
+		for status in ("ahead", "identical", "diverged", ""):
 			with self.subTest(status=status):
 				rc, out, calls = _sync_gate([], compare_commits=[], base_status=status)
 				self.assertEqual(rc, 1)
-				self.assertTrue(any(f"/compare/{BASE_TIP}...main" in c for c in calls))
-				self.assertEqual(bool(_posted(calls)), posted, out)
+				self.assertIn(f"MERGE_BASE_SYNC_MARKER pr=7 head_sha={HEAD} outcome=skipped reason=base_tip_unknown", out)
+				self.assertFalse(any(f"/compare/{BASE_TIP}...main" in c for c in calls))
+				self.assertFalse(any(c.endswith("repos/owner/repo/pulls/7") or "/commits/" in c for c in calls))
+				self.assertEqual(_posted(calls), [])
 
 	def test_the_base_tip_is_recorded_only_for_a_complete_commit_list(self) -> None:
 		body = f'_pr_base_freshness 7 {HEAD} main >/dev/null; echo "tip=${{PR_BASE_FRESHNESS_BASE_SHA}}"'

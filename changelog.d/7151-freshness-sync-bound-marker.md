@@ -7,11 +7,11 @@ After an accepted `update-branch`, `_pr_base_fresh_for_merge` (`scripts/pr_check
 
 | The numbers that matter | Value |
 | --- | --- |
-| Extra reads per accepted update | at most 5 PR reads, 1 commit read, 1 compare read (only for more than 250 base commits) |
+| Extra reads per accepted update | at most 5 PR reads and 1 commit read |
 | Updates after which a warning is logged | `MERGE_BASE_FRESHNESS_MAX_SYNCS` (default 2) |
 | Merges allowed over remaining overlap | 0 |
 
-What this means for operators: a PR whose base keeps changing the same files now keeps updating, one CI run each, until the base is quiet for one CI cycle. When the update commit cannot be observed or verified, no marker is posted (`MERGE_BASE_SYNC_MARKER ... outcome=skipped reason=<token>`) and the next run reviews in full. `MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS` (default 5, 1-20) and `MERGE_BASE_SYNC_HEAD_POLL_SECONDS` (default 3, 1-30) tune the wait for the new head.
+What this means for operators: a PR whose base keeps changing the same files now keeps updating, one CI run each, until the base is quiet for one CI cycle. When the update commit cannot be observed or verified, or the base gained more than 250 commits, no marker is posted (`MERGE_BASE_SYNC_MARKER ... outcome=skipped reason=<token>`) and the next run reviews in full. `MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS` (default 5, 1-20) and `MERGE_BASE_SYNC_HEAD_POLL_SECONDS` (default 3, 1-30) tune the wait for the new head.
 
 ### For contributors
 

@@ -762,23 +762,28 @@ _pr_base_sync_count()
 # MERGE_BASE_SYNC_HEAD_POLL_SECONDS apart (default 3, 1-30); invalid values use
 # the defaults. The new head must have exactly two parents, the first being
 # <from head>, be committed by `web-flow` with a verified signature, and its
-# second parent must equal PR_BASE_FRESHNESS_BASE_SHA (or, when the compare
-# commit list was truncated and that is empty, be contained in <base ref>).
+# second parent must equal PR_BASE_FRESHNESS_BASE_SHA exactly. When the
+# compare commit list was truncated (more than 250 base commits) that tip is
+# unknown and no marker is posted (base_tip_unknown, no reads): mere
+# containment in the base would also accept a later web conflict-resolver
+# merge [approved head, newer base tip] made by a branch writer, so the next
+# run reviews in full instead. Only an exact [approved head, compared tip]
+# pair, which GitHub merged without conflict, admits no editable merge.
+# <base ref> is accepted for compatibility and unused.
 # Sets PR_BASE_SYNC_MERGE_SHA / PR_BASE_SYNC_BASE_SHA and returns 0 on
 # success; otherwise returns 1 with PR_BASE_SYNC_OBSERVE_REASON =
-# head_not_observed | pull_read_failed | commit_read_failed |
-# parents_mismatch | not_github_merge | base_mismatch | base_compare_failed.
+# head_not_observed | base_tip_unknown | pull_read_failed |
+# commit_read_failed | parents_mismatch | not_github_merge | base_mismatch.
 # API budget (§15): at most MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS `pulls/{n}`
-# reads, one `commits/{sha}` read and, only when the compare commit list was
-# truncated, one compare read, all on the accepted-update path. The earlier
+# reads and one `commits/{sha}` read, all on the accepted-update path. The earlier
 # `pulls/{n}` read in _pr_base_freshness cannot be reused: the head changes
 # after the PUT.
 _pr_base_sync_observe_update_commit()
 {
-	local pr_number="$1" from_head="$2" base_ref="${3:-${PR_BASE_FRESHNESS_BASE_REF:-}}"
+	local pr_number="$1" from_head="$2"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local observe_attempts="${MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS:-5}" observe_sleep="${MERGE_BASE_SYNC_HEAD_POLL_SECONDS:-3}"
-	local observe_i observe_head="" observe_pull_ok="false" observe_commit observe_parents observe_first observe_second observe_verified observe_committer observe_status
+	local observe_i observe_head="" observe_pull_ok="false" observe_commit observe_parents observe_first observe_second observe_verified observe_committer
 	PR_BASE_SYNC_MERGE_SHA=""
 	PR_BASE_SYNC_BASE_SHA=""
 	PR_BASE_SYNC_OBSERVE_REASON=""
@@ -786,6 +791,10 @@ _pr_base_sync_observe_update_commit()
 	if [[ "${observe_sleep}" =~ ^[0-9]+$ ]] && [ "${observe_sleep}" -ge 1 ] && [ "${observe_sleep}" -le 30 ]; then :; else observe_sleep=3; fi
 	if ! [[ "${from_head}" =~ ^[0-9a-f]{40}$ ]]; then
 		PR_BASE_SYNC_OBSERVE_REASON="head_not_observed"
+		return 1
+	fi
+	if ! [[ "${PR_BASE_FRESHNESS_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		PR_BASE_SYNC_OBSERVE_REASON="base_tip_unknown"
 		return 1
 	fi
 	for (( observe_i = 1; observe_i <= observe_attempts; observe_i++ )); do
@@ -825,28 +834,9 @@ _pr_base_sync_observe_update_commit()
 		PR_BASE_SYNC_OBSERVE_REASON="not_github_merge"
 		return 1
 	fi
-	if [ -n "${PR_BASE_FRESHNESS_BASE_SHA:-}" ]; then
-		if [ "${observe_second}" != "${PR_BASE_FRESHNESS_BASE_SHA}" ]; then
-			PR_BASE_SYNC_OBSERVE_REASON="base_mismatch"
-			return 1
-		fi
-	else
-		if [ -z "${base_ref}" ] \
-			|| ! observe_status="$(gh_retry _safe_gh_jq "repos/${repo}/compare/${observe_second}...${base_ref}" 2>/dev/null | jq -r 'if type == "object" then (.status // "") else "" end' 2>/dev/null | tail -n1)"; then
-			PR_BASE_SYNC_OBSERVE_REASON="base_compare_failed"
-			return 1
-		fi
-		case "${observe_status}" in
-			ahead|identical) ;;
-			"")
-				PR_BASE_SYNC_OBSERVE_REASON="base_compare_failed"
-				return 1
-				;;
-			*)
-				PR_BASE_SYNC_OBSERVE_REASON="base_mismatch"
-				return 1
-				;;
-		esac
+	if [ "${observe_second}" != "${PR_BASE_FRESHNESS_BASE_SHA}" ]; then
+		PR_BASE_SYNC_OBSERVE_REASON="base_mismatch"
+		return 1
 	fi
 	PR_BASE_SYNC_MERGE_SHA="${observe_head}"
 	PR_BASE_SYNC_BASE_SHA="${observe_second}"

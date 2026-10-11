@@ -273,8 +273,8 @@ def test_pool_slot_contract_in_scripts_and_workflow() -> None:
 	assert "pr_closed|skipped_unmapped|skipped_open|skipped_pool)" in reviewers
 	assert "skipped_unmapped|skipped_open|skipped_pool)\n        review_skip_only_statuses" in reviewers
 	# The sandbox only admits PANEL_REVIEWER read-only.
-	assert "SECURITY_JUDGE|PANEL_REVIEWER) ;; *) exit 2 ;; esac" in sandbox
-	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER)\n\t\t[ \"${claude_access}\" = read ] || exit 2 ;;" in sandbox
+	assert "SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM|PANEL_REVIEWER) ;; *) exit 2 ;; esac" in sandbox
+	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM|PANEL_REVIEWER)\n\t\t[ \"${claude_access}\" = read ] || exit 2 ;;" in sandbox
 	# The workflow resolves the role (so the CLI and pool credential install)
 	# and exposes the fallback model with a default.
 	assert "ai_engine_for_role PANEL_REVIEWER" in workflow
@@ -386,7 +386,7 @@ def test_fallback_alert_names_the_panel_slot_action(tmp_path: Path, role: str, e
 		source "{REPO_ROOT / 'scripts' / 'ai_engine.sh'}"
 		ai_engine_fallback {role} all_accounts_failed
 		""")
-	subprocess.run(["bash", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path)}, capture_output=True, text=True, check=True)
+	subprocess.run(["bash", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path), "AI_ENGINE_FALLBACK_POLICY": "always"}, capture_output=True, text=True, check=True)
 	message = sent.read_text(encoding="utf-8")
 	assert expected in message
 	assert absent not in message
