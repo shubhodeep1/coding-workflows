@@ -207,7 +207,12 @@ exit 0
 def _sandbox_harness_script() -> str:
 	functions = "".join(
 		_extract_shell_function(VALIDATE_DRIVER, name)
-		for name in ("is_synthesised_test", "synthesised_test_sandbox_skip", "run_synthesised_test_sandboxed", "run_single_test")
+		# run_single_test runs host tests through run_test_without_credentials
+		# (main's credential scrub), so the harness needs it too.
+		for name in (
+			"is_synthesised_test", "synthesised_test_sandbox_skip", "run_synthesised_test_sandboxed",
+			"run_test_without_credentials", "run_single_test",
+		)
 	)
 	return (
 		"set -euo pipefail\n"
