@@ -9476,6 +9476,7 @@ invoke_judge_for_integration_conflict() {
     echo "how the isolated resolver should preserve merged sub-issue intent."
     echo 'Return only JSON: {"action":"redispatch_resolver","diagnosis":"...","resolution_guidance":"..."}.'
     echo 'Use action "fail" or "unknown" if a safe resolution cannot be identified.'
+    echo 'Keep "diagnosis" and "resolution_guidance" at 2000 characters or fewer each; longer answers are rejected.'
     echo
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
@@ -9575,9 +9576,13 @@ invoke_judge_for_integration_conflict() {
         integration_judge_invalid_reason="too_long"
       fi
       echo "INTEGRATION_JUDGE_INVALID pr=${final_pr} reason=${integration_judge_invalid_reason} rc=${integration_judge_rc} output_bytes=${integration_judge_output_bytes:-0}" >&2
+      printf '%s\n' "${integration_judge_invalid_reason}" > "${RUNTIME_DIR}/integration_judge_invalid_reason" 2>/dev/null || true
       if [ -s "${RUNTIME_DIR}/integration_judge.log" ]; then
         echo "::group::Integration judge log (last 20 lines)" >&2
-        tail -n 20 "${RUNTIME_DIR}/integration_judge.log" | cut -c1-400 | tr -cd '[:print:]\n' >&2 || true
+        # The log carries model-influenced text: escape `##[` and prefix every
+        # line so no line can be parsed as a workflow command (::add-mask::,
+        # ::stop-commands::, ...).
+        tail -n 20 "${RUNTIME_DIR}/integration_judge.log" | cut -c1-400 | tr -cd '[:print:]\n' | sed -e 's/##\[/##\\[/g' -e 's/^/| /' >&2 || true
         echo "::endgroup::" >&2
       fi
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
@@ -11435,6 +11440,9 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       # the project (#6902: it failed on the first and only judge call). Each
       # retry spends one lifetime slot, so the lifetime cap above still ends
       # a judge that never answers validly.
+      local integration_judge_retry_reason="unknown"
+      [ ! -s "${RUNTIME_DIR}/integration_judge_invalid_reason" ] || integration_judge_retry_reason="$(head -n 1 "${RUNTIME_DIR}/integration_judge_invalid_reason" | tr -cd 'A-Za-z0-9_')"
+      rm -f -- "${RUNTIME_DIR}/integration_judge_invalid_reason"
       total_dispatches=$((total_dispatches + 1))
       jq --argjson total "${total_dispatches}" \
         '.integration_sync_status = "healing" |
@@ -11442,7 +11450,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
          .integration_sync_last_error = "integration judge returned an invalid diagnosis"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
-      echo "INTEGRATION_JUDGE_RETRY pr=${final_pr} total_dispatches=${total_dispatches} lifetime_max=${INTEGRATION_CONFLICT_LIFETIME_MAX}"
+      echo "INTEGRATION_JUDGE_RETRY pr=${final_pr} reason=${integration_judge_retry_reason:-unknown} total_dispatches=${total_dispatches} lifetime_max=${INTEGRATION_CONFLICT_LIFETIME_MAX}" >&2
       echo "::warning::Integration judge answer for PR #${final_pr} was invalid; retrying on a later tick (${total_dispatches}/${INTEGRATION_CONFLICT_LIFETIME_MAX} lifetime dispatches)." >&2
       return 0
     fi
