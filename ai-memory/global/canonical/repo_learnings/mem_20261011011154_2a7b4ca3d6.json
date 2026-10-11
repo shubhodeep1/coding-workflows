@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.73,
+  "details": "Several cross-cutting changes included `.ai/.workspace_source_manifest.txt` alongside updates to documentation such as `README.md`, `agents.md`, or `docs/INVENTORY.md`. When modifying shared workflow-support files, check whether the manifest or these docs track the affected source.",
+  "fingerprint": "922ec62a14d3293ef680d5f05d501a1a8bf094e10803ec2e83942cbd6b70db93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38100444111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38100444111",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6668",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6712",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6812",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7103",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6722",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7104",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7111"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261011011154_2a7b4ca3d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Broad workflow-support changes may require updating the workspace source manifest and repository documentation.",
+  "timestamps": {
+    "created_at": "2026-10-11T01:11:54Z",
+    "promoted_at": "2026-10-11T01:13:27Z",
+    "superseded_at": null
+  }
+}
