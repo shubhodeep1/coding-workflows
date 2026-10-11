@@ -334,6 +334,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
+          VALIDATE_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -341,6 +342,17 @@ jobs:
           if [ "${GITHUB_REPOSITORY}" = "${wf_source}" ]; then
             helper_ref="main"
           fi
+          # A consumer wrapper pins this workflow to a commit (validate.yml@<sha>).
+          # Stage the support scripts from that same commit, never from a newer
+          # stable: binance-blessings#249's integration branch pinned an old
+          # validate.yml that failed against stable's scripts on every dispatch
+          # (Q49). Same identity source as review_autofix.yml's support commit.
+          validate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${VALIDATE_WORKFLOW_JOB_JSON}" 2>/dev/null || true)"
+          validate_support_pin_pattern='^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$'
+          if [ "${GITHUB_REPOSITORY}" != "${wf_source}" ] && [[ "${validate_workflow_ref}" =~ ${validate_support_pin_pattern} ]]; then
+            helper_ref="${validate_workflow_ref##*@}"
+          fi
+          echo "VALIDATE_SUPPORT_REF ref=${helper_ref} workflow_ref=${validate_workflow_ref:-unknown}"
           helper_stage_root="${RUNNER_TEMP}/codex-validate-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           helper_stage_dir="${helper_stage_root}/src"
           mkdir -p "${helper_stage_root}"
@@ -349,13 +361,25 @@ jobs:
           helper_git() {
             git -c "http.extraHeader=Authorization: Basic ${helper_auth}" "$@"
           }
-          if ! helper_git clone --quiet --no-tags --depth 1 --branch "${helper_ref}" \
+          if [[ "${helper_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+            # A commit is not a branch, so fetch it directly.
+            if ! { helper_git init --quiet "${helper_stage_dir}" &&
+                   helper_git -C "${helper_stage_dir}" fetch --quiet --no-tags --depth 1 "https://github.com/${wf_source}" "${helper_ref}" &&
+                   helper_git -C "${helper_stage_dir}" checkout --quiet --detach FETCH_HEAD; }; then
+              echo "::error::Trusted validation support checkout failed (ref=${helper_ref})."
+              exit 1
+            fi
+          elif ! helper_git clone --quiet --no-tags --depth 1 --branch "${helper_ref}" \
             "https://github.com/${wf_source}" "${helper_stage_dir}"; then
             echo "::error::Trusted validation support checkout failed."
             exit 1
           fi
           support_sha="$(git -C "${helper_stage_dir}" rev-parse HEAD)"
           [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [[ "${helper_ref}" =~ ^[0-9a-f]{40}$ ]] && [ "${support_sha}" != "${helper_ref}" ]; then
+            echo "::error::Validation support checkout is not the pinned commit (expected ${helper_ref}, got ${support_sha})."
+            exit 1
+          fi
           if [ ! -f "${helper_stage_dir}/scripts/stage_workflow_support.sh" ] ||
              [ ! -f "${helper_stage_dir}/scripts/run_workspace_hook.sh" ]; then
             echo "::error::Trusted validation support helpers are unavailable."

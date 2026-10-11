@@ -1745,6 +1745,7 @@ def _consumer_payload(**overrides) -> dict:
 
 JOB_LOG = (
 	"2026-09-20T10:00:00.000Z ##[group]Run codex\n"
+	"2026-09-20T10:00:00.000Z ##[endgroup]\n"
 	"2026-09-20T10:00:01.000Z codex: applying plan\n"
 	"2026-09-20T10:00:02.000Z ::error::resolve_integration_ref.sh: Integration branch 'orchestrator/project-4123' declared in child issue #4200 does not exist.\n"
 	"2026-09-20T10:00:03.000Z ##[error]Process completed with exit code 1.\n"
@@ -1883,6 +1884,54 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	for call in state["calls"]:
 		if any(part.endswith("/jobs") or part.endswith("/issues") for part in call):
 			assert "--method" in call and call[call.index("--method") + 1] == "GET"
+
+
+@pytest.mark.parametrize("status", ("behind", "diverged"))
+def test_intake_targets_the_default_branch_when_stable_lacks_the_pinned_release(status: str) -> None:
+	"""#6902 -> #7063: a consumer pinned to a main-only commit got a stable hotfix
+	issue for a file stable does not have, and its plan could only block."""
+	state = _intake_state(compare=_compare(0, [], status=status), branches=["stable", "main"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+	assert f"target_branch_retarget from=stable to=main reason=wrapper_pin_not_on_target pin={SHA_A} compare_status={status}" in result.stdout
+	assert "target_branch=main" in result.stdout and "target_branch_source=wrapper_pin_not_on_target" in result.stdout
+	# No extra API call: the branch-progress compare already answered it.
+	compare_calls = [call for call in state_after["calls"] if any("/compare/" in part for part in call)]
+	assert len(compare_calls) == 1 and any(f"compare/{SHA_A}...stable" in part for part in compare_calls[0])
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments"]
+	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
+
+
+@pytest.mark.parametrize("compare", (_compare(2, [(SHA_FIX, "fix"), (SHA_C, "merge")], status="ahead"), _compare(0, [], status="identical"), None))
+def test_intake_keeps_stable_when_it_contains_the_pin_or_the_compare_is_unavailable(compare) -> None:
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(compare=compare), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "target_branch_retarget" not in result.stdout
+	assert "target_branch_source=default" in result.stdout
+
+
+def test_intake_retarget_uses_the_configured_default_branch_for_consumer_issue_reports() -> None:
+	"""Consumer issue reports skip the provenance block; the retarget must still
+	read WORKFLOW_HEAL_DEFAULT_BRANCH instead of assuming `main`."""
+	state = _intake_state(compare=_compare(0, [], status="behind"), branches=["stable", "main", "develop"])
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "develop"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "develop"
+	assert "target_branch_retarget from=stable to=develop" in result.stdout
+
+
+def test_intake_retarget_falls_back_to_main_without_a_known_default_branch() -> None:
+	state = _intake_state(compare=_compare(0, [], status="behind"))
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": ""})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(state_after["issues_created"][0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
 
 
 def test_intake_routes_consumer_defect_to_consumer_repo() -> None:
@@ -5339,10 +5388,27 @@ def test_phase_report_skip_paths() -> None:
 
 PLAN_JOB_LOG = (
 	"2026-10-05T23:41:45.000Z ##[group]Run bash scripts/run_plan_codex.sh\n"
+	"2026-10-05T23:41:45.000Z ##[endgroup]\n"
 	"2026-10-05T23:41:47.000Z codex_stall_guard.sh: unknown option: --engine\n"
 	"2026-10-05T23:42:19.000Z ##[error]Codex planning failed after 3 attempts.\n"
 	"2026-10-05T23:42:19.000Z ##[error]Process completed with exit code 1.\n"
 )
+
+
+def test_job_log_fixtures_close_every_run_header() -> None:
+	# Real Actions job logs always close a ##[group]Run step header with
+	# ##[endgroup]; the log filter fails closed on a header it never sees
+	# closed, so fixtures must keep the real shape (#6876).
+	for fixture in (JOB_LOG, PLAN_JOB_LOG):
+		open_header = False
+		for raw in fixture.splitlines():
+			content = heal._LOG_TIMESTAMP_RE.sub("", raw)
+			if heal._STEP_HEADER_OPEN_RE.match(content):
+				assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
+				open_header = True
+			elif heal._STEP_HEADER_CLOSE_RE.match(content):
+				open_header = False
+		assert not open_header, "fixture opens a ##[group]Run header without ##[endgroup]; real Actions job logs always close it"
 
 
 def _plan_intake_state(*, repo: str = CONSUMER_REPO, **overrides) -> dict:
