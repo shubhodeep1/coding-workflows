@@ -295,6 +295,20 @@ _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MAR
 _FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+# Authorship facts on ai:scope-blocked reports (Q81): the automation-path
+# guard grants by author, so the diagnosis needs the issue author, its
+# association and the pipeline login. Invalid values are dropped, never fatal.
+_SCOPE_AUTHOR_LABEL = "ai:scope-blocked"
+_SCOPE_AUTHOR_LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$")
+_SCOPE_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", "NONE"})
+
+
+def _scope_author_login(value: Any) -> str | None:
+	return value if isinstance(value, str) and _SCOPE_AUTHOR_LOGIN_RE.fullmatch(value) else None
+
+
+def _scope_author_association(value: Any) -> str | None:
+	return value if isinstance(value, str) and value in _SCOPE_AUTHOR_ASSOCIATIONS else None
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 _ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
@@ -678,8 +692,15 @@ def build_issue_payload(
 	wrapper_sha: str | None,
 	reporter_run_url: str | None,
 	now: datetime | None = None,
+	pipeline_login: str | None = None,
 ) -> dict[str, Any]:
-	"""Build the dispatch payload for an escalation label on an issue / PR."""
+	"""Build the dispatch payload for an escalation label on an issue / PR.
+
+	An ``ai:scope-blocked`` report also carries the issue author, its
+	association and ``pipeline_login`` (the reporter's identity), so the
+	diagnosis can tell whether the automation-path guard treats the item as
+	pipeline-authored.
+	"""
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
@@ -722,6 +743,18 @@ def build_issue_payload(
 		"conclusion": None,
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
+		**_scope_author_facts(label, issue, pipeline_login),
+	}
+
+
+def _scope_author_facts(label: str, issue: dict[str, Any], pipeline_login: str | None) -> dict[str, Any]:
+	if label != _SCOPE_AUTHOR_LABEL:
+		return {}
+	user = issue.get("user") if isinstance(issue.get("user"), dict) else {}
+	return {
+		"issue_author_login": _scope_author_login(user.get("login")),
+		"issue_author_association": _scope_author_association(issue.get("author_association")),
+		"reporter_pipeline_login": _scope_author_login(pipeline_login),
 	}
 
 
@@ -1318,6 +1351,10 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
+		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
+		normalized["issue_author_association"] = _scope_author_association(payload.get("issue_author_association"))
+		normalized["reporter_pipeline_login"] = _scope_author_login(payload.get("reporter_pipeline_login"))
 	if kind == "autofix_failure":
 		normalized.update({
 			"base_branch": base_branch,
@@ -3468,6 +3505,7 @@ def _cmd_build_issue_payload(args: argparse.Namespace) -> int:
 		runs=runs if isinstance(runs, list) else [],
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
+		pipeline_login=args.pipeline_login or None,
 	)
 	validate_payload(payload)
 	encoded = json.dumps(payload)
@@ -4137,6 +4175,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--runs-json")
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--pipeline-login", default="", help="Reporter identity; recorded on ai:scope-blocked reports only")
 	p.set_defaults(func=_cmd_build_issue_payload)
 
 	p = sub.add_parser("build-autofix-payload", help="Build the payload for a failed review/autofix run on a PR")
