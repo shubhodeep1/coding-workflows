@@ -218,6 +218,17 @@ def test_both_reissue_bodies_append_issue_bound_guidance() -> None:
 	assert POLLER_TEXT.count('orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"') == 2
 
 
+def test_both_reissue_cases_bypass_noop_cap_only_for_verified_retired_conflicts() -> None:
+	for case_anchor, next_case in (
+		("    close_and_reissue)\n      # Belt-and-braces ancestor-chain", "    skip)\n"),
+		("      close_and_reissue)\n        # Belt-and-braces ancestor-chain", "      skip)\n"),
+	):
+		start = POLLER_TEXT.index(case_anchor)
+		block = POLLER_TEXT[start:POLLER_TEXT.index(next_case, start)]
+		assert block.index('"${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}"') < block.index("Ancestor-chain no-op cap reached")
+		assert block.index('orig_body="$(printf') < block.index('orig_body="$(_stall_retired_conflict_reissue_body') < block.index('new_body="$(cat <<REISSUE_EOF')
+
+
 @pytest.mark.parametrize(
 	("base", "expected_header"),
 	[("main", ""), ("orchestrator/project-7", "- **Target branch:** `orchestrator/project-7`")],
@@ -236,6 +247,82 @@ def test_retired_reissue_retargets_stale_issue_header(base: str, expected_header
 	if expected_header:
 		assert result.stdout.rstrip().endswith(expected_header)
 	assert "Keep this work." in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for issue JSON parsing")
+@pytest.mark.parametrize("recovery_mode", ["managed", "standalone"])
+@pytest.mark.parametrize("base", ["main", "orchestrator/project-7"])
+@pytest.mark.parametrize("retired_guidance", [True, False])
+def test_retired_reissue_with_noop_ancestors_creates_issue_on_pr_base(tmp_path: Path, recovery_mode: str, base: str, retired_guidance: bool) -> None:
+	if recovery_mode == "managed":
+		start = POLLER_TEXT.index("    close_and_reissue)\n      # Belt-and-braces ancestor-chain")
+		stop = POLLER_TEXT.index("    skip)\n", start)
+	else:
+		start = POLLER_TEXT.index("      close_and_reissue)\n        # Belt-and-braces ancestor-chain")
+		stop = POLLER_TEXT.index("      skip)\n", start)
+	case_body = POLLER_TEXT[start:stop]
+	issue_body = "- **Target branch:** `ai/issue-7`\nKeep this work."
+	issue_json = json.dumps({"title": "Original", "body": issue_body, "heal": False})
+	script = """set -euo pipefail
+count_noop_ancestors() { printf '2\\n'; }
+ensure_label_exists() { :; }
+close_linked_pr() { :; }
+surface_reissue_closed_without_pr() { :; }
+tg_notify() { :; }
+tg_notify_issue() { :; }
+_gh_url() { :; }
+engine_label_create_args() { :; }
+write_standalone_state_json() { :; }
+gh_retry() {
+  if [ "$1" = _safe_gh_jq ]; then
+    printf '%s\\n' "$ORIG_ISSUE_JSON"
+  elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = create ]; then
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --body ]; then
+        printf '%s\\n' "$2" > "$CAPTURED_ISSUE_BODY_FILE"
+        break
+      fi
+      shift
+    done
+    printf 'https://github.com/o/r/issues/99\\n'
+  fi
+}
+""" + _extract_function("_stall_retired_conflict_reissue_body") + """
+reissue_case() {
+  local issue_num=7 phase=review-blocked recovery_count=1 local_id='' stall_minutes=70
+  local elapsed_minutes=70 labels_json='[]' updated_state='{}' state_comment_id=''
+  local STALL_REISSUE_EXTRA_GUIDANCE_ISSUE="$RETIRE_ISSUE" STALL_REISSUE_EXTRA_GUIDANCE='Review changed files'
+  local STALL_RETIRED_CONFLICT_CLOSE_MESSAGE='Retired conflict' STALL_RETIRED_CONFLICT_BASE="$PR_BASE"
+  local STALL_RECOVERY_SHOULD_INCREMENT='' took_action=''
+  local MAX_IMPL_NOOP_REISSUES=2 GITHUB_REPOSITORY=o/r WAVE_IDX=0
+  for REISSUE_TEST_PASS in 1; do
+    case close_and_reissue in
+""" + case_body + """
+    esac
+  done
+}
+reissue_case
+"""
+	created_body_file = tmp_path / "replacement-body.txt"
+	result = subprocess.run(
+		["bash", "-c", script], capture_output=True, text=True, check=False,
+		env={**os.environ, "ORIG_ISSUE_JSON": issue_json, "PR_BASE": base,
+			"RETIRE_ISSUE": "7" if retired_guidance else "8", "CAPTURED_ISSUE_BODY_FILE": str(created_body_file)},
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	if not retired_guidance:
+		assert not created_body_file.exists()
+		assert "Ancestor-chain no-op cap reached" in result.stdout
+		return
+	assert created_body_file.exists(), result.stderr
+	created_body = created_body_file.read_text(encoding="utf-8")
+	assert "Keep this work." in created_body and "Review changed files" in created_body
+	assert "ai/issue-7" not in created_body
+	if base == "main":
+		assert "Target branch:" not in created_body
+	else:
+		assert created_body.count("Target branch:") == 1
+		assert f"- **Target branch:** `{base}`" in created_body
 
 
 # --- poller helper against a scratch git origin ---------------------------------

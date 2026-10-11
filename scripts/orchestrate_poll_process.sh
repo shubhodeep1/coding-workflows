@@ -15642,7 +15642,7 @@ STALL_EOF
       local stall_anc_noop_count
       stall_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES}")"
       [[ "${stall_anc_noop_count}" =~ ^[0-9]+$ ]] || stall_anc_noop_count=0
-      if [ "${stall_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+      if [ "${stall_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}" ]; then
         echo "  [stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closing without re-issue — judge will verify."
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
@@ -15665,7 +15665,6 @@ STALL_EOF
       if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
         _stall_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
         _stall_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
-        orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
       fi
       STALL_REISSUE_EXTRA_GUIDANCE=""
       STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
@@ -15678,6 +15677,9 @@ STALL_EOF
       orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
       orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
+      if [ -n "${_stall_reissue_extra}" ]; then
+        orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
+      fi
 
       ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -19028,7 +19030,7 @@ STALL_EOF
         local standalone_anc_noop_count
         standalone_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES:-2}")"
         [[ "${standalone_anc_noop_count}" =~ ^[0-9]+$ ]] || standalone_anc_noop_count=0
-        if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ]; then
+        if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}" ]; then
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
@@ -19061,6 +19063,12 @@ STALL_EOF
         orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
         orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
 
+        local _std_reissue_extra="" _std_reissue_close_msg=""
+        if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
+          _std_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
+          _std_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
+          orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
+        fi
         new_body="$(cat <<REISSUE_EOF
 ${orig_body}
 
@@ -19074,12 +19082,6 @@ ${orig_body}
 - Proceed through clarify → plan → implement → review.
 REISSUE_EOF
 )"
-        local _std_reissue_extra="" _std_reissue_close_msg=""
-        if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
-          _std_reissue_extra="${STALL_REISSUE_EXTRA_GUIDANCE:-}"
-          _std_reissue_close_msg="${STALL_RETIRED_CONFLICT_CLOSE_MESSAGE:-}"
-          orig_body="$(_stall_retired_conflict_reissue_body "${orig_body}" "${STALL_RETIRED_CONFLICT_BASE}")"
-        fi
         STALL_REISSUE_EXTRA_GUIDANCE=""
         STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
         STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""

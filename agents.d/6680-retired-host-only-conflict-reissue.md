@@ -13,6 +13,7 @@ a resolver that can only fail closed. The replacement issue names the retired
 paths and the closed PR's changed files, and the PR branch is kept. The managed
 and standalone replacement bodies discard a stale `Target branch` header for
 the default base, or replace it with the PR's base for an integration branch.
+The ancestor no-op cap does not discard a verified retired-conflict re-issue.
 The managed review-blocked pre-judge dispatch skips the resolver and the judge for such a PR
 and leaves the re-issue to the stall-recovery rung. Conflicts are read locally
 with `git merge-tree`, the head tip must equal the PR head SHA, and the PR must
@@ -20,6 +21,10 @@ be the issue's own implementation PR; any other case, including probe or trust
 failures, keeps the existing dispatch, and the resolver's own
 `sandbox_path_host_only` check is unchanged. Kill switch
 `STALL_RETIRED_CONFLICT_REISSUE_ENABLED` (default `true`).
+
+For a self-repo review/autofix failure, workflow heal targets the PR head only
+when `script_ref` equals the head SHA; otherwise it targets verified stable/main
+support or omits Target branch to ship the shared-workflow fix on the default branch.
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `STALL_RETIRED_CONFLICT_REISSUE` (`scripts/orchestrate_poll_process.sh`: `issue= pr= outcome=reissue|skip reason= retired_paths=`)
