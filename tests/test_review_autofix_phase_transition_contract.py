@@ -6,6 +6,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from review_autofix_step_scripts import expanded_review_autofix_text
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,6 +37,7 @@ POST_MERGE_GH_RETRY_NOOP = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; 
 
 
 def _workflow_text() -> str:
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
 	return expanded_review_autofix_text()
 
 

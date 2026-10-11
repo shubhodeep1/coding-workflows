@@ -381,6 +381,10 @@ def _run_shell(
 	# Speed up: gh_retry's exponential backoff would slow tests on simulated
 	# errors. One attempt is enough — the helper still reports failure.
 	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
+	# Sourcing the poller reads the actions-runs cache from the ai-memory
+	# branch (a git fetch from origin, ~35 s per test); the gate under test
+	# never reads it, so keep the harness off the network.
+	env["AI_MEMORY_ENABLED"] = "false"
 
 	preamble = textwrap.dedent(
 		f"""

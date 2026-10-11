@@ -250,14 +250,22 @@ def _runs(*entries: tuple[str, str, str]) -> str:
 	]}])
 
 
-def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None) -> tuple[int, str]:
-	"""Each check-runs read returns the next fixture; the last one repeats."""
+def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None,
+		ci_runs_sequence: list[str] | None = None) -> tuple[int, str]:
+	"""Each check-runs read returns the next fixture; the last one repeats.
+
+	ci_runs_sequence does the same for the actions/runs?head_sha= read.
+	"""
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_seq_{os.getpid()}.json"
 	seq_file.write_text(json.dumps(runs_sequence), encoding="utf-8")
 	counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_n_{os.getpid()}"
 	counter.write_text("0", encoding="utf-8")
+	ci_seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_ci_seq_{os.getpid()}.json"
+	ci_seq_file.write_text(json.dumps(ci_runs_sequence or [json.dumps({"workflow_runs": []})]), encoding="utf-8")
+	ci_counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_ci_n_{os.getpid()}"
+	ci_counter.write_text("0", encoding="utf-8")
 	preamble = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -267,6 +275,9 @@ _safe_gh_jq() {{
     *"/check-runs"*)
       n="$(cat "{counter}")"; printf '%s' "$((n + 1))" > "{counter}"
       jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{seq_file}" ;;
+    *"/actions/runs?head_sha="*)
+      n="$(cat "{ci_counter}")"; printf '%s' "$((n + 1))" > "{ci_counter}"
+      jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{ci_seq_file}" ;;
     *) printf '%s' '{{}}' ;;
   esac
 }}
@@ -281,6 +292,13 @@ printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 	assert res.returncode == 0, res.stderr
 	last = [line for line in res.stdout.splitlines() if line.startswith("rc=")][-1]
 	return int(last.split()[0][3:]), res.stdout
+
+
+def _ci_runs(*entries: tuple) -> str:
+	"""actions/runs?head_sha= shape: workflow name, status, run id[, conclusion]."""
+	return json.dumps({"workflow_runs": [
+		{"name": e[0], "status": e[1], "id": e[2], "conclusion": e[3] if len(e) > 3 else None} for e in entries
+	]})
 
 
 GREEN = _runs(("CI", "completed", "success"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
@@ -346,6 +364,58 @@ class RequiredChecksWait(unittest.TestCase):
 		rc, out = _wait([EMPTY])
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=ok waited_s=2", out)
+
+	def test_queued_ci_run_keeps_waiting_until_it_completes(self) -> None:
+		"""A fast check already passed but CI's run is still queued: do not read the head as green."""
+		queued = _ci_runs(("CI", "queued", 101))
+		done = _ci_runs(("CI", "completed", 101))
+		rc, out = _wait([GREEN], ci_runs_sequence=[queued, queued, done])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("1 CI workflow run(s) on", out)
+		self.assertIn("outcome=ok", out)
+
+	def test_ci_run_that_never_completes_times_out(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[_ci_runs(("CI", "in_progress", 101))])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_unlisted_workflows_and_the_own_run_do_not_wait(self) -> None:
+		runs = _ci_runs(("Security audit", "in_progress", 101), ("CI", "in_progress", 4242))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+		self.assertNotIn("CI workflow run(s)", out)
+
+	def test_wait_workflows_can_be_disabled_or_renamed(self) -> None:
+		runs = _ci_runs(("Build", "queued", 101))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "none"})
+		self.assertEqual(rc, 0, out)
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "Build, CI"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_wait_workflow_names_match_case_insensitively(self) -> None:
+		runs = _ci_runs(("CI", "queued", 101))
+		rc, out = _wait([GREEN], max_minutes="0", ci_runs_sequence=[runs], env={"AUTO_MERGE_WAIT_WORKFLOWS": "ci"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_ci_run_cancelled_before_its_jobs_refuses(self) -> None:
+		"""A queued CI run cancelled before any job started leaves no check-runs: not green."""
+		runs = _ci_runs(("CI", "completed", 101, "cancelled"))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=failed", out)
+		self.assertIn("reason=ci_run_cancelled", out)
+
+	def test_cancelled_run_superseded_by_a_finished_run_proceeds(self) -> None:
+		runs = _ci_runs(("CI", "completed", 101, "cancelled"), ("CI", "completed", 102, "success"))
+		rc, out = _wait([GREEN], ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+
+	def test_failed_runs_read_falls_back_to_the_check_runs(self) -> None:
+		rc, out = _wait([GREEN], ci_runs_sequence=["not json"])
+		self.assertEqual(rc, 0, out)
 
 	def test_allow_all_sentinel_proceeds(self) -> None:
 		rc, out = _wait([RED], env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
@@ -455,12 +525,14 @@ class RequiredChecksWiring(unittest.TestCase):
 		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
 		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", job)
 
 	def test_codex_agent_auto_merge_step_passes_the_wait_variables(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
 
 	def test_freshness_is_rechecked_after_a_wait_on_every_auto_merge_path(self) -> None:
 		job = WORKFLOW.read_text(encoding="utf-8").split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
@@ -473,6 +545,7 @@ class RequiredChecksWiring(unittest.TestCase):
 		step = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
 
 	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
@@ -491,6 +564,135 @@ class RequiredChecksWiring(unittest.TestCase):
 		recheck_at = text.index('[ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ]')
 		self.assertLess(wait_at, recheck_at)
 		self.assertLess(recheck_at, text.index('--squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
+
+
+# --- Update markers and the per-PR update cap (#7084, Q60: A) ----------------
+# #6654 was updated from main four times in two hours: every update restarted
+# the full review cycle, and main moved again before it finished.
+
+SYNC_LOGIN = "workflow-bot"
+
+
+def _sync_marker(sync: int, *, pr: int = 7, author: str = SYNC_LOGIN) -> dict:
+	return {"user": {"login": author}, "body": f"**Branch updated from `main` before merging** (update {sync} of at most 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync} -->"}
+
+
+def _sync_gate(comments: list[dict] | None, *, max_syncs: str | None = None, user_ok: bool = True) -> tuple[int, str, list[str]]:
+	"""Overlap case with the user and comments reads answered from fixtures."""
+	comments_json = json.dumps([comments]) if comments is not None else ""
+	user_json = json.dumps({"login": SYNC_LOGIN}) if user_ok else ""
+	body = f'''
+eval "base_$(declare -f _safe_gh_jq)"
+_safe_gh_jq() {{
+  case "$*" in
+    user) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {user_json!r} ] || return 1; printf '%s' {user_json!r} ;;
+    *"/issues/7/comments?per_page=100"*) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {comments_json!r} ] || return 1; printf '%s' {comments_json!r} ;;
+    *) base__safe_gh_jq "$@" ;;
+  esac
+}}
+_pr_base_fresh_for_merge 7 {HEAD} main; rc=$?; printf "%s\\n" "rc=${{rc}}"
+'''
+	env = {"MERGE_BASE_FRESHNESS_MAX_SYNCS": max_syncs} if max_syncs is not None else None
+	res = _run(body, compare_json=_compare(2, ["agents.md"]), pr_files_json=_pr_files(["agents.md"]), env=env)
+	assert res.returncode == 0, res.stderr
+	rc = int([line for line in res.stdout.splitlines() if line.startswith("rc=")][-1][3:])
+	return rc, res.stdout + res.stderr, res.calls  # type: ignore[attr-defined]
+
+
+class FreshnessSyncCap(unittest.TestCase):
+	def test_first_update_posts_the_marker_for_the_approved_head(self) -> None:
+		rc, out, calls = _sync_gate([])
+		self.assertEqual(rc, 1)
+		self.assertIn("update 1 of at most 2", out)
+		# The comment body spans several log lines; match on the whole log.
+		log = "\n".join(calls)
+		self.assertEqual(len([c for c in calls if c.startswith("-X POST repos/owner/repo/issues/7/comments")]), 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=1 -->", log)
+		self.assertIn("**Branch updated from `main` before merging** (update 1 of at most 2)", log)
+		self.assertIn("MERGE_BASE_SYNC_MARKER pr=7 head_sha=" + HEAD + " sync=1 outcome=posted", out)
+
+	def test_second_update_counts_only_the_workflow_logins_markers_for_this_pr(self) -> None:
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(1, author="someone-else"), _sync_marker(1, pr=8)])
+		self.assertEqual(rc, 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=2 -->", "\n".join(calls))
+
+	def test_after_the_cap_the_merge_proceeds_without_another_update(self) -> None:
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(2)])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=overlap action=proceed reason=max_syncs syncs=2 max=2", out)
+		self.assertFalse(any("/update-branch" in c for c in calls))
+		self.assertFalse(any("-X POST" in c for c in calls))
+
+	def test_the_cap_is_configurable_and_validated(self) -> None:
+		rc, out, _ = _sync_gate([_sync_marker(1)], max_syncs="1")
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=max_syncs syncs=1 max=1", out)
+		rc, _out, _calls = _sync_gate([_sync_marker(1)], max_syncs="nine")
+		self.assertEqual(rc, 1, "an invalid cap falls back to 2")
+
+	def test_cap_zero_never_updates_and_reads_nothing(self) -> None:
+		rc, out, calls = _sync_gate(None, max_syncs="0", user_ok=False)
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=max_syncs syncs=0 max=0", out)
+		self.assertFalse(any(c == "user" or "/comments" in c or "/update-branch" in c for c in calls))
+
+	def test_an_unreadable_count_updates_as_before(self) -> None:
+		rc, out, calls = _sync_gate(None, user_ok=False)
+		self.assertEqual(rc, 1)
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
+		self.assertIn("update 1 of at most 2", out)
+
+	def test_a_failed_update_posts_no_marker(self) -> None:
+		body_calls = _run(
+			f'_pr_base_fresh_for_merge 7 {HEAD} main; echo "rc=$?"',
+			compare_json=_compare(1, ["a.py"]), pr_files_json=_pr_files(["a.py"]), update_rc=1,
+		).calls  # type: ignore[attr-defined]
+		self.assertFalse(any("-X POST" in c for c in body_calls))
+
+	def test_a_short_head_sha_gets_no_marker(self) -> None:
+		res = _run('_pr_base_sync_marker_post 7 abc1234 1 2', env={})
+		self.assertIn("outcome=skipped reason=short_head_sha", res.stdout)
+		self.assertFalse(any("-X POST" in c for c in res.calls))  # type: ignore[attr-defined]
+
+
+class FreshnessSyncWiring(unittest.TestCase):
+	def test_every_merge_path_passes_the_cap(self) -> None:
+		for path in (WORKFLOW, REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"):
+			text = path.read_text(encoding="utf-8")
+			self.assertEqual(
+				text.count("MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}"),
+				text.count("MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}"),
+				path.name,
+			)
+
+	def test_the_gate_routes_a_verified_update_to_deterministic_skip_merge(self) -> None:
+		text = WORKFLOW.read_text(encoding="utf-8")
+		self.assertIn('or ($b | contains("<!-- ai:merge-base-sync:v1 "))', text)
+		self.assertIn("MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}", text)
+		block = text.split("gate_freshness_sync_fast_path()", 1)[1].split("# Size check uses", 1)[0]
+		self.assertIn('bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}"', block)
+		self.assertIn('[ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1', block)
+		# The skip job runs no conflict resolver and no single-issue security
+		# pass, so both suppressors apply before any API call.
+		fast_path = block.split("if [ \"${FORCE_REVIEW}\" = \"true\" ]; then", 1)[0]
+		self.assertIn('reason=merge_conflict pr=${PR_NUMBER}', fast_path)
+		self.assertIn('reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync', fast_path)
+		self.assertLess(fast_path.index("reason=single_issue_security_pass"), fast_path.index("gate_fetch_marker_comments"))
+		# The security-pass eligibility rule must match the doc-only /
+		# small-diff skip's copy, or a drift could merge an eligible PR unaudited.
+		skip_block = text.split('SECURITY_PASS_SKIP_SUPPRESSED="false"', 1)[1].split("SECURITY_PASS_SKIP_SUPPRESSED=\"true\"", 1)[0]
+		for cond in ('[ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ]',
+				'&& [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ]',
+				'&& [ "${pr_head_repo}" = "${REPOSITORY}" ]',
+				'&& ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]]',
+				'&& [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]'):
+			self.assertIn(cond, fast_path)
+			self.assertIn(cond, skip_block)
+		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
+		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
+			self.assertIn(line, branch)
+		# force-review still wins over the fast path.
+		self.assertLess(block.index('if [ "${FORCE_REVIEW}" = "true" ]; then'), block.index("elif gate_freshness_sync_fast_path; then"))
 
 
 if __name__ == "__main__":
