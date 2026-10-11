@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~9579 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `too_long` branch repeats the jq validation that already failed, adding an extra jq invocation for each invalid answer.\n  WHY: This is a minor efficiency issue, not a runtime failure; it occurs once per failed judge call and is not a hot path.\n- scripts/orchestrate_poll_process.sh:~9341-9343 | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Code 5 is added as an additive return value; codes 0-4 retain their original semantics.\n  WHY: This does not fail at runtime; the only caller handles 5 explicitly, and the change is not a compatibility break.\n- scripts/orchestrate_poll_process.sh:~9582 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If the final line of the tailed judge stderr lacks a trailing newline, the sanitization pipeline's output does not end with a newline.\n  WHY: This does not fail at runtime because the following `echo \"::endgroup::\" >&2` closes the GitHub group correctly; the output neutralization remains in place, so this is cosmetic.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:~9579 | severity=NIT | confidence=2\n  PROBLEM: The `too_long` branch re-runs the same jq validation that already failed at the top of the rejection block, costing an extra jq invocation per invalid answer.\n  WHY: It does not fail; this is a minor efficiency issue. Each invalid-answer classification runs jq twice instead of once. Not a hot path (one per failed judge call) so impact is negligible.\n- scripts/orchestrate_poll_process.sh:~9341-9343 | severity=NIT | confidence=1\n  PROBLEM: Code 5 is added as an additive new return value; codes 0-4 retain their original semantics. The header now documents the new contract.\n  WHY: It does not fail. The change is additive and the only caller (the `heal_integration_branch_conflict` path) handles 5 explicitly before the existing 2-handler. No compatibility break.\n- scripts/orchestrate_poll_process.sh:~9582 | severity=NIT | confidence=2\n  PROBLEM: The `tail \u2026 | cut \u2026 | tr \u2026 | sed \u2026` pipeline's output will not end with `\\n` if the final line of the 20-line tail lacks a trailing newline.\n  WHY: It does not fail at runtime. The next `echo \"::endgroup::\" >&2` after the pipeline writes its own newline, so the GitHub group closes correctly. The neutralization and forged-stderr test coverage are in place; cosmetic only.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3320550ad8d7b3153d59f0b9ff6568688f16add37a6ac04b8b37fc1f9ad43647",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7143,
+    "run_id": "38114711799",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38114711799",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011060732_8814bd8e0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7143,
+    "run_id": "38114711799"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T06:07:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
