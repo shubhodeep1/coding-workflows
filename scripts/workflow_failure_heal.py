@@ -2491,6 +2491,9 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 	``review-autofix-failure-cap:v1`` marker decides; a trusted editor summary
 	seen first means the host-only stop is no longer current. Markers from any
 	other author are ignored, so a forged marker cannot suppress a heal.
+	Provider-outage markers (``reason=provider_unavailable``) and markerless
+	pause comments (header line only) are repo-wide events (#6633): they are
+	skipped and never decide or end the scan.
 
 	``head_sha`` (the labeled PR's current head, when known) binds the
 	deciding marker to that head, so a host-only marker left from an older head
@@ -2520,7 +2523,11 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 			if head and fields.get("head", "").lower() != head:
 				return False
 			return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
-		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body:
+		# A markerless outage pause is recognised by its header line only: a
+		# failure comment can quote the pause phrase in its PR-influenced
+		# "First error" line and must still end the scan below.
+		header = next((line.strip().strip("*").strip() for line in body.splitlines() if line.strip()), "")
+		if header.startswith(PROVIDER_UNAVAILABLE_COMMENT_MARKER):
 			continue
 		# A newer trusted failure comment posted without a marker (the marker
 		# failed to render) is a different, later failure: it ends the scan,

@@ -5691,6 +5691,11 @@ def test_latest_trusted_autofix_marker_is_host_only() -> None:
 	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": outage_text}], CAP_AUTHOR, SHA_B)
 	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_B, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
 	assert check([_host_only_cap_comment(), _failure_marker_comment(outage_text, head=SHA_A, reason="provider_unavailable", run="9")], CAP_AUTHOR, SHA_B)
+	# A markerless failure comment quoting the pause phrase in its First error
+	# line is a failure, not a pause: it still ends the scan.
+	quoting = f"**AI review/autofix failed — needs human intervention**\n\n**First error:** `{outage_text}`"
+	assert not check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": quoting}], CAP_AUTHOR, SHA_B)
+	assert check([_host_only_cap_comment(), {"author_login": CAP_AUTHOR, "body": f"**{outage_text}**\n\nThe model provider failed."}], CAP_AUTHOR, SHA_B)
 	# The same markerless text from another author is ignored.
 	assert check([_host_only_cap_comment(), {"author_login": "contributor", "body": "AI review/autofix failed"}], CAP_AUTHOR)
 	assert not check([_host_only_cap_comment()], "")
