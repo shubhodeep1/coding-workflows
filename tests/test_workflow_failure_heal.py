@@ -1938,7 +1938,7 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	# The prompt carried the log evidence, the release pin, and the trust notice.
 	assert "resolve_integration_ref.sh: Integration branch" in prompt
 	assert SHA_A in prompt and "UNTRUSTED" in prompt and "failing step: Run codex" in prompt
-	# The escalated consumer issue got an outcome comment.
+	# Scope guard off (default, #6871): the heal issue is composed but not created.
 	assert "WORKFLOW_HEAL skip reason=scope_guard_disabled repo=%s " % SELF_REPO in result.stdout
 	# Scope guard off (default, #6871): the intake stops before creating, so no outcome comment either.
 	assert not any(c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments" for c in state.get("comments_posted", []))
@@ -2643,7 +2643,7 @@ def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> No
 
 def test_intake_scope_guard_off_by_default_files_no_issue() -> None:
 	# #6871: until an operator sets HEAL_INTAKE_SCOPE_GUARD_ENABLED=true, the
-	# intake composes the heal issue and stops before any GitHub write.
+	# intake composes the heal issue and stops before creating it.
 	for extra_env in (None, {"HEAL_INTAKE_SCOPE_GUARD_ENABLED": "yes"}, {"HEAL_INTAKE_SCOPE_GUARD_ENABLED": "1"}):
 		result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
 		assert result.returncode == 0, result.stderr + result.stdout

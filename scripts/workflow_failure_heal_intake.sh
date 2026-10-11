@@ -109,7 +109,8 @@
 #                                         fetching it (default empty)
 #   HEAL_INTAKE_SCOPE_GUARD_ENABLED       default "false": the intake composes the heal issue,
 #                                         logs `skip reason=scope_guard_disabled` and creates
-#                                         nothing (#6798 / #6871 operator step pending). Only
+#                                         no issue or outcome comment (#6798 / #6871 operator
+#                                         step pending; SELF_REPO heal labels are still ensured). Only
 #                                         "true" (any letter case) enables issue creation, and
 #                                         then only after the composed body's
 #                                         ai:workflow-heal-scope:v1 marker verifies; a missing
@@ -1432,8 +1433,10 @@ _git_fetch_consumer_scope_ref()
 
 # Gate in front of the only heal issue-create call (#6871). With
 # HEAL_INTAKE_SCOPE_GUARD_ENABLED off (the default) it ends the intake with
-# exit 0 before any GitHub write, so no heal issue, label, outcome comment or
-# "created" alert happens. With it on it re-verifies the composed body's
+# exit 0 before the issue-create writes, so no heal issue, target-repo label,
+# outcome comment or "created" alert happens (the ai:workflow-heal /
+# ai:workflow-heal-escalated labels in SELF_REPO are still ensured earlier,
+# as for every report). With it on it re-verifies the composed body's
 # ai:workflow-heal-scope:v1 marker through the same `heal-scope verify` the
 # implement preflight uses (author / label / edit checks are satisfied
 # synthetically: the issue does not exist yet, so only the marker shape is
