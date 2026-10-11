@@ -1342,7 +1342,13 @@ not delete wrappers that are already present in `.github/workflows/`.
 > they land on `main`, [`ci.yml`](.github/workflows/ci.yml) runs `yamllint`
 > and `actionlint` over every file in `.github/workflows/` **and**
 > `workflow-templates/` on `pull_request` against `main`. Broken reusable
-> workflow bodies or template schemas fail CI before merge.
+> workflow bodies or template schemas fail CI before merge. CI also runs on
+> pull requests into, and pushes to, orchestrator integration branches
+> (`orchestrator/project-*`), so a sub-issue PR is checked before it merges
+> into its project branch rather than only at the project's final PR into
+> `main`. The push runs give check-failure triage a base-branch result: when
+> the integration branch is green, a failing sub-issue PR is left to its own
+> review autofix instead of opening a triage issue.
 >
 > **Recovery procedure for a broken `main` reusable.** Push a fix directly
 > to `main` (or merge a hotfix PR). The next triggered wrapper run picks

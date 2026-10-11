@@ -896,9 +896,12 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	steps = ci_jobs["tests-hooks-and-orchestrator"]["steps"]
 	assert steps[0]["with"]["fetch-depth"] == 0
 	prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
-	assert prepare["if"] == "github.event_name == 'pull_request' && github.base_ref == 'main'"
+	prepare_if = " ".join(prepare["if"].split())
+	assert "github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))" in prepare_if
+	assert "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')" in prepare_if
 	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
-	assert 'sync --dry-run --before "${PR_BASE_SHA}" --after HEAD' in prepare["run"]
+	assert prepare["env"]["PUSH_BEFORE_SHA"] == "${{ github.event.before }}"
+	assert 'sync --dry-run --before "${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}" --after HEAD' in prepare["run"]
 	assert "--keep-committed-security-paths" in prepare["run"]
 
 
