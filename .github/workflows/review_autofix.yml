@@ -1217,9 +1217,12 @@ jobs:
           esac
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${pr_base_retargeted}" != "true" ] \
-            && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+            && { [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] || [ "${FORCE_RB_JUDGE:-false}" = "true" ]; } \
             && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
             && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            # force_rb_judge runs enter even with the cap disabled: they never
+            # evaluate the cap, only the host-only conflict skip below (#6743),
+            # which has its own kill switch.
             fingerprint_cap_helper=""
             for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
               if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
@@ -1249,7 +1252,8 @@ jobs:
                   frj_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
                     --comments-json "${gate_marker_comments_file}" \
                     --head-sha "${pr_head_sha_gate}" \
-                    --author-login "${gate_marker_author_login}" 2>/dev/null)" || frj_decision=""
+                    --author-login "${gate_marker_author_login}" \
+                    --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)" || frj_decision=""
                   frj_count="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
                   frj_marker_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
                   [ -n "${frj_marker_reason}" ] || frj_marker_reason="none"

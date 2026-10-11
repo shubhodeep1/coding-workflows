@@ -8280,6 +8280,7 @@ def main() -> int:
 	test_review_relay_main_preserves_invoked_mode()
 	test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost()
 	test_review_sandbox_cleanup_reports_path_free_reason()
+	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -9598,10 +9599,6 @@ def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
 	assert 'if [ "${action}" = cleanup ]; then\n\t\techo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2' in helper
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def _step_if_line(step_name: str) -> str:
 	return next(line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:"))
 
@@ -9635,3 +9632,7 @@ def test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge(
 	# The sandbox refusal itself is unchanged.
 	assert "_resolver_fail_closed sandbox_path_host_only" in (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	assert text.count(skip_condition) == 3
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

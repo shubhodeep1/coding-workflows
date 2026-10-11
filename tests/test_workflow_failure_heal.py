@@ -3612,6 +3612,20 @@ def test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host
 			assert outputs["force_rb_judge_conflict_skip"] == "false", (name, result.stdout)
 			assert outputs["should_run"] == "true" and outputs["fingerprint_cap"] == "false", (name, result.stdout)
 			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} outcome=run reason={reason} " in result.stdout, (name, result.stdout)
+	# The skip runs with the fingerprint cap disabled (it has its own switch),
+	# and only on a marker from the current support version.
+	current_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="504", support=SUPPORT_NEW, reason=HOST_ONLY_REASON)
+	old_support = _support_marker_comment(AUTOFIX_FAILED_COMMENT, run="505", support=SUPPORT_OLD, reason=HOST_ONLY_REASON)
+	for name, comments, extra_env, expected in (
+		("cap_disabled", [_host_only_failure_comment()], {"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"}, "outcome=skip reason=host_only_marker"),
+		("current_support", [current_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=skip reason=host_only_marker"),
+		("old_support", [old_support], {"REVIEW_SUPPORT_SHA": SUPPORT_NEW}, "outcome=run reason=no_trusted_marker"),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-frj-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={**force, **extra_env})
+			assert result.returncode == 0, (name, result.stderr)
+			assert outputs["force_rb_judge_conflict_skip"] == ("true" if "outcome=skip" in expected else "false"), (name, result.stdout)
+			assert f"AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=4259 head={SHA_A} {expected} " in result.stdout, (name, result.stdout)
 	# Without force_rb_judge the host-only marker still trips the cap and no skip is exported.
 	with tempfile.TemporaryDirectory(prefix="heal-gate-frj-noforce-") as tmp_name:
 		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()])
