@@ -390,3 +390,55 @@ def test_fallback_alert_names_the_panel_slot_action(tmp_path: Path, role: str, e
 	message = sent.read_text(encoding="utf-8")
 	assert expected in message
 	assert absent not in message
+
+
+def test_rejected_attempt_output_is_kept_for_diagnosis(tmp_path: Path) -> None:
+	"""Q65: PR #7104's pass-2 Sonnet answer was rejected as malformed_output
+	and the attempt file was deleted with the pool runtime dir, so nothing
+	showed what it returned. A rejected attempt now keeps its output (capped)
+	next to the per-reviewer log, outside the <prefix>_*.txt reviewer globs."""
+	result = _run(tmp_path, FAKE_SONNET_OUT="No findings in this diff.", FAKE_HAIKU_RC="1")
+	assert result["status"] == "failed"
+	reviews = tmp_path / "reviews"
+	kept = reviews / f"rejected_review_{SAFE}_attempt1.txt"
+	assert kept.read_text(encoding="utf-8") == "No findings in this diff.\n"
+	# The crashed Haiku attempt wrote nothing, so no file but a bytes=0 line.
+	assert not (reviews / f"rejected_review_{SAFE}_attempt2.txt").exists()
+	assert f"REVIEWER_POOL_REJECTED_OUTPUT slot={SLOT} pass=review attempt=1 model=claude-sonnet-5-5 bytes=26 reason=malformed_output kept_bytes=26 truncated=false" in result["log"]
+	assert f"REVIEWER_POOL_REJECTED_OUTPUT slot={SLOT} pass=review attempt=2 model=claude-haiku-5-5 bytes=0 reason=exit_1 kept_bytes=0 truncated=false" in result["log"]
+	# The summariser reads only <prefix>_*.txt; the kept file never matches.
+	assert not any(path.name.startswith(("review_", "pass1_")) and "rejected" in path.name for path in reviews.iterdir())
+	workflow = WORKFLOW.read_text(encoding="utf-8")
+	assert "${{ env.PREVIOUS_REVIEWS_DIR }}/rejected_*.txt" in workflow
+	staging = (REPO_ROOT / "scripts" / "review_autofix_step_stage_codex_logs.sh").read_text(encoding="utf-8")
+	assert '"${PREVIOUS_REVIEWS_DIR}"/rejected_*.txt' in staging
+
+
+def test_successful_attempt_keeps_no_rejected_file(tmp_path: Path) -> None:
+	result = _run(tmp_path, FAKE_SONNET_OUT=FINDINGS)
+	assert result["status"] == "success"
+	assert not list((tmp_path / "reviews").glob("rejected_*"))
+	assert "REVIEWER_POOL_REJECTED_OUTPUT" not in result["log"]
+
+
+def test_sandbox_crash_logs_the_cli_result_text(tmp_path: Path) -> None:
+	"""Q65: a Claude run that ends with a result event but exit 1 (an API
+	error the CLI reports as a result) logged only `outcome=crashed
+	reason=result_success`. The sandbox now logs the result text."""
+	sandbox = SANDBOX.read_text(encoding="utf-8")
+	branch = sandbox.split('\t\t\tusage_limit|auth_failed)\n\t\t\t\tcontinue\n\t\t\t\t;;\n\t\t\t*)\n', 1)[1].split("\t\tesac\n", 1)[0]
+	assert '_ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${root}/crash_result.txt"' in branch
+	assert "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=" in branch
+	assert "head -c 400" in branch and "tr -cd '[:print:]'" in branch
+	# The engine's extract returns the text of an error result too.
+	transcript = tmp_path / "transcript.jsonl"
+	transcript.write_text(
+		'{"type":"result","subtype":"success","is_error":true,"result":"API Error: 400 example\\nsecond line"}\n',
+		encoding="utf-8",
+	)
+	out = tmp_path / "crash_result.txt"
+	subprocess.run(
+		["python3", str(REPO_ROOT / "scripts" / "claude_engine.py"), "extract", "--transcript", str(transcript), "--out", str(out)],
+		check=True, capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert out.read_text(encoding="utf-8") == "API Error: 400 example\nsecond line"
