@@ -902,6 +902,7 @@ jobs:
             tests/test_validate_lint_init_true.py \
             tests/test_validate_preflight_canary_tools_scope.py \
             tests/test_validate_process_render_recovery.py \
+            tests/test_validation_import_audit_stdlib.py \
             tests/test_verify_integration_fingerprints_partial_removal.py \
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
             tests/test_workflow_retro_fanout.py \
