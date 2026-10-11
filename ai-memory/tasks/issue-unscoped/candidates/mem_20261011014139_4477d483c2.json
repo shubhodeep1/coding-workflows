@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:around line 318 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Neither the probe `docker run` nor the `docker import` pipeline in `build_probe_image` has a wall-clock bound.\n  WHY: A daemon that hangs when it starts a container would block `provision` without reaching the cgroupfs retry or the fail-closed `container_start_failed` path; this is a defensive gap, and the suggested fix is to time-bound both commands and treat exit 124 as a refusal.\n- scripts/validation_harness_sandbox.sh:259-269 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: stop_rootless_dockerd does not attempt to kill containerd in the initial termination loop, and the wait loop only monitors rootlesskit for exit.\n  WHY: If containerd outlives its rootlesskit parent during the cgroupfs retry path, it may remain running and conflict with the new daemon's attempt to bind resources or manage containers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validation_harness_sandbox.sh:rootless_docker_container_probe (around line 318, `docker run --rm --network none`) and `build_probe_image` (the `docker import` pipeline) | severity=NIT | confidence=2\n  PROBLEM: Neither the probe `docker run` nor the `docker import` has a wall-clock bound.\n  WHY: A daemon that hangs when it starts a container would block `provision` without reaching the cgroupfs retry or the fail-closed `container_start_failed` path. No hang has been shown in this scenario, and the original failure was a fast error, so this is a defensive gap only. The suggested minimal fix is to prefix the `docker run` with `timeout 120`, treat exit 124 as a refusal (return 1) so the cgroupfs retry runs, and apply the same wrapper to the pipeline in `build_probe_image`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh:lines 259-269 | severity=MAJOR | confidence=3\n  PROBLEM: stop_rootless_dockerd does not attempt to kill containerd in the initial termination loop, and the wait loop only monitors rootlesskit for exit.\n  WHY: If containerd outlives its rootlesskit parent during the cgroupfs retry path, it may remain running and conflict with the new daemon's attempt to bind resources or manage containers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "05e919b4e700a69faf24555709a39e8c20c69c629e7e2103a9dde0b4403dcbf8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7105,
+    "run_id": "38101283555",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38101283555",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011014139_4477d483c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7105,
+    "run_id": "38101283555"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T01:41:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
