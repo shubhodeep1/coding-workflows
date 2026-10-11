@@ -61,6 +61,10 @@
 #   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
 #                                          identical-failure cap passes identical_failure_cap);
 #                                          wins over the flags when it is a valid reason token
+#   FINGERPRINT_CAP_REASON                 failure_reason the identical-failure cap repeats
+#                                          (default empty; inherited from the fingerprint-cap-block
+#                                          job env); sent as repeated_failure_reason so skip-reason
+#                                          drops a cap on the resolver's host-only stop
 #   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
 #                                          marker, sent as failure_fingerprint when 64 hex
 #   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
@@ -281,6 +285,30 @@ if grep -q 'classify-crash-ownership' "${HEAL_PY}" 2>/dev/null; then
 	if [ -n "${PR_CHANGED_FILES_FILE:-}" ] && [ -s "${PR_CHANGED_FILES_FILE}" ]; then
 		BUILD_ARGS+=(--changed-files-file "${PR_CHANGED_FILES_FILE}")
 	fi
+fi
+# The failure reason an identical-failure cap report repeats, so skip-reason can
+# drop a cap that only repeats the resolver's host-only stop (#6738). Taken
+# from the gate's FINGERPRINT_CAP_REASON (job env of fingerprint-cap-block),
+# else from the trusted head markers already fetched; never from the evidence
+# text, which carries PR-influenced log tails. Empty keeps the old dispatch.
+REPEATED_FAILURE_REASON=""
+if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && grep -q 'repeated-failure-reason' "${HEAL_PY}" 2>/dev/null; then
+	if [[ "${FINGERPRINT_CAP_REASON:-}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
+		REPEATED_FAILURE_REASON="${FINGERPRINT_CAP_REASON}"
+	elif [ -n "${COMMENTS_FILE}" ] && [ -s "${COMMENTS_FILE}" ] && [ -n "${AUTOFIX_FAILURE_MARKER_AUTHOR:-}" ]; then
+		CAP_HEAD_SHA="$(jq -r '.head.sha // ""' "${PR_JSON_FILE}" 2>/dev/null || echo "")"
+		if [[ "${CAP_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+			CAP_MARKER_REASON="$(python3 "${HEAL_PY}" autofix-identical-failure-count --comments-json "${COMMENTS_FILE}" \
+				--head-sha "${CAP_HEAD_SHA}" --author-login "${AUTOFIX_FAILURE_MARKER_AUTHOR}" 2>/dev/null \
+				| sed -n 's/^reason=//p' | head -1 || true)"
+			if [[ "${CAP_MARKER_REASON}" =~ ^[a-z][a-z0-9_:-]{0,79}$ ]]; then
+				REPEATED_FAILURE_REASON="${CAP_MARKER_REASON}"
+			fi
+		fi
+	fi
+fi
+if [ -n "${REPEATED_FAILURE_REASON}" ]; then
+	BUILD_ARGS+=(--repeated-failure-reason "${REPEATED_FAILURE_REASON}")
 fi
 if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
