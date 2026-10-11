@@ -129,6 +129,10 @@ def env(tmp_path: Path):
 	server.server_close()
 
 
+def outputs_text(env: dict) -> str:
+	return Path(env["env"]["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
+
+
 def _run(env: dict, **extra: str) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
 	values = dict(env["env"], **extra)
 	for key in [k for k, v in values.items() if v is None]:
@@ -150,7 +154,13 @@ def _without_masks(text: str) -> str:
 def test_selected_pool_is_ordered_least_used_first(env: dict) -> None:
 	result, outputs = _run(env, GH_TOKEN="probe-must-not-see", GITHUB_TOKEN="probe-must-not-see")
 	assert result.returncode == 0, result.stderr
+	probes = json.loads(outputs.pop("probes"))
 	assert outputs == {"available": "true", "reason": "selected", "accounts": "2", "pool_dir": str(env["pool"])}
+	# The `probes` output carries the readings (for the hourly near-cap alert) and never a token.
+	assert [(p["account"], p["five_hour"], p["seven_day"], p["status"], p["error"]) for p in probes] == [
+		("ALPHA", 0.5, 0.3, "allowed", None), ("BETA", 0.2, 0.1, "allowed", None),
+	]
+	assert "tok-alpha" not in outputs_text(env) and "tok-beta" not in outputs_text(env)
 	pool = env["pool"]
 	assert (pool / "order").read_text(encoding="utf-8") == "BETA\nALPHA\n"
 	assert (pool / "tokens" / "ALPHA").read_text(encoding="utf-8") == "tok-alpha"
@@ -197,6 +207,8 @@ def test_all_gated_is_unavailable_and_removes_the_pool(env: dict) -> None:
 	result, outputs = _run(env, FAKE_PROBE_TABLE=json.dumps(table))
 	assert (outputs["available"], outputs["reason"]) == ("false", "all_gated")
 	assert not env["pool"].exists()
+	# The readings survive the pool removal, so the near-cap alert can still name the accounts.
+	assert [(p["account"], p["five_hour"], p["seven_day"]) for p in json.loads(outputs["probes"])] == [("ALPHA", 0.95, 0.1), ("BETA", 0.2, 0.99)]
 
 
 def test_probe_false_keeps_the_broker_order(env: dict) -> None:
@@ -210,6 +222,8 @@ def test_probe_false_keeps_the_broker_order(env: dict) -> None:
 	[
 		(403, {"error": "repo_not_allowed"}, "broker_refused_repo_not_allowed"),
 		(403, {"error": "Weird Reason!"}, "broker_refused_unknown"),
+		(403, {"error": "workflow_ref_not_allowed"}, "broker_refused_workflow_ref_not_allowed"),
+		(403, {"error": "workflow_sha_unverifiable"}, "broker_refused_workflow_sha_unverifiable"),
 		(503, {"error": "pool_empty"}, "broker_unavailable_503"),
 		(200, {"accounts": "nope"}, "broker_response_invalid"),
 		(200, {"accounts": [{"name": "bad name", "token": "x"}]}, "no_accounts"),
@@ -350,3 +364,17 @@ def test_no_workflow_or_template_references_pool_secrets() -> None:
 				if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
 					offenders.append(str(path.relative_to(REPO_ROOT)))
 	assert offenders == []
+
+
+def test_broker_workflow_allowlist_matches_pool_action_users() -> None:
+	"""The broker's exact workflow allowlist equals the workflows that fetch the pool (#6636)."""
+	source = (REPO_ROOT / "tools" / "claude-pool-broker" / "src" / "index.ts").read_text(encoding="utf-8")
+	match = re.search(r"ALLOWED_WORKFLOW_FILES[^=]*=\s*Object\.freeze\(\[(.*?)\]\)", source, re.S)
+	assert match, "ALLOWED_WORKFLOW_FILES not found in the broker source"
+	allowed = set(re.findall(r'"([^"]+)"', match.group(1)))
+	users = {
+		path.name
+		for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml")
+		if ".github/actions/claude-pool-token" in path.read_text(encoding="utf-8", errors="replace")
+	}
+	assert allowed == users
