@@ -18,10 +18,10 @@ PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"3f2b0e485dac2f9727873a257bf478041663f3511c617c4b6078a3f306a7bd62"
+	"8e900f915b542400a201615631a715955b7315fba4ddca51bb83ad8b24618bb5"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 13_730
-PRE_EXTRACTION_PROMPT_LINES = 217
+PRE_EXTRACTION_PROMPT_BYTES = 13_819
+PRE_EXTRACTION_PROMPT_LINES = 218
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -196,6 +196,16 @@ case "${MOCK_CODEX_SCENARIO}" in
     ;;
   ref_mismatch_always)
     printf 'BLOCKED: Integration branch mismatch.\n'
+    ;;
+  ref_mismatch_embellished_then_plan)
+    if [ "${attempt}" -eq 1 ]; then
+      printf 'BLOCKED: integration branch mismatch (workspace is on isolated, expected orchestrator/project-7126)\n'
+    else
+      printf 'plan after retry\n'
+    fi
+    ;;
+  ref_mismatch_other_reason)
+    printf 'BLOCKED: integration branch mismatches are not the issue here\n'
     ;;
   ref_mismatch_fenced)
     printf '```text\nBLOCKED: integration branch mismatch\n```\nfenced example plan\n'
@@ -419,6 +429,27 @@ def test_ref_mismatch_block_stands_when_the_workflow_found_a_mismatch() -> None:
 		assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout, value
 		assert "Codex planning succeeded on attempt 1" in result.stdout, value
 		assert "BLOCKED: integration branch mismatch" in (runtime_dir / "codex_output.txt").read_text(encoding="utf-8")
+
+
+def test_embellished_ref_mismatch_block_is_retried() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_embellished_then_plan", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY attempt=1 outcome=retry planning_ref_mismatch=false" in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "plan after retry\n"
+
+
+def test_longer_word_after_the_phrase_is_not_retried() -> None:
+	result, _root, _temporary_directory = _run_runner(
+		"ref_mismatch_other_reason", planning_ref_mismatch="false"
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout
+	assert "Codex planning succeeded on attempt 1" in result.stdout
 
 
 def test_fenced_ref_mismatch_example_is_not_retried() -> None:

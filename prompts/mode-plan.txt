@@ -134,10 +134,11 @@ Rules:
   do not assume `main`.
 - If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads
   `true`, emit exactly `BLOCKED: integration branch mismatch`. Decide this
-  from that line only. Your workspace's own git is a filtered read-only
-  snapshot on a local branch named `isolated`, and its commit ID never
-  matches the planning ref, so `git branch` or `git rev-parse` there is not
-  evidence of a mismatch.
+  from that line only. Your workspace's own git, when it has one, is a
+  filtered read-only snapshot on a local branch named `isolated`, and its
+  commit ID never matches the planning ref; some sandboxes have no git at
+  all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
+  error there is evidence of a mismatch.
 - Prefer repo-local context first. Web search IS available (the
   `web_search` tool is enabled by the codex config —
   `scripts/write_codex_config.sh` defaults `--web-search live`). Use it

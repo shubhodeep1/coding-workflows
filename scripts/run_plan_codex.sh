@@ -176,10 +176,11 @@ Rules:
   from the planning context and do not assume `main`.
 - If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads
   `true`, emit exactly `BLOCKED: integration branch mismatch`. Decide this
-  from that line only. Your workspace's own git is a filtered read-only
-  snapshot on a local branch named `isolated`, and its commit ID never
-  matches the planning ref, so `git branch` or `git rev-parse` there is not
-  evidence of a mismatch.
+  from that line only. Your workspace's own git, when it has one, is a
+  filtered read-only snapshot on a local branch named `isolated`, and its
+  commit ID never matches the planning ref; some sandboxes have no git at
+  all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
+  error there is evidence of a mismatch.
 - Before exiting, run a self-check on the plan you are about to emit.
   If the plan is implementation-ready, end with `STATUS: CLEAR` and
   `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
@@ -292,7 +293,8 @@ fi
 # human after one such answer although the workflow had computed
 # PLANNING_REF_MISMATCH=false. Returns 0 when the output's first BLOCKED line
 # (closed fences stripped, as plan.yml's parser does) is that reason while the
-# workflow found no mismatch.
+# workflow found no mismatch. The second perl reads to EOF so the first never
+# gets SIGPIPE under pipefail on a large output.
 plan_output_contradicts_ref_context()
 {
   local output_file="$1" blocked_reason
@@ -300,11 +302,16 @@ plan_output_contradicts_ref_context()
   blocked_reason="$(perl -0pe '
     s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;
   ' "${output_file}" | perl -ne '
-    if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; exit; }
+    if (!$seen && /^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; $seen = 1; }
   ')" || return 1
   blocked_reason="${blocked_reason,,}"
   blocked_reason="${blocked_reason%.}"
-  [ "${blocked_reason}" = "integration branch mismatch" ]
+  # Also match a reason the model embellished after the phrase, e.g.
+  # "integration branch mismatch (workspace is on isolated)".
+  case "${blocked_reason}" in
+    "integration branch mismatch" | "integration branch mismatch"[!a-z0-9_]*) return 0 ;;
+  esac
+  return 1
 }
 plan_ref_retry_note_added=false
 
@@ -351,7 +358,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
       if [ "${plan_ref_retry_note_added}" = false ]; then
         {
           printf '\n=== RETRY NOTE ===\n'
-          printf '%s\n' "A previous attempt answered \`BLOCKED: integration branch mismatch\`, but PLANNING REF CONTEXT reports \`Integration branch mismatch: false\`: the workflow checked out the integration branch. Git inside your workspace (branch \`isolated\`) is a snapshot, not the planning ref. Plan the issue."
+          printf '%s\n' "A previous attempt answered \`BLOCKED: integration branch mismatch\`, but PLANNING REF CONTEXT reports \`Integration branch mismatch: false\`: the workflow checked out the integration branch. Git inside your workspace, if any (branch \`isolated\`), is a snapshot, not the planning ref. Plan the issue."
         } >> "${CODEX_PROMPT_FILE}"
         plan_ref_retry_note_added=true
       fi
