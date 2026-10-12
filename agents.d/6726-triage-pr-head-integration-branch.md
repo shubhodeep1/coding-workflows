@@ -1,6 +1,6 @@
 <!-- agents: section="Workflow architecture" -->
 - **Check-failure triage integration branch (#6726).** With
-  `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true` (default `false`) the only
+  `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` on (default `true`; `false` turns it off) the only
   routing key the triage body validator accepts is one header line
   `- **Integration branch:** \`orchestrator/project-<N>\``, written by
   `scripts/check_failure_triage.sh` when the GitHub API reports a
