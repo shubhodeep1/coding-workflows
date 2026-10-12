@@ -148,6 +148,28 @@ def test_locate_widens_to_branch_runs_and_falls_back_on_expired_log(monkeypatch,
 	assert not any("runs/23/" in c[0][0] for c in fake.calls), "runs created after merged_at must be ignored"
 
 
+def test_locate_selects_cancelled_shard_job(monkeypatch, tmp_path):
+	# A shard killed by timeout-minutes reports conclusion "cancelled".
+	jobs = {f"repos/{REPO}/actions/runs/31/attempts/1/jobs": {"jobs": [{"id": 301, "name": "orchestrate-poll (3)", "conclusion": "cancelled"}]}}
+	fake = FakeGh(_locate_routes([{"id": 31, "run_attempt": 1, "created_at": "2026-10-09T09:00:00Z"}], jobs=jobs), logs={f"repos/{REPO}/actions/jobs/301/logs": (0, FIXTURE_LOG.encode() + b"\xff\n", "")})
+	_install(monkeypatch, fake)
+	evidence = mod.locate(REPO, "6576", "ai/issue-6573", tmp_path)
+	assert [j["id"] for j in evidence["jobs"]] == [301]
+	assert evidence["source"] == "log"
+
+
+def test_gh_raw_allows_escape_sequences(monkeypatch):
+	seen = {}
+
+	def fake_run(cmd, **kwargs):
+		seen["cmd"] = cmd
+		return subprocess.CompletedProcess(cmd, 0, b"log", b"")
+
+	monkeypatch.setattr(mod.subprocess, "run", fake_run)
+	assert mod._gh_raw(["repos/o/r/actions/jobs/1/logs"]) == (0, b"log", "")
+	assert seen["cmd"][:3] == ["gh", "api", "--allow-escape-sequences"]
+
+
 @pytest.mark.parametrize("head", [
 	{"head": {"sha": "not-a-sha", "repo": {"full_name": REPO}}},
 	{"head": {"sha": SHA, "repo": {"full_name": "fork/r"}}},

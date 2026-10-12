@@ -101,7 +101,10 @@ def _gh_json(args: list[str], paginate: bool = False, input_obj: Any = None) -> 
 
 
 def _gh_raw(args: list[str]) -> tuple[int, bytes, str]:
-	proc = subprocess.run(["gh", "api", *args], capture_output=True, check=False)
+	# The job-logs endpoint returns plain text with ANSI colour codes; without
+	# --allow-escape-sequences gh refuses the body (see the same note in
+	# scripts/workflow_failure_heal_intake.sh), so every log would read as unavailable.
+	proc = subprocess.run(["gh", "api", "--allow-escape-sequences", *args], capture_output=True, check=False)
 	return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", errors="replace")
 
 
@@ -183,7 +186,10 @@ def _failing_tests_from_logs(log_files: list[Path]) -> list[str]:
 
 
 def _redact(raw: bytes) -> bytes:
-	proc = subprocess.run([sys.executable, str(HEAL_SCRIPT), "redact-stream"], input=raw, capture_output=True, check=False)
+	# redact-stream reads stdin as strict UTF-8; replace undecodable bytes so a
+	# stray byte in a log cannot abort the whole locate step.
+	clean = raw.decode("utf-8", errors="replace").encode("utf-8")
+	proc = subprocess.run([sys.executable, str(HEAL_SCRIPT), "redact-stream"], input=clean, capture_output=True, check=False)
 	if proc.returncode != 0:
 		raise FollowupError("redact-stream failed")
 	return proc.stdout
