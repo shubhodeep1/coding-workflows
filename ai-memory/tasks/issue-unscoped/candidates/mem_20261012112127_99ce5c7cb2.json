@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:Lines 837-958 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \u201cCommit and push updates\u201d run body is 19,821 characters, exceeding the 18,000-character guard.\n  WHY: `test_interpolated_run_bodies_below_expression_guard` fails, which fails `tests-promote-stall-and-review` and the aggregate `lint` check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cmove the body into `scripts/` and pass each `${{ }}` value through `env:` (\u00a724).\u201d\n  expected_change_site: `.github/workflows/update_workflows.yml`, job `update-wrappers`, step \u201cCommit and push updates\u201d\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: `.github/workflows/update_workflows.yml`, job `update-wrappers`, step \u201cCommit and push updates\u201d (about line 826); the `run:` body contains `${{ }}` and is 19,821 characters.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The workflow run body must be moved into `scripts/` and each `${{ }}` value passed through `env:` (\u00a724).\n  Expected change site: `.github/workflows/update_workflows.yml`, job `update-wrappers`, step \u201cCommit and push updates\u201d (about line 826)\n  Evidence of absence: The step's `run:` body contains `${{ }}` and is 19,821 characters, over the 18,000-character guard.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- `.github/workflows/update_workflows.yml` job `update-wrappers`, step \u201cCommit and push updates\u201d (line 826): The 19,821-character run body exceeds the 18,000-character guard, causing `test_interpolated_run_bodies_below_expression_guard` to fail and making `tests-promote-stall-and-review` and the aggregate `lint` check fail. The issue is pre-existing on the integration branch and outside issue #7172\u2019s scope; it needs its own PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/update_workflows.yml | Lines 837-958, \u201cCommit and push updates\u201d run body; inline expressions include lines 887, 891-892, 954-958.\n  severity=MAJOR\n  confidence=5\n  PROBLEM: The PR head\u2019s CI reports this run body is 19,821 characters, exceeding the 18,000-character guard. This is in an unchanged file and is unrelated to the PR\u2019s edits.\n  WHY: `test_interpolated_run_bodies_below_expression_guard` fails, which fails `tests-promote-stall-and-review` and the aggregate `lint` check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nNo task was provided \u2014 the message contains only the unattended system instructions header with an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder and no actual request.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3eb6108aca86396a89265b7a856e29b05b6eef1d8736637fb5fa30cc2d8586e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7211,
+    "run_id": "38240203439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38240203439",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012112127_99ce5c7cb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7211,
+    "run_id": "38240203439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T11:21:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
