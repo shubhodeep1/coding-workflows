@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-10-12T02:05:30Z",
+  "issue_number": 6902,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Safeguarded consumer workflow updater: attested release manifest, fail-closed verification, pull-request delivery\" (#6902): issues stalled and needed automated recovery (1 time(s)). Causes: stuck in ai:done for 121m; recovery: retrigger_review (#6960). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 6905,
+  "record_id": "lesson-orchestrator-6902-stall-recovery-b1cc247b2abb834d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:6902",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_manifest_verify.py",
+    "file:.github/workflows/ci.yml",
+    "file:changelog.d/safeguarded-updater-p2b-updater-verify-flag.md"
+  ]
+}
