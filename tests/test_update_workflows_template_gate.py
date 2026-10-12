@@ -363,13 +363,15 @@ def test_template_gate_is_registered_in_ci() -> None:
 FAKE_GH = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_GH_LOG}"
 printf 'token=%s\n' "${GH_TOKEN:-}" >> "${FAKE_GH_LOG}"
+if [ "$1" = "api" ] && [ "${GH_TOKEN:-}" = "${FAKE_STATUS_REFUSED_TOKEN:-none}" ]; then exit 1; fi
 if [ "$1" = "api" ]; then exit "${FAKE_STATUS_RC:-0}"; fi
 if [ "$1 $2" = "pr merge" ]; then exit "${FAKE_MERGE_RC:-0}"; fi
 exit 1
 """
 
 
-def _run_publish(tmp_path: Path, verified: str, status_rc: int = 0, merge_rc: int = 0) -> tuple[subprocess.CompletedProcess, list[str], dict]:
+def _run_publish(tmp_path: Path, verified: str, status_rc: int = 0, merge_rc: int = 0,
+	refused_token: str = "none") -> tuple[subprocess.CompletedProcess, list[str], dict]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
@@ -395,6 +397,7 @@ def _run_publish(tmp_path: Path, verified: str, status_rc: int = 0, merge_rc: in
 		"FAKE_GH_LOG": str(log),
 		"FAKE_STATUS_RC": str(status_rc),
 		"FAKE_MERGE_RC": str(merge_rc),
+		"FAKE_STATUS_REFUSED_TOKEN": refused_token,
 	}
 	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
 	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -433,6 +436,17 @@ def test_status_post_failure_blocks_the_merge(tmp_path: Path) -> None:
 	assert not any(call.startswith("pr merge") for call in calls)
 	assert "auto_merge" not in outputs
 	assert "reason=status_post_failed" in result.stdout
+
+
+def test_status_post_retries_with_pat_when_job_token_is_refused(tmp_path: Path) -> None:
+	# A caller wrapper rendered before it granted `statuses: write`: the PR
+	# that fixes the wrapper must not wait for a human.
+	result, calls, outputs = _run_publish(tmp_path, "true", refused_token="job-token")
+	assert result.returncode == 0, result.stderr
+	posts = [i for i, call in enumerate(calls) if call.startswith("api -X POST")]
+	assert [calls[i + 1] for i in posts] == ["token=job-token", "token=pat-token"]
+	assert "::warning::UPDATER_PR_VERIFY posted the status with GH_PAT" in result.stdout
+	assert outputs["auto_merge"] == "enabled"
 
 
 def test_merge_failure_is_reported_not_retried(tmp_path: Path) -> None:

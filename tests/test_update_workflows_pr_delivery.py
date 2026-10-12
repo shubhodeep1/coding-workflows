@@ -81,14 +81,14 @@ def test_step_name_predicate_and_id() -> None:
 	assert "continue-on-error" not in step
 
 
-def test_flag_defaults_off_in_workflow_and_shell() -> None:
+def test_flag_defaults_on_in_workflow_and_shell() -> None:
 	step = _step()
 	env = step["env"]
-	assert env["UPDATER_PR_DELIVERY_ENABLED"] == "${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'false' }}"
+	assert env["UPDATER_PR_DELIVERY_ENABLED"] == "${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'true' }}"
 	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	assert env["VERIFIED"] == "${{ steps.verify_release_manifest.outputs.verified }}"
 	assert env["UPSTREAM_SHA"] == "${{ steps.fetch.outputs.upstream_sha }}"
-	assert '"${UPDATER_PR_DELIVERY_ENABLED:-false}"' in step["run"]
+	assert '"${UPDATER_PR_DELIVERY_ENABLED:-true}"' in step["run"]
 
 
 def test_assembly_outputs_reach_the_body_through_env() -> None:
