@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from review_autofix_step_scripts import expanded_review_autofix_text
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -32,7 +34,8 @@ POST_MERGE_GH_RETRY_NOOP = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; 
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
+	return expanded_review_autofix_text()
 
 
 def _step_block(text: str, step_name: str) -> str:

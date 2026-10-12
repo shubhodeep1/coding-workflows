@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **Workflow heal implementation no longer fails its support-ref check by reading the wrong repository.** The check now reads the trusted support checkout itself, so a matching support commit verifies and a mismatching one is refused with its real commit.
+
+`implement.yml`'s "Activate workspace shell context" step exports `GIT_DIR` and `GIT_WORK_TREE` for the primary workspace. An exported `GIT_DIR` overrides `git -C`, so `scripts/implement_heal_preflight.sh` compared the workspace branch's HEAD with `SCRIPT_REF` instead of `.codex-workflow-src`'s. Heal issues were refused with `reason=unavailable detail=support_ref_mismatch fallback=false` (#6983). A workspace HEAD that happened to equal `SCRIPT_REF` would have passed the check without looking at the support scripts it then copies. The support reads now run with the repository-pinning git variables unset. A support directory that is not its own repository top level is refused with the new detail `support_not_repository`. The equality check and the `support_ref_fallback` refusal are unchanged.
+
+What this means for operators: `actual_sha` in `HEAL_SCOPE_REFUSED` and `Heal support ref check failed` lines now shows the support checkout's commit. Re-approve a heal refused with `support_ref_mismatch` once this fix is on the support ref it stages from.

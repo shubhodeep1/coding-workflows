@@ -6,6 +6,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -128,7 +132,7 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 
 
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:
-	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	for prefix in (
 		"REISSUE_FILES_TOUCHED_UNION",
 		"REISSUE_FILES_TOUCHED_NEW_OUTPUTS",
@@ -146,7 +150,7 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 
 
 def test_validation_run_attribution_log_prefix_is_registered() -> None:
-	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	assert "- `VALIDATION_RUN_ATTRIBUTION`" in agents_text
 	assert "LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION" in agents_text
 
@@ -159,7 +163,7 @@ def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	step = wf[step_start:step_end]
 	assert "steps.find_tracking.outputs.has_work != 'true'" in step
 	assert "github.repository == 'shubhodeep1/coding-workflows'" in step
-	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in step
+	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert 'STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"' in step
 	assert 'run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh' in step
 	assert 'if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then' in poller
@@ -180,7 +184,7 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
 	assert "TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}" in step
 	assert "TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}" in step
-	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in step
+	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert 'PYTHONDONTWRITEBYTECODE: "1"' in step
 	assert "run: bash scripts/orchestrate_poll_process.sh" in step
 	for name, default in (

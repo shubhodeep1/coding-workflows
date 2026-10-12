@@ -129,8 +129,7 @@ def test_regex_does_not_match_substring_or_unrelated_words():
 		"link to #2734",       # no keyword
 		"Refs #2734",          # the recommended replacement — must NOT be flagged
 		"Related to #2734",    # also the recommended replacement
-		"Closes: #2734",       # GitHub does not auto-close on colon-form syntax
-		"Resolves: https://github.com/owner/repo/issues/9",
+		"fixes#2734",          # no separator at all
 	]
 	for text in false_positives:
 		matches = mod._scan_text("test", text)
@@ -138,6 +137,27 @@ def test_regex_does_not_match_substring_or_unrelated_words():
 			f"regex falsely matched {text!r}; got {matches!r}. "
 			f"This would create noise for legitimate PR bodies and erode trust in the lint."
 		)
+
+
+def test_regex_matches_colon_forms():
+	# GitHub closes issues on colon forms too: merge commit ae99a17d202
+	# (PR #7190) closed tracking issue #6664 through "resolved: #6664" in a
+	# squashed commit message.
+	mod = _import_lint_module()
+	cases = [
+		("though each conflict was resolved: #6664 failed", "resolved", None, 6664),
+		("Closes: #2734", "Closes", None, 2734),
+		("Fixes:#12", "Fixes", None, 12),
+		("fix : owner/repo#3", "fix", "owner/repo", 3),
+		("Resolves: https://github.com/owner/repo/issues/9", "Resolves", "owner/repo", 9),
+	]
+	for text, keyword, referenced_repo, issue in cases:
+		matches = mod._scan_text("test", text)
+		assert len(matches) == 1, f"regex failed to match colon form {text!r}; got {matches!r}"
+		_, _, kw, repo_ref, iss = matches[0]
+		assert kw.lower() == keyword.lower()
+		assert repo_ref == referenced_repo
+		assert iss == issue
 
 
 def test_markdown_code_examples_in_pr_body_are_ignored():
@@ -307,10 +327,10 @@ def test_commit_messages_are_scanned_in_addition_to_pr_body():
 	mod = _import_lint_module()
 	def fake_lookup(repo: str, issue: int) -> list[str]:
 		return ["ai:orchestrator-tracking"] if issue == 2734 else []
-	# PR body is clean; the violation is hidden in a commit message
-	# (GitHub squash-merge would still use the PR body, but plain merge
-	# commits to the default branch would auto-close on the keyword in the
-	# commit message).
+	# PR body is clean; the violation is hidden in a commit message. A
+	# squash merge in this repository copies commit messages into the
+	# merge commit, and a plain merge lands the commit itself, so either
+	# way the keyword reaches the default branch.
 	violations, errors = mod.lint(
 		pr_body="Some clean description with Refs #2734 only.\n",
 		commit_messages=[(1, "fix: thing\n\nFixes #2734\n")],
@@ -321,6 +341,74 @@ def test_commit_messages_are_scanned_in_addition_to_pr_body():
 	assert errors == []
 	assert len(violations) == 1
 	assert "commit message" in violations[0].source
+	formatted = violations[0].format()
+	assert "reword that commit on the PR branch" in formatted, formatted
+
+
+def test_pr_body_violation_has_no_commit_reword_advice():
+	mod = _import_lint_module()
+	violations, _ = mod.lint(
+		pr_body="Fixes #2734\n",
+		commit_messages=[],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		label_lookup=lambda repo, issue: ["ai:orchestrator-tracking"],
+	)
+	assert len(violations) == 1
+	assert "reword that commit" not in violations[0].format()
+
+
+def _lint_workflow_step(name: str) -> str:
+	# Plain-text step lookup: this file also runs as a bare `python3` script
+	# in release jobs that do not install PyYAML.
+	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	start = workflow.index(f"      - name: {name}\n")
+	end = workflow.find("\n      - name: ", start + 1)
+	return workflow[start:] if end == -1 else workflow[start:end]
+
+
+def test_workflow_lints_commit_messages_for_default_branch_prs():
+	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	collect = _lint_workflow_step("Write PR commit messages to file")
+	assert "        if: github.event.pull_request.base.ref == github.event.repository.default_branch\n" in collect
+	assert 'gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100"' in collect
+	assert "--paginate --jq '.[].commit.message | @json'" in collect
+	assert collect.index("set -euo pipefail") < collect.index("gh api")
+	lint_run = _lint_workflow_step("Run auto-close keyword lint")
+	assert "commit_args=(--commit-messages-file /tmp/pr-body-lint/commits.bin)" in lint_run
+	assert '"${commit_args[@]}"' in lint_run
+	assert workflow.index("- name: Write PR commit messages to file") < workflow.index(
+		"- name: Run auto-close keyword lint"
+	)
+
+
+def test_workflow_commit_collector_writes_nul_separated_messages():
+	import json
+	import subprocess
+	import textwrap
+
+	collect = _lint_workflow_step("Write PR commit messages to file")
+	opener = "python3 -I -c '"
+	program = textwrap.dedent(
+		collect[collect.index(opener) + len(opener):collect.index("' /tmp/pr-body-lint/commits.jsonl")]
+	)
+	mod = _import_lint_module()
+	tmp = Path(tempfile.mkdtemp(prefix="lint-pr-commits-"))
+	try:
+		src = tmp / "commits.jsonl"
+		dst = tmp / "commits.bin"
+		messages = ["fix: one\n\nbody line", "two: \u00e9\nthough each conflict was resolved: #6664"]
+		src.write_text("".join(json.dumps(m) + "\n" for m in messages), encoding="utf-8")
+		proc = subprocess.run(
+			[sys.executable, "-I", "-c", program, str(src), str(dst)],
+			capture_output=True, text=True, check=False,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert "Collected 2 commit message(s)." in proc.stdout
+		assert mod._load_commit_messages(dst) == [(1, messages[0]), (2, messages[1])]
+	finally:
+		import shutil
+		shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_repeated_references_to_same_issue_cache_the_lookup():
@@ -393,6 +481,24 @@ def test_main_exit_codes():
 			finally:
 				sys.argv = old_argv
 			assert rc == 1, f"expected exit 1 (violation), got {rc}"
+			# A clean body with the violation only in a commit message
+			# (the PR #7190 shape) must also fail the check.
+			body_path.write_text("Refs #2734\n", encoding="utf-8")
+			commits_path = tmp / "commits.bin"
+			commits_path.write_bytes(
+				b"fix: one\x00chore: two\n\nthough each conflict was resolved: #2734 failed"
+			)
+			sys.argv = [
+				"lint_pr_body_auto_close.py",
+				"--pr-body-file", str(body_path),
+				"--commit-messages-file", str(commits_path),
+				"--repo", "owner/repo",
+			]
+			try:
+				rc = mod.main()
+			finally:
+				sys.argv = old_argv
+			assert rc == 1, f"expected exit 1 (commit-message violation), got {rc}"
 		finally:
 			mod._fetch_issue_labels_gh = original
 	finally:
