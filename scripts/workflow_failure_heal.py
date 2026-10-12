@@ -2991,7 +2991,7 @@ def count_identical_failures(
 			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body))
 		):
 			result["cap_applied"] = True
-		for failure_fields in (_marker_fields(match) for match in _FAILURE_MARKER_RE.finditer(body)):
+		for failure_fields in (_marker_fields(match) for match in (_canonical_failure_marker(body),) if match is not None):
 			recorded = failure_fields.get("support", "").lower()
 			# Outage markers never count (#6633), so they must not spend a
 			# re-arm slot either: the resolver never ran under that support.
