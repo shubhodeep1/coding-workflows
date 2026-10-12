@@ -69,10 +69,14 @@ def test_attestation_identity_is_exact():
 
 
 def test_only_summary_runs_unconditionally():
-	text = workflow_text()
+	# Scoped to the update-wrappers job: the separate `verify` job (#7004)
+	# has its own always() bookkeeping steps.
+	full = workflow_text()
+	text = full[full.index("\n  update-wrappers:\n"):full.index("\n  verify:\n")]
 	always = [name for name in step_names(text) if "always()" in step_block(text, name).split("run:", 1)[0]]
 	assert always == ["Summary"]
 	alert = step_block(text, "Alert on sync manifest verification failure")
+	assert alert in full
 	assert "failure() && steps.verify_manifest.outcome == 'failure'" in alert
 	assert "source " not in alert.split("run: |", 1)[1]
 

@@ -196,15 +196,24 @@ def test_verify_job_runs_after_the_update_job_for_opened_prs_only() -> None:
 
 def test_auto_merge_is_enabled_only_by_the_verify_job() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
-	assert text.count("gh pr merge") == 1
+	commit_push = [step for step in _workflow()["jobs"]["update-wrappers"]["steps"] if step.get("id") == "commit_push"][0]
+	# The ai-sync/stable delivery (#7128) merges its own verified PR, bound to
+	# the head it pushed; the auto/update-workflows-* flow below the
+	# ai-sync section stays verify-job-only.
+	commit_run = commit_push["run"]
+	sync_start = commit_run.index('SYNC_BRANCH="ai-sync/stable"')
+	sync_end = commit_run.index("# ── Pull-request delivery (UPDATER_PR_DELIVERY_ENABLED=true)")
+	sync_section = commit_run[sync_start:sync_end]
+	assert sync_section.count("gh pr merge") == 2
+	assert sync_section.count('--match-head-commit "${MERGE_HEAD_SHA}"') == 2
+	assert text.count("gh pr merge") - sync_section.count("gh pr merge") == 1
 	run = _verify_step("verify_publish")["run"]
 	success = run.index("-f state=success")
 	merge = run.index('gh pr merge "${PR_NUMBER}"')
 	assert success < merge
 	assert run.index('if [ "${VERIFIED:-}" = "true" ]; then') < merge
 	assert '--auto --squash --match-head-commit "${PUSHED_SHA}"' in run
-	commit_push = [step for step in _workflow()["jobs"]["update-wrappers"]["steps"] if step.get("id") == "commit_push"][0]
-	assert "gh pr merge" not in commit_push["run"]
+	assert "gh pr merge" not in commit_run[:sync_start] + commit_run[sync_end:]
 	assert 'AUTO_MERGE="pending_verify"' in commit_push["run"]
 	steps = [step.get("id") for step in _verify_job()["steps"]]
 	for earlier in ("verify_inputs", "verify_release", "verify_topology", "verify_reproduce", "verify_tree"):

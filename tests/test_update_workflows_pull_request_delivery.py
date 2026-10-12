@@ -39,10 +39,12 @@ def test_direct_push_path_is_unchanged():
 	assert "id: commit_push" in block
 	assert "UPDATE_VIA_PR: ${{ inputs.update_via_pull_request != false }}" in block
 	assert ORIGINAL_COMMIT in block
-	direct = block.split('if [ "${UPDATE_VIA_PR}" != "true" ]; then\n', 1)[1].split("\n          fi\n", 1)[0]
-	assert direct.lstrip().startswith("git push\n")
+	gate = 'if [ "${PR_DELIVERY}" != "true" ] && [ "${UPDATE_VIA_PR:-true}" != "true" ]; then\n'
+	direct = block.split(gate, 1)[1].split("\n          fi\n", 1)[0]
+	direct_lines = [line.strip() for line in direct.splitlines()]
+	assert direct_lines[:2] == ['echo "delivery=direct" >> "${PR_OUT}"', "git push"]
 	assert 'echo "sync_pr_state=pushed" >> "$GITHUB_OUTPUT"' in direct
-	assert block.index(ORIGINAL_COMMIT) < block.index('if [ "${UPDATE_VIA_PR}" != "true" ]; then')
+	assert block.index(ORIGINAL_COMMIT) < block.index(gate)
 
 
 def test_pull_request_path_contract():
@@ -52,7 +54,9 @@ def test_pull_request_path_contract():
 	assert block.count("pulls?head=${OWNER}:${SYNC_BRANCH}&base=${DEFAULT_BRANCH}&state=open") == 1
 	assert block.count("-X PATCH") == 1
 	assert block.count('-X POST "repos/${REPO}/pulls"') == 1
-	assert 'git push --force origin "HEAD:refs/heads/${SYNC_BRANCH}"' in block
+	assert 'git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_REMOTE_SHA}" origin "HEAD:refs/heads/${SYNC_BRANCH}"' in block
+	assert "git push --force origin" not in block
+	assert 'TG_LEVEL="WARNING"' in text().split('if [ "${SYNC_PR_STATE:-}" = "awaiting_merge" ]; then', 1)[1].split("fi", 1)[0]
 	assert "FETCH_HEAD^{tree}" in block and "HEAD^{tree}" in block
 	assert "<!-- ai-sync:v1 version=%s commit=%s -->" in block
 	auto = block.index('--auto "--${MERGE_METHOD}" --match-head-commit "${MERGE_HEAD_SHA}"')

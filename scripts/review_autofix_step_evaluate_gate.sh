@@ -702,6 +702,69 @@ if [ "${SHOULD_RUN}" = "true" ] \
   fi
 fi
 
+# Consumer sync PRs (#7128): the consumer updater delivers verified
+# upstream changes through a pull request from ai-sync/stable and merges it
+# itself. When every changed path (rename sources included) is in the signed
+# sync allowlist derived from the verified head-gate support checkout, the
+# reviewer panel is skipped. The skip grants no authority: it sets no label,
+# posts no comment or status and never merges. DETERMINISTIC_SKIP stays false
+# here, so the deterministic-skip-merge job never runs for it. A force-review
+# marker, an unverified helper, or a missing, partial or capped file list keeps
+# the normal review.
+if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
+  && [ "${pr_head_ref}" = "ai-sync/stable" ] \
+  && [ "${pr_head_repo}" = "${REPOSITORY}" ]; then
+  workflow_sync_reason=""
+  workflow_sync_files="0"
+  workflow_sync_helper=".codex-head-gate-src/scripts/review_workflow_sync_skip.sh"
+  workflow_sync_force_review="false"
+  if printf '%s' "${PR_TITLE:-}" | grep -Fq "[force-review]"; then
+    workflow_sync_force_review="true"
+  fi
+  case ",${pr_labels}," in
+    *,force-review,*) workflow_sync_force_review="true" ;;
+  esac
+  if [ "${workflow_sync_force_review}" = "true" ]; then
+    workflow_sync_reason="force_review"
+  elif ! [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || [ ! -f "${workflow_sync_helper}" ]; then
+    workflow_sync_reason="helper_unverified"
+  elif ! [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]]; then
+    workflow_sync_reason="changed_files_unknown"
+  else
+    workflow_sync_paths_file="$(mktemp)"
+    # One paginated read; the list must be complete (count equal to the
+    # PR's changed_files, below GitHub's 3000-file cap) and free of control
+    # characters, since the helper reads one path per line.
+    if gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename}]' 2>/dev/null \
+      | jq -s 'add // []' 2>/dev/null \
+      | jq -er --argjson n "${pr_changed_files}" '
+          def ok_path: type == "string" and length > 0 and (test("[[:cntrl:]]") | not);
+          if type == "array" and length == $n and length < 3000
+            and all(.[]; type == "object" and (.filename | ok_path)
+              and (.previous_filename == null or (.previous_filename | ok_path)))
+          then .[] | .filename, (.previous_filename // empty)
+          else error("incomplete") end' > "${workflow_sync_paths_file}" 2>/dev/null; then
+      workflow_sync_files="$(grep -c . "${workflow_sync_paths_file}" || true)"
+      if workflow_sync_check="$(bash "${workflow_sync_helper}" check "${pr_head_ref}" "${workflow_sync_paths_file}" ".codex-head-gate-src" 2>/dev/null)"; then
+        SHOULD_RUN="false"
+        SKIP_REASON="workflow_sync_managed"
+        GATE_SKIP_RECORDED="true"
+        workflow_sync_reason="managed_paths_only"
+        echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=skipped files=${workflow_sync_files} reason=${workflow_sync_reason}"
+      else
+        workflow_sync_reason="${workflow_sync_check#review reason=}"
+        [ -n "${workflow_sync_reason}" ] || workflow_sync_reason="path_check_failed"
+      fi
+    else
+      workflow_sync_reason="files_unavailable"
+    fi
+    rm -f "${workflow_sync_paths_file}"
+  fi
+  if [ "${SHOULD_RUN}" = "true" ]; then
+    echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=review files=${workflow_sync_files} reason=${workflow_sync_reason}"
+  fi
+fi
+
 # Deterministic pre-review skip (last gate check):
 # If all earlier gates have passed (SHOULD_RUN still true) and the
 # PR qualifies as doc-only or under the size threshold, flip

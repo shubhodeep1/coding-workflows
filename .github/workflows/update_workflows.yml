@@ -1207,7 +1207,7 @@ jobs:
           # auto-merge. Otherwise the update_via_pull_request input (#7128,
           # default true) selects the ai-sync/stable pull request, and false
           # keeps the direct push to the default branch.
-          if [ "${PR_DELIVERY}" != "true" ] && [ "${UPDATE_VIA_PR}" != "true" ]; then
+          if [ "${PR_DELIVERY}" != "true" ] && [ "${UPDATE_VIA_PR:-true}" != "true" ]; then
             echo "delivery=direct" >> "${PR_OUT}"
             git push
             echo "sync_pr_state=pushed" >> "$GITHUB_OUTPUT"
@@ -1255,8 +1255,15 @@ jobs:
                 gh api -X PATCH "repos/${REPO}/pulls/${OPEN_PR_NUMBER}" -f state=closed >/dev/null
                 echo "SYNC_DELIVERY outcome=replaced_stale_pr pr=${OPEN_PR_NUMBER} branch=${SYNC_BRANCH}"
               fi
-              # The updater owns this branch, so a force push is safe.
-              git push --force origin "HEAD:refs/heads/${SYNC_BRANCH}"
+              # The updater owns this branch. The lease binds the replacement
+              # to the tip read just before it, so a concurrent updater run
+              # that moved the branch fails this push instead of being
+              # silently overwritten (an empty tip means "must not exist").
+              SYNC_REMOTE_SHA="$(git ls-remote origin "refs/heads/${SYNC_BRANCH}" | awk 'NR == 1 { print $1 }')"
+              if ! git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_REMOTE_SHA}" origin "HEAD:refs/heads/${SYNC_BRANCH}"; then
+                echo "::error::SYNC_DELIVERY outcome=failed reason=lease_mismatch_or_push_rejected branch=${SYNC_BRANCH}"
+                exit 1
+              fi
               MERGE_HEAD_SHA="$(git rev-parse HEAD)"
               SYNC_PR_BODY="$(printf '%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.\n\n<!-- ai-sync:v1 version=%s commit=%s -->' "${COMMIT_BODY}" "${SYNC_VERSION:-unknown}" "${SYNC_UPSTREAM_SHA:-unknown}")"
               CREATED_PR="$(gh api -X POST "repos/${REPO}/pulls" \
@@ -1686,6 +1693,11 @@ jobs:
           # Pull-request delivery reports the PR instead of a pushed commit.
           # A PR left for a human (auto-merge not enabled) is a WARNING.
           TG_LEVEL="DEBUG"
+          # An ai-sync/stable PR that was not merged or enrolled in
+          # auto-merge waits for a person to merge it (#7128).
+          if [ "${SYNC_PR_STATE:-}" = "awaiting_merge" ]; then
+            TG_LEVEL="WARNING"
+          fi
           if [ "${COMMIT_DELIVERY:-}" = "pr" ]; then
             MSG="${MSG}
           Delivered as a pull request (${COMMIT_PR_ACTION:-unknown}): ${COMMIT_PR_URL:-none}
@@ -1861,10 +1873,13 @@ jobs:
           RETIRED_REMOVED_COUNT="${{ steps.retired_files.outputs.retired_removed }}"
           echo "- **Retired files removed:** ${RETIRED_REMOVED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Sync manifest verification:** ${VERIFY_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          # The ai-sync/stable and direct-push paths report sync_pr_state;
+          # the auto/update-workflows-* path reports delivery.
           if [ -n "${SYNC_PR_STATE}" ]; then
             echo "- **Delivery:** ${SYNC_PR_STATE}${SYNC_PR_URL:+ (${SYNC_PR_URL})}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **Delivery:** ${COMMIT_DELIVERY:-none}" >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "- **Delivery:** ${COMMIT_DELIVERY:-none}" >> "$GITHUB_STEP_SUMMARY"
           if [ "${COMMIT_OUTCOME:-}" = "failure" ]; then
             echo "- **Delivery status:** failed (see the UPDATER_PR_DELIVERY log line)" >> "$GITHUB_STEP_SUMMARY"
           fi

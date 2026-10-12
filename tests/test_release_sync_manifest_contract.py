@@ -10,6 +10,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOWS = ("test-and-mark-stable.yml", "mark-stable.yml")
+# Same gate as the release-manifest steps: nothing is attested or uploaded
+# for a version that the release switches leave unpublished.
+RELEASE_GATE = "if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}"
 
 
 def release_job(name: str) -> str:
@@ -53,8 +56,8 @@ def test_manifest_is_built_and_attested_before_tagging(workflow):
 	assert '--commit "$(git rev-parse HEAD)"' in build_block
 	assert 'echo "path=${SYNC_MANIFEST_PATH}" >> "$GITHUB_OUTPUT"' in build_block
 	attest_block = step(job, "Attest sync manifest")
-	assert "if: ${{ !inputs.dry_run }}" in attest_block
-	assert "uses: actions/attest-build-provenance@v2" in attest_block
+	assert RELEASE_GATE in attest_block
+	assert "uses: actions/attest-build-provenance@v3" in attest_block
 	assert "subject-path: ${{ steps.sync_manifest.outputs.path }}" in attest_block
 	assert "continue-on-error" not in attest_block
 
@@ -67,7 +70,7 @@ def test_manifest_is_uploaded_after_the_release(workflow):
 	assert names.index("Create GitHub Release") + 1 == upload
 	assert upload < names.index("Notify consumer repos via repository_dispatch")
 	block = step(job, "Upload sync manifest")
-	assert "if: ${{ !inputs.dry_run }}" in block
+	assert RELEASE_GATE in block
 	assert 'gh release upload "${VERSION}" "${SYNC_MANIFEST_PATH}" --clobber' in block
 	assert "SYNC_MANIFEST outcome=upload_failed" in block
 

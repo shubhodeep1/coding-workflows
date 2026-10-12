@@ -16,6 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "review_workflow_sync_skip.sh"
 BUILDER = REPO_ROOT / "scripts" / "build_sync_manifest.py"
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+# The "Evaluate review gate" body lives in this script (#6972).
+GATE_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_evaluate_gate.sh"
 
 
 @pytest.fixture()
@@ -71,15 +73,21 @@ def _gate_text() -> str:
 	return REVIEW_AUTOFIX.read_text(encoding="utf-8")
 
 
+def _gate_script_text() -> str:
+	return GATE_SCRIPT.read_text(encoding="utf-8")
+
+
 def _sync_block(text: str) -> str:
-	start = text.index("          # Consumer sync PRs (#7128)")
-	return text[start:text.index("          # Deterministic pre-review skip (last gate check):", start)]
+	start = text.index("\n# Consumer sync PRs (#7128)")
+	return text[start:text.index("\n# Deterministic pre-review skip (last gate check):", start)]
 
 
 def test_gate_block_contract():
-	text = _gate_text()
+	text = _gate_script_text()
 	block = _sync_block(text)
-	assert text.index("          # Consumer sync PRs (#7128)") < text.index('          DETERMINISTIC_SKIP="false"\n')
+	assert text.index("\n# Consumer sync PRs (#7128)") < text.index('\nDETERMINISTIC_SKIP="false"\n')
+	assert text.index("\n# ----- Identical-failure fingerprint cap -----") < text.index("\n# Consumer sync PRs (#7128)")
+	assert ".codex-head-gate-src/scripts/review_workflow_sync_skip.sh" in block
 	assert '[ "${pr_head_ref}" = "ai-sync/stable" ]' in block
 	assert '[ "${pr_head_repo}" = "${REPOSITORY}" ]' in block
 	assert '[ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ]' in block

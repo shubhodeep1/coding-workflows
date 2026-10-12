@@ -28,13 +28,11 @@
 # refresh the pull request) and statuses (the verify job's commit status).
 #
 # Opting out:
-#   Set the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' to
-#   stop this job entirely (unset or any other value keeps it on). The gate
-#   lives here, so a sync of this file cannot erase the hold.
 #   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
 #   automatic updates. The workflow will still run but skip all changes.
 #   Set the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' to
-#   stop the job entirely; unset (or any other value) means it runs.
+#   stop the job entirely; unset (or any other value) means it runs. The gate
+#   lives here, so a sync of this file cannot erase the hold.
 #
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten
 # by the update process. Do not add custom logic here.

@@ -1070,8 +1070,8 @@ jobs:
 
       # A failed attestation fails the job here, before any tag is pushed.
       - name: Attest sync manifest
-        if: ${{ !inputs.dry_run }}
-        uses: actions/attest-build-provenance@v2
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: ${{ steps.sync_manifest.outputs.path }}
 
@@ -1321,7 +1321,7 @@ jobs:
       # partial-release recovery. A rerun rebuilds a byte-identical manifest
       # for the same commit and --clobber replaces the asset.
       - name: Upload sync manifest
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
