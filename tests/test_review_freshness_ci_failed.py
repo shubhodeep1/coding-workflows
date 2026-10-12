@@ -141,6 +141,15 @@ def test_gate_reads_the_marker_comments() -> None:
 	assert 'or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in GATE_STEP.read_text(encoding="utf-8")
 
 
+def test_gate_marker_also_suppresses_docs_only_and_small_diff_skips() -> None:
+	text = GATE_STEP.read_text(encoding="utf-8")
+	block = text[text.index('FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="false"'):]
+	assert '[ "${gate_marker_fetch_state}" = "ok" ]' in block[:600]
+	assert "reason=freshness_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}" in block
+	final = block[block.index('if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ]'):]
+	assert '[ "${FRESHNESS_CI_FAILED_SKIP_SUPPRESSED}" != "true" ]' in final[:600]
+
+
 if __name__ == "__main__":
 	import sys
 
