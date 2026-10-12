@@ -9,6 +9,7 @@ Covers the three pieces that can silently detach the mechanism:
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import json
 import os
@@ -2301,6 +2302,49 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 		for hook in entry["hooks"]
 	]
 	assert any("session-start.sh" in command for command in commands)
+
+
+def _bash_rule_patterns(rules: list[str]) -> list[str]:
+	return [rule[len("Bash(") : -1] for rule in rules if rule.startswith("Bash(") and rule.endswith(")")]
+
+
+def _matches_any(command: str, patterns: list[str]) -> bool:
+	# Claude Code's `*` matches any text, spaces and `:` included; fnmatchcase
+	# models that for these bracket-free patterns.
+	return any(fnmatch.fnmatchcase(command, pattern) for pattern in patterns)
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_claude_branch_push_rules_allow_plain_forms_and_ask_on_default_branch_or_delete(
+	path: Path,
+) -> None:
+	"""CLAUDE.md §21.E — plain claude/* pushes run unprompted; deletes and main/master writes ask."""
+	settings = json.loads(path.read_text(encoding="utf-8"))
+	allow = _bash_rule_patterns(settings["permissions"]["allow"])
+	ask = _bash_rule_patterns(settings["permissions"].get("ask", []))
+	for command in (
+		"git push -u origin claude/fix-x",
+		"git push origin claude/fix-x",
+		"git push --force-with-lease origin claude/fix-x",
+		"git push --force-with-lease=claude/fix-x:0123abcd origin claude/fix-x",
+	):
+		assert _matches_any(command, allow), command
+		assert not _matches_any(command, ask), command
+	# The trailing `*` of a claude/* allow rule also matches these; an ask
+	# rule must catch every one so no allow rule carries them silently.
+	for command in (
+		"git push origin claude/fix-x:main",
+		"git push origin claude/fix-x:master",
+		"git push --force-with-lease origin claude/fix-x:refs/heads/main",
+		"git push --force-with-lease origin claude/fix-x main",
+		"git push origin claude/fix-x master --verbose",
+		"git push origin claude/fix-x --delete",
+		"git push origin claude/fix-x -d",
+		"git push -u origin claude/fix-x -d other",
+		"git push origin claude/fix-x --prune",
+	):
+		assert _matches_any(command, allow), command
+		assert _matches_any(command, ask), command
 
 
 def test_template_copies_are_identical() -> None:
