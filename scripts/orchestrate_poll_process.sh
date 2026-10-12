@@ -258,33 +258,6 @@ for _orch_fp_candidate in \
   fi
 done
 unset _orch_fp_candidate
-# Default-off automation-path gate for plan auto-approval (#6838); see
-# _automation_path_plan_auto_approval_gate. Keep an unset flag distinct from
-# explicit false: direct script callers without the flag can still recover a
-# plan-step hold marker. The workflow forwards an explicit default of false.
-# The grant guard is taken only from the verified support checkout.
-AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED-}"
-ORCH_AUTOMATION_PATH_GUARD=""
-for _orch_apg_candidate in \
-  "$(pwd)/.codex-workflow-src/scripts/files_touched_scope_guard.py" \
-  "$(pwd)/.codex-workflow-src-main/scripts/files_touched_scope_guard.py"; do
-  if [ -f "${_orch_apg_candidate}" ]; then
-    ORCH_AUTOMATION_PATH_GUARD="${_orch_apg_candidate}"
-    break
-  fi
-done
-unset _orch_apg_candidate
-_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS='
-  def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
-  def event_key: [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
-  def is_plan: ((.body // "") | test("(^|\n)\\s*implementation\\s+plan\\b"; "i"));
-  def hold_marker: ((.body // "") | (capture("<!-- ai:automation-path-plan-hold:v1 issue=(?<issue>[0-9]+) reason=(?<reason>[a-z_]+) source=(?<source>[a-z]+) paths=(?<paths>[A-Za-z0-9+/=]*) -->") // null));
-  def latest_plan: (map(select(trusted and is_plan)) | max_by(event_key));
-  def hold_markers: latest_plan as $plan
-    | [.[] | select(trusted) | . as $c | hold_marker as $m
-        | select($m != null and $m.issue == $issue and ($plan == null or (($c | event_key) > ($plan | event_key))))
-        | $m];
-'
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -2423,6 +2396,10 @@ if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
 else
   ALLOW_WORKFLOW_EDITS="false"
 fi
+
+# Issue #6769: automatic /approved for plans that list automation paths stays
+# off until an operator enables this flag (see _plan_auto_approval_gate).
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"
 
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
@@ -15399,275 +15376,203 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
-# ---------------------------------------------------------------
-# Default-off automation-path gate for stall-recovery auto-approval (#6838)
-# ---------------------------------------------------------------
-# plan.yml withholds its automatic /approved when
-# AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is on and the plan's
-# "Files ... change" section lists automation paths that the issue body does
-# not grant with a trusted exact files_touched entry. It then posts an
-# ai:automation-path-plan-hold:v1 marker. The stall-recovery auto_approve
-# branches below apply the same check when the workflow-forwarded flag is on.
-# For direct script callers without that flag, a trusted hold marker newer
-# than the latest plan also activates the check. Explicit false overrides
-# old markers; with the flag off the gate returns before any API call, so
-# behaviour is unchanged. The grant decision is the
-# unchanged scripts/files_touched_scope_guard.py from the verified support
-# checkout; a hold withholds the automatic /approved only (a human /approved
-# and the implement commit-time automation-path guard are unchanged).
-_automation_path_plan_extract()
+# Issue #6769: comments for the plan auto-approval gate. Reuses the batched
+# GraphQL cache entry when it conclusively holds the whole history, otherwise
+# the paginated REST read in _staged_support_comments_for_guard. Prints `[]`
+# on any failure, which makes the gate hold (plan_comment_unavailable).
+_plan_auto_approval_gate_comments()
 {
-  python3 -I -B - "$1" "$2" <<'AUTOMATION_PATH_PLAN_EXTRACTOR_PY'
-# BEGIN automation-path-plan-extractor v1
-# Reads an implementation plan (argv[1]) and writes the automation paths its
-# "Files ... change" section lists to argv[2], sorted, one per line. Exit 0
-# when a Files section exists (even with no paths); exit 3 when none exists
-# or the section lists more than 200 path tokens. This block is kept
-# byte-identical in .github/workflows/plan.yml and
-# scripts/orchestrate_poll_process.sh (#6838); a parity test pins it.
-import re
-import sys
+  local issue_num="$1"
+  local details_map_json="$2"
+  local cached_comments='[]'
+  local cache_available="false"
+  local comments_out=""
 
-MAX_TOKENS = 200
-FILES_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchang", re.IGNORECASE)
-HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
-NEXT_LABEL_RE = re.compile(
-    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?`?\s*"
-    r"(?:Functions|Data structures|API|Decisions|Security considerations|Data flow|"
-    r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit|"
-    r"Implementation-time|Diagrams)\b",
-    re.IGNORECASE,
-)
-LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-NEGATIVE_RE = re.compile(r"^(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
-NEGATIVE_VERB_RE = re.compile(r"chang|modif|edit|touch|affect|updat", re.IGNORECASE)
-TOKEN_RE = re.compile(
-    r"(?<![A-Za-z0-9_./-])(?:\./)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`,;:()\"'<>]*)",
-    re.IGNORECASE,
-)
-
-
-def line_tokens(line):
-    found = []
-    for match in TOKEN_RE.finditer(line):
-        # A bare directory such as `scripts/` is kept: it names an automation
-        # path no exact grant can cover, so the gate holds (fail closed).
-        found.append(match.group(1).rstrip(".!?}]"))
-    return found
-
-
-def main(argv):
-    if len(argv) != 3:
-        return 2
-    with open(argv[1], encoding="utf-8", errors="replace") as handle:
-        lines = handle.read().splitlines()
-    found_section = False
-    in_section = False
-    suppress = None
-    tokens = []
-    for line in lines:
-        if FILES_RE.match(line):
-            found_section = True
-            in_section = True
-            suppress = None
-            tokens.extend(line_tokens(line))
-            continue
-        if not in_section:
-            continue
-        # A numbered file entry does not end the section; only a heading or
-        # the next known plan label does (fail closed on unknown layouts).
-        if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line):
-            in_section = False
-            suppress = None
-            continue
-        stripped = line.strip()
-        if not stripped:
-            continue
-        indent = len(line) - len(line.lstrip())
-        list_match = LIST_RE.match(line)
-        text = line[list_match.end():].strip() if list_match else stripped
-        text = text.lstrip("*_` ")
-        if NEGATIVE_RE.match(text) and NEGATIVE_VERB_RE.search(text):
-            suppress = ("item" if list_match else "leadin", indent)
-            continue
-        if suppress is not None:
-            mode, base = suppress
-            if indent > base or (mode == "leadin" and list_match):
-                continue
-            suppress = None
-        tokens.extend(line_tokens(line))
-    if not found_section or len(tokens) > MAX_TOKENS:
-        return 3
-    with open(argv[2], "w", encoding="utf-8") as handle:
-        for token in sorted(set(tokens)):
-            handle.write(token + "\n")
-    return 0
-
-
-sys.exit(main(sys.argv))
-# END automation-path-plan-extractor v1
-AUTOMATION_PATH_PLAN_EXTRACTOR_PY
+  if [ -n "${details_map_json}" ] \
+    && printf '%s' "${details_map_json}" | jq -e --arg n "${issue_num}" \
+      'has($n) and (.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+    cached_comments="$(printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].comments' 2>/dev/null || printf '[]')"
+    cache_available="true"
+  fi
+  if comments_out="$(_staged_support_comments_for_guard "${issue_num}" "${cached_comments}" "${cache_available}")"; then
+    printf '%s' "${comments_out}"
+  else
+    printf '[]'
+  fi
 }
 
-# Sets AUTOMATION_PATH_GATE_REASON / _DETAIL / _PATHS_FILE. Returns 0 when the
-# latest trusted plan lists no automation path or every listed path is
-# granted, 1 for a hold.
-_automation_path_plan_gate_check()
+# Issue #6769: hold automatic /approved posts from stall recovery for plans
+# that list automation paths (.github/, .claude/, scripts/, prompts/,
+# workflow-templates/). The plan is the newest comment carrying the
+# `<!-- ai:plan-proposal:v1 -->` marker line posted by the pipeline login, so
+# a forged marker from anyone else is ignored. scripts/files_touched_scope_guard.py
+# decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off every such
+# plan is held; when on, every protected path needs a trusted, exact
+# issue-body grant (the open pipeline-author grant does not count). Every
+# error holds. A hold leaves the issue in its phase for a human /approved and
+# does not increment the recovery count; the implement-time guard still runs.
+# Args: <issue_num> <details_map_json> <comments_json> <phase>
+# Returns 0 to approve, 1 to hold (after logging).
+_plan_auto_approval_gate()
 {
-  local gate_dir="$1"
-  local issue_num="$2"
+  local issue_num="$1"
+  local details_map_json="$2"
   local comments_json="$3"
-  local plan_body="" issue_json="" check_rc=0 allow_edits="false"
+  local phase="$4"
+  local guard_py=""
+  local gate_login=""
+  local gate_plan_file=""
+  local gate_meta_file=""
+  local gate_meta_arg=""
+  local gate_result=""
+  local gate_decision="hold"
+  local gate_reason=""
+  local gate_paths="none"
+  local gate_display_paths="[]"
 
-  AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
-  AUTOMATION_PATH_GATE_DETAIL="no_plan_comment"
-  AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/plan_paths.txt"
-  : > "${AUTOMATION_PATH_GATE_PATHS_FILE}" || return 1
-  plan_body="$(printf '%s' "${comments_json}" | jq -r --arg issue "${issue_num}" \
-    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' latest_plan | if . == null then empty else (.body // "") end' 2>/dev/null)" || plan_body=""
-  [ -n "${plan_body}" ] || return 1
-  printf '%s\n' "${plan_body}" > "${gate_dir}/plan.txt" || return 1
-  AUTOMATION_PATH_GATE_DETAIL="extractor"
-  if ! _automation_path_plan_extract "${gate_dir}/plan.txt" "${AUTOMATION_PATH_GATE_PATHS_FILE}" >/dev/null 2>&1; then
-    : > "${AUTOMATION_PATH_GATE_PATHS_FILE}"
-    return 1
-  fi
-  if [ ! -s "${AUTOMATION_PATH_GATE_PATHS_FILE}" ]; then
-    return 0
-  fi
-  AUTOMATION_PATH_GATE_DETAIL="guard_unavailable"
-  [ -n "${ORCH_AUTOMATION_PATH_GUARD}" ] && [ -f "${ORCH_AUTOMATION_PATH_GUARD}" ] || return 1
-  # GitHub API audit (§14): the comment history is the caller's already
-  # fetched copy (_staged_support_comments_for_guard / _candidate_details_json)
-  # and the login comes from the tick-cached unblock_trusted_login. This one
-  # issue read is new: no existing call in this path returns the live issue
-  # author, author_association and body the grant check needs. It runs only
-  # while the gate is active and the plan lists automation paths.
-  AUTOMATION_PATH_GATE_DETAIL="issue_lookup_failed"
-  issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null)" || issue_json=""
-  [ -n "${issue_json}" ] || return 1
-  printf '%s' "${issue_json}" > "${gate_dir}/issue.json" || return 1
-  unblock_trusted_login >/dev/null 2>&1 || true
-  AUTOMATION_PATH_GATE_DETAIL="grant_error"
-  python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --emit-automation-grant "${gate_dir}/grant.json" \
-    --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${UNBLOCK_TRUSTED_LOGIN:-}" >/dev/null 2>&1 || return 1
-  if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
-    allow_edits="true"
-  fi
-  python3 -I -B "${ORCH_AUTOMATION_PATH_GUARD}" --check-automation-paths \
-    --automation-grant-file "${gate_dir}/grant.json" \
-    --staged-file "${AUTOMATION_PATH_GATE_PATHS_FILE}" \
-    --allow-workflow-edits "${allow_edits}" --issue-number "${issue_num}" \
-    > "${gate_dir}/denied.txt" 2> "${gate_dir}/check.err" || check_rc=$?
-  if [ "${check_rc}" -eq 0 ]; then
-    return 0
-  fi
-  AUTOMATION_PATH_GATE_DETAIL="$(sed -n 's/^reason=\([a-z_]*\)$/\1/p' "${gate_dir}/check.err" 2>/dev/null | head -n 1)"
-  if [ "${check_rc}" -eq 30 ]; then
-    case "${AUTOMATION_PATH_GATE_DETAIL}" in
-      path_not_granted|no_allowlist|malformed_allowlist|untrusted_author|workflow_edits_disabled)
-        AUTOMATION_PATH_GATE_REASON="automation_path_ungranted"
-        if [ -s "${gate_dir}/denied.txt" ]; then
-          AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/denied.txt"
+  guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
+  if [ ! -f "${guard_py}" ]; then
+    gate_reason="plan_gate_helper_unavailable"
+  else
+    # Call in the main shell so the tick-wide login cache and the one-shot
+    # identity alert state persist (a command substitution would drop them).
+    unblock_trusted_login >/dev/null 2>&1 || true
+    gate_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+    if [ -z "${gate_login}" ]; then
+      gate_reason="identity_unavailable"
+    else
+      gate_plan_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_plan.XXXXXX" 2>/dev/null || true)"
+      gate_meta_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX" 2>/dev/null || true)"
+      if [ -z "${gate_plan_file}" ] || [ -z "${gate_meta_file}" ]; then
+        gate_reason="plan_gate_error"
+      elif ! printf '%s' "${comments_json:-[]}" | jq -er --arg login "${gate_login}" '
+          [ .[]?
+            | select(type == "object")
+            | select((.user.login // "") == $login)
+            | select(((.body // "") | split("\n") | map(sub("\r$"; "") | gsub("^[ \t]+|[ \t]+$"; "")) | any(. == "<!-- ai:plan-proposal:v1 -->")))
+          ]
+          | sort_by(.created_at // "")
+          | last
+          | .body
+          | strings
+        ' > "${gate_plan_file}" 2>/dev/null || [ ! -s "${gate_plan_file}" ]; then
+        gate_reason="plan_comment_unavailable"
+      else
+        # Issue metadata comes from the batched GraphQL cache (author fields
+        # added for this gate). The guard needs it only when the flag is on
+        # and the plan lists protected paths; otherwise an empty argument
+        # makes it hold with issue_meta_unavailable in that case alone.
+        if printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" '
+            .[$n]
+            | select(type == "object")
+            | select((.body | type) == "string" and (.author_login | type) == "string" and .author_login != "")
+            | {number: ($n | tonumber), body: .body, user: {login: .author_login}, author_association: (.author_association // "")}
+          ' > "${gate_meta_file}" 2>/dev/null; then
+          gate_meta_arg="${gate_meta_file}"
         fi
-        ;;
-    esac
+        gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --plan-auto-approval-gate \
+          --plan-file "${gate_plan_file}" \
+          --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" \
+          --issue-meta-file "${gate_meta_arg}" \
+          --pipeline-login "${gate_login}" \
+          --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" \
+          --origin-repo "${GITHUB_REPOSITORY:-}" \
+          --issue-number "${issue_num}" 2>/dev/null || true)"
+        gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+        gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        gate_paths="$(printf '%s' "${gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+        # The hold comment names the raw plan paths (globs kept, so the
+        # maintainer sees what the plan lists); log_paths strips `*?[]`.
+        # The list stays raw and uncapped here, like plan.yml's, so both
+        # markers fingerprint the same paths; the comment renderer
+        # sanitizes and caps it for display only.
+        gate_display_paths="$(printf '%s' "${gate_result}" | jq -c '
+          (if ((.denied_paths // []) | length) > 0 then .denied_paths else (.protected_paths // []) end)
+          | [ .[]? | strings | select(length > 0) ]
+          | sort | unique' 2>/dev/null)" || gate_display_paths="[]"
+      fi
+    fi
   fi
-  [ -n "${AUTOMATION_PATH_GATE_DETAIL}" ] || AUTOMATION_PATH_GATE_DETAIL="guard_exit_${check_rc}"
+  rm -f "${gate_plan_file}" "${gate_meta_file}" 2>/dev/null || true
+  if [ "${gate_decision}" = "approve" ]; then
+    return 0
+  fi
+  # Sanitize model-derived values before logging.
+  gate_reason="$(printf '%s' "${gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  gate_paths="$(printf '%s' "${gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+  echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
+  echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
+  _plan_auto_approval_hold_notify "${issue_num}" "${comments_json}" "${gate_reason:-plan_gate_error}" "${gate_paths:-none}" "${gate_login}" "${gate_display_paths:-[]}" || true
   return 1
 }
 
-# Logs STALL_SKIP for a hold and posts one deduplicated marker comment plus
-# one WARNING. Comment/alert failures only warn; the hold stands either way.
-_automation_path_plan_hold_report()
+# Issue #6769: a poller hold reaches a human once. Posts one
+# ai:automation-path-plan-hold:v1 comment (source=poller) and one WARNING,
+# unless a trusted hold marker for this issue, reason and path list is
+# already in the caller's comment snapshot (a re-plan with different paths
+# gets a fresh note). Failures only warn; the hold stands either way.
+# Args: <issue_num> <comments_json> <reason (sanitized)> <paths (sanitized, comma-joined)> <login>
+#       [<display paths JSON array>]
+_plan_auto_approval_hold_notify()
 {
   local issue_num="$1"
   local comments_json="$2"
-  local phase="$3"
-  local mode="$4"
-  local paths_json="[]" paths_b64="" path_count=0 duplicate="false" hold_body=""
+  local reason="$3"
+  local paths_csv="$4"
+  local login="$5"
+  local display_paths_json="${6:-}"
+  local paths_json="[]" paths_b64="" duplicate="false" hold_body=""
 
-  paths_json="$(jq -R -s -c 'split("\n") | map(select(length > 0)) | sort | unique' "${AUTOMATION_PATH_GATE_PATHS_FILE:-/dev/null}" 2>/dev/null)" || paths_json="[]"
+  if printf '%s' "${display_paths_json}" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+    paths_json="$(printf '%s' "${display_paths_json}" | jq -c '.' 2>/dev/null)" || paths_json="[]"
+  elif [ -n "${paths_csv}" ] && [ "${paths_csv}" != "none" ]; then
+    paths_json="$(printf '%s' "${paths_csv}" | jq -R -c 'split(",") | map(select(length > 0))' 2>/dev/null)" || paths_json="[]"
+  fi
   [ -n "${paths_json}" ] || paths_json="[]"
-  path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
   paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
-  echo "STALL_SKIP issue=${issue_num} reason=${AUTOMATION_PATH_GATE_REASON} phase=${phase} action=none detail=${AUTOMATION_PATH_GATE_DETAIL} paths=${path_count}"
-  duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${issue_num}" \
-    --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" \
-    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | any(.reason == $reason and .paths == $paths)' 2>/dev/null)" || duplicate="false"
+  duplicate="$(printf '%s' "${comments_json:-[]}" | jq -r --arg issue "${issue_num}" --arg reason "${reason}" --arg login "${login}" --arg paths "${paths_b64}" '
+    [ .[]?
+      | select(type == "object")
+      | select(((.user.login // "") == $login and $login != "")
+          or ((.user.login // "") | test("\\[bot\\]$"))
+          or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      | (.body // "")
+      | select(contains("<!-- ai:automation-path-plan-hold:v1 issue=" + $issue + " reason=" + $reason + " ")
+          and contains(" paths=" + $paths + " -->"))
+    ] | length > 0' 2>/dev/null)" || duplicate="false"
   if [ "${duplicate}" = "true" ]; then
     return 0
   fi
-  if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${issue_num}" \
-    --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg detail "${AUTOMATION_PATH_GATE_DETAIL}" \
-    --arg source "poller" --arg b64 "${paths_b64}" '
+  if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${issue_num}" --arg reason "${reason}" --arg b64 "${paths_b64}" '
       ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
       | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
       | [
-          (if $reason == "automation_path_ungranted"
-            then "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**"
-            else "**Automatic approval withheld: the automation-path grant check could not run.**" end),
-          "",
-          "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
-          "",
-          (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
-          (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
-          (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
-          (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
-          "",
-          "To proceed, a trusted OWNER/MEMBER/COLLABORATOR adds these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant), or replies `/approved`. The implement commit-time automation-path guard still applies either way.",
-          "",
-          "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=\($source) paths=\($b64) -->"
-        ] | join("\n")
-    ' 2>/dev/null)"; then
+        (if $reason == "automation_path_plan_auto_approval_disabled"
+          then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
+          elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable"))
+          then "**Automatic approval withheld: the automation-path grant check could not run.**"
+          else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
+        "",
+        "Reason: `\($reason)`",
+        "",
+        (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+        (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
+        (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
+        "",
+        "Stall recovery did not post `/approved`. To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way.",
+        "",
+        "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=poller paths=\($b64) -->"
+      ] | join("\n")' 2>/dev/null)"; then
     echo "::warning::Could not render the automation-path hold comment for issue #${issue_num}."
     return 0
   fi
   if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    # The WARNING below still goes out, so a failed write never leaves the
+    # hold unseen (matches plan.yml's automation_path_plan_hold).
     echo "::warning::Could not post the automation-path hold comment for issue #${issue_num}."
   fi
-  if [ "${mode}" = "standalone" ]; then
-    tg_notify_issue "${issue_num}" "Stall recovery: plan auto-approval withheld (${AUTOMATION_PATH_GATE_REASON}, ${path_count} path(s))." "WARNING" || true
-  else
-    tg_notify "Stall recovery: plan auto-approval withheld for issue #${issue_num} (${AUTOMATION_PATH_GATE_REASON}, ${path_count} path(s))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING" || true
-  fi
+  tg_notify_issue "${issue_num}" "Stall recovery: plan auto-approval held (${reason}); a maintainer must reply /approved." "WARNING" || true
   return 0
-}
-
-# Returns 0 to proceed with the automatic /approved, 1 for a hold (after
-# logging STALL_SKIP). Callers must not count a hold as a recovery attempt.
-_automation_path_plan_auto_approval_gate()
-{
-  local issue_num="$1"
-  local comments_json="$2"
-  local phase="$3"
-  local mode="$4"
-  local active="false" gate_dir="" gate_rc=0
-
-  if is_truthy "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"; then
-    active="true"
-  elif [ -z "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED}" ] \
-    && printf '%s' "${comments_json}" | jq -e --arg issue "${issue_num}" \
-    "${_AUTOMATION_PATH_PLAN_HOLD_JQ_DEFS}"' hold_markers | length > 0' >/dev/null 2>&1; then
-    active="true"
-  fi
-  if [ "${active}" != "true" ]; then
-    return 0
-  fi
-  gate_dir="$(mktemp -d "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_gate.XXXXXX" 2>/dev/null)" || gate_dir=""
-  if [ -z "${gate_dir}" ]; then
-    AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
-    AUTOMATION_PATH_GATE_DETAIL="tempdir"
-    AUTOMATION_PATH_GATE_PATHS_FILE="/dev/null"
-    _automation_path_plan_hold_report "${issue_num}" "${comments_json}" "${phase}" "${mode}" || true
-    return 1
-  fi
-  _automation_path_plan_gate_check "${gate_dir}" "${issue_num}" "${comments_json}" || gate_rc=$?
-  if [ "${gate_rc}" -ne 0 ]; then
-    _automation_path_plan_hold_report "${issue_num}" "${comments_json}" "${phase}" "${mode}" || true
-  fi
-  rm -rf "${gate_dir}"
-  [ "${gate_rc}" -eq 0 ]
 }
 
 execute_stall_recovery_action() {
@@ -15796,9 +15701,10 @@ STALL_EOF
           return 1
           ;;
       esac
-      # A held plan (#6838) is not a recovery attempt; like the staged-support
+      # A held plan is not a recovery attempt; like the staged-support
       # skip above, return before STALL_RECOVERY_SHOULD_INCREMENT is set.
-      if ! _automation_path_plan_auto_approval_gate "${issue_num}" "${_managed_staged_support_comments}" "${phase}" "managed"; then
+      if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
+        "${_managed_staged_support_comments}" "${phase}"; then
         return 1
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
@@ -15830,6 +15736,16 @@ STALL_EOF
         tg_notify "Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return 0
+      fi
+      if [ "${phase}" = "ai:awaiting-approval" ]; then
+        # Issue #6769: this arm posts the same /approved, so a stall-judge
+        # choice cannot skip the plan auto-approval gate.
+        local _managed_rti_gate_comments='[]'
+        _managed_rti_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_current_wave_details_json:-}")"
+        if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
+          "${_managed_rti_gate_comments}" "${phase}"; then
+          return 1
+        fi
       fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
       # The implement workflow precheck (implement.yml) skips when
@@ -17129,6 +17045,8 @@ _fetch_candidate_issue_details_graphql() {
           number
           state
           body
+          author { login }
+          authorAssociation
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -17181,6 +17099,8 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
+            author_login: (.value.author.login // ""),
+            author_association: (.value.authorAssociation // ""),
             labels: [(.value.labels.nodes // [])[]?.name],
             labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
@@ -19370,9 +19290,17 @@ STALL_EOF
         took_action="true"
         ;;
       auto_approve)
-        # A held plan (#6838) is not a recovery attempt: took_action and
-        # STALL_RECOVERY_SHOULD_INCREMENT stay false, like the staged-support skip.
-        if _automation_path_plan_auto_approval_gate "${issue_num}" "${comments_json}" "${phase}" "standalone"; then
+        # Issue #6769: a held plan logs STALL_SKIP and takes no action, so
+        # took_action and STALL_RECOVERY_SHOULD_INCREMENT stay false, like
+        # the staged-support skip.
+        # In ai:awaiting-approval, comments_json already holds the complete
+        # history (_staged_support_comments_for_guard above); reuse it.
+        local _std_plan_gate_comments="${comments_json:-[]}"
+        if [ "${phase}" != "ai:awaiting-approval" ]; then
+          _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
+        fi
+        if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
+          "${_std_plan_gate_comments}" "${phase}"; then
           local _std_auto_approve_rc=0
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -19389,6 +19317,18 @@ STALL_EOF
         fi
         ;;
       retrigger_implement)
+        # Issue #6769: before the first approval this arm posts the same
+        # /approved as auto_approve, so it passes the same plan gate.
+        local _std_rti_gate_ok="true"
+        if [ "${phase}" = "ai:awaiting-approval" ]; then
+          # comments_json is the complete history in this phase (see auto_approve).
+          local _std_rti_gate_comments="${comments_json:-[]}"
+          if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
+            "${_std_rti_gate_comments}" "${phase}"; then
+            _std_rti_gate_ok="false"
+          fi
+        fi
+        if [ "${_std_rti_gate_ok}" = "true" ]; then
         # Same precheck gate as the managed arm in execute_stall_recovery_action:
         # without this swap the /approved below fires an implement run that
         # exits at "Precheck approval phase label" with
@@ -19407,6 +19347,7 @@ STALL_EOF
         tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered implementation (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
+        fi
         ;;
       retrigger_review)
         local pr_num
