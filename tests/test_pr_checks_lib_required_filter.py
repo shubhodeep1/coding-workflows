@@ -333,6 +333,78 @@ def test_legacy_object_shape_is_deduped() -> None:
 	assert rc == 0 and reason == "ok", (rc, reason)
 
 
+def _lint_run(run_id: str, conclusion: str, check_id: int) -> dict:
+	return {
+		"id": check_id,
+		"name": "lint",
+		"status": "completed",
+		"conclusion": conclusion,
+		"details_url": f"https://github.com/o/r/actions/runs/{run_id}/job/{check_id}",
+	}
+
+
+LINT_REQUIRED_ENV = {
+	"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows",
+	"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "lint",
+}
+
+
+def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None:
+	"""The CI check name (`lint` here) is shared with lint-pr-body-auto-close
+	and lint-plan-archival, which re-run on every PR body edit. A newer
+	`lint` from another Actions run must not hide a cancelled CI `lint`,
+	in either filter mode, when the runs are not bound to CI run ids."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=LINT_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=LINT_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_cancelled_ci_check_superseded_by_rerun_of_same_actions_run() -> None:
+	"""Re-running the cancelled job keeps the Actions run id, so the newer
+	attempt supersedes the cancellation."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("555", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=LINT_REQUIRED_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_cancelled_ci_check_superseded_by_newer_bound_ci_run_only() -> None:
+	"""With PR_CHECKS_CI_RUN_IDS a newer bound CI run supersedes a bound
+	cancelled run; an unbound newer run still does not."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("556", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "PR_CHECKS_CI_RUN_IDS": "555,556"})
+	assert rc == 0 and reason == "ok", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "PR_CHECKS_CI_RUN_IDS": "555"})
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_non_ci_names_keep_cross_run_supersession() -> None:
+	"""Names other than the CI check (a new review run's `review / gate`)
+	still supersede a cancelled run from an earlier Actions run."""
+	runs = _page([
+		{**_lint_run("555", "cancelled", 1), "name": "review / gate"},
+		{**_lint_run("777", "success", 2), "name": "review / gate"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "review / gate"})
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_rb_judge_jq_mirror_matches_library_defs() -> None:
+	"""The runtime jq mirror in test_review_rb_judge_self_run_exclusion.py
+	must carry the library's supersession defs verbatim."""
+	import re
+
+	lib_text = LIB.read_text(encoding="utf-8")
+	m = re.search(r"\nPR_CHECKS_JQ_SUPERSEDE_DEFS='\n(.*?)\n'\n", lib_text, re.S)
+	assert m, "pr_checks_lib.sh must define PR_CHECKS_JQ_SUPERSEDE_DEFS"
+	mirror = (REPO_ROOT / "tests" / "test_review_rb_judge_self_run_exclusion.py").read_text(encoding="utf-8")
+	assert m.group(1) in mirror
+
+
 # ---------------------------------------------------------------------------
 # Sentinels + branch-protection precedence.
 # ---------------------------------------------------------------------------

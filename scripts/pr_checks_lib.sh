@@ -90,6 +90,41 @@
 # assignment; tests/test_pr_checks_lib_required_filter.py pins them equal.
 : "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate}"
 
+# jq definitions shared by the gate filters below and by
+# _summarize_final_merge_blockers (scripts/orchestrate_poll_process.sh).
+# Callers pass --arg ci (the resolved AUTO_MERGE_REQUIRED_CI_CHECK name)
+# and --arg bound (PR_CHECKS_CI_RUN_IDS, or `__unbound__`).
+# _mark_superseded tags each check-run with `_superseded`. For most names a
+# run is superseded when a newer run of the same name exists (highest id,
+# then latest started_at), so a re-run replaces a cancelled attempt. The
+# configured CI check name is shared by jobs of other workflows (here
+# `lint` also exists in lint-pr-body-auto-close.yml and
+# lint-plan-archival.yml, which re-run on every PR body edit), so for that
+# name a newer run supersedes only when it comes from the same Actions run
+# (a re-run attempt) or when both runs are bound CI runs. Otherwise an
+# unrelated workflow's `lint` would hide a cancelled CI `lint`.
+PR_CHECKS_JQ_SUPERSEDE_DEFS='
+def _run_id: [(.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first;
+def _bound_ci_run: ($bound != "__unbound__") and (_run_id as $rid | ($rid != null) and (($bound | split(",") | index($rid)) != null));
+def _newer_than($r): [(.id // 0), (.started_at // "")] > [($r.id // 0), ($r.started_at // "")];
+def _mark_superseded:
+	group_by(.name // "")
+	| map(
+		if ($ci != "" and $ci != "none" and $ci != "__invalid__" and ((.[0].name // "") == $ci)) then
+			. as $grp
+			| map(
+				. as $r
+				| ($r | _run_id) as $rrid
+				| ($r | _bound_ci_run) as $rb
+				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0)}
+			)
+		else
+			max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})
+		end
+	)
+	| add // [];
+'
+
 # Helper: returns the comma-separated list of check-run names treated as
 # blocking for the given base ref. Resolution: branch protection's
 # required_status_checks.contexts first (server-side truth), then the
@@ -161,13 +196,15 @@ _pr_required_check_names_for_base()
 # A cancelled check-run blocks only while it is the newest check-run of
 # its name (highest id, then latest started_at): re-running a job creates
 # a new check-run with the same name on the same SHA, so a cancelled run
-# that a newer run superseded does not block. Every other check-run is
-# evaluated on its own: a failed, timed-out or still-running run blocks
-# even when a newer run of the same name exists. A check-run carries no
-# workflow identity, so a newer same-name run from another workflow (this
-# repo has three jobs named `lint`) must not hide a failure or an
-# in-progress run; at worst it supersedes a cancellation, which before
-# #7127 never blocked at all. Newest is decided before the self-run
+# that a newer run superseded does not block. For the configured CI check
+# name (shared with other workflows' jobs) only a newer run from the same
+# Actions run, or a bound CI run, supersedes (PR_CHECKS_JQ_SUPERSEDE_DEFS).
+# Every other check-run is evaluated on its own: a failed, timed-out or
+# still-running run blocks even when a newer run of the same name exists.
+# A check-run carries no workflow identity, so a newer same-name run from
+# another workflow (this repo has three jobs named `lint`) must not hide a
+# failure or an in-progress run, nor a cancelled run of the CI check.
+# Newest is decided before the self-run
 # exclusion, so an older cancelled attempt of the caller's own job never
 # resurfaces. A cancelled required check with nothing newer is a settled
 # failure (pending=0).
@@ -307,9 +344,8 @@ _pr_checks_completed()
 	local incomplete
 	if [ "${required_names_csv}" = "*" ]; then
 		# Legacy fail-closed-on-any-failure behaviour (with self-run exclusion).
-		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
+		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
 			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
 			(
 				if (type == "array") then
@@ -334,9 +370,8 @@ _pr_checks_completed()
 		# failures (Copilot, optional reviewers, CodeQL, etc.) through.
 		# Whitespace around comma-separated tokens is trimmed so operators
 		# can format the env var with spaces after commas.
-		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg self_run "${self_run}" '
+		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg self_run "${self_run}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
 			($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 			(
 				if (type == "array") then

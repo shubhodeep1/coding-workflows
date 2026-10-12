@@ -1622,9 +1622,21 @@ _summarize_final_merge_blockers()
 		return 0
 	fi
 
+	# Supersession rules shared with _pr_checks_completed: the jq defs come
+	# from scripts/pr_checks_lib.sh, with the CI check name resolved for this
+	# base (a cancelled CI-named run is replaced only by a same-run re-run).
+	# Without the library, fall back to the name-only rule (alert text only).
+	local summary_ci_name="none"
+	local summary_supersede_defs="${PR_CHECKS_JQ_SUPERSEDE_DEFS:-}"
+	if declare -F _pr_auto_merge_required_ci_check_name >/dev/null 2>&1; then
+		summary_ci_name="$(_pr_auto_merge_required_ci_check_name "${base_ref}" 2>/dev/null || echo none)"
+	fi
+	if [ -z "${summary_supersede_defs}" ]; then
+		summary_supersede_defs='def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];'
+	fi
+
 	if [ "${required_names_csv}" = "*" ]; then
-		printf '%s' "${check_runs_json}" | jq -r '
-			def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
+		printf '%s' "${check_runs_json}" | jq -r --arg ci "${summary_ci_name:-none}" --arg bound "__unbound__" "${summary_supersede_defs}"'
 			(
 				if (type == "array") then
 					[.[]? | (.check_runs // [])[]]
@@ -1643,8 +1655,7 @@ _summarize_final_merge_blockers()
 		return 0
 	fi
 
-	printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" '
-		def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
+	printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg ci "${summary_ci_name:-none}" --arg bound "__unbound__" "${summary_supersede_defs}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 		(
 			if (type == "array") then

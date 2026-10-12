@@ -505,9 +505,29 @@ def test_workflow_merge_conflict_comment_is_branch_agnostic() -> None:
 # hosted in scripts/pr_checks_lib.sh's "*" branch). The text-shape tests
 # above are the change-detection guard against drift; keep this copy in
 # sync with scripts/pr_checks_lib.sh when the live filter changes.
+# PR_CHECKS_JQ_SUPERSEDE_DEFS from scripts/pr_checks_lib.sh, run with
+# --arg ci none --arg bound __unbound__ (name-only supersession).
 JQ_FILTER = '''
+def _run_id: [(.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first;
+def _bound_ci_run: ($bound != "__unbound__") and (_run_id as $rid | ($rid != null) and (($bound | split(",") | index($rid)) != null));
+def _newer_than($r): [(.id // 0), (.started_at // "")] > [($r.id // 0), ($r.started_at // "")];
+def _mark_superseded:
+	group_by(.name // "")
+	| map(
+		if ($ci != "" and $ci != "none" and $ci != "__invalid__" and ((.[0].name // "") == $ci)) then
+			. as $grp
+			| map(
+				. as $r
+				| ($r | _run_id) as $rrid
+				| ($r | _bound_ci_run) as $rb
+				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0)}
+			)
+		else
+			max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})
+		end
+	)
+	| add // [];
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
 def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
 (
   if (type == "array") then
@@ -529,7 +549,7 @@ def _run_jq(payload: object, self_run: str) -> str:
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	result = subprocess.run(
-		["jq", "-r", "--arg", "self_run", self_run, JQ_FILTER],
+		["jq", "-r", "--arg", "self_run", self_run, "--arg", "ci", "none", "--arg", "bound", "__unbound__", JQ_FILTER],
 		input=json.dumps(payload),
 		capture_output=True,
 		text=True,
