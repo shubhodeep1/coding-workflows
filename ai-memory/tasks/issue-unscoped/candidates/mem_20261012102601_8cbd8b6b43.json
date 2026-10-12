@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml line 826-892 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `update-wrappers` step\u2019s inline `run:` body is 19,821 characters, exceeding the 18,000-character guard and causing the CI check to fail.\n  WHY: The body must move into `scripts/` with each `${{ }}` value passed through `env:` to clear the failing check; the finding notes this predates the PR and is outside its scope.\n- scripts/implement_handle_guard_block.sh: around lines 35-64\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If label creation fails after `gh_retry` exhausts retries, `guard_block_ensure_label` returns 1 without a diagnostic, obscuring the failure when the caller falls through to issue-edit.\n  WHY: The job log does not identify label creation as the cause, making guard-block failures harder to diagnose.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/update_workflows.yml, job `update-wrappers`, step \"Commit and push updates\" (run body at about lines 826-892) | severity=MAJOR | confidence=5\n  PROBLEM: This step's `run:` body contains `${{ }}` and is 19,821 characters, over the 18,000-character guard, causing the CI assertion to fail.\n  WHY: CI stays red until the body moves into `scripts/` and each `${{ }}` value is passed through `env:`; the finding says this predates the PR and is outside issue #7172's `files_touched`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/implement_handle_guard_block.sh, guard_block_ensure_label function, around lines 35-64\n  PROBLEM: When create fails for a non-\"already exists\" reason and the `gh_retry` retried create also fails, the function returns 1 without a diagnostic echo to stderr.\n  WHY: The caller silently falls through to the subsequent `guard_block_gh gh issue edit`, so an operator debugging a guard-block failure cannot tell from the job log that label creation failed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- The message contains only the unattended-pipeline preamble and an unsubstituted `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder; no actual task or issue was provided.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1857026acb2af2b9deaa7607fbd26a36693c091d541dd1db4c157e21cd526014",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7211,
+    "run_id": "38234405965",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38234405965",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012102601_8cbd8b6b43",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7211,
+    "run_id": "38234405965"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T10:26:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
