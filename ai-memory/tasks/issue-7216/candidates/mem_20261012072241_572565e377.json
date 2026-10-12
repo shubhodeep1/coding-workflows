@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7216,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7216\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7229\",\"pr_number\":7229,\"branch\":\"ai/issue-7216\",\"run_id\":\"38215354288\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38215354288\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/plan.yml\",\"README.md\",\"agents.d/7216-plan-superseded-merged-pr.md\",\"changelog.d/7216-plan-superseded-merged-pr.md\",\"docs/INVENTORY.md\",\"scripts/plan_superseded_merged_pr.py\",\"tests/test_plan_superseded_merged_pr.py\",\"tests/test_plan_superseded_merged_pr_workflow.py\"]}",
+  "fingerprint": "d259cc72a9d193188822420d85caddf94d93608c571a48531014e8030188ad56",
+  "lineage": {
+    "issue_number": 7216,
+    "parent_ids": [],
+    "pr_number": 7229,
+    "run_id": "38215354288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38215354288",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7229"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261012072241_572565e377",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7216,
+    "level": "run",
+    "pr_number": 7229,
+    "run_id": "38215354288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7216: https://github.com/shubhodeep1/coding-workflows/pull/7229",
+  "timestamps": {
+    "created_at": "2026-10-12T07:22:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
