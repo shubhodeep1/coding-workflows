@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What default should `RELEASE_TAGGING_ENABLED` have in `mark-stable.yml` (lines 933/936) and `test-and-mark-stable.yml` (lines 6622/6625)?\nChoices:\nA) Default off, as the issue asks. Change `vars.RELEASE_TAGGING_ENABLED || 'true'` to `|| 'false'` and `${RELEASE_TAGGING_ENABLED-true}` to `-false`. Treat an empty or unset value as off, and only `true` (any letter case) as on. Update the step comments, README.md, the #7029 changelog wording through a new fragment, and `tests/test_release_validate_ci_gate.py` (`SWITCH_ENV`, the unset/empty cases). No stable tag, GitHub Release or consumer dispatch happens until someone sets the repo variable `RELEASE_TAGGING_ENABLED=true`. The release jobs still end green with the \"publishing disabled\" summary.\nB) Keep it default on, as #7029 intended (an off switch backed by the `CI / lint` gate). Close this activation gap as a false positive and change no workflow or test. At most, add a changelog/agents.d note recording that default-on is intentional. (RECOMMENDED)\nC) Default off, and also keep `auto-release-stable.yml` from re-dispatching the gate while tagging is off (skip with a log line). This goes beyond what the issue asks.\n**Note:** A and C stop all stable releases until a person sets the variable. With B the code does not change at all.",
+  "fingerprint": "89bb2bb733ae65b2f8d4c215a63aad8294e34bcacac44a0c52211a6b3164864a",
+  "lineage": {
+    "issue_number": 7272,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38265128640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38265128640",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012145037_648014de6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7272,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38265128640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7272 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T14:50:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
