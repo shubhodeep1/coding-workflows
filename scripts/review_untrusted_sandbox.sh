@@ -127,14 +127,21 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	fi
 	# Only the credential-free host proxy reaches vetted public registries.
 	# The user cannot specify the image, executable, mounts or Docker flags.
-	# Opt-in bound on the optional installs and pytest bootstrap below (#6835).
-	# Off by default, so the dependency container behaves as before. Only
+	# Bound on the optional installs and pytest bootstrap below (#6835). On
+	# by default: a stalled optional install used to run the whole container
+	# into its 900s limit and fail the review (#6793). `false` (or 0/no/off)
+	# turns it off; an unrecognised value also turns it off and warns. Only
 	# normalized scalars cross into the container; the 780s ceiling keeps a
 	# bounded run inside the outer 900s container budget, whose expiry ends
 	# every install still pending (warned, not fatal; see the dep_rc case below).
-	bounded_deps_enabled=false
-	case "$(printf '%s' "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+	bounded_deps_enabled=true
+	case "$(printf '%s' "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on) bounded_deps_enabled=true ;;
+		0|false|no|off) bounded_deps_enabled=false ;;
+		*)
+			bounded_deps_enabled=false
+			echo '::warning::REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED has an unrecognised value; bounded installs stay off. Use true or false.' >&2
+			;;
 	esac
 	bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"
 	if ! [[ "${bounded_deps_budget}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${bounded_deps_budget}))" -lt 30 ] || [ "$((10#${bounded_deps_budget}))" -gt 780 ]; then

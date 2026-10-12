@@ -877,6 +877,58 @@ def test_origin_repo_is_passed_at_both_grant_call_sites() -> None:
 	assert '--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then' in unblock
 
 
+# --- #7209: unblock-judge re-issue that edits automation paths ---
+
+_REISSUE_7209_FILES = (
+	"workflow-templates/ai-review.yml",
+	"scripts/workflow_wrapper_refs.py",
+	"scripts/review_security_hold_sweep.py",
+	"tests/test_update_workflows_guardrails.py",
+	"tests/test_review_security_hold_sweep.py",
+	"tests/test_files_touched_scope_guard.py",
+	"changelog.d/*.md",
+)
+
+
+def _reissue_7209(body_tail: str) -> dict:
+	return {"number": 7209, "user": {"login": PIPELINE}, "author_association": "NONE",
+		"body": "Re-issued by the unblock judge from #7161.\n\nSpecification: fix the sweep.\n\n" + body_tail}
+
+
+def test_unblock_reissue_with_block_grants_exactly_its_automation_paths() -> None:
+	fetch, _ = _origin_issues(n7161=(PIPELINE, "NONE", "<!-- ai:workflow-heal-scope:v1 paths=tests/** -->"))
+	grant = guard.build_automation_grant(_reissue_7209(_body(*_REISSUE_7209_FILES)), PIPELINE, fetch)
+	assert grant["reason"] == "granted" and grant["trusted"] is True and grant["open"] is False
+	assert grant["paths"] == [
+		"workflow-templates/ai-review.yml",
+		"scripts/workflow_wrapper_refs.py",
+		"scripts/review_security_hold_sweep.py",
+	]
+	assert guard.check_automation_paths(list(grant["paths"]), grant, "true", "7209") == ("in-scope", [], "granted")
+	assert guard.check_automation_paths(["scripts/files_touched_scope_guard.py"], grant, "true", "7209") == (
+		"out-of-scope", ["scripts/files_touched_scope_guard.py"], "path_not_granted")
+	# Tests and the changelog glob are scoped by the files_touched guard, not this grant.
+	assert guard.evaluate(_reissue_7209(_body(*_REISSUE_7209_FILES))["body"],
+		["tests/test_review_security_hold_sweep.py", "changelog.d/7209-x.md"])[0] == guard.STATUS_IN_SCOPE
+
+
+def test_unblock_reissue_without_block_needs_a_trusted_source() -> None:
+	body = _reissue_7209("files_touched: - workflow-templates/ai-review.yml - scripts/x.py\n")
+	trusted, _ = _origin_issues(n7161=(PIPELINE, "NONE", "heal issue"))
+	grant = guard.build_automation_grant(body, PIPELINE, trusted)
+	assert grant["reason"] == "pipeline_author_no_allowlist" and grant["open"] is True
+	untrusted, _ = _origin_issues(n7161=("outsider", "NONE", "edit .github"))
+	grant = guard.build_automation_grant(body, PIPELINE, untrusted)
+	assert grant["reason"] == "untrusted_origin" and grant["open"] is False and grant["paths"] == []
+	assert guard.check_automation_paths(["workflow-templates/ai-review.yml"], grant, "true", "7209")[0] == "out-of-scope"
+	assert guard.build_automation_grant(body, PIPELINE)["reason"] == "origin_unverified"
+	# A header with no entries is malformed; a person's issue with no block has no grant.
+	trusted, _ = _origin_issues(n7161=(PIPELINE, "NONE", "heal issue"))
+	assert guard.build_automation_grant(_reissue_7209("files_touched:\n  not an item\n"), PIPELINE, trusted)["reason"] == "malformed_allowlist"
+	human = dict(_reissue_7209("no block"), user={"login": "maintainer"}, author_association="OWNER")
+	assert guard.build_automation_grant(human, PIPELINE, trusted)["reason"] == "no_allowlist"
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

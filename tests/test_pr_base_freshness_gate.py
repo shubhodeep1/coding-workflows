@@ -20,8 +20,13 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LIB = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
@@ -818,7 +823,8 @@ class FreshnessSyncWiring(unittest.TestCase):
 			)
 
 	def test_the_gate_routes_a_verified_update_to_deterministic_skip_merge(self) -> None:
-		text = WORKFLOW.read_text(encoding="utf-8")
+		# The gate body lives in scripts/review_autofix_step_evaluate_gate.sh (#6972).
+		text = expanded_review_autofix_text()
 		self.assertIn('or ($b | contains("<!-- ai:merge-base-sync:v1 "))', text)
 		self.assertIn("MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}", text)
 		block = text.split("gate_freshness_sync_fast_path()", 1)[1].split("# Size check uses", 1)[0]

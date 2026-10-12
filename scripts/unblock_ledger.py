@@ -740,11 +740,15 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			raise UsageError("operator_step needs 'placeholder': an upper-case flag or env var name")
 		if not flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX) and not flag.endswith("_ENABLED"):
 			raise UsageError(
-				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default off) "
+				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default on, an off switch) "
 				f"or a placeholder ending in {OPERATOR_PLACEHOLDER_SUFFIX}"
 			)
 		normalised["placeholder"] = flag
-		normalised["operator_instructions"] = _clean_text(verdict.get("operator_instructions"), "operator_instructions", True)
+		# Only an _UNSET_OPERATOR_STEP placeholder pages a person, so only it needs
+		# operator steps; an _ENABLED off switch is finished by the fix-up alone.
+		normalised["operator_instructions"] = _clean_text(
+			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
+		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
 	return normalised
 
