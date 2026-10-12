@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **During a model-provider outage, consumer repos no longer dispatch stale security holds, and every issue labelled review-blocked by a failed judge gets its outage marker.** Activation gaps found by verifying PR #6655 (issue #6633).
+
+In the consumer `ai-review.yml` wrapper, the hourly `security-hold-sweep` job now waits for `provider-outage-resume` and skips while that job reports `paused=true`. If the outage job is disabled, skipped or fails, the sweep runs as before. This matches the source repo's review sweep.
+
+When the review-blocked judge fails because the provider is down, `review_autofix.yml` now writes an `ai:provider-outage-label:v1` marker for exactly the issues the label step labelled, including those found from the PR title and body. Before, the marker step re-derived the list without that fallback, so those labels were never removed when the outage ended. `set_issue_phase_label_resilient` reports `applied`, `failed` or `skipped` in `SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME`; its return code is unchanged. If the label step's output is missing, the marker step uses the old derivation and logs `PROVIDER_OUTAGE op=mark_label outcome=fallback reason=labelled_set_unavailable`. No new GitHub API calls.
