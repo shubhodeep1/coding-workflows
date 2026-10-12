@@ -164,6 +164,10 @@ import sys
 
 MAX_README_BYTES = 2 * 1024 * 1024
 MAX_README_PROMPT_BYTES = 200000
+# Keep in step with scripts/review_untrusted_workspace.py: the "#### Variables"
+# env-var reference table is left out of prompts (issue #6902).
+README_VARIABLES_HEADING = b"#### Variables"
+README_VARIABLES_POINTER = b"(The variable reference table under this heading is left out of this prompt. Read the \"#### Variables\" section of README.md in the repository for a variable's default and description.)"
 readme_path = Path(sys.argv[1]) / "README.md"
 
 try:
@@ -214,10 +218,18 @@ if not readme_data:
 	sys.exit(0)
 
 trimmed_lines = []
+skipping_variables = False
 for readme_line in readme_data.split(b"\n")[: -1 if readme_data.endswith(b"\n") else None]:
 	if readme_line.startswith(b"### 2. Create wrapper workflows"):
 		break
+	if skipping_variables:
+		if not readme_line.startswith(b"#"):
+			continue
+		skipping_variables = False
 	trimmed_lines.append(readme_line)
+	if readme_line == README_VARIABLES_HEADING:
+		trimmed_lines.append(README_VARIABLES_POINTER)
+		skipping_variables = True
 
 if trimmed_lines:
 	if sum(len(readme_line) + len(b"UNTRUSTED_DATA: ") + 1 for readme_line in trimmed_lines) > MAX_README_PROMPT_BYTES:

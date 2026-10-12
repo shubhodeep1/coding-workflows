@@ -127,6 +127,28 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	fi
 	# Only the credential-free host proxy reaches vetted public registries.
 	# The user cannot specify the image, executable, mounts or Docker flags.
+	# Bound on the optional installs and pytest bootstrap below (#6835). On
+	# by default: a stalled optional install used to run the whole container
+	# into its 900s limit and fail the review (#6793). `false` (or 0/no/off)
+	# turns it off; an unrecognised value also turns it off and warns. Only
+	# normalized scalars cross into the container; the 780s ceiling keeps a
+	# bounded run inside the outer 900s container budget, whose expiry ends
+	# every install still pending (warned, not fatal; see the dep_rc case below).
+	bounded_deps_enabled=true
+	case "$(printf '%s' "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) bounded_deps_enabled=true ;;
+		0|false|no|off) bounded_deps_enabled=false ;;
+		*)
+			bounded_deps_enabled=false
+			echo '::warning::REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED has an unrecognised value; bounded installs stay off. Use true or false.' >&2
+			;;
+	esac
+	bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"
+	if ! [[ "${bounded_deps_budget}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${bounded_deps_budget}))" -lt 30 ] || [ "$((10#${bounded_deps_budget}))" -gt 780 ]; then
+		echo '::warning::REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS must be an integer between 30 and 780; using 600' >&2
+		bounded_deps_budget=600
+	fi
+	bounded_deps_budget="$((10#${bounded_deps_budget}))"
 	python_bin="$(python3 -c 'import sys; print(sys.executable)')"
 	if [ ! -f "${support}/dependency_registry_proxy.py" ] || [ -L "${support}/dependency_registry_proxy.py" ]; then
 		echo '::warning::Review dependencies skipped: registry proxy support missing' >&2
@@ -168,6 +190,8 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		--env npm_config_https_proxy=http://127.0.0.1:3128 --env npm_config_proxy=http://127.0.0.1:3128 \
 		--env YARN_HTTPS_PROXY=http://127.0.0.1:3128 --env YARN_HTTP_PROXY=http://127.0.0.1:3128 \
 		--env PIP_PROXY=http://127.0.0.1:3128 --env NO_PROXY= --env no_proxy= \
+		--env "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=${bounded_deps_enabled}" \
+		--env "REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=${bounded_deps_budget}" \
 		--workdir /source "${image}" /bin/bash -c '
 			set -u
 			python3 /support/dependency_registry_proxy.py bridge /socket/registry.sock 3128 &
@@ -191,25 +215,59 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 			}
 			python3 -m venv --system-site-packages /source/.review-venv || exit 1
 			export PATH=/source/.review-venv/bin:$PATH
+			# REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true gives the optional
+			# installs one shared deadline; a timeout warns and continues. Off,
+			# run_bounded_install runs the command unchanged.
+			deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"
+			case "$deps_budget" in ""|*[!0-9]*) deps_budget=600 ;; esac
+			deps_budget=$((10#$deps_budget))
+			deps_deadline=$(( $(date +%s) + deps_budget ))
+			run_bounded_install()
+			{
+				bounded_step="$1"
+				shift
+				if [ "${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}" != true ]; then
+					"$@"
+					return $?
+				fi
+				bounded_remaining=$(( deps_deadline - $(date +%s) ))
+				if [ "$bounded_remaining" -le 0 ]; then
+					echo "::warning::Review dependency install skipped (step=$bounded_step): dependency install budget of ${deps_budget}s exhausted; continuing."
+					return 124
+				fi
+				# Callers pass the bounded_install shell function, which timeout(1)
+				# cannot run (it only execs programs); so cap the per-command budget
+				# bounded_install already applies at the time left before the deadline.
+				bounded_limit="${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}"
+				[ "$bounded_remaining" -ge "$bounded_limit" ] || bounded_limit="$bounded_remaining"
+				bounded_rc=0
+				bounded_started_at=$(date +%s)
+				DEPENDENCY_INSTALL_TIMEOUT_SECONDS="$bounded_limit" "$@" || bounded_rc=$?
+				# Exit 137 before the limit elapsed is an OOM kill, not a timeout.
+				if [ "$bounded_rc" -eq 124 ] || { [ "$bounded_rc" -eq 137 ] && [ $(( $(date +%s) - bounded_started_at )) -ge "$bounded_limit" ]; }; then
+					echo "::warning::Review dependency install timed out (step=$bounded_step, limit=${bounded_limit}s, budget=${deps_budget}s); continuing without it."
+				fi
+				return "$bounded_rc"
+			}
 			if [ -f package-lock.json ]; then
 				echo "Found package-lock.json — running npm ci"
-				bounded_install npm ci --ignore-scripts || install_failed=true
+				run_bounded_install npm bounded_install npm ci --ignore-scripts || install_failed=true
 			elif [ -f yarn.lock ]; then
 				echo "Found yarn.lock — running yarn install"
-				bounded_install yarn install --frozen-lockfile --ignore-scripts || install_failed=true
+				run_bounded_install yarn bounded_install yarn install --frozen-lockfile --ignore-scripts || install_failed=true
 			elif [ -f pnpm-lock.yaml ]; then
 				echo "Found pnpm-lock.yaml — running pnpm install"
-				bounded_install npx pnpm install --frozen-lockfile --ignore-scripts || install_failed=true
+				run_bounded_install pnpm bounded_install npx pnpm install --frozen-lockfile --ignore-scripts || install_failed=true
 			elif [ -f package.json ]; then
 				echo "Found package.json (no lockfile) — running npm install"
-				bounded_install npm install --ignore-scripts || install_failed=true
+				run_bounded_install npm_install bounded_install npm install --ignore-scripts || install_failed=true
 			fi
 			if [ -f requirements.txt ]; then
 				echo "Found requirements.txt — running pip install"
-				bounded_install pip install -r requirements.txt || install_failed=true
+				run_bounded_install pip_requirements bounded_install pip install -r requirements.txt || install_failed=true
 			elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
 				echo "Found pyproject.toml — running pip install"
-				bounded_install pip install -e ".[dev]" || bounded_install pip install -e . || install_failed=true
+				run_bounded_install pip_editable_dev bounded_install pip install -e ".[dev]" || run_bounded_install pip_editable bounded_install pip install -e . || install_failed=true
 			fi
 			[ "$install_failed" = false ] || echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
 			pytest_bootstrap_wanted=false
@@ -227,7 +285,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					echo "Repository declares pytest configuration and pytest is already importable."
 				else
 					echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-					bounded_install python3 -m pip install pytest || bounded_install python3 -m pip install --user --break-system-packages pytest || true
+					run_bounded_install pytest_bootstrap bounded_install python3 -m pip install pytest || run_bounded_install pytest_bootstrap_user bounded_install python3 -m pip install --user --break-system-packages pytest || true
 					if python3 -c "import pytest" >/dev/null 2>&1; then
 						echo "pytest bootstrap succeeded."
 					else
@@ -349,8 +407,10 @@ if [ "$#" -lt 9 ] && [ "${claude_role}" = REVIEW_CONSOLIDATOR ]; then
 	claude_access=read
 fi
 case "${claude_access}" in read|write) ;; *) exit 2 ;; esac
-# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the Claude review-panel
-# slot (PANEL_REVIEWER) are read-only sandbox roles; never transfer.
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
+# The Claude review-panel slot (PANEL_REVIEWER) is read-only too. Keep the line
+# above verbatim: orchestrate_poll_process.sh greps for it as a capability
+# marker and defers every poller judge as sandbox_helper_outdated without it.
 case "${claude_role}" in
 	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|PANEL_REVIEWER)
 		[ "${claude_access}" = read ] || exit 2 ;;
@@ -490,6 +550,16 @@ if [ "${engine}" = claude ]; then
 				continue
 				;;
 			*)
+				# Q65: a crash such as "result_success exit_code=1" (an API
+				# error the CLI reports as a result) left no trace once the
+				# sandbox root was removed. Log the first 400 printable
+				# characters of the result text so the job log shows why.
+				if _ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${root}/crash_result.txt" >/dev/null 2>&1; then
+					crash_detail_text="$(head -c 400 "${root}/crash_result.txt" | tr '\n\r\t' '   ' | tr -cd '[:print:]')" || crash_detail_text=""
+					echo "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=${crash_detail_text:-empty}" >&2
+				else
+					echo "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=no_result_event" >&2
+				fi
 				rc=1
 				break
 				;;
