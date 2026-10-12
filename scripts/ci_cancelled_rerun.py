@@ -39,6 +39,8 @@ RUNNER_SHUTDOWN_PREFIX = "The runner has received a shutdown signal"
 CI_AGGREGATE_JOB_NAME = "lint"
 CI_AGGREGATE_MESSAGE = re.compile(r"CI jobs that did not succeed: (.+)\Z")
 GENERIC_STEP_FAILURE = "Process completed with exit code 1."
+# The only other failure annotation a real runner shutdown leaves on the job.
+SHUTDOWN_COMPANION_MESSAGE = "The operation was canceled."
 CHECK_RUN_URL_PATTERN = re.compile(r"/check-runs/([1-9][0-9]*)\Z")
 MAX_FAILED_JOBS_CLASSIFIED = 10
 MAX_FAILURE_CLASSIFICATIONS_PER_TICK = 5
@@ -243,7 +245,11 @@ def classify_runner_shutdown(repo: str, run_id: int) -> str:
 			annotations = failure_annotations(repo, check_run_id)
 			if job["name"] == CI_AGGREGATE_JOB_NAME:
 				aggregate_annotations.append(annotations)
-			elif any(item["message"].startswith(RUNNER_SHUTDOWN_PREFIX) for item in annotations):
+			elif any(item["message"].startswith(RUNNER_SHUTDOWN_PREFIX) for item in annotations) \
+					and all(item["message"].startswith(RUNNER_SHUTDOWN_PREFIX)
+						or item["message"].strip() == SHUTDOWN_COMPANION_MESSAGE for item in annotations):
+				# Any other failure annotation (a failed step's exit code, a
+				# test error) means the job also failed for real.
 				shutdown_ids.add(job["id"])
 			else:
 				return "genuine"
@@ -260,8 +266,11 @@ def classify_runner_shutdown(repo: str, run_id: int) -> str:
 			if not keys or any(not key for key in keys):
 				return "unverified"
 			for key in keys:
+				# Successful or skipped matrix siblings (fail-fast: false) are not
+				# what made the aggregate key fail; judge only the rest.
 				named = [job for job in jobs
-					if job["name"] == key or job["name"].startswith(key + " (")]
+					if (job["name"] == key or job["name"].startswith(key + " ("))
+					and job["conclusion"] not in ("success", "skipped", "neutral")]
 				if not named or any(job["id"] not in shutdown_ids and job["conclusion"] != "cancelled"
 						for job in named):
 					return "genuine"

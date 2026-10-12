@@ -469,6 +469,24 @@ def test_matrix_key_matches_matrix_job_names():
 	assert verdict == "shutdown"
 
 
+def test_successful_matrix_sibling_does_not_block_shutdown():
+	jobs = [job("orchestrate-poll (0)", 1, "success"), job("orchestrate-poll (2)", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		3: [annotation("CI jobs that did not succeed: orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_shutdown_text_next_to_a_real_failure_is_genuine():
+	jobs = [job("static-checks", 1), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("Process completed with exit code 1.")],
+		3: [annotation("CI jobs that did not succeed: static-checks")],
+	})
+	assert verdict == "genuine"
+
+
 def test_lint_alone_without_shutdown_job_is_unverified_or_genuine():
 	jobs = [job("static-checks", 1, "cancelled"), job("lint", 3)]
 	verdict, _ = classify(jobs, {3: [annotation("CI jobs that did not succeed: static-checks")]})
