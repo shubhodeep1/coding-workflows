@@ -35,6 +35,7 @@ REFUSAL_REASONS = {
 	"pr_cross_repository",
 	"head_ref_invalid",
 	"branch_missing",
+	"issue_read_failed",
 }
 
 

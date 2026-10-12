@@ -360,12 +360,6 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
     Fix PRs linked to triage issues run the single-issue security pass at their
     current head; the triage label and fingerprint do not exempt them.
-    With `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true` (default `false`),
-    `scripts/resolve_integration_ref.sh` routes a verified triage issue to
-    its failing PR's head branch for every issue phase; unverifiable label,
-    marker header, author, PR association, PR state, repository or branch
-    exits 3 and the phase fails closed instead of using the default branch
-    (log `CI_TRIAGE_PR_BRANCH_ROUTING`).
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
     `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
     `scripts/workflow_failure_heal_report.sh`,
@@ -2443,7 +2437,6 @@ and shipped:
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
-- `CI_TRIAGE_PR_BRANCH_ROUTING` (`scripts/resolve_integration_ref.sh`: `issue= pr= outcome=routed branch=` on stderr, `::error::... outcome=refused reason=label_missing|marker_invalid|not_an_issue|author_untrusted|pr_association_mismatch|pr_lookup_failed|pr_not_open|pr_cross_repository|head_ref_invalid|branch_missing|branch_lookup_failed|issue_parse_failed`, exit 3)
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
 - `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
 - `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
@@ -2705,7 +2698,6 @@ LOG_PREFIX.name=GH_API_RETRY
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
-LOG_PREFIX.name=CI_TRIAGE_PR_BRANCH_ROUTING
 LOG_PREFIX.name=RELEASE_MANIFEST
 LOG_PREFIX.name=UPDATER_MANIFEST_VERIFY
 LOG_PREFIX.name=UPDATER_PR_DELIVERY

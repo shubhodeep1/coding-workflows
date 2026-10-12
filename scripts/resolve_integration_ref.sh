@@ -138,6 +138,12 @@ ci_triage_routing_enabled() {
 
 get_issue_json() {
 	local issue_num="$1"
+	# Same rate-limit-aware read as get_issue_body(); the caller maps any
+	# failure to a CI-triage refusal (exit 3), never to the default branch.
+	if type gh_api_retry >/dev/null 2>&1; then
+		gh_api_retry "repos/${REPO}/issues/${issue_num}"
+		return $?
+	fi
 	gh api "repos/${REPO}/issues/${issue_num}"
 }
 
@@ -333,16 +339,23 @@ resolve_ref() {
 	local child_body child_branch tracking_issue tracking_body tracking_branch
 	local child_json="" triage_branch triage_rc
 	if ci_triage_routing_enabled; then
-		# One full issue read supplies body, labels, author and PR flag. A
-		# failed read keeps the legacy non-3 failure: whether the issue is a
-		# CI-triage issue is not yet known.
-		child_json="$(get_issue_json "${ISSUE}")" || return 1
-		child_body="$(printf '%s' "${child_json}" | python3 -I -c '
+		# One full issue read supplies body, labels, author and PR flag. With
+		# routing on, an unreadable issue might be a CI-triage issue, so a
+		# failed read or parse refuses (exit 3) instead of returning a code
+		# that callers map to the default-branch fallback.
+		if ! child_json="$(get_issue_json "${ISSUE}")"; then
+			ci_triage_refuse "issue_read_failed" "none"
+			return "${CI_TRIAGE_REFUSED_RC}"
+		fi
+		if ! child_body="$(printf '%s' "${child_json}" | python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
 body = data.get("body") if isinstance(data, dict) else ""
 print(body if isinstance(body, str) else "")
-')" || return 1
+')"; then
+			ci_triage_refuse "issue_parse_failed" "none"
+			return "${CI_TRIAGE_REFUSED_RC}"
+		fi
 	else
 		child_body="$(get_issue_body "${ISSUE}")"
 	fi
@@ -507,6 +520,9 @@ def main() -> int:
 			print("invalid issue endpoint", file=sys.stderr)
 			return 2
 		issue = fixture.get("issues", {}).get(str(issue_num), {})
+		if issue.get("read_error"):
+			print("gh: Not Found (HTTP 404)", file=sys.stderr)
+			return 1
 		body = issue.get("body", "")
 		if "--jq" in args:
 			jq_expr = args[args.index("--jq") + 1]

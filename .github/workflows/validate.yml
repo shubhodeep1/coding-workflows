@@ -212,7 +212,9 @@ jobs:
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
           else
-            resolver_rc=$?
+            # resolver_rc already holds the resolver's exit code (captured by
+            # `|| resolver_rc=$?` above); `$?` here would be the failed exit-3
+            # test's status and would hide exits 75 and 2.
             # A resolver that stayed rate-limited (exit 75, issue #6634) must
             # not silently fall back to the default branch.
             if [ "${resolver_rc}" -eq 75 ]; then
