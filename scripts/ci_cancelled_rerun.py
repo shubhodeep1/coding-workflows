@@ -6,9 +6,13 @@ CI_CANCELLED_RERUN decision per PR. Fail closed on incomplete evidence.
 At most four repository-wide CI run-list GETs per tick: one bounded completed
 window (`status=completed&per_page=100`) and one each for queued, in_progress,
 and pending, plus one paginated open-PR listing immediately before posting.
-There are no per-PR reads. The sweep's earlier PR snapshot cannot prove a
-head is still current after the review-dispatch loop, and its run cache
-contains *review* workflow runs, not CI runs.
+The sweep's earlier PR snapshot cannot prove a head is still current after
+the review-dispatch loop, and its run cache contains *review* workflow runs,
+not CI runs. The only per-run reads classify a `failure` run that passed every
+other guard as a runner shutdown (issue #7109): one attempt-1 jobs GET plus at
+most MAX_FAILED_JOBS_CLASSIFIED check-run annotation GETs per classified run,
+and at most MAX_FAILURE_CLASSIFICATIONS_PER_TICK classified runs per tick
+(worst case 55 extra GETs per tick, none when no PR head has a failed CI run).
 Eligible runs get one rerun-failed-jobs POST, with no retry or full-rerun
 fallback. The bounded completed window cannot establish an absolute
 once-per-head cap if an older, distinct run ID has fallen out of view.
@@ -27,6 +31,21 @@ from pathlib import Path
 SOURCE_REPO = "shubhodeep1/coding-workflows"
 SHA_PATTERN = re.compile(r"[a-fA-F0-9]{40}\Z")
 ACTIVE_STATUSES = ("queued", "in_progress", "pending")
+# Runner-shutdown classification (issue #7109). The runner writes this text as
+# an `##[error]` line, which GitHub records as a failure annotation on the job.
+RUNNER_SHUTDOWN_PREFIX = "The runner has received a shutdown signal"
+# ci.yml's aggregate job keeps the id `lint` (CLAUDE.md §6) and fails with
+# `::error::CI jobs that did not succeed: <key>, <key>` when a needed job fails.
+CI_AGGREGATE_JOB_NAME = "lint"
+CI_AGGREGATE_MESSAGE = re.compile(r"CI jobs that did not succeed: (.+)\Z")
+GENERIC_STEP_FAILURE = "Process completed with exit code 1."
+# The only other failure annotation a real runner shutdown leaves on the job.
+SHUTDOWN_COMPANION_MESSAGE = "The operation was canceled."
+CHECK_RUN_URL_PATTERN = re.compile(r"/check-runs/([1-9][0-9]*)\Z")
+MAX_FAILED_JOBS_CLASSIFIED = 10
+MAX_FAILURE_CLASSIFICATIONS_PER_TICK = 5
+# Job conclusions that are not, by themselves, evidence of a real failure.
+BENIGN_JOB_CONCLUSIONS = ("success", "skipped", "neutral", "cancelled", "failure")
 
 
 def positive_number(value: object) -> bool:
@@ -156,6 +175,109 @@ def rerun_failed_jobs(repo: str, run_id: int) -> bool:
 	return result.returncode == 0 and bool(re.match(r"HTTP/\S+ 201\b", result.stdout))
 
 
+
+def list_run_jobs(repo: str, run_id: int) -> list[dict]:
+	# Attempt-scoped: `already_retried` has ruled out any attempt >= 2.
+	result = subprocess.run(
+		["gh", "api", "-X", "GET", f"repos/{repo}/actions/runs/{run_id}/attempts/1/jobs",
+			"-f", "per_page=100"],
+		capture_output=True, text=True, timeout=30, check=False,
+	)
+	if result.returncode != 0:
+		raise ValueError("jobs_unreadable")
+	try:
+		payload = json.loads(result.stdout)
+	except ValueError as exc:
+		raise ValueError("jobs_unreadable") from exc
+	if not isinstance(payload, dict):
+		raise ValueError("jobs_unreadable")
+	jobs = payload.get("jobs")
+	count = payload.get("total_count")
+	if not isinstance(jobs, list) or type(count) is not int or count != len(jobs) or len(jobs) >= 100:
+		raise ValueError("jobs_unreadable")
+	for job in jobs:
+		if not isinstance(job, dict) or not positive_number(job.get("id")) \
+				or not isinstance(job.get("name"), str) or job.get("status") != "completed" \
+				or not isinstance(job.get("conclusion"), str) \
+				or not isinstance(job.get("check_run_url"), str) \
+				or not CHECK_RUN_URL_PATTERN.search(job["check_run_url"]):
+			raise ValueError("jobs_unreadable")
+	return jobs
+
+
+def failure_annotations(repo: str, check_run_id: int) -> list[dict]:
+	result = subprocess.run(
+		["gh", "api", "-X", "GET", f"repos/{repo}/check-runs/{check_run_id}/annotations",
+			"-f", "per_page=100"],
+		capture_output=True, text=True, timeout=30, check=False,
+	)
+	if result.returncode != 0:
+		raise ValueError("annotations_unreadable")
+	try:
+		payload = json.loads(result.stdout)
+	except ValueError as exc:
+		raise ValueError("annotations_unreadable") from exc
+	if not isinstance(payload, list) or len(payload) >= 100 or any(
+			not isinstance(item, dict) or not isinstance(item.get("message"), str)
+			or not isinstance(item.get("annotation_level"), str) for item in payload):
+		raise ValueError("annotations_unreadable")
+	return [item for item in payload if item["annotation_level"] == "failure"]
+
+
+def classify_runner_shutdown(repo: str, run_id: int) -> str:
+	"""Return "shutdown", "genuine", or "unverified" for a failed CI run.
+
+	Fail closed: only a run whose every failed job was killed by a runner
+	shutdown (or is the `lint` aggregate reporting only such jobs) counts.
+	Annotation text is never logged; it can be written by a PR's own steps.
+	"""
+	try:
+		jobs = list_run_jobs(repo, run_id)
+		if any(job["conclusion"] not in BENIGN_JOB_CONCLUSIONS for job in jobs):
+			return "genuine"
+		failed = [job for job in jobs if job["conclusion"] == "failure"]
+		if not failed or len(failed) > MAX_FAILED_JOBS_CLASSIFIED:
+			return "unverified"
+		shutdown_ids: set[int] = set()
+		aggregate_annotations: list[list[dict]] = []
+		for job in failed:
+			check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
+			annotations = failure_annotations(repo, check_run_id)
+			if job["name"] == CI_AGGREGATE_JOB_NAME:
+				aggregate_annotations.append(annotations)
+			elif any(item["message"].startswith(RUNNER_SHUTDOWN_PREFIX) for item in annotations) \
+					and all(item["message"].startswith(RUNNER_SHUTDOWN_PREFIX)
+						or item["message"].strip() == SHUTDOWN_COMPANION_MESSAGE for item in annotations):
+				# Any other failure annotation (a failed step's exit code, a
+				# test error) means the job also failed for real.
+				shutdown_ids.add(job["id"])
+			else:
+				return "genuine"
+		for annotations in aggregate_annotations:
+			messages = [item["message"].strip() for item in annotations]
+			if any(message != GENERIC_STEP_FAILURE and not CI_AGGREGATE_MESSAGE.fullmatch(message)
+					for message in messages):
+				return "genuine"
+			matches = [CI_AGGREGATE_MESSAGE.fullmatch(message) for message in messages]
+			matches = [match for match in matches if match]
+			if len(matches) != 1:
+				return "unverified"
+			keys = [key.strip() for key in matches[0][1].split(",")]
+			if not keys or any(not key for key in keys):
+				return "unverified"
+			for key in keys:
+				# Successful or skipped matrix siblings (fail-fast: false) are not
+				# what made the aggregate key fail; judge only the rest.
+				named = [job for job in jobs
+					if (job["name"] == key or job["name"].startswith(key + " ("))
+					and job["conclusion"] not in ("success", "skipped", "neutral")]
+				if not named or any(job["id"] not in shutdown_ids and job["conclusion"] != "cancelled"
+						for job in named):
+					return "genuine"
+		return "shutdown" if shutdown_ids else "unverified"
+	except (ValueError, OSError, subprocess.TimeoutExpired):
+		return "unverified"
+
 def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str) -> None:
 	# One malformed item makes the enumerated set incomplete: do not infer
 	# that the remaining entries are the only open PRs on a shared head.
@@ -200,6 +322,7 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 		return
 
 	processed_heads: set[str] = set()
+	classified = 0
 	for pr in eligible:
 		number, sha = pr["number"], pr["head_sha"]
 		if not dry_run and current_heads.get(number) != sha:
@@ -236,7 +359,7 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 			decision(number, sha, run_id, "skip", "already_retried")
 		elif newest["event"] == "push" and newest.get("head_branch") != pr["head_ref"]:
 			decision(number, sha, run_id, "skip", "push_run")
-		elif newest["conclusion"] not in ("cancelled", "startup_failure"):
+		elif newest["conclusion"] not in ("cancelled", "startup_failure", "failure"):
 			decision(number, sha, run_id, "skip", "other_conclusion")
 		elif any(associated(run, number, sha)
 				or (run["event"] == "push" and run["head_sha"] == sha
@@ -253,6 +376,25 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 			decision(number, sha, run_id, "skip", "active_run")
 		elif dry_run:
 			decision(number, sha, run_id, "skip", "dry_run")
+		elif newest["conclusion"] == "failure":
+			# Runner-shutdown recovery (issue #7109). The completed-run,
+			# active-run and open-PR listings above, and the sweep's
+			# review-run cache, carry no job or annotation data, so this
+			# needs its own reads. They run only for a `failure` candidate
+			# that passed every other guard, capped per run and per tick.
+			if classified >= MAX_FAILURE_CLASSIFICATIONS_PER_TICK:
+				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
+				continue
+			classified += 1
+			verdict = classify_runner_shutdown(repo, run_id)
+			if verdict == "genuine":
+				decision(number, sha, run_id, "skip", "other_conclusion")
+			elif verdict != "shutdown":
+				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
+			elif rerun_failed_jobs(repo, run_id):
+				decision(number, sha, run_id, "rerun", "runner_shutdown")
+			else:
+				decision(number, sha, run_id, "skip", "rerun_refused")
 		elif rerun_failed_jobs(repo, run_id):
 			decision(number, sha, run_id, "rerun", "cancelled_ci")
 		else:
