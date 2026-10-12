@@ -17081,6 +17081,8 @@ _fetch_candidate_issue_details_graphql() {
           state
           body
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
+          authorAssociation
+          author { login }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
@@ -17132,6 +17134,8 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
+            author_login: (.value.author.login // ""),
+            author_association: (.value.authorAssociation // ""),
             labels: [(.value.labels.nodes // [])[]?.name],
             labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
@@ -18668,6 +18672,11 @@ run_standalone_stall_recovery() {
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
+  local _pr_dependency_verdict
+  local _pr_dependency_status
+  local _pr_dependency_reason
+  local _pr_dependency_login
+  local _pr_dependency_comments_complete
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -18716,6 +18725,8 @@ run_standalone_stall_recovery() {
     else
       printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" --arg repo "${GITHUB_REPOSITORY}" '
         .[$n] | {number: ($n | tonumber), body, labels,
+          user: {login: (.author_login // "")},
+          author_association: (.author_association // ""),
           repository_url: ("https://api.github.com/repos/" + $repo)}' > "${_security_dependency_issue_file}"
     fi
     _security_dependency_verdict="$(python3 scripts/security_dependency.py security-dependency \
@@ -18751,6 +18762,63 @@ run_standalone_stall_recovery() {
           echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
         fi
         continue
+      fi
+    fi
+    # A trusted standalone issue that declares `- Depends on PR: #N` and
+    # `- Requires on main: <path> contains <string>` waits until that PR is
+    # merged into the default branch and the string is there (issue #7228).
+    # While held, stall recovery does nothing for it (no auto-answer, no
+    # approval, no recovery attempt). Once ready, the poller posts one
+    # /reclarify with a release marker; only a marker written by the
+    # pipeline login counts, and nothing is posted when the login or the
+    # complete comment history cannot be read.
+    # §14: the helper's `pulls/<N>` read is new because the candidate batch's
+    # `linked_pr` only covers PRs that close this issue, not a declared
+    # prerequisite PR; its `contents` read of the default branch has no
+    # existing source and runs only after the PR has merged. Both happen only
+    # for an issue whose body carries a declaration.
+    if jq -e '(.body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i")' \
+      "${_security_dependency_issue_file}" >/dev/null 2>&1; then
+      unblock_trusted_login >/dev/null 2>&1 || true
+      _pr_dependency_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+      _pr_dependency_verdict="$(python3 -I -B scripts/pr_dependency.py pr-dependency \
+        --issue-json "${_security_dependency_issue_file}" --repo "${GITHUB_REPOSITORY}" \
+        --issue-number "${issue_num}" --trusted-login "${_pr_dependency_login}" 2>/dev/null || echo '{"status":"held"}')"
+      _pr_dependency_status="$(printf '%s' "${_pr_dependency_verdict}" | jq -r '.status // "held"' 2>/dev/null || echo held)"
+      if [ "${_pr_dependency_status}" = "held" ] || { [ "${_pr_dependency_status}" != "ready" ] && [ "${_pr_dependency_status}" != "none" ]; }; then
+        _pr_dependency_reason="$(printf '%s' "${_pr_dependency_verdict}" | jq -r '.reason // "unverified"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
+        echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_held detail=${_pr_dependency_reason:-unverified} action=none"
+        continue
+      fi
+      if [ "${_pr_dependency_status}" = "ready" ]; then
+        if [ -z "${_pr_dependency_login}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_identity_unavailable action=none"
+          continue
+        fi
+        _pr_dependency_comments_complete="false"
+        if [ "${_standalone_staged_support_cache_available}" = "true" ] && [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -lt 100 ]; then
+          _pr_dependency_comments_complete="true"
+        fi
+        if [ "${_pr_dependency_comments_complete}" != "true" ]; then
+          if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+            || ! printf '%s' "${comments_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            comments_json='[]'
+            echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_comments_unavailable action=none"
+            continue
+          fi
+        fi
+        if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:pr-dependency-released:${issue_num} -->" --arg login "${_pr_dependency_login}" '
+          any(.[]; ((.user.login // "") == $login)
+            and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+          if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+            -f body="/reclarify
+<!-- ai:pr-dependency-released:${issue_num} -->" >/dev/null; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_released action=reclarify"
+          else
+            echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_retrigger_failed action=none"
+          fi
+          continue
+        fi
       fi
     fi
     # Resolve both values through the shared Python predicates in one call so

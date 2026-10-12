@@ -125,7 +125,7 @@ def test_implement_host_helpers_run_isolated_from_branch_modules() -> None:
 	assert text.index("UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=trusted_helper_unavailable") < text.index(ledger[0])
 
 
-@pytest.mark.parametrize("script_name", ["unblock_ledger.py", "load_workflow_overlay.py", "security_dependency.py"])
+@pytest.mark.parametrize("script_name", ["unblock_ledger.py", "load_workflow_overlay.py", "security_dependency.py", "pr_dependency.py"])
 def test_implement_host_helpers_need_no_sibling_imports(script_name: str, tmp_path: Path) -> None:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
