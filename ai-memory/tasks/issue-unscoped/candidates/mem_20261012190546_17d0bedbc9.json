@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:1-23 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: This new fragment duplicates an entry already in `CHANGELOG.md` and will cause the next release or consumer sync to publish it a second time.\n  WHY: `CHANGELOG.md:2534` already carries the entry, and `scripts/assemble_changelog.py` folds fragments without content-level deduplication.\n- .github/workflows/ci.yml:line 939 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The test file is added to a workflow job even though it is already run by two dedicated steps in another job, causing CI to run it three times.\n  WHY: The additional run adds runner time without helping the wiring guard, which only needs the test file named in some workflow.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Avoid creating new, contradicting changelog entries.\n  expected_change_site: changelog.d/ directory and CHANGELOG.md\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR adds `changelog.d/6985-clarify-sandbox-base-image-mirror.md` (23 lines), while the same entry is already in CHANGELOG.md at lines 2534-2555; `scripts/assemble_changelog.py` folds every fragment without content-level deduplication.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:lines 1-23 | severity=high | confidence=[5]\n  PROBLEM: `CHANGELOG.md:2534` already carries this exact entry, with the same headline \"Clarify gets its sandbox base image from a mirror first, so a Docker Hub rate limit no longer fails it while a mirror is reachable.\" The fragment is also unrelated to #7219, which is about the `update_workflows.yml` `run:` body guard. The PR diff shows it as a newly added file, so it is a leftover of the merge that brought in the already-released fold.\n  WHY: `scripts/assemble_changelog.py` folds every `changelog.d/*.md` file without content-level deduplication. The next release, or the consumer sync in `update_workflows.yml`, would add the 6985 entry to `CHANGELOG.md` a second time. The fragment's contributor note also says the test runs in the `tests-heal-plan-and-validation` job, which contradicts the released copy and the actual wiring (see the performance finding below).\n\n- .github/workflows/ci.yml:line 939 | severity=low | confidence=[4]\n  PROBLEM: The test is already run by two dedicated steps in `tests-hooks-and-orchestrator`, which spans lines 437-788. Those are \"Clarify sandbox base image pre-seed tests (#6985)\" at line 577 and \"Clarify sandbox base image pre-seed tests\" at line 658. The wiring guard `tests/test_ci_wires_every_test_file.py` only needs the file named in some workflow, so the new entry adds nothing.\n  WHY: CI now runs the same test file three times. This costs runner time and puts the same test in two job groups, which contradicts the `tests/test_ci_job_split_contract.py` convention that a step belongs to one job. It is not a correctness failure.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md | severity=high | confidence=[4]\n  PROBLEM: Duplicate entry already exists in CHANGELOG.md\n  WHY: The assembler folds every changelog fragment without deduplication. This causes the release notes to publish the same entry twice, with contradictory details about whether the test-location was already updated.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Pass changelog and agents assembly outputs through the step's existing env: block and replace their inline expressions with shell variable references. Preserve the step's behavior and the guard. Update the execution fixture in tests/test_update_workflows_pr_delivery.py:284-318 to supply those environment values, then rerun the guard and updater tests.\" (from issue #7219's Suggested fix; the PR DESCRIPTION says \"Closes #7219\"). The fix must avoid creating new, contradicting changelog entries.\n  Expected change site: changelog.d/ directory and CHANGELOG.md\n  Evidence of absence: The PR adds a NEW fragment `changelog.d/6985-clarify-sandbox-base-image-mirror.md` (23 lines) for issue #6985. The exact same headline, table, contributor notes and conclusion are already present in CHANGELOG.md at lines 2534-2555 from a prior release. `scripts/assemble_changelog.py` folds every fragment without content-level deduplication, so the next release/consumer sync would append a second, near-identical \"Clarify gets its sandbox base image from a mirror\" entry to CHANGELOG.md, with contradictory test-location details: the existing entry says the test runs in the \"Regression tests wired by the CI wiring guard (part 1)\" step of `ci.yml` (which matches line 933-939 of `ci.yml` where the test was added), while the LAST RUN DIFF made the new fragment say the test runs in the `tests-heal-plan-and-validation` job of `ci.yml`. The same `ci.yml` file shows the test is also already wired at lines 574-577 and 655-658 under step names \"Clarify sandbox base image pre-seed tests (#6985)\" / \"Clarify sandbox base image pre-seed tests\" inside the `tests-hooks-and-orchestrator` job (between job header at line 437 and the next job at line 788), so the test actually runs three times per CI invocation (twice within `tests-hooks-and-orchestrator`, once within `tests-heal-plan-and-validation`), and neither claim is uniquely correct. The fragment also does not belong to issue #7219 (it is for #6985), so it is scope creep: shipping it in this PR publishes a duplicate, contradicting changelog entry on the next release.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9331c8d61d42ca425a8d755e7afcc79f8dd6d366be3a64206f0b52b53975e6a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7231,
+    "run_id": "38292956203",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38292956203",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012190546_17d0bedbc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7231,
+    "run_id": "38292956203"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T19:05:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
