@@ -940,6 +940,26 @@ remains wired as a transport fallback for environments where REST is gated
 instead. The fallback is a retry of the same question on a different
 transport, never a second query.
 
+### E) Push Command Shape
+
+Write every `git push` as one plain command with literal arguments:
+`git push -u origin <branch>`, or after a §21.A reset
+`git push --force-with-lease origin <branch>` (or
+`--force-with-lease=<branch>:<sha>` with the SHA typed out). Never put a push
+inside a `for`/`while` retry loop: the guard cannot tell which directory the
+push runs in, so it asks for confirmation in every permission mode. Keep
+`$VAR` and `$(...)` out of the push arguments too, so the allow rules below
+can match. When a push fails on a network error, retry it as a new call with
+the same plain command.
+
+`.claude/settings.json` allows the plain `git push` and
+`git push --force-with-lease` forms to `origin claude/*` without a prompt
+(§23.C makes force-pushing the session's own working branch routine). Its
+`ask` rules cover pushes that delete a branch (`--delete`, `-d`, `--prune`)
+or name `main` or `master` as a destination, so a `claude/*` allow rule never
+silently carries a default-branch write or a deletion. A consumer repo whose
+default branch has another name gets no ask rule for it.
+
 ---
 
 ## §22. DigitalOcean Access (MANDATORY)
