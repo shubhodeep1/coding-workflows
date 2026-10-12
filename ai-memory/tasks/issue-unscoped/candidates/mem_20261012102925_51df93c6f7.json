@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"implement PR-head routing only for an open, same-repository PR with a valid head ref and matching nonempty check and PR head SHAs. Otherwise log routing_unverified, send a WARNING, and exit without filing an issue.\"\n  expected_change_site: `scripts/check_failure_triage.sh` early PR-state and fork checks (lines 386-393)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `scripts/check_failure_triage.sh` lines 386-393 exit before `triage_verify_pr_head_route` runs; these paths log only `pr_not_open` or `fork_pr` and send no WARNING; tests cover missing state but not explicit `state=\"closed\"` or a fork PR in the flag-on path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Otherwise log routing_unverified, send a WARNING, and exit without filing an issue\" for any PR that is not an open, same-repository PR.\n  Expected change site: `scripts/check_failure_triage.sh`, the early exits at lines 386-389 (`skip reason=pr_not_open`) and 390-393 (`skip reason=fork_pr`).\n  Evidence of absence: With the flag on, a PR whose state is explicitly closed, or whose `head.repo` is a fork, exits at those lines before `triage_verify_pr_head_route` runs. They log only their own reason, with no `routing_unverified` token and no WARNING. No issue is filed, so the \"exit without filing\" part is met. Only the log token and the alert are missing. These silent skips already existed, and a WARNING for every closed or fork PR would be noisy. The code is defensible as written.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Otherwise log routing_unverified, send a WARNING, and exit without filing an issue\" for anything that is not an open, same-repository PR with a matching head SHA and a valid ref.\n  Expected change site: scripts/check_failure_triage.sh:386-393 \u2014 the pre-existing early exits `skip reason=pr_not_open` (lines 386-389) and `skip reason=fork_pr` (lines 390-393) that fire when PR_STATE is non-empty and != \"open\", or when HEAD_REPO_FULL_NAME is non-empty and != REPO.\n  Evidence of absence: With CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED=true, a payload whose state is explicitly \"closed\" (or whose head.repo.full_name is a fork) exits at lines 388 / 391 before triage_verify_pr_head_route runs at line 534. Those exits log only their own skip reason and call neither triage_report_routing_unverified nor the base-gate / lineage-cap wrappers. The PR is not filed, which matches \"exit without filing an issue\", but the log token and Telegram WARNING required by the issue are missing for these two paths. The test_collect_flag_on_rejects_unverified_pr_head subTest for pr_not_open uses a payload with the `state` key deleted (`no_state`), so PR_STATE is empty, the line 386 `[ -n \"${PR_STATE}\" ]` guard is false, and the early exit never fires \u2014 that case exercises the PR-head routing gate at line 663 instead. There is no subTest for an explicit state=\"closed\" or head.repo full_name of a fork in the flag-on path, so the gap is uncovered and would not be caught by CI.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cOtherwise log routing_unverified, send a WARNING, and exit without filing an issue\u201d when the PR does not meet the routing criteria.\n  Expected change site: scripts/check_failure_triage.sh, early PR-state and fork checks.\n  Evidence of absence: With routing enabled, the closed-PR check at lines 386-389 and fork check at lines 390-393 exit before route verification at lines 528-544. They log only `pr_not_open` or `fork_pr` and send no WARNING. No issue is filed, but the required routing-unverified log and warning are missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"implement PR-head routing only for an open, same-repository PR with a valid head ref and matching nonempty check and PR head SHAs. Otherwise log routing_unverified, send a WARNING, and exit without filing an issue.\"\n  Expected change site: scripts/check_failure_triage.sh lines 386-393 (the early exits for pr_not_open and fork_pr)\n  Evidence of absence: When CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED=true, a PR with state=\"closed\" exits at line 388 and a PR from a fork exits at line 392. Both exits happen before the routing verification at line 528-537 runs. Neither exit logs \"routing_unverified\" or sends a Telegram WARNING. The linked issue requires that any PR that is not (open AND same-repository AND valid ref AND matching SHA) must log routing_unverified and send WARNING. The current code only does this for cases where the routing verification itself fails (sha_mismatch, invalid_head_ref, etc.), not for the early-exit cases. The test test_collect_flag_on_rejects_unverified_pr_head covers missing state and missing base.repo, but not explicit state=\"closed\" or head.repo != base.repo (fork), which take the early-exit paths.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e6a319a0fcf361a875a7670eec5d701aef32ecfb5589ed2a8f52096cf9f4dee7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6980,
+    "run_id": "38232427385",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38232427385",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012102925_51df93c6f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6980,
+    "run_id": "38232427385"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T10:29:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
