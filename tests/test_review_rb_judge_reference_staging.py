@@ -108,8 +108,11 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 
 def test_review_staging_uses_only_verified_checkout() -> None:
 	"""A PR worktree cannot supply required or optional review runtime code."""
-	with tempfile.TemporaryDirectory(prefix="trusted-review-support-") as td:
+	# RUNNER_TEMP sits outside the checkout, as on a runner: the trusted
+	# overlay root under it must not be inside GITHUB_WORKSPACE.
+	with tempfile.TemporaryDirectory(prefix="trusted-review-support-") as td, tempfile.TemporaryDirectory(prefix="trusted-review-runner-temp-") as runner_td:
 		workspace = Path(td)
+		runner_temp = Path(runner_td)
 		trusted = workspace / ".codex-workflow-src"
 		trusted.mkdir()
 		for directory in ("scripts", "prompts", "ai-memory"):
@@ -124,7 +127,7 @@ def test_review_staging_uses_only_verified_checkout() -> None:
 			subprocess.run(["git", "-C", str(trusted), *arguments], check=True, capture_output=True)
 		sha = subprocess.check_output(["git", "-C", str(trusted), "rev-parse", "HEAD"], text=True).strip()
 		github_env = workspace / "github_env"
-		env = {**os.environ, "RUNNER_TEMP": td, "GITHUB_WORKSPACE": td, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_ENV": str(github_env), "SCRIPT_REF": sha, "PYTHONDONTWRITEBYTECODE": "1"}
+		env = {**os.environ, "RUNNER_TEMP": runner_td, "GITHUB_WORKSPACE": td, "GITHUB_REPOSITORY": "owner/repo", "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_ENV": str(github_env), "SCRIPT_REF": sha, "PYTHONDONTWRITEBYTECODE": "1"}
 		env.pop("BASH_ENV", None)
 		env.pop("ENV", None)
 		def stage() -> subprocess.CompletedProcess[str]:
@@ -132,7 +135,7 @@ def test_review_staging_uses_only_verified_checkout() -> None:
 
 		result = stage()
 		assert result.returncode == 0, result.stderr
-		bundle = workspace / "coding-workflows-runtime-123-1" / "scripts"
+		bundle = runner_temp / "coding-workflows-runtime-123-1" / "scripts"
 		assert (bundle / "gh_helpers.sh").read_bytes() == (trusted / "scripts/gh_helpers.sh").read_bytes()
 		assert (bundle / "install_semble.sh").read_bytes() == (trusted / "scripts/install_semble.sh").read_bytes()
 		env["SCRIPT_REF"] = "0" * 40
@@ -144,7 +147,7 @@ def test_review_staging_uses_only_verified_checkout() -> None:
 		(trusted / "scripts/install_semble.sh").unlink()
 		env["GITHUB_RUN_ID"] = "124"  # Fresh attempt, no previous bundle contents.
 		assert stage().returncode == 0  # Missing optional script stays missing.
-		assert not (workspace / "coding-workflows-runtime-124-1" / "scripts/install_semble.sh").exists()
+		assert not (runner_temp / "coding-workflows-runtime-124-1" / "scripts/install_semble.sh").exists()
 		(trusted / "scripts/codex_model_catalog.json").unlink()
 		(workspace_scripts / "codex_model_catalog.json").write_text("{}\n", encoding="utf-8")
 		env["GITHUB_RUN_ID"] = "125"

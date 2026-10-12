@@ -27,7 +27,12 @@ Inputs:
   --allowlist-out PATH    Optional: write the normalized allowlist (one entry
                           per line) so the caller can surface it in the alert.
   --emit-automation-grant PATH --issue-meta-file PATH --pipeline-login LOGIN
-                          Snapshot trusted-author exact automation paths.
+                          [--origin-repo OWNER/NAME]
+                          Snapshot trusted-author exact automation paths. A
+                          pipeline-authored issue derived from another issue
+                          (re-issue, unblock fix-up) is granted only when its
+                          whole source chain is trusted; --origin-repo lets
+                          the guard read those source issues (Q82).
   --check-automation-paths --automation-grant-file PATH --staged-file PATH
                           --allow-workflow-edits VALUE --issue-number NUMBER
                           Verify staged automation paths against the snapshot.
@@ -71,7 +76,9 @@ from functools import lru_cache
 import json
 from pathlib import PurePosixPath
 import re
+import subprocess
 import sys
+import time
 
 
 EXIT_IN_SCOPE = 0
@@ -86,6 +93,35 @@ TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 PIPELINE_AUTHOR_OPEN_REASON = "pipeline_author_no_allowlist"
 AUTOMATION_GRANT_SCHEMA = "automation_path_grant.v1"
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
+
+# Source-issue references the pipeline writes into issues it derives from
+# another issue (Q82). Only a pipeline-authored issue is walked: a person's
+# own issue is trusted on its author alone. Every reference counts, so text
+# copied from the source can only add checks, never remove one.
+ORIGIN_REFERENCE_PATTERNS = (
+	re.compile(r"Re-issued from\s+#([1-9][0-9]{0,9})\b"),  # stall recovery, no-op / validation re-issues
+	re.compile(r"Re-issued by the unblock judge from #([1-9][0-9]{0,9})\b"),  # unblock reissue
+	re.compile(r"<!--\s*ai:unblock-fixup:v1\s+item=([1-9][0-9]{0,9})\b"),  # unblock descope / operator_step
+	re.compile(r"^-\s*Replaces:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked re-issue footer
+	re.compile(r"^-\s*Source issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # implement-diagnose fix-up
+	re.compile(r"Accepted with this follow-up by the unblock judge \(#([1-9][0-9]{0,9})\)"),  # unblock accept_with_followup
+	re.compile(r"^-\s*Parent issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked merge_with_followup
+)
+# A review-blocked re-issue or follow-up whose metadata footer names no issue
+# names only its PR, so its source cannot be checked: it gets no automation
+# paths. The named-source line must sit in the same `---`-delimited block as
+# the last `- Type:` line of that kind (the pipeline-written footer); a match
+# in the model-written prose above it only adds a check, never names a source.
+ORIGIN_UNNAMED_PATTERN = re.compile(r"^-\s*Type:\s*review-blocked-reissue\s*$", re.MULTILINE)
+ORIGIN_FOOTER_KINDS = (
+	(ORIGIN_UNNAMED_PATTERN, re.compile(r"^-\s*Replaces:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+	(re.compile(r"^-\s*Type:\s*review-blocked-followup\b.*$", re.MULTILINE),
+		re.compile(r"^-\s*Parent issue:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+)
+ORIGIN_FOOTER_RULE = re.compile(r"^---\s*$", re.MULTILINE)
+ORIGIN_MAX_DEPTH = 4
+ORIGIN_MAX_ISSUES = 8
+ORIGIN_REASONS = ("untrusted_origin", "origin_unverified")
 
 STATUS_IN_SCOPE = "in-scope"
 STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
@@ -181,8 +217,110 @@ def files_touched_block_state(text: str) -> tuple[str, list[str]]:
 	return "missing", []
 
 
-def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
-	"""Snapshot the author's authority and exact automation files in the issue."""
+def origin_references(body: str) -> tuple[list[int], bool]:
+	"""Source issue numbers a pipeline-authored body names, and whether it
+	also claims a source it does not name (an unverifiable review-blocked
+	re-issue)."""
+	numbers: list[int] = []
+	for pattern in ORIGIN_REFERENCE_PATTERNS:
+		for match in pattern.finditer(body):
+			number = int(match.group(1))
+			if number not in numbers:
+				numbers.append(number)
+	unnamed = False
+	for type_pattern, named_pattern in ORIGIN_FOOTER_KINDS:
+		type_matches = list(type_pattern.finditer(body))
+		if not type_matches:
+			continue
+		last = type_matches[-1]
+		rules_before = [rule.end() for rule in ORIGIN_FOOTER_RULE.finditer(body, 0, last.start())]
+		block_start = rules_before[-1] if rules_before else 0
+		rule_after = ORIGIN_FOOTER_RULE.search(body, last.end())
+		block_end = rule_after.start() if rule_after else len(body)
+		if not named_pattern.search(body[block_start:block_end]):
+			unnamed = True
+	return numbers, unnamed
+
+
+def fetch_issue_with_gh(repo: str, number: int) -> dict | None:
+	"""One `gh api` read of a source issue; two attempts, None on failure."""
+	for attempt in range(2):
+		try:
+			completed = subprocess.run(["gh", "api", f"repos/{repo}/issues/{number}"],
+				capture_output=True, text=True, timeout=60, check=False)
+		except (OSError, subprocess.SubprocessError):
+			completed = None
+		if completed is not None and completed.returncode == 0:
+			try:
+				data = json.loads(completed.stdout)
+			except ValueError:
+				data = None
+			if isinstance(data, dict):
+				return data
+		if completed is not None and "HTTP 404" in (completed.stderr or ""):
+			break  # a missing source will not appear on retry; fail closed now
+		if attempt == 0:
+			time.sleep(2)
+	return None
+
+
+def _origin_author_trusted(meta: dict, pipeline_login: str) -> tuple[bool, bool]:
+	"""(trusted, pipeline_authored) for a source issue's author."""
+	user = meta.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	login = login if isinstance(login, str) else ""
+	association = meta.get("author_association")
+	association = association.upper() if isinstance(association, str) else ""
+	if not LOGIN_RE.fullmatch(login):
+		return False, False
+	if login == pipeline_login:
+		return True, True
+	return association in TRUSTED_AUTHOR_ASSOCIATIONS, False
+
+
+def check_origin_chain(body: str, pipeline_login: str, fetch) -> tuple[str, list[int]]:
+	"""Walk the source chain of a pipeline-authored issue body.
+
+	Returns ("ok" | "untrusted_origin" | "origin_unverified", issues read).
+	A source written by a trusted person ends its branch; one written by the
+	pipeline is walked in turn. At most ORIGIN_MAX_DEPTH hops and
+	ORIGIN_MAX_ISSUES issue reads (one `gh api` call each, §15); anything
+	that cannot be read or exceeds the bounds fails closed.
+	"""
+	pending, unnamed = origin_references(body)
+	if unnamed:
+		return "origin_unverified", []
+	frontier = [(number, 1) for number in pending]
+	seen: list[int] = []
+	while frontier:
+		number, depth = frontier.pop(0)
+		if number in seen:
+			continue
+		if depth > ORIGIN_MAX_DEPTH or len(seen) >= ORIGIN_MAX_ISSUES or fetch is None:
+			return "origin_unverified", seen
+		seen.append(number)
+		meta = fetch(number)
+		if not isinstance(meta, dict):
+			return "origin_unverified", seen
+		trusted, pipeline_authored = _origin_author_trusted(meta, pipeline_login)
+		if not trusted:
+			return "untrusted_origin", seen
+		if pipeline_authored:
+			source_body = meta.get("body") if isinstance(meta.get("body"), str) else ""
+			numbers, source_unnamed = origin_references(source_body)
+			if source_unnamed:
+				return "origin_unverified", seen
+			frontier.extend((source, depth + 1) for source in numbers)
+	return "ok", seen
+
+
+def build_automation_grant(issue_meta: dict, pipeline_login: str, fetch_origin=None) -> dict:
+	"""Snapshot the author's authority and exact automation files in the issue.
+
+	``fetch_origin(number) -> dict | None`` reads a source issue for the
+	origin-chain check of a pipeline-authored issue; without it, a
+	pipeline-authored issue that names a source gets no automation paths.
+	"""
 	if not isinstance(issue_meta, dict):
 		raise ValueError("invalid issue metadata")
 	user = issue_meta.get("user")
@@ -204,7 +342,16 @@ def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
 		if not isinstance(body, str):
 			body = ""
 		state, entries = files_touched_block_state(body)
-		if state == "missing" and author_login == pipeline_login:
+		origin_status = "ok"
+		if author_login == pipeline_login:
+			origin_status, origin_issues = check_origin_chain(body, pipeline_login, fetch_origin)
+			record["origin_issues"] = origin_issues
+		if origin_status != "ok":
+			# Q82: a re-issue or fix-up the pipeline filed from an issue that an
+			# untrusted author wrote must not turn that author's request into
+			# an automation-path grant.
+			record["reason"] = origin_status
+		elif state == "missing" and author_login == pipeline_login:
 			# Pipeline-generated issues (security-pass fixes, re-issues, heal
 			# issues) carry no files_touched block; Q24: A grants them every
 			# automation path. A declared block still grants exact entries
@@ -248,7 +395,8 @@ def check_automation_paths(staged: list[str], grant: object, allow_workflow_edit
 		reason = "grant_issue_mismatch"
 	elif not grant["trusted"]:
 		reason = grant.get("reason") if grant.get("reason") in {
-			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error"
+			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error",
+			*ORIGIN_REASONS,
 		} else "grant_unavailable"
 	elif grant.get("open", False) is True:
 		return STATUS_IN_SCOPE, [], PIPELINE_AUTHOR_OPEN_REASON
@@ -301,6 +449,18 @@ def entry_matches(entry: str, path: str) -> bool:
 	return path == entry or path.startswith(entry + "/")
 
 
+# CLAUDE.md §30: agents.md is documented through agents.d/<pr>-<slug>.md
+# fragments that release automation folds in, so a scope that covers the agents
+# file covers its top-level fragments too.
+AGENTS_FRAGMENT_RE = re.compile(r"^agents\.d/[^/]+\.md$")
+AGENTS_DOC_PATHS = ("agents.md", "AGENTS.md")
+
+
+def is_agents_fragment(path: str) -> bool:
+	"""True for a top-level ``agents.d/*.md`` fragment."""
+	return bool(AGENTS_FRAGMENT_RE.match(path))
+
+
 def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True) -> bool:
 	"""True when a staged path is auto-allowed or covered by any allowlist entry."""
 	if allow_lockfiles and is_lockfile(path):
@@ -308,6 +468,8 @@ def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = Tr
 	for entry in allowlist:
 		if entry_matches(entry, path):
 			return True
+	if is_agents_fragment(path):
+		return any(entry_matches(entry, doc) for entry in allowlist for doc in AGENTS_DOC_PATHS)
 	return False
 
 
@@ -526,6 +688,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--emit-automation-grant", default="")
 	parser.add_argument("--issue-meta-file", default="")
 	parser.add_argument("--pipeline-login", default="")
+	parser.add_argument("--origin-repo", default="", help="owner/name to read source issues from (Q82)")
 	parser.add_argument("--check-automation-paths", action="store_true")
 	parser.add_argument("--automation-grant-file", default="")
 	parser.add_argument("--allow-workflow-edits", default="false")
@@ -542,7 +705,9 @@ def main(argv: list[str] | None = None) -> int:
 	if args.emit_automation_grant:
 		try:
 			metadata = json.loads(_read_text_file(args.issue_meta_file))
-			record = build_automation_grant(metadata, args.pipeline_login)
+			origin_repo = args.origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.origin_repo or "") else ""
+			fetch_origin = (lambda number: fetch_issue_with_gh(origin_repo, number)) if origin_repo else None
+			record = build_automation_grant(metadata, args.pipeline_login, fetch_origin)
 		except (ValueError, TypeError, KeyError):
 			record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": None,
 				"trusted": False, "open": False, "reason": "grant_error", "author_login": "", "author_association": "", "paths": []}

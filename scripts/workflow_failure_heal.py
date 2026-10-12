@@ -74,6 +74,12 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 # go to check-failure triage instead.
 MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 
+# Scheduled self-checks in coding-workflows. The intake takes their failed
+# runs on the default branch only. The nightly self-test carries the daily
+# validation harness sandbox check, which catches runner-image drift before
+# project validations fail on it.
+SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
+
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
@@ -113,6 +119,7 @@ FAILURE_EVIDENCE_LIMIT = 4000  # same bound as ISSUE_EXCERPT_LIMIT (defined belo
 # them newest first. An editor summary ends the streak unless the next newer
 # failure marker shows that the same run failed after posting its summary.
 AUTOFIX_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
+	"AI review/autofix paused — model provider unavailable",
 	"AI review/autofix produced no output",
 	"AI review/autofix failed",
 	"AI review/autofix encountered a post-editor failure",
@@ -127,6 +134,13 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"Editor changes lost",
 	"Editor no-op suspicious",
 )
+
+# A model-provider outage (OpenRouter 402/401/429/5xx confirmed by a live
+# probe, scripts/provider_outage.py) is a repo-wide event, not a PR defect:
+# its failure markers count toward neither the identical-failure cap nor the
+# autofix failure streak (issue #6633, the 2026-09-30 credit outage).
+PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
+PROVIDER_UNAVAILABLE_COMMENT_MARKER = "AI review/autofix paused — model provider unavailable"
 
 # Pipeline phases whose failed runs report themselves (the `heal-report` job of
 # clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
@@ -149,6 +163,10 @@ RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promot
 # runs on the repository's default branch (checked against the run GitHub
 # returns, not the payload), matching the intake job's `if:` predicate.
 CI_WORKFLOW_FILES = ("ci.yml",)
+# Scheduled self-check workflow files (SCHEDULED_CHECK_WORKFLOW_NAMES) a
+# `workflow_run` report may cite. Accepted only for runs GitHub reports on the
+# default branch, matching the intake job's `if:` predicate.
+SCHEDULED_CHECK_WORKFLOW_FILES = ("nightly-validation-selftest.yml",)
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
@@ -186,6 +204,26 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"conflict_resolver_sandbox_support_missing",
 	}
 )
+# A non-retryable cap is re-armed once per verified review-support commit not
+# yet recorded (``support=``) on a trusted marker for the head, so a resolver
+# fix on main reaches a capped head without a manual rerun (#6911). Bounded
+# per head so frequent pushes to main cannot undo the cap (#6438).
+DEFAULT_FAILURE_CAP_MAX_REARMS = 3
+# The resolver's host-only conflict stop is an intentional fail-closed state
+# that needs a human merge: review_conflict_resolve.sh already prints the
+# "host-only conflicted path(s) need a manual merge" ::error:: line and the
+# identical-failure cap posts its comment, so a heal issue adds nothing and
+# only files more heal issues (#6738). skip_reason() drops the per-run report,
+# the cap report repeating this reason, and the ai:needs-human report on an
+# item whose newest trusted autofix marker names it. Since #6756 the
+# review/autofix reporter and the intake defer the first two
+# (defer_host_only_autofix) so the intake can post a provenance-verified PR
+# diagnosis (non_retryable_route); the intake still ends every undiagnosed
+# host-only report in this skip. With that routing off, the other
+# non-retryable resolver reasons are still healed.
+HOST_ONLY_CONFLICT_FAILURE_REASON = "conflict_resolver_sandbox_path_host_only"
+HOST_ONLY_CONFLICT_SKIP_REASON = "host_only_conflict_manual_merge"
+IDENTICAL_FAILURE_CAP_REASON = "identical_failure_cap"
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -261,8 +299,27 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+# Own-line variant of _FAILURE_MARKER_RE for latest_trusted_autofix_marker_is_host_only:
+# a marker quoted inline in PR-influenced text (the "First error" code span) is not one.
+_FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+# Authorship facts on ai:scope-blocked reports (Q81): the automation-path
+# guard grants by author, so the diagnosis needs the issue author, its
+# association and the pipeline login. Invalid values are dropped, never fatal.
+_SCOPE_AUTHOR_LABEL = "ai:scope-blocked"
+_SCOPE_AUTHOR_LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$")
+_SCOPE_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", "NONE"})
+
+
+def _scope_author_login(value: Any) -> str | None:
+	return value if isinstance(value, str) and _SCOPE_AUTHOR_LOGIN_RE.fullmatch(value) else None
+
+
+def _scope_author_association(value: Any) -> str | None:
+	return value if isinstance(value, str) and value in _SCOPE_AUTHOR_ASSOCIATIONS else None
+
+
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 _ORCHESTRATOR_BRANCH_RE = re.compile(r"^orchestrator/project-([0-9]+)$")
@@ -555,8 +612,27 @@ def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comment
 	return decision(True, "ok")
 
 
-def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int = MAX_RUN_REFS, since: datetime | None = None) -> list[dict[str, Any]]:
-	"""Pick recent failed runs whose display title matches the issue title."""
+# Validate wrappers' run-name: `AI Validate [tracking:<N>]` (internal:
+# `Internal: AI Validate [tracking:<N>]`), see select_failed_runs.
+_TRACKING_RUN_TITLE_RE = re.compile(r"\[tracking:([1-9][0-9]{0,9})\]$")
+
+
+def select_failed_runs(
+	runs: Iterable[dict[str, Any]],
+	*,
+	title: str,
+	limit: int = MAX_RUN_REFS,
+	since: datetime | None = None,
+	tracking_issue: int | None = None,
+) -> list[dict[str, Any]]:
+	"""Pick recent failed runs whose display title matches the issue title.
+
+	With ``tracking_issue``, a failed run titled ``… [tracking:<tracking_issue>]``
+	also matches: the validate wrappers name their runs that way
+	(``AI Validate [tracking:N]``), never after the project's title, so an
+	orchestrator project's validation failure (binance-blessings#249) was
+	reported with no runs and fell back to the label-only fingerprint.
+	"""
 	wanted = single_line(title, 500)
 	picked: list[dict[str, Any]] = []
 	for run in runs:
@@ -564,7 +640,9 @@ def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int
 			continue
 		if str(run.get("conclusion") or "") not in ("failure", "timed_out", "cancelled"):
 			continue
-		if single_line(run.get("display_title"), 500) != wanted:
+		display_title = single_line(run.get("display_title"), 500)
+		tracking_match = _TRACKING_RUN_TITLE_RE.search(display_title) if tracking_issue else None
+		if display_title != wanted and not (tracking_match and int(tracking_match.group(1)) == tracking_issue):
 			continue
 		created = _parse_iso(run.get("created_at"))
 		if since is not None and created is not None and created < since:
@@ -646,12 +724,22 @@ def build_issue_payload(
 	wrapper_sha: str | None,
 	reporter_run_url: str | None,
 	now: datetime | None = None,
+	pipeline_login: str | None = None,
 ) -> dict[str, Any]:
-	"""Build the dispatch payload for an escalation label on an issue / PR."""
+	"""Build the dispatch payload for an escalation label on an issue / PR.
+
+	An ``ai:scope-blocked`` report also carries the issue author, its
+	association and ``pipeline_login`` (the reporter's identity), so the
+	diagnosis can tell whether the automation-path guard treats the item as
+	pipeline-authored.
+	"""
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
+	# Tracking issues are never pull requests; a PR sharing the number must not
+	# pick up that project's `[tracking:<N>]` validation runs.
+	tracking_issue = _positive_int(issue.get("number")) if kind == "issue" else None
+	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""), tracking_issue=tracking_issue)
 	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
 	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
 	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)
@@ -690,6 +778,18 @@ def build_issue_payload(
 		"conclusion": None,
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
+		**_scope_author_facts(label, issue, pipeline_login),
+	}
+
+
+def _scope_author_facts(label: str, issue: dict[str, Any], pipeline_login: str | None) -> dict[str, Any]:
+	if label != _SCOPE_AUTHOR_LABEL:
+		return {}
+	user = issue.get("user") if isinstance(issue.get("user"), dict) else {}
+	return {
+		"issue_author_login": _scope_author_login(user.get("login")),
+		"issue_author_association": _scope_author_association(issue.get("author_association")),
+		"reporter_pipeline_login": _scope_author_login(pipeline_login),
 	}
 
 
@@ -738,6 +838,9 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 		if not isinstance(comment, dict):
 			continue
 		body = sanitize_text(comment.get("body"))
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_FAILURE_MARKER_RE.search(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			# A provider outage neither adds to nor ends the streak.
+			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			streak += 1
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
@@ -769,6 +872,7 @@ def build_autofix_failure_payload(
 	script_ref: str | None = None,
 	changed_files: Iterable[str] | None = None,
 	failure_marker_author: str | None = None,
+	repeated_failure_reason: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
@@ -786,6 +890,11 @@ def build_autofix_failure_payload(
 	ownership facts the intake's self-inflicted routing uses; each is sent only
 	when it validates. ``crash_file`` is extracted from the full (untruncated)
 	evidence before it is bounded.
+
+	``repeated_failure_reason`` is the failure reason an identical-failure cap
+	report repeats (the gate's trusted ``fingerprint_cap_reason`` or the
+	trusted head markers). It is sent only for ``identical_failure_cap``
+	reports and only when it is a well-formed reason token.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -840,6 +949,9 @@ def build_autofix_failure_payload(
 	crash = extract_crash_file(failure_evidence)
 	if crash:
 		payload["crash_file"] = crash
+	repeated = str(repeated_failure_reason or "").strip()
+	if failure_reason == IDENTICAL_FAILURE_CAP_REASON and _FAILURE_REASON_RE.match(repeated):
+		payload["repeated_failure_reason"] = repeated
 	return payload
 
 
@@ -1239,6 +1351,13 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	changed_files = normalize_changed_files(changed_raw) if isinstance(changed_raw, list) else []
 	crash_file = payload.get("crash_file") if kind == "autofix_failure" else None
 	crash_file = crash_file if is_valid_repo_path(crash_file) else None
+	repeated_failure_reason = payload.get("repeated_failure_reason") if kind == "autofix_failure" else None
+	if not (
+		failure_reason == IDENTICAL_FAILURE_CAP_REASON
+		and isinstance(repeated_failure_reason, str)
+		and _FAILURE_REASON_RE.match(repeated_failure_reason)
+	):
+		repeated_failure_reason = None
 	normalized = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -1267,12 +1386,17 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
+		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
+		normalized["issue_author_association"] = _scope_author_association(payload.get("issue_author_association"))
+		normalized["reporter_pipeline_login"] = _scope_author_login(payload.get("reporter_pipeline_login"))
 	if kind == "autofix_failure":
 		normalized.update({
 			"base_branch": base_branch,
 			"script_ref": script_ref,
 			"changed_files": changed_files,
 			"crash_file": crash_file,
+			"repeated_failure_reason": repeated_failure_reason,
 		})
 	return normalized
 
@@ -1311,10 +1435,37 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
-	"""Return a stable skip reason when a validated payload must not be healed."""
+def skip_reason(
+	payload: dict[str, Any],
+	*,
+	registered_repos: Iterable[str],
+	self_repo: str,
+	heal_scope_unverified: bool = False,
+	non_retryable_diagnosed: bool = False,
+	host_only_conflict: bool = False,
+	defer_host_only_autofix: bool = False,
+) -> str:
+	"""Return a stable skip reason when a validated payload must not be healed.
+
+	``host_only_conflict`` is set by the label reporter only after the newest
+	trusted autofix marker on the labeled item named the host-only resolver
+	stop (``latest_trusted_autofix_marker_is_host_only``).
+
+	``defer_host_only_autofix`` leaves an ``autofix_failure`` host-only report
+	to the intake's provenance-verified non-retryable routing (#6756), which
+	posts the PR diagnosis and falls back to HOST_ONLY_CONFLICT_SKIP_REASON
+	itself, so no heal issue is filed either way. Label reports are unaffected.
+	"""
 	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
 		return "heal_scope_unverified"
+	# The heal intake applied ai:needs-human itself after diagnosing a
+	# non-retryable review/autofix failure; reporting that label would loop.
+	if non_retryable_diagnosed and payload.get("label") == "ai:needs-human":
+		return "non_retryable_diagnosed"
+	if is_host_only_conflict_report(payload, host_only_conflict=host_only_conflict) and not (
+		defer_host_only_autofix and payload.get("source_kind") == "autofix_failure"
+	):
+		return HOST_ONLY_CONFLICT_SKIP_REASON
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -1327,6 +1478,22 @@ def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], sel
 	if SELF_WORKFLOW_FRAGMENT.lower() in workflow_name.lower():
 		return "self_workflow"
 	return ""
+
+
+def is_host_only_conflict_report(payload: dict[str, Any], *, host_only_conflict: bool = False) -> bool:
+	"""True when the report is the resolver's host-only conflict stop.
+
+	Covers the per-run autofix report, the identical-failure cap report that
+	repeats that reason, and (with ``host_only_conflict``, verified by the
+	caller against trusted markers) the ``ai:needs-human`` label report.
+	"""
+	if payload.get("source_kind") == "autofix_failure":
+		reason = payload.get("failure_reason")
+		if reason == HOST_ONLY_CONFLICT_FAILURE_REASON:
+			return True
+		if reason == IDENTICAL_FAILURE_CAP_REASON and payload.get("repeated_failure_reason") == HOST_ONLY_CONFLICT_FAILURE_REASON:
+			return True
+	return bool(host_only_conflict) and payload.get("label") == "ai:needs-human"
 
 
 # ---------------------------------------------------------------------------
@@ -1865,7 +2032,8 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 	Same precedence as ``workflow_failure_heal_autofix_report.sh`` (tests pin
 	the parity): an explicit ``AUTOFIX_FAILURE_REASON``, then a failed editor
-	preflight (the editor never ran), then the editor flags, then the run
+	preflight, a failed reviewer step or a failed sandbox prepare (the editor
+	never ran), then the editor flags, then the run
 	summary's ``finalize_reason``, then ``workflow_failure``.
 	"""
 	explicit = str(flags.get("AUTOFIX_FAILURE_REASON") or "")
@@ -1877,6 +2045,9 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	# failing phase rather than the empty editor output it left behind.
 	if flags.get("AUTOFIX_REVIEWERS_FAILED") == "true":
 		return "reviewers_failed"
+	# The review sandbox could not be prepared, so the editor never ran.
+	if flags.get("AUTOFIX_SANDBOX_PREPARE_FAILED") == "true":
+		return "sandbox_prepare_failed"
 	if flags.get("AUTOFIX_EDITOR_EMPTY_NOOP") == "true":
 		return "editor_empty_noop"
 	if flags.get("EDITOR_CHANGES_LOST") == "true":
@@ -2068,6 +2239,11 @@ _FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
 	# test reports ``tests/x.py::TestClass::test_y``.
 	re.compile(r"^\s*FAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(?:[A-Za-z_][A-Za-z0-9_]{0,160}::)?(test_[A-Za-z0-9_]{1,160})", re.MULTILINE),
 	re.compile(r"^\s*FAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b", re.MULTILINE),
+	# A test file CI runs as a script (``python3 tests/x.py``) fails with a
+	# traceback whose frame names the file and the test function, or with
+	# unittest's ``FAIL: test_x (module.Class.test_x)`` / ``ERROR:`` header.
+	re.compile(r'^\s*File "(?:[^"\n]{0,400}/)?(tests/(?:[A-Za-z0-9_-]{1,80}/){0,4}test_[A-Za-z0-9_]{1,160}\.py)", line [0-9]+, in (test_[A-Za-z0-9_]{1,160})\s*$', re.MULTILINE),
+	re.compile(r"^\s*(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,160}) \([A-Za-z0-9_.]{1,300}\)\s*$", re.MULTILINE),
 )
 FAILING_TEST_LIMIT = 20
 
@@ -2135,6 +2311,90 @@ def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str
 	return out
 
 
+# Guard tests check a property of other files, so their own name maps to no
+# subject (tests/test_workflow_file_size_limit.py has no
+# scripts/workflow_file_size_limit.*) and a heal for them was confined to
+# tests/**, where the guard cannot be fixed. Each one maps to the files its
+# fix edits instead; every entry must still exist at the scope commit.
+HEAL_SCOPE_GUARD_TEST_SUBJECTS: dict[str, tuple[str, ...]] = {
+	"tests/test_ci_job_split_contract.py": (".github/workflows/ci.yml",),
+	# Pin the inventory-parity step order and the shared shell-block guard step in ci.yml.
+	"tests/test_ci_inventory_parity_order_contract.py": (".github/workflows/ci.yml",),
+	"tests/test_ci_shared_shell_block_guard.py": (".github/workflows/ci.yml",),
+	# Pins the orchestrate-poll sharded step in ci.yml and its ports in both
+	# release gates; ci.yml, mark-stable.yml and test-and-mark-stable.yml run it.
+	"tests/test_ci_poll_test_sharding.py": (".github/workflows/ci.yml", ".github/workflows/mark-stable.yml", ".github/workflows/test-and-mark-stable.yml"),
+}
+# The workflow size guard (CLAUDE.md §27) is fixed by moving inline run:
+# bodies of the oversized workflow into new scripts/<workflow>_step_<slug>.sh
+# files, registered in the bootstrap list and the inventory. Its subjects are
+# the workflow files at or above the guard at the scope commit, those
+# registries, and one glob per oversized workflow for the new step scripts.
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST = "tests/test_workflow_file_size_limit.py"
+HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES = 480_000
+HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES = ("scripts/stage_workflow_support.sh", "docs/INVENTORY.md")
+# The only glob a scope may carry besides the trailing tests/** and
+# changelog.d/*.md: new step scripts of one named workflow, never scripts/*.
+_HEAL_SCOPE_STEP_GLOB_RE = re.compile(r"scripts/[a-z0-9][a-z0-9_]{0,79}_step_\*\.sh")
+
+
+def heal_scope_step_script_glob(workflow_path: str) -> str:
+	"""``scripts/<stem>_step_*.sh`` for ``.github/workflows/<stem>.yml`` (``-`` becomes ``_``), or ``""``."""
+	match = re.fullmatch(r"\.github/workflows/([A-Za-z0-9_-]{1,80})\.ya?ml", workflow_path or "")
+	if not match:
+		return ""
+	glob = f"scripts/{match.group(1).replace('-', '_').lower()}_step_*.sh"
+	return glob if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(glob) else ""
+
+
+def _heal_oversized_workflows(checkout: str, ref: str | None, guard_bytes: int = HEAL_SCOPE_WORKFLOW_SIZE_GUARD_BYTES) -> list[str]:
+	"""Workflow files at or above ``guard_bytes`` at ``ref`` (or in the checkout when ``ref`` is empty)."""
+	found: list[str] = []
+	if ref:
+		result = subprocess.run(["git", "ls-tree", "-l", "-z", ref, "--", ".github/workflows/"], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			return []
+		for entry in result.stdout.split(b"\0"):
+			meta, _, raw_path = entry.partition(b"\t")
+			fields = meta.split()
+			if len(fields) != 4 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") or not fields[3].isdigit():
+				continue
+			path = raw_path.decode("utf-8", errors="replace")
+			if int(fields[3]) >= guard_bytes and re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml", path):
+				found.append(path)
+		return sorted(found)
+	workflows = Path(checkout) / ".github" / "workflows"
+	for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
+		if path.is_file() and not path.is_symlink() and path.stat().st_size >= guard_bytes:
+			found.append(path.relative_to(checkout).as_posix())
+	return found
+
+
+def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_workflows: Any) -> list[str]:
+	"""Subjects of the failing guard tests: existing paths, plus step-script globs.
+
+	``oversized_workflows`` is called only when the size guard failed and returns
+	the workflow paths at or above the guard at the scope commit.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str):
+			continue
+		candidates: list[str] = list(HEAL_SCOPE_GUARD_TEST_SUBJECTS.get(test_file, ()))
+		if test_file == HEAL_SCOPE_WORKFLOW_SIZE_GUARD_TEST:
+			oversized = [path for path in oversized_workflows() if isinstance(path, str)]
+			candidates.extend(oversized)
+			if oversized:
+				candidates.extend(HEAL_SCOPE_WORKFLOW_SPLIT_REGISTRIES)
+			candidates.extend(heal_scope_step_script_glob(path) for path in oversized)
+		for candidate in candidates:
+			if not candidate or candidate in out:
+				continue
+			if _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(candidate) or (_safe_heal_path(candidate) and exists(candidate)):
+				out.append(candidate)
+	return out
+
+
 # Explicit scope slots reserved for failing-test subjects ahead of changed_files.
 HEAL_SCOPE_SUBJECT_RESERVE = 8
 
@@ -2152,12 +2412,17 @@ def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable
 	# The crash file and workflow paths keep priority; remaining subjects follow.
 	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
 	for path in ordered:
-		if not isinstance(path, str) or not _safe_heal_path(path) or path in paths:
+		if not isinstance(path, str) or path in paths:
+			continue
+		step_glob = bool(_HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) and path in subjects
+		if not step_glob and not _safe_heal_path(path):
 			continue
 		if len(paths) >= 20:
 			# Counted without an existence lookup, so this is an upper bound.
 			dropped += 1
-		elif exists(path):
+		elif step_glob or exists(path):
+			# A step-script glob names files the fix creates, so it has no
+			# existence check; it comes only from heal_scope_guard_subjects.
 			paths.append(path)
 	if dropped:
 		print(f"WORKFLOW_HEAL warn heal_scope_truncated kept={len(paths)} dropped_candidates={dropped}", file=sys.stderr)
@@ -2191,7 +2456,7 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 	runs = markers[0][1].split(",") if markers else []
 	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
 		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
-		or any(not _safe_heal_path(path) for path in paths[:-2])
+		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
 		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
 		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
 		status = "malformed"
@@ -2272,8 +2537,9 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	``run`` lets the counter treat two failure comments of one run as a single
 	failure. ``support`` (issue #6625) records the verified review-support SHA
 	that ran, so a later review on updated support can ignore failures from an
-	older support version; it is omitted when ``support_sha`` is not a 40-hex
-	SHA. Returns an empty string when the head or fingerprint is malformed.
+	older support version, and feeds the non-retryable cap re-arm (#6911); it
+	is omitted when ``support_sha`` is not a 40-hex SHA. Returns an empty
+	string when the head or fingerprint is malformed.
 	"""
 	head = str(head_sha or "").strip().lower()
 	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
@@ -2304,6 +2570,67 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
+def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_login: str, head_sha: str | None = None) -> bool:
+	"""True when the newest trusted autofix marker names the host-only stop.
+
+	``comments`` is oldest first. Only comments by ``author_login`` (the
+	pipeline account) count; the author is read from ``author_login``,
+	``user.login`` or ``author`` (the label reporter's rows). Scanning newest
+	first, the first trusted ``review-autofix-failure:v1`` or
+	``review-autofix-failure-cap:v1`` marker decides; a trusted editor summary
+	seen first means the host-only stop is no longer current. Markers from any
+	other author are ignored, so a forged marker cannot suppress a heal.
+	Provider-outage markers (``reason=provider_unavailable``) and markerless
+	pause comments (header line only) are repo-wide events (#6633): they are
+	skipped and never decide or end the scan.
+
+	``head_sha`` (the labeled PR's current head, when known) binds the
+	deciding marker to that head, so a host-only marker left from an older head
+	cannot suppress a later, unrelated escalation.
+	"""
+	author = str(author_login or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
+	if not author:
+		return False
+	for comment in reversed([item for item in comments if isinstance(item, dict)]):
+		login = _comment_author(comment) or str(comment.get("author") or "").strip().lower()
+		if login != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		# Own-line markers only: the pipeline writes its marker on its own line,
+		# while PR-influenced "First error" text can quote a forged one inline.
+		for pattern in (_FAILURE_MARKER_LINE_RE, _FAILURE_CAP_MARKER_LINE_RE):
+			match = pattern.search(body)
+			if match is not None:
+				break
+		else:
+			match = None
+		if match is not None:
+			fields = _marker_fields(match)
+			# Provider-outage markers are repo-wide events (#6633): like
+			# count_identical_failures, they never decide or end the scan.
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
+			if head and fields.get("head", "").lower() != head:
+				return False
+			return fields.get("reason") == HOST_ONLY_CONFLICT_FAILURE_REASON
+		# A markerless outage pause is recognised by its header line only: a
+		# failure comment can quote the pause phrase in its PR-influenced
+		# "First error" line and must still end the scan below.
+		header = next((line.strip().strip("*").strip() for line in body.splitlines() if line.strip()), "")
+		if header.startswith(PROVIDER_UNAVAILABLE_COMMENT_MARKER):
+			continue
+		# A newer trusted failure comment posted without a marker (the marker
+		# failed to render) is a different, later failure: it ends the scan,
+		# as in count_identical_failures, so an older host-only marker cannot
+		# decide for it.
+		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
+			return False
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			return False
+	return False
+
+
 def _run_workflow_file(run: dict[str, Any]) -> str | None:
 	path = run.get("path")
 	if not isinstance(path, str):
@@ -2323,7 +2650,9 @@ def verify_run_provenance(
 
 	A ``workflow_run`` report may cite a CI run (``CI_WORKFLOW_FILES``) only
 	when GitHub reports it as a ``push`` run on ``default_branch``; an empty or
-	invalid ``default_branch`` rejects every CI run (fail closed).
+	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
+	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
+	GitHub reports it on ``default_branch``, under the same fail-closed rule.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
@@ -2346,7 +2675,7 @@ def verify_run_provenance(
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
 	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
 		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
-		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES)
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -2377,6 +2706,11 @@ def verify_run_provenance(
 			and str(run.get("head_branch") or "") == default_branch
 		):
 			reason = "ci_not_default_branch_push"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in SCHEDULED_CHECK_WORKFLOW_FILES and not (
+			is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "scheduled_check_not_default_branch"
 		if not reason and kind == "phase_failure":
 			linked = any(
 				isinstance(comment, dict) and bool(_comment_author(comment))
@@ -2461,7 +2795,15 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 	return markers
 
 
-def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> dict[str, Any]:
+def count_identical_failures(
+	comments: Iterable[dict[str, Any]],
+	*,
+	head_sha: str,
+	author_login: str,
+	support_sha: str | None = None,
+	current_support_sha: str = "",
+	max_rearms: int = DEFAULT_FAILURE_CAP_MAX_REARMS,
+) -> dict[str, Any]:
 	"""Count the trailing identical failures on ``head_sha``.
 
 	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
@@ -2476,6 +2818,15 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
 
+	``support`` is the newest counted marker's ``support=`` value. When the
+	support filter leaves no counted marker but the newest trusted markers of
+	any support version are a non-retryable stop, that older stop is reported
+	instead (with ``current_support_sha`` only), so the bound applies. ``rearm``
+	(#6911) is true only for a non-retryable result when ``current_support_sha``
+	is a valid SHA that no trusted marker for the head records yet and fewer
+	than ``max_rearms`` distinct support SHAs are recorded for the head; an
+	invalid current SHA or ``max_rearms <= 0`` never re-arms.
+
 	With a valid ``support_sha`` (the verified review-support SHA of the
 	evaluating run, issue #6625), failure and cap markers whose ``support``
 	field is missing or different come from an older support version: they are
@@ -2487,19 +2838,35 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
-	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	result: dict[str, Any] = {
+		"count": 0,
+		"fp": "",
+		"reason": "",
+		"cap_applied": False,
+		"non_retryable": False,
+		"support": "",
+		"rearm": False,
+	}
 	if not head or not author:
 		return result
+	recorded_supports: set[str] = set()
 	for comment in ordered:
 		if _comment_author(comment) != author:
 			continue
-		cap_body = sanitize_text(comment.get("body"))
+		body = sanitize_text(comment.get("body"))
 		if any(
 			fields.get("head", "").lower() == head and (not support or fields.get("support", "").lower() == support)
-			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(cap_body))
+			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body))
 		):
 			result["cap_applied"] = True
-			break
+		for failure_fields in (_marker_fields(match) for match in _FAILURE_MARKER_RE.finditer(body)):
+			recorded = failure_fields.get("support", "").lower()
+			# Outage markers never count (#6633), so they must not spend a
+			# re-arm slot either: the resolver never ran under that support.
+			if failure_fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
+			if failure_fields.get("head", "").lower() == head and is_valid_sha(recorded):
+				recorded_supports.add(recorded)
 	seen_runs: set[str] = set()
 	skip_paired_summary = False
 	for comment in reversed(ordered):
@@ -2511,18 +2878,28 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				continue
 			if support and fields.get("support", "").lower() != support:
 				continue
-			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			run = fields.get("run", "")
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				# Outage markers never count and never end the scan; the
+				# run is remembered so its other comments are skipped too.
+				if run:
+					seen_runs.add(run)
+				continue
+			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			if run and run in seen_runs:
 				continue
 			if not result["fp"]:
 				result["fp"] = fields["fp"]
 				result["reason"] = fields.get("reason") or "unknown"
+				support_field = fields.get("support", "").lower()
+				result["support"] = support_field if is_valid_sha(support_field) else ""
 			elif fields["fp"] != result["fp"]:
 				break
 			result["count"] += 1
 			if run:
 				seen_runs.add(run)
+			continue
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body:
 			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			break
@@ -2532,7 +2909,244 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				continue
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
+	current_support = str(current_support_sha or "").strip().lower()
+	fallback_cap_applied = False
+	if support and is_valid_sha(current_support) and result["count"] == 0:
+		# #6911: the support filter above hides a non-retryable stop recorded
+		# under an older (or no) support version. For the re-arm decision the
+		# newest trusted markers of any support version are read, so the
+		# per-head bound below applies instead of an unbounded fresh count.
+		older = count_identical_failures(ordered, head_sha=head, author_login=author)
+		if older["non_retryable"]:
+			for key in ("count", "fp", "reason", "support", "non_retryable"):
+				result[key] = older[key]
+			fallback_cap_applied = bool(older["cap_applied"])
+	try:
+		rearm_limit = int(max_rearms)
+	except (TypeError, ValueError):
+		rearm_limit = 0
+	result["rearm"] = (
+		result["non_retryable"]
+		and is_valid_sha(current_support)
+		and current_support not in recorded_supports
+		and len(recorded_supports) < rearm_limit
+	)
+	if fallback_cap_applied and not result["rearm"]:
+		# The older stop was already capped (under an older support SHA): keep
+		# reporting it so the gate does not re-post the cap once the bound is
+		# spent, one comment / label / heal report per new support commit.
+		result["cap_applied"] = True
 	return result
+
+
+def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> str:
+	"""Return the reason of the newest trusted failure marker for ``head_sha``.
+
+	Same trust rules as ``count_identical_failures`` (author, head, valid
+	``fp``, and ``support`` when given), but ``provider_unavailable`` markers
+	are not skipped. The force_rb_judge host-only conflict skip (issue #6743)
+	uses it so a newer failure with any other reason keeps the conflict steps.
+	Returns "" when no trusted marker exists.
+	"""
+	support = _normalized_support_sha(support_sha)
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	if not head or not author:
+		return ""
+	for comment in reversed([comment for comment in comments if isinstance(comment, dict)]):
+		match = _FAILURE_MARKER_RE.search(sanitize_text(comment.get("body")))
+		if match is None or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(match)
+		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
+		return fields.get("reason") or "unknown"
+	return ""
+
+
+# ---------------------------------------------------------------------------
+# Non-retryable review/autofix failures (heal intake routing)
+# ---------------------------------------------------------------------------
+
+# Durable PR-comment marker the heal intake posts when it routes a verified
+# non-retryable autofix_failure report to a manual merge instead of a heal
+# issue. Trusted only when written by the intake's authenticated account;
+# keyed on (pr, head, reason) so a duplicate report stays silent and a new
+# head earns a fresh diagnosis.
+NON_RETRYABLE_DIAGNOSIS_MARKER_TAG = "ai:workflow-heal-non-retryable:v1"
+NON_RETRYABLE_MAX_PATHS = 20
+_NON_RETRYABLE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(NON_RETRYABLE_DIAGNOSIS_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+_FIRST_ERROR_LINE_RE = re.compile(r"\*\*First error:\*\* `(?P<error>[^`\n]{1,400})`")
+_HOST_ONLY_PATHS_PREFIX = "host-only conflicted path(s) need a manual merge: "
+
+
+def _non_retryable_comment_author(comment: dict[str, Any]) -> str:
+	"""Author login of a comment, also accepting the reporter's flat ``author`` string."""
+	login = _comment_author(comment)
+	if not login and isinstance(comment.get("author"), str):
+		login = comment["author"].strip().lower()
+	return login
+
+
+def non_retryable_suffix(reason: str) -> str:
+	"""Short log token for a non-retryable reason (``host_only`` for the host-only resolver refusal)."""
+	text = str(reason or "")
+	for prefix in ("conflict_resolver_sandbox_path_", "conflict_resolver_sandbox_"):
+		if text.startswith(prefix):
+			return safe_token(text[len(prefix):]) or "unknown"
+	return safe_token(text) or "unknown"
+
+
+def render_non_retryable_marker(pr_number: Any, head_sha: str, reason: str) -> str:
+	return f"<!-- {NON_RETRYABLE_DIAGNOSIS_MARKER_TAG} pr={safe_token(pr_number, 20)} head={safe_token(head_sha, 40).lower()} reason={safe_token(reason)} -->"
+
+
+def _non_retryable_host_only_paths(comments: list[dict[str, Any]], *, head_sha: str, author: str) -> list[str]:
+	"""Paths named by the newest trusted failure comment for ``head_sha``.
+
+	Only the ``**First error:**`` line of a ``review-autofix-failure:v1``
+	comment the trusted account wrote on this head is read; every entry must
+	pass ``is_valid_repo_path`` and at most NON_RETRYABLE_MAX_PATHS are kept.
+	"""
+	for comment in reversed(comments):
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
+		if fields.get("head", "").lower() != head_sha:
+			continue
+		match = _FIRST_ERROR_LINE_RE.search(body)
+		if match is None:
+			return []
+		error = match.group("error")
+		index = error.find(_HOST_ONLY_PATHS_PREFIX)
+		if index < 0:
+			return []
+		entries = error[index + len(_HOST_ONLY_PATHS_PREFIX):].split(", ")
+		if len(error) >= FAILURE_HEADLINE_LIMIT:
+			# failure_headline() truncates at this length, so the last entry may
+			# be a cut-off path; never name a file that may not exist.
+			entries = entries[:-1]
+		paths: list[str] = []
+		for raw in entries:
+			path = raw.strip()
+			if path == "..." or not is_valid_repo_path(path) or path in paths:
+				continue
+			paths.append(path)
+			if len(paths) >= NON_RETRYABLE_MAX_PATHS:
+				break
+		return paths
+	return []
+
+
+def non_retryable_route(payload: dict[str, Any], *, comments: Iterable[dict[str, Any]], trusted_login: str) -> dict[str, Any]:
+	"""Decide whether a provenance-verified autofix_failure report is non-retryable.
+
+	The caller must have verified the report's run provenance first. A report
+	routes when its ``failure_reason`` is in NON_RETRYABLE_FAILURE_REASONS, or
+	when it is an ``identical_failure_cap`` report whose trailing trusted
+	failure markers on the head carry such a reason (payload evidence text is
+	never consulted). ``already_diagnosed`` is true when the trusted account
+	already posted the non-retryable marker for the same pr, head and reason.
+	"""
+	result: dict[str, Any] = {"route": False, "reason": "", "suffix": "", "paths": [], "already_diagnosed": False, "detail": ""}
+	author = str(trusted_login or "").strip().lower()
+	head = str(payload.get("head_sha") or "").strip().lower()
+	pr_number = str(payload.get("issue_number") or "").strip()
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	if payload.get("source_kind") != "autofix_failure":
+		result["detail"] = "not_autofix_failure"
+		return result
+	if not pr_number.isdigit() or not is_valid_sha(head) or not author:
+		result["detail"] = "missing_inputs"
+		return result
+	failure_reason = str(payload.get("failure_reason") or "")
+	reason = ""
+	if failure_reason in NON_RETRYABLE_FAILURE_REASONS:
+		reason = failure_reason
+	elif failure_reason == "identical_failure_cap":
+		counted = count_identical_failures(ordered, head_sha=head, author_login=author)
+		if counted["non_retryable"]:
+			reason = counted["reason"]
+	if not reason:
+		result["detail"] = "retryable"
+		return result
+	result.update({"route": True, "reason": reason, "suffix": non_retryable_suffix(reason), "detail": "non_retryable"})
+	result["paths"] = _non_retryable_host_only_paths(ordered, head_sha=head, author=author)
+	for comment in ordered:
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		for match in _NON_RETRYABLE_MARKER_RE.finditer(sanitize_text(comment.get("body"))):
+			fields = _marker_fields(match)
+			if fields.get("pr") == pr_number and fields.get("head", "").lower() == head and fields.get("reason") == reason:
+				result["already_diagnosed"] = True
+				break
+		if result["already_diagnosed"]:
+			break
+	return result
+
+
+# Reason-specific remediation text: only the host-only stop is a host-executed
+# path; an unsupported path is a symlink or a name the sandbox cannot carry,
+# and missing support is a workflow-support defect, not a PR defect.
+_NON_RETRYABLE_EXPLANATIONS = {
+	"conflict_resolver_sandbox_path_host_only": "Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+	"conflict_resolver_sandbox_path_unsupported": "Another review/autofix run cannot resolve this: the conflicted path(s) are symlinks or have names the resolver sandbox cannot carry, so it refuses them. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+	"conflict_resolver_sandbox_support_missing": "Another review/autofix run cannot resolve this: the verified workflow support commit is missing the conflict resolver's sandbox support files, so no resolver run can start until workflow support is fixed. Ask a maintainer to fix workflow support, or merge the conflict by hand and push, then remove `ai:needs-human`.",
+}
+_NON_RETRYABLE_EXPLANATION_DEFAULT = "Another review/autofix run cannot resolve this failure. Resolve it by hand, push, then remove `ai:needs-human`."
+
+
+def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, head_sha: str, intake_run_url: str = "") -> str:
+	"""Render the PR diagnosis comment for a routed non-retryable failure, ending with its marker."""
+	reason = safe_token(decision.get("reason"))
+	head = safe_token(head_sha, 40).lower()
+	lines = [
+		"**Workflow failure heal: this review/autofix failure cannot be fixed by another run**",
+		"",
+		f"Failure reason: `{reason}` on head `{head[:12]}`.",
+		"",
+	]
+	paths = [path for path in decision.get("paths") or [] if is_valid_repo_path(path)][:NON_RETRYABLE_MAX_PATHS]
+	if paths:
+		lines.append("Conflicted path(s) that need a manual merge:")
+		lines.append("")
+		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
+	elif reason != "conflict_resolver_sandbox_support_missing":
+		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
+	lines.extend(["", _NON_RETRYABLE_EXPLANATIONS.get(reason, _NON_RETRYABLE_EXPLANATION_DEFAULT), "", "No heal issue was opened."])
+	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
+	if run_match:
+		lines.extend(["", f"Heal intake run: {run_match.group(0)}"])
+	lines.extend(["", render_non_retryable_marker(pr_number, head, reason)])
+	return "\n".join(lines) + "\n"
+
+
+def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, trusted_login: str) -> bool:
+	"""True when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker.
+
+	The heal intake posts that marker immediately before it applies
+	``ai:needs-human``, so the resulting label event must not produce another
+	heal report. A newer trusted ``review-autofix-failure:v1`` comment means
+	the PR failed again since, and a newer trusted editor summary means a
+	later review ran; either way normal escalation resumes, so an old
+	diagnosis cannot suppress a later, unrelated escalation.
+	"""
+	author = str(trusted_login or "").strip().lower()
+	if not author:
+		return False
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	for comment in reversed(ordered):
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		if _NON_RETRYABLE_MARKER_RE.search(body):
+			return True
+		if _FAILURE_MARKER_RE.search(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			return False
+	return False
 
 
 # ---------------------------------------------------------------------------
@@ -2887,6 +3501,8 @@ def compose_issue_body(
 		if payload.get("source_kind") == "workflow_run":
 			if payload.get("workflow_name") in MAIN_CI_WORKFLOW_NAMES:
 				intro = "A CI run on the default branch failed."
+			elif payload.get("workflow_name") in SCHEDULED_CHECK_WORKFLOW_NAMES:
+				intro = "A scheduled self-check workflow run on the default branch failed."
 			else:
 				intro = "A release / promotion workflow run failed."
 			intro += (
@@ -3183,6 +3799,7 @@ def _cmd_build_issue_payload(args: argparse.Namespace) -> int:
 		runs=runs if isinstance(runs, list) else [],
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
+		pipeline_login=args.pipeline_login or None,
 	)
 	validate_payload(payload)
 	encoded = json.dumps(payload)
@@ -3214,6 +3831,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		script_ref=args.script_ref or None,
 		changed_files=_read_path_list(args.changed_files_file),
 		failure_marker_author=args.failure_marker_author or None,
+		repeated_failure_reason=args.repeated_failure_reason or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -3342,13 +3960,24 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
 		raise ValueError("comments JSON must be a list")
-	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
+	result = count_identical_failures(
+		comments,
+		head_sha=args.head_sha,
+		author_login=args.author_login,
+		support_sha=args.support_sha or None,
+		current_support_sha=args.current_support_sha,
+		max_rearms=args.max_rearms,
+	)
 	sys.stdout.write(f"count={int(result['count'])}\n")
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
+	sys.stdout.write(f"rearm={'true' if result['rearm'] else 'false'}\n")
+	sys.stdout.write(f"prior_support={safe_token(result['support'], 40)}\n")
+	newest_reason = newest_trusted_failure_reason(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
+	sys.stdout.write(f"newest_reason={safe_token(newest_reason) if newest_reason else ''}\n")
 	return 0
 
 
@@ -3392,7 +4021,51 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	sys.stdout.write(
+		skip_reason(
+			payload,
+			registered_repos=registered,
+			self_repo=args.self_repo,
+			heal_scope_unverified=args.heal_scope_unverified,
+			non_retryable_diagnosed=args.non_retryable_diagnosed,
+			host_only_conflict=args.host_only_conflict,
+			defer_host_only_autofix=args.defer_host_only_autofix,
+		)
+		+ "\n"
+	)
+	return 0
+
+
+def _cmd_non_retryable_route(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(payload, dict) or not isinstance(comments, list):
+		raise ValueError("payload JSON must be an object and comments JSON a list")
+	decision = non_retryable_route(payload, comments=comments, trusted_login=args.trusted_login)
+	decision["comment"] = ""
+	if decision["route"]:
+		decision["comment"] = render_non_retryable_comment(
+			decision, pr_number=payload.get("issue_number"), head_sha=str(payload.get("head_sha") or ""), intake_run_url=args.intake_run_url,
+		)
+	_write_json(decision)
+	return 0
+
+
+def _cmd_non_retryable_label_suppressed(args: argparse.Namespace) -> int:
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(comments, list):
+		raise ValueError("comments JSON must be a list")
+	sys.stdout.write(("true" if non_retryable_label_suppressed(comments, trusted_login=args.trusted_login) else "false") + "\n")
+	return 0
+
+
+def _cmd_host_only_conflict_marker(args: argparse.Namespace) -> int:
+	try:
+		comments = _load_json_file(args.comments_json)
+	except (OSError, ValueError):
+		comments = None
+	result = isinstance(comments, list) and latest_trusted_autofix_marker_is_host_only(comments, args.author_login, args.head_sha or None)
+	sys.stdout.write(("true" if result else "false") + "\n")
 	return 0
 
 
@@ -3500,7 +4173,9 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 				if len(matches) > 1:
 					matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]
 				test_files.extend(path for path in matches if path not in test_files)
-		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=heal_scope_test_subjects(test_files, exists))
+		subjects = heal_scope_test_subjects(test_files, exists)
+		subjects += [path for path in heal_scope_guard_subjects(test_files, exists, lambda: _heal_oversized_workflows(args.checkout, args.ref)) if path not in subjects]
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=subjects)
 		sys.stdout.write(marker + "\n")
 	elif args.operation == "failing-tests":
 		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
@@ -3828,6 +4503,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--runs-json")
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--pipeline-login", default="", help="Reporter identity; recorded on ai:scope-blocked reports only")
 	p.set_defaults(func=_cmd_build_issue_payload)
 
 	p = sub.add_parser("build-autofix-payload", help="Build the payload for a failed review/autofix run on a PR")
@@ -3850,6 +4526,11 @@ def build_parser() -> argparse.ArgumentParser:
 		"--failure-marker-author",
 		default="",
 		help="list the runs of this author's review-autofix-failure:v1 markers for the PR head in run_refs",
+	)
+	p.add_argument(
+		"--repeated-failure-reason",
+		default="",
+		help="for identical_failure_cap reports: the failure reason the cap repeats",
 	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
@@ -3885,19 +4566,40 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
-	p.add_argument("--support-sha", default="", help="verified review-support SHA; recorded as support= in the marker (issue #6625)")
+	p.add_argument(
+		"--support-sha",
+		default=os.environ.get("AUTOFIX_FAILURE_SUPPORT_SHA", ""),
+		help="verified review-support SHA recorded as support= in the marker (issues #6625, #6911); defaults to AUTOFIX_FAILURE_SUPPORT_SHA",
+	)
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
+	p = sub.add_parser(
+		"autofix-identical-failure-count",
+		help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / rearm= / prior_support= / newest_reason= for the trailing identical failures on a head",
+	)
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
 	p.add_argument("--support-sha", default="", help="verified review-support SHA; markers from other support versions are ignored (issue #6625)")
+	p.add_argument("--current-support-sha", default="", help="verified review-support commit; a non-retryable cap re-arms once per new SHA (#6911)")
+	p.add_argument("--max-rearms", type=int, default=DEFAULT_FAILURE_CAP_MAX_REARMS)
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
+
+	p = sub.add_parser("non-retryable-route", help="Decide whether a provenance-verified autofix_failure report is non-retryable; prints JSON with the rendered PR comment")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.add_argument("--intake-run-url", default="")
+	p.set_defaults(func=_cmd_non_retryable_route)
+
+	p = sub.add_parser("non-retryable-label-suppressed", help="Print true when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.set_defaults(func=_cmd_non_retryable_label_suppressed)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
 	p.add_argument("--repo", required=True)
@@ -3922,7 +4624,16 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.add_argument("--heal-scope-unverified", action="store_true")
+	p.add_argument("--non-retryable-diagnosed", action="store_true")
+	p.add_argument("--host-only-conflict", action="store_true", help="the newest trusted autofix marker on the labeled item names the host-only resolver stop")
+	p.add_argument("--defer-host-only-autofix", action="store_true", help="leave autofix_failure host-only reports to the intake's non-retryable routing (#6756)")
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("host-only-conflict-marker", help="Print true when the newest trusted autofix marker names the host-only resolver stop")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--author-login", required=True)
+	p.add_argument("--head-sha", default="", help="require the deciding marker to name this head")
+	p.set_defaults(func=_cmd_host_only_conflict_marker)
 
 	p = sub.add_parser("redact-stream")
 	p.add_argument("--secret-env", default="GH_PAT,GH_TOKEN,GITHUB_TOKEN,OPENROUTER_API_KEY")
