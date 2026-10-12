@@ -496,7 +496,12 @@ def _make_odd_named_symlink(tmp_path):
 	return "assets/odd $link.svg", "symlink", "2"
 
 
-@pytest.mark.parametrize("make", [_make_symlinked_file, _make_symlinked_parent, _make_fifo, _make_odd_name, _make_odd_named_symlink])
+def _make_nul_byte_name(tmp_path):
+	# Pure paths accept NUL; the classifier must not walk the host for it.
+	return "assets/odd\x00name.svg", "unsafe_name", "2"
+
+
+@pytest.mark.parametrize("make", [_make_symlinked_file, _make_symlinked_parent, _make_fifo, _make_odd_name, _make_odd_named_symlink, _make_nul_byte_name])
 @pytest.mark.parametrize("integration", ["false", "true"])
 def test_unsafe_path_category_is_named_without_the_path(tmp_path, make, integration):
 	_sandbox, calls = _stub(tmp_path)
