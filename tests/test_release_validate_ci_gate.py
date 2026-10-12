@@ -79,7 +79,7 @@ def test_validate_steps_call_release_ci_gate() -> None:
 		perms = job.get("permissions") or {}
 		for key, value in (("contents", "read"), ("checks", "read"), ("actions", "read")):
 			assert perms.get(key) == value, f"{wf}: validate permissions must include {key}: {value}, got {perms}"
-		assert int(job.get("timeout-minutes", 0)) >= 35, f"{wf}: validate timeout must cover the gate wait"
+		assert int(job.get("timeout-minutes", 0)) >= 45, f"{wf}: validate timeout must cover the maximum gate wait plus preflight"
 	assert "GATE_ONLY" in (_step(_load(TAMS)["jobs"]["validate"], VALIDATE_STEPS[TAMS]).get("env") or {})
 	assert "GATE_ONLY" not in (_step(_load(MARK)["jobs"]["validate"], VALIDATE_STEPS[MARK]).get("env") or {})
 
@@ -112,11 +112,11 @@ def test_release_jobs_carry_default_on_tagging_switch() -> None:
 def _run_body(body: str, env_extra: dict, *, gate_rc: int | None) -> subprocess.CompletedProcess:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
-		subprocess.run(["git", "init", "-q", str(root)], check=True)
 		git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
 			GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
 		for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
 			git_env.pop(key, None)
+		subprocess.run(["git", "init", "-q", str(root)], check=True, env=git_env)
 		(root / "f").write_text("x\n")
 		subprocess.run(["git", "-C", str(root), "add", "f"], check=True, env=git_env)
 		subprocess.run(["git", "-C", str(root), "commit", "-qm", "init"], check=True, env=git_env)

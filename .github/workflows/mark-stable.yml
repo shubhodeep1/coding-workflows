@@ -609,10 +609,11 @@ jobs:
   validate:
     needs: [source, resolve-version]
     runs-on: ubuntu-latest
-    # 40, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
-    # (default 30 minutes) for a pending `CI / lint` run. A job timeout
-    # fails closed.
-    timeout-minutes: 40
+    # 45, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes, maximum 40) for a pending `CI / lint` run; the
+    # extra 5 minutes cover checkout and the tag preflight so the gate can
+    # log its wait_timeout outcome. A job timeout fails closed.
+    timeout-minutes: 45
     # checks/actions read let the CI gate read check-runs and workflow runs
     # with github.token; this job writes nothing.
     permissions:

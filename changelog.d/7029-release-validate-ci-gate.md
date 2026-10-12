@@ -6,5 +6,5 @@ The "Verify CI passed on stable" step in `mark-stable.yml` and "Verify CI passed
 In `gate_only` runs of `test-and-mark-stable.yml` the check does not wait and only warns, because those runs never tag.
 
 What this means for operators:
-- A release now waits in `validate` (up to `RELEASE_CI_GATE_WAIT_SECS`, default 30 minutes) for `CI / lint` to finish. The `validate` job timeout went from 5 to 40 minutes, and the job now has read-only `contents`, `checks` and `actions` permissions.
+- A release now waits in `validate` (up to `RELEASE_CI_GATE_WAIT_SECS`, default 30 minutes) for `CI / lint` to finish. The `validate` job timeout went from 5 to 45 minutes (the 40-minute maximum gate wait plus preflight), and the job now has read-only `contents`, `checks` and `actions` permissions.
 - New repository variable `RELEASE_TAGGING_ENABLED`, default `true`. Any other value skips the changelog commit, the tag pushes, the release manifest build, attestation and upload, the GitHub Release and the consumer dispatch with a `::warning::`; the CI gate and validation still run and the job ends green. `sync-to-main` is skipped and the summary reports publishing disabled. While it is off, `auto-release-stable.yml` keeps re-dispatching the gate every 6 hours, so set `AUTO_RELEASE_STABLE_ENABLED=false` too.
