@@ -197,3 +197,48 @@ BUG-001 is the confirmed unwired-script case; it is not duplicated as a dead-cod
 | Code modularization | 8 callers, proposed shared helpers, staging lists, and tests | Large |
 | Expression size reduction | 3 workflows, trusted step scripts, staging lists, and tests | Large |
 | Medium/Low fixes | Retro fan-out, log-analysis and CI workflows, dependency helper, poller, and tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-12)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** In `scripts/review_merge_train.sh:800-806`, `_mt_find_marker_comment` retrieves paginated PR comments but returns only the selected marker’s ID and creation time. On the existing-marker path, `_mt_gate` passes that ID to `_mt_upsert_comment` (`scripts/review_merge_train.sh:957-999`), which fetches the same comment’s body separately (`scripts/review_merge_train.sh:870-885`).
+  - **Current → proposed:** 2 reads → 1 read per existing marker; any PATCH remains unchanged.
+  - **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments?per_page=100` and `GET /repos/{repo}/issues/comments/{id}`.
+  - **Evidence:** The paginated listing already contains each comment’s body, but its projection discards it before `_mt_upsert_comment` compares bodies.
+  - **Proposed fix:** *Manual-review option only:* extend `_mt_find_marker_comment` to return a safely encoded body with the ID and timestamp; pass it from `_mt_gate` to `_mt_upsert_comment`. Retain the individual GET whenever listing completeness, marker identity, or body freshness is uncertain.
+  - **Safety rationale:** `RISKY_SKIP` is required because the source listing uses `--paginate`, and replacing the later read could miss a concurrent marker edit.
+  - **Downstream signal:** Do not auto-implement. Manually test pagination failures and concurrent comment edits before deciding whether the later freshness read can be omitted.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: NEEDS_VERIFICATION — Confirm that one failed GET preserves the two existing calls’ independent retry and fallback outcomes.
+- BATCH-001: NEEDS_VERIFICATION — GraphQL comment ordering, the first-100 window, and incomplete-batch REST fallback need parity tests.
+- API-002: NEEDS_VERIFICATION — Confirm label completeness and whether reconciliation requires the later snapshot.
+- API-003: NEEDS_VERIFICATION — Confirm that removing the label edit cannot lose an intentional repair after the listing.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+Counts cover net-new findings; cross-references are not counted.
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
