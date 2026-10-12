@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/lint-pr-body-auto-close.yml:81-98 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: When a PR has more than 250 commits, the workflow warns but proceeds with an incomplete commit-message scan, allowing an auto-close keyword in an unscanned commit to reach the squash merge.\n  WHY: The omitted commit messages never reach `commits.bin`, so the lint can pass without detecting a tracking-issue auto-close keyword; severity is rated high overall, though anthropic_claude-sonnet-5_5 rated it low.\n- scripts/lint_pr_body_auto_close.py:130-140 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The commit-message remediation advice depends on a string-prefix check against `self.source`, so a changed or additional source label can silently remove that advice.\n  WHY: A contributor may try to fix the violation in the PR body while the commit message still triggers the auto-close check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/lint-pr-body-auto-close.yml:96-98 | severity=low | confidence=[2]\n  PROBLEM: For a PR with more than 250 commits, the step only emits `::warning::` and the lint still passes. Commit messages beyond the 250th are never written to `commits.bin`.\n  WHY: If a closing keyword against a tracking issue sits in an unscanned commit, the check goes green and the squash merge can still close the tracking issue.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/lint-pr-body-auto-close.yml:88-92 | severity=high | confidence=[5]\n  PROBLEM: The commit message scan does not enforce a hard limit of 250 commits.\n  WHY: If a PR has more than 250 commits, an auto-close keyword in an unscanned commit can bypass the check and cause the merge to kill the orchestrator's tracking issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/lint-pr-body-auto-close.yml:96-98, line 85 | severity=high | confidence=[3]\n  PROBLEM: The workflow warns when a PR exceeds 250 commits but does not fail the step, and commit messages beyond the API limit do not reach `commits.bin`.\n  WHY: If GitHub's squash-merge message includes a commit beyond the 250 exposed by the API, an auto-close keyword can silently close the tracking issue.\n- scripts/lint_pr_body_auto_close.py:130-140 | severity=low | confidence=[2]\n  PROBLEM: The reword-on-commit-branch guidance is gated on a string-prefix check against `self.source`.\n  WHY: If a future change introduces a third source label or changes the format, the remediation advice disappears and a contributor may try editing the PR body while the commit message still triggers the auto-close check.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/lint-pr-body-auto-close.yml:81-97 | severity=high | confidence=[5]\n  PROBLEM: For a PR with more than 250 commits, the workflow proceeds with an incomplete commit-message scan.\n  WHY: A tracking-issue auto-close keyword in an omitted message can reach the squash merge unchecked.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No actionable task was included in the message; it contained only the instruction header and an unrendered placeholder `{{REFERENCE_SEVERITY_CLASSIFICATION}}`, so the template substitution appears to have failed. The response said the referenced content exists at `prompts/references/severity-classification.txt` and requested resending the message with the placeholder expanded or pasting the actual task/issue.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "291a298dd72d99dbf3b204630c660ab2e5f1aad54aaa4846f96ee489d6ccab2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7197,
+    "run_id": "38192017850",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38192017850",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012015428_42243d4095",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7197,
+    "run_id": "38192017850"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T01:54:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
