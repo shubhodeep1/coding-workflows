@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When planning a workflow change, check for related shell or Python helpers and tests that assert workflow contracts or security behavior; several merged changes touched these together. Add or update a focused test when changing workflow behavior.",
+  "fingerprint": "f80c641776c44a01e480b6dce99bfcdaae95e78fe064d754f35c764b45ea9859",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38274521177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38274521177",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7029",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7032",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7172",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7209",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7272",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7036",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7040",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7211",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7213",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7273"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261012160831_46c8f957fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes in this repository often span YAML definitions, helper scripts, and contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-12T16:08:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
