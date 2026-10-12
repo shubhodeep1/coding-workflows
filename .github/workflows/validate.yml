@@ -136,6 +136,7 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
         run: |
           set -euo pipefail
@@ -195,15 +196,25 @@ jobs:
           fi
 
           chmod +x "${resolver_script}"
-          if integration_branch="$({
+          # Exit 3 means CI-triage PR-branch routing was required but could
+          # not be verified; never fall back to the default branch then.
+          resolver_rc=0
+          integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
             bash "${resolver_script}"
-          })"; then
+          })" || resolver_rc=$?
+          if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_rc}" -eq 3 ]; then
+            echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
           else
-            resolver_rc=$?
+            # resolver_rc already holds the resolver's exit code (captured by
+            # `|| resolver_rc=$?` above); `$?` here would be the failed exit-3
+            # test's status and would hide exits 75 and 2.
             # A resolver that stayed rate-limited (exit 75, issue #6634) must
             # not silently fall back to the default branch.
             if [ "${resolver_rc}" -eq 75 ]; then
@@ -488,6 +499,12 @@ jobs:
               "workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2"
             ],
             "required_remote_when_external_scripts": [
+              "scripts/validate_driver.sh",
+              "scripts/validate_process.sh"
+            ],
+            "self_repo_trusted_support_files": [
+              "scripts/templates/slot_manifest.schema.json",
+              "scripts/validation_harness_sandbox.sh",
               "scripts/validate_driver.sh",
               "scripts/validate_process.sh"
             ],
@@ -1080,7 +1097,7 @@ jobs:
           VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           bash scripts/validate_process.sh
