@@ -20,4 +20,4 @@ The step has `continue-on-error: true` and records a failed pull with `|| presee
 - check-failure triage (`scripts/check_failure_triage.sh`)
 - `claude-engine-smoke.yml`
 
-The implement and review sandboxes (`scripts/codex_isolated_exec.sh`, `scripts/review_sandbox/Dockerfile`) also still pull from Docker Hub. The regression test `tests/test_clarify_sandbox_base_image_preseed.py` is not yet run by any `ci.yml` step.
+The implement and review sandboxes (`scripts/codex_isolated_exec.sh`, `scripts/review_sandbox/Dockerfile`) also still pull from Docker Hub. The regression test `tests/test_clarify_sandbox_base_image_preseed.py` runs in the `Regression tests wired by the CI wiring guard (part 1)` step of `ci.yml`.
