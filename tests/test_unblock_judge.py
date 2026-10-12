@@ -2417,9 +2417,11 @@ def test_unreadable_ci_runs_listing_does_not_supersede(tmp_path: Path) -> None:
 
 
 def test_merged_owner_with_failing_checks_reissues_with_the_marker(tmp_path: Path) -> None:
-	red = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "failure"}]}])
+	# Bound to CI run 555 with a readable runs listing, so the red check itself
+	# is evaluated rather than the unreadable-listing exit.
+	red = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "failure", "details_url": CI_RUN_URL}]}])
 	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=red,
-		AUTO_MERGE_REQUIRED_CI_CHECK="CI")
+		FAKE_GH_OWNER_RUNS=CI_RUNS, AUTO_MERGE_REQUIRED_CI_CHECK="CI", AUTO_MERGE_WAIT_WORKFLOWS="CI")
 	assert "outcome=superseded" not in result.stdout
 	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
 
@@ -2449,7 +2451,7 @@ def test_untrusted_issue_author_cannot_name_an_owning_pr(tmp_path: Path) -> None
 def test_merged_owner_without_the_named_ci_check_is_not_superseded(tmp_path: Path) -> None:
 	# Only an unrelated check succeeded; the required named CI check never ran.
 	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
-		AUTO_MERGE_REQUIRED_CI_CHECK="lint")
+		FAKE_GH_OWNER_RUNS=CI_RUNS, AUTO_MERGE_REQUIRED_CI_CHECK="lint", AUTO_MERGE_WAIT_WORKFLOWS="CI")
 	assert "outcome=superseded" not in result.stdout, result.stdout + result.stderr
 	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
 
