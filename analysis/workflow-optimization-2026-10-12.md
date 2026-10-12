@@ -111,3 +111,128 @@ Among the **261 non-skipped** runs, 238 succeeded and 23 failed; this is a diffe
 | Other MCP servers observed | — | **None** with validated query/fallback/probe telemetry |
 
 **Per-target MCP availability:** no `probe_ok`, `probe_failed`, or `probe_skipped` event was emitted for observed Semble targets (`reviewer-context`, `review-blocked-judge-context`, `overflow`): **0 / 0 / 0 for each**. No Serena target was observed: **0 / 0 / 0 emitted probes**, not an availability result. The most material remaining collection gaps are skipped-run reasons, end-to-end phase timestamps, actual GH API call counts, and representative successful-run usage.
+
+## Deep Audit — Workflows & Scripts (2026-10-12)
+
+### Section 1: Bug & Correctness Sweep
+
+Read-only inventory covered 55 `.github/workflows/*.yml` files and 215 `scripts/*.sh` or `scripts/*.py` files. Shell scripts passed `bash -n`. Actionlint and ShellCheck were unavailable locally; the findings below are source-level findings, not a claim that those tools passed.
+
+- **ID:** SEC-001 · **File path and line range:** `scripts/gh_helpers.sh:1051-1125` · **Severity:** High · **Category tag:** `security`  
+  **Description:** On failed calls, `gh_retry` prints `$*` in warnings and errors. A caller passing `-f body=...` therefore places the entire comment body in workflow logs on failure; `gh_retry_to_file` repeats this pattern at `scripts/gh_helpers.sh:1154-1207`. This defeats the helper’s stated practice of dropping failed response bodies.  
+  **Recommended fix:** Log only a sanitized command family, endpoint class, attempt, and failure class. Never log arguments or raw stderr that may contain submitted content. Add a failure-path test with an inline-body sentinel and assert that it never appears in logs.
+
+- **ID:** SEC-002 · **File path and line range:** `scripts/gh_helpers.sh:1278-1289` · **Severity:** Medium · **Category tag:** `security`  
+  **Description:** `gh_api_json_to_file` prints the first 50 lines of any successful but malformed JSON response. **Inference:** a truncated response containing private issue or PR content would expose that content in logs. `[NEEDS VERIFICATION]`  
+  **Recommended fix:** Replace the raw-response group with response byte count and a bounded parse-failure class; retain the response only in the caller’s protected temporary file.
+
+- **ID:** BUG-001 · **File path and line range:** `scripts/review_collect_pr_metadata.sh:260-307` · **Severity:** Medium · **Category tag:** `bug`  
+  **Description:** The `closingIssuesReferences(first:50)` query selects `.nodes // []` without inspecting GraphQL `errors` or pagination. It publishes `LINKED_ISSUES_JSON` as cached even when the first page has 50 entries; only the separate raw-file status is marked failed. The later label step consumes that cached list at `.github/workflows/review_autofix.yml:5410-5439`. **Inference:** a partial response can omit linked issues from review context or label updates.  
+  **Recommended fix:** Fetch and validate the full GraphQL envelope and `pageInfo.hasNextPage`; publish a complete-list cache only after validation. Keep incomplete lists out of label authorization, and add partial-response and 50-plus-reference tests.
+
+- **ID:** SHELL-001 · **File path and line range:** `.github/workflows/test-and-mark-stable.yml:899-902` · **Severity:** Low · **Category tag:** `shellcheck`  
+  **Description:** `[ $IDLE -ge $INACTIVITY_LIMIT ]` is unquoted here and at lines 1191, 1491, 2464, and 3804. Both values are arithmetic-derived in the current paths, so this is not evidence of a present timeout failure, but the tests are susceptible to splitting if that contract changes.  
+  **Recommended fix:** Quote both operands in all five tests, as adjacent numeric tests in this workflow do.
+
+The unwired test and updater-size CI failures are already covered in the report’s **Speed Optimizations #1** and **Reliability Improvements #1**; they are not counted again here.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **calls implied by source paths**, not measured production call totals. They exclude retries unless stated.
+
+- **ID:** API-001 · **File path and line range:** `scripts/orchestrate_poll_process.sh:12208-12220` · **Severity:** Medium · **Category tag:** `api-redundancy`  
+  **Description:** When `final_pr_json_snapshot` does not match, two successive GETs to the same PR fetch `.state` and `.merged_at`. They can also observe different PR states. **Current → proposed:** 2 → 1 GET on this branch.  
+  **Recommended fix:** Fetch one PR object with `_safe_gh_jq`, then parse both fields from that snapshot. Reuse `final_pr_json_snapshot` when it matches; no new batching helper is needed.
+
+- **ID:** BATCH-001 · **File path and line range:** `scripts/orchestrate_poll_process.sh:42-60` · **Severity:** Medium · **Category tag:** `api-batching`  
+  **Description:** `replay_failed_reclarify_commands` reads each queued issue and its full comments separately inside its issue loop. For **N** queued issues, the read path makes approximately **3 + 2N** calls: budget, listing, identity, then two per issue.  
+  **Recommended fix:** Extend `_fetch_blocked_issue_routing_graphql` (`scripts/orchestrate_poll_process.sh:102-141`) with the issue state and pagination evidence needed here. Batch initial reads in groups of 25, fall back to the full REST comments read when history is incomplete, and retain a fresh issue-state read before an actionable POST. **Projected reads:** `3 + ceil(N/25) + M + F`, where `M ≤ N` is the number reaching that fresh check and `F` is incomplete-batch fallback reads. Verify full-history authorization parity before adopting the cache. `[NEEDS VERIFICATION]`
+
+- **ID:** BATCH-002 · **File path and line range:** `scripts/gh_helpers.sh:1617-1647` · **Severity:** Low · **Category tag:** `api-batching`  
+  **Description:** The timeline REST fallback fetches each distinct same-repo cross-referenced PR inside a `while` loop. For **N** such PRs, that path uses one paginated timeline request plus **N** PR GETs.  
+  **Recommended fix:** Apply the aliased-query pattern of `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh` to batches of 25 PR numbers, preserving per-PR REST fallback when batch data is unavailable. **Current → projected:** `1 + N` → `1 + ceil(N/25)` in a successful batch path. Because this path already follows a GraphQL fallback, verify that another GraphQL attempt improves rather than delays recovery. `[NEEDS VERIFICATION]`
+
+- **ID:** API-002 · **File path and line range:** `scripts/gh_helpers.sh:183-185,1051-1118` · **Severity:** Medium · **Category tag:** `api-redundancy`  
+  **Description:** `_is_gh_permanent_failure` recognizes selected 404/422 errors but not a general non-rate-limit 400/401/403. `gh_retry` can consequently repeat such a request up to its default five attempts. **Current → proposed:** up to 5 → 1 call for a confirmed permanent error.  
+  **Recommended fix:** Use the status classification already implemented by `gh_api_retry` in this file for `gh api` calls, retaining reset-aware retries for actual rate limits.
+
+- **ID:** API-003 · **File path and line range:** `scripts/gh_helpers.sh:1341-1393` · **Severity:** Medium · **Category tag:** `api-redundancy`  
+  **Description:** `curl_gh_api` backs off and retries every non-rate-limit HTTP error, including permanent 400/401/404 responses. Its callers include comment reads in `scripts/tg_helpers.sh:174-175`. **Current → proposed:** up to 5 → 1 call for permanent 4xx; transient-call counts stay unchanged.  
+  **Recommended fix:** Give the curl wrapper the permanent-versus-transient distinction used by `gh_api_retry`; do not replace its existing rate-limit reset handling.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001 · **File path and line range:** `scripts/assemble_prompt.sh:12-93` · **Severity:** Low · **Category tag:** `duplication`  
+  **Description:** `resolve_prompt_file`, `resolve_render_prompt_py`, and `resolve_assembly_source_path` duplicate the implementations in `scripts/render_prompt.sh:12-159`.  
+  **Recommended fix:** Move them to a staged `scripts/prompt_path_helpers.sh` with signatures `resolve_prompt_file <path> <script_dir>`, `resolve_render_prompt_py <script_dir>`, and `resolve_assembly_source_path <path>`; source it from both scripts and update support-file staging with the two callers.
+
+- **ID:** DUP-002 · **File path and line range:** `scripts/review_run_reviewers.sh:2052-2061` · **Severity:** Low · **Category tag:** `duplication`  
+  **Description:** The same `append_semble_query_section` body also appears in `scripts/review_apply_fixes.sh:1022-1031` and `scripts/review_conflict_prepare.sh:1265-1274`.  
+  **Recommended fix:** Put `append_semble_query_section <label> <path> [max_bytes=4096]` in `scripts/semble_helpers.sh`; update all three callers while preserving their stdout and byte-cap behavior.
+
+- **ID:** DUP-003 · **File path and line range:** `.github/workflows/plan.yml:2175-2264` · **Severity:** Medium · **Category tag:** `duplication`  
+  **Description:** The automation-path plan extractor heredoc is duplicated in `scripts/orchestrate_poll_process.sh:15369-15460`; `tests/test_plan_auto_approve_safe_state_fetch.py:353` pins their current parity.  
+  **Recommended fix:** Extract the pinned body to `scripts/automation_path_plan_extract.py` with CLI `<plan-file> <output-paths-file>` and its existing exit-code contract. Stage it for the plan step and poller, then replace the text-parity test with shared-script behavior tests. This also reduces the interpolated plan block flagged as EXPR-004.
+
+- **ID:** DUP-004 · **File path and line range:** `.github/workflows/review_autofix.yml:2002-2024` · **Severity:** Low · **Category tag:** `duplication`  
+  **Description:** A buffered inline `gh_retry` is repeated at lines 2332-2354, alongside the canonical implementation in `scripts/gh_helpers.sh:1051-1129`. The inline copies do not use its classified retry policy.  
+  **Recommended fix:** Arrange a verified, lightweight `gh_helpers.sh` bootstrap for both jobs, then use its `gh_retry <command...>` and remove the two inline definitions. Preserve fail-closed behavior if the trusted helper cannot be staged.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The estimates below count dedented **source `run:` bodies containing `${{ }}`**; runtime substitution can change their final lengths. Expression-free `run:` bodies were excluded.
+
+- **ID:** EXPR-001 · **File path and line range:** `.github/workflows/implement.yml:1092-1496` · **Severity:** High · **Category tag:** `expression-limit`  
+  **Description:** “Stage workflow support files” contains three interpolations and approximately **20,140 source characters**, leaving about **860** before the stated 21,000-character limit.  
+  **Recommended fix:** Extract its staging and inventory logic to a trusted `scripts/implement_stage_support.sh`; pass repository and flag values through step `env:`.
+
+- **ID:** EXPR-002 · **File path and line range:** `.github/workflows/implement.yml:3710-4102` · **Severity:** High · **Category tag:** `expression-limit`  
+  **Description:** The preflight destructive guard has one interpolation amid approximately **19,826 source characters**, leaving about **1,174**. Its inline heredocs make later growth especially easy.  
+  **Recommended fix:** Extract the step to `scripts/implement_preflight_destructive_guard.sh`, retaining its environment and output contract and passing `github.repository` through `env:`.
+
+- **ID:** EXPR-003 · **File path and line range:** `.github/workflows/update_workflows.yml:837-1257` · **Severity:** High · **Category tag:** `expression-limit`  
+  **Description:** “Commit and push updates” measures approximately **19,822 source characters**, or **1,178** of stated-limit headroom. This **cross-references Speed Optimizations #1**, which already records the runner’s 19,821-character measurement and CI failure; the one-character difference is a source-count convention, not a second incident.  
+  **Recommended fix:** As proposed there, extract the commit/delivery body to `scripts/` and pass step outputs through `env:` rather than interpolating them into shell source.
+
+- **ID:** EXPR-004 · **File path and line range:** `.github/workflows/plan.yml:2107-2414` · **Severity:** Medium · **Category tag:** `expression-limit`  
+  **Description:** “Auto-approve clear plan” has five interpolations and approximately **15,655 source characters**, leaving about **5,345**; its duplicated Python heredoc occupies part of the block.  
+  **Recommended fix:** Extract the step to a staged `scripts/plan_auto_approve.sh`, including the shared extractor proposed in DUP-003; pass repository identity through `env:`.
+
+No scanned workflow exceeds the requested **800 KB** alert threshold, and no `if:` expression approached 21,000 characters. The repository has a stricter *local* file-size contract than the prompt’s 1 MB threshold: `tests/test_workflow_file_size_limit.py:24-27` guards at 480,000 bytes against its documented 512,000-byte limit. The largest current workflow, `review_autofix.yml`, is 429,152 bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** DEAD-001 · **File path and line range:** `scripts/orchestrate_poll_process.sh:15083-15090` · **Severity:** Low · **Category tag:** `dead-code`  
+  **Description:** `read_standalone_state_json` has no repository caller; the live recovery path calls `_extract_standalone_state_json_from_comments` on cached comments at line 18835.  
+  **Recommended fix:** Remove the unused API-fetching wrapper after preserving tests for the pure cached-comments parser.
+
+- **ID:** CONSIST-001 · **File path and line range:** `scripts/comprehensive_test_and_release_gh_api.sh:3-47` · **Severity:** Medium · **Category tag:** `consistency`  
+  **Description:** `gh_api_safe` implements a separate four-attempt, text-matched rate-limit loop while `scripts/gh_helpers.sh:561-606` provides status-classified, reset-aware `gh_api_retry`. The release helper also logs `$*` on a non-rate-limit error.  
+  **Recommended fix:** Delegate its API execution to a verified `gh_api_retry` bootstrap while retaining the `GH_API_SAFE_OUTPUT` and quiet-error interfaces; remove argument-bearing diagnostics.
+
+- **ID:** DEBT-001 · **File path and line range:** `.github/workflows/ci.yml:301-314` · **Severity:** Low · **Category tag:** `tech-debt`  
+  **Description:** Actionlint’s inline ShellCheck integration is disabled, while the separate check at `.github/workflows/ci.yml:403-425` scans `scripts/*.sh` at error severity. Neither gate catches the workflow-block quoting pattern in SHELL-001.  
+  **Recommended fix:** Add a targeted warning-level ShellCheck check for changed inline `run:` bodies, resolve its baseline warnings, then make that check fail CI.
+
+No `TODO`, `FIXME`, or `HACK` marker was found in the scoped workflows or scripts. No additional unquoted script command argument or event-title/body interpolation was established as a finding by the source scan.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | SEC-001, EXPR-001, EXPR-002, EXPR-003 |
+| Medium | 9 | SEC-002, BUG-001, API-001, BATCH-001, API-002, API-003, DUP-003, EXPR-004, CONSIST-001 |
+| Low | 7 | SHELL-001, BATCH-002, DUP-001, DUP-002, DUP-004, DEAD-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `scripts/gh_helpers.sh`, retry-helper tests | Medium |
+| API call optimization | `scripts/orchestrate_poll_process.sh`, `scripts/gh_helpers.sh`, API-helper tests | Large |
+| Code modularization | `scripts/assemble_prompt.sh`, `scripts/render_prompt.sh`, three review scripts, `scripts/orchestrate_poll_process.sh`, `.github/workflows/plan.yml`, shared helpers and tests | Large |
+| Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/update_workflows.yml`, extracted scripts and contract tests | Large |
+| Medium/Low fixes | `scripts/review_collect_pr_metadata.sh`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/ci.yml`, related tests | Medium |
