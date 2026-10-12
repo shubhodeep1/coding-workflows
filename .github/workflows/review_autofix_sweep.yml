@@ -115,6 +115,9 @@ jobs:
       # job-level block replaces the workflow-level one, so grant it here.
       issues: write
       actions: write
+      # The CI recovery step's runner-shutdown classifier (issue #7109) reads
+      # the failed jobs' check-run annotations with github.token.
+      checks: read
     steps:
       - name: Check out budget helper
         uses: actions/checkout@v5
