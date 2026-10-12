@@ -72,7 +72,7 @@ def test_checked_in_config_is_valid_and_inert() -> None:
 	on_claude = {role for role, fields in config["role_defaults"].items() if fields["engine"] == "claude"}
 	assert on_claude == CUTOVER_ROLES
 	assert config["broker_url"] == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool"
-	assert config["gate_utilization"] == 0.9
+	assert config["gate_utilization"] == 0.95
 	assert config["probe_model"] == "claude-haiku-4-5-20251001"
 	assert config["oidc_audience"] == "coding-workflows-claude-pool"
 

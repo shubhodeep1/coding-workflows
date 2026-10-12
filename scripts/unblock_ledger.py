@@ -26,7 +26,8 @@ Rules enforced here:
     offered again, on this item or anywhere in the same project;
   - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
     per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
-    round with the item still blocked, the only outcome is the terminal close;
+    round on the same stop id and fingerprint with the item still blocked,
+    the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
     issue, and its paths never include `.github/`, `.claude/` or
     `workflow-templates/` (case-insensitive) in any repository, or `scripts/`
@@ -523,7 +524,18 @@ def decide(
 	# able to abandon a blocked item. `close` is offered only below, once a
 	# deterministic terminal condition holds.
 	options = [verdict for verdict in allowed if verdict != TERMINAL_VERDICT]
-	last_times = [_parse_time(entry["created_at"]) for entry in pool if entry["item"] == item and entry["created_at"]]
+	# The 24-hour clock measures how long *this* block has outlived its last
+	# round, so only rounds on the same stop and fingerprint count. A round on
+	# an earlier, cleared block must not make a new block terminal on sight:
+	# binance-blessings#249 was closed on the first round of a new
+	# harness-broken block because its previous round, on another
+	# fingerprint, was three days old. The item and project caps still bound
+	# an item whose fingerprint keeps changing.
+	last_times = [
+		_parse_time(entry["created_at"])
+		for entry in pool
+		if entry["item"] == item and entry["created_at"] and entry["stop"] == stop and entry["fingerprint"] == fp
+	]
 	# A fix-up's follow-up (the reset posted after it merged) restarts the
 	# 24-hour clock, so the reset gets its chance before the terminal close.
 	if last_times and last_activity is not None:
@@ -724,11 +736,15 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			raise UsageError("operator_step needs 'placeholder': an upper-case flag or env var name")
 		if not flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX) and not flag.endswith("_ENABLED"):
 			raise UsageError(
-				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default off) "
+				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default on, an off switch) "
 				f"or a placeholder ending in {OPERATOR_PLACEHOLDER_SUFFIX}"
 			)
 		normalised["placeholder"] = flag
-		normalised["operator_instructions"] = _clean_text(verdict.get("operator_instructions"), "operator_instructions", True)
+		# Only an _UNSET_OPERATOR_STEP placeholder pages a person, so only it needs
+		# operator steps; an _ENABLED off switch is finished by the fix-up alone.
+		normalised["operator_instructions"] = _clean_text(
+			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
+		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
 	return normalised
 

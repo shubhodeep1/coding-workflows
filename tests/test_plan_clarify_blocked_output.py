@@ -223,8 +223,12 @@ def test_plan_workflow_includes_ref_context_and_mismatch_rule() -> None:
 	assert "git symbolic-ref --short -q HEAD" in wf
 	assert "PLANNING_REF_INTEGRATION_BRANCH_META" in wf
 	assert "PLANNING REF CONTEXT" in wf
-	assert "If checked-out ref mismatches Integration branch metadata, emit exactly" in plan_runner
-	assert "`BLOCKED: integration branch mismatch`" in plan_runner
+	# Issue #7172: the rule keys on the workflow's computed line, not on git
+	# inside the model's snapshot workspace (branch `isolated`).
+	for prompt_text in (plan_runner, _read(PROMPT_PLAN)):
+		assert "If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads\n  `true`, emit exactly `BLOCKED: integration branch mismatch`." in prompt_text
+		assert "snapshot on a local branch named `isolated`" in prompt_text
+	assert "plan_output_contradicts_ref_context" in plan_runner
 
 
 def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:

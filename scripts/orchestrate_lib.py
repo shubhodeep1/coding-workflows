@@ -3793,6 +3793,148 @@ def cmd_concurrency_caps(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# Retired host-only conflict classifier (issue #6680)
+# ---------------------------------------------------------------------------
+#
+# Stall recovery uses this to recognise a PR conflict the sandboxed conflict
+# resolver can never merge: a conflicted path the sandbox keeps on the host
+# (``review_untrusted_workspace.allowed()`` refuses it) that is listed in the
+# trusted ``workflow-templates/retired_files.txt`` manifest and no longer
+# exists on the PR base. Such a PR is closed and re-issued against the
+# current base instead of re-dispatching a resolver that fails closed with
+# ``sandbox_path_host_only``. Anything else, including any doubt, keeps the
+# existing resolver dispatch (which still fails closed).
+
+RETIRED_CONFLICT_PATH_RE = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9._/-]{0,199}")
+RETIRED_CONFLICT_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+RETIRED_CONFLICT_MAX_LISTED = 50
+
+
+def _retired_conflict_result(decision: str, reason: str, retired: Any = (), blocking: Any = (), other: Any = ()) -> dict[str, Any]:
+	return {
+		"decision": decision,
+		"reason": reason,
+		"retired_paths": sorted(retired)[:RETIRED_CONFLICT_MAX_LISTED],
+		"blocking_paths": sorted(blocking)[:RETIRED_CONFLICT_MAX_LISTED],
+		"other_paths": sorted(other)[:RETIRED_CONFLICT_MAX_LISTED],
+	}
+
+
+def _retired_conflict_path_ok(path: str) -> bool:
+	return bool(RETIRED_CONFLICT_PATH_RE.fullmatch(path)) and ".." not in path.split("/") and "//" not in path and ".." not in path
+
+
+def parse_retired_files_manifest(manifest_text: str) -> set[str] | None:
+	"""Return the retired paths, or None when any entry is malformed.
+
+	Same format the ``Remove retired upstream files`` step of
+	``update_workflows.yml`` reads: ``#`` comment lines and blank lines are
+	skipped; other lines are ``<path> <sha256> [<sha256> ...]``.
+	"""
+	paths: set[str] = set()
+	for raw_line in manifest_text.splitlines():
+		line = raw_line.strip()
+		if not line or line.startswith("#"):
+			continue
+		tokens = line.split()
+		if len(tokens) < 2 or not _retired_conflict_path_ok(tokens[0]):
+			return None
+		if not all(RETIRED_CONFLICT_SHA256_RE.fullmatch(token) for token in tokens[1:]):
+			return None
+		paths.add(tokens[0])
+	return paths
+
+
+def classify_retired_host_only_conflicts(conflict_paths: Any, manifest_text: str, base_present_paths: Any, is_sandbox_allowed: Any) -> dict[str, Any]:
+	"""Decide whether a conflicted PR should be closed and re-issued.
+
+	``decision`` is ``reissue`` only when at least one conflicted host-only
+	path is retired and absent from the base, and every host-only path is.
+	``no_match`` keeps the existing resolver dispatch; ``unavailable`` means
+	the inputs could not be trusted (fail closed to the existing path).
+	"""
+	paths = [str(path) for path in (conflict_paths or [])]
+	paths = [path for path in paths if path != ""]
+	if not paths:
+		return _retired_conflict_result("unavailable", "no_conflict_paths")
+	if any(not _retired_conflict_path_ok(path) for path in paths):
+		return _retired_conflict_result("unavailable", "unsafe_path")
+	retired = parse_retired_files_manifest(manifest_text or "")
+	if retired is None:
+		return _retired_conflict_result("unavailable", "manifest_malformed")
+	base_present = {str(path) for path in (base_present_paths or [])}
+	unique_paths = set(paths)
+	host_only: set[str] = set()
+	for path in unique_paths:
+		try:
+			if not is_sandbox_allowed(path):
+				host_only.add(path)
+		except Exception:  # noqa: BLE001 - any policy error fails closed
+			return _retired_conflict_result("unavailable", "policy_error")
+	other = unique_paths - host_only
+	retired_absent = {path for path in host_only if path in retired and path not in base_present}
+	blocking = host_only - retired_absent
+	if not host_only:
+		return _retired_conflict_result("no_match", "no_host_only", other=other)
+	if blocking:
+		retired_on_base = {path for path in blocking if path in retired}
+		reason = "retired_present_on_base" if retired_on_base == blocking else "host_only_not_retired"
+		return _retired_conflict_result("no_match", reason, retired_absent, blocking, other)
+	return _retired_conflict_result("reissue", "retired_host_only_absent_from_base", retired_absent, (), other)
+
+
+def _retired_conflict_trusted_dir(path: Path) -> bool:
+	return not path.is_symlink() and path.is_dir()
+
+
+def _retired_conflict_read_lines(path: str) -> list[str] | None:
+	try:
+		return Path(path).read_text(encoding="utf-8").splitlines()
+	except (OSError, UnicodeDecodeError):
+		return None
+
+
+def cmd_retired_conflict_check(args: argparse.Namespace) -> int:
+	"""Print the classifier decision as JSON; always exits 0."""
+
+	def _emit(result: dict[str, Any]) -> int:
+		print(json.dumps(result, sort_keys=True))
+		return 0
+
+	support = Path(args.support_dir)
+	templates = support / "workflow-templates"
+	manifest = templates / "retired_files.txt"
+	scripts_dir = support / "scripts"
+	module_path = scripts_dir / "review_untrusted_workspace.py"
+	try:
+		if not (_retired_conflict_trusted_dir(support) and _retired_conflict_trusted_dir(templates) and _retired_conflict_trusted_dir(scripts_dir)):
+			return _emit(_retired_conflict_result("unavailable", "support_untrusted"))
+		if manifest.is_symlink() or not manifest.is_file() or module_path.is_symlink() or not module_path.is_file():
+			return _emit(_retired_conflict_result("unavailable", "support_untrusted"))
+		manifest_text = manifest.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError):
+		return _emit(_retired_conflict_result("unavailable", "support_untrusted"))
+	try:
+		import importlib.util
+
+		spec = importlib.util.spec_from_file_location("_retired_conflict_review_untrusted_workspace", module_path)
+		if spec is None or spec.loader is None:
+			raise ImportError("no loader")
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		policy = getattr(module, "allowed")
+		if not callable(policy):
+			raise ImportError("allowed not callable")
+	except Exception:  # noqa: BLE001 - any import failure fails closed
+		return _emit(_retired_conflict_result("unavailable", "policy_unavailable"))
+	conflict_lines = _retired_conflict_read_lines(args.conflict_paths_file)
+	base_lines = _retired_conflict_read_lines(args.base_present_file)
+	if conflict_lines is None or base_lines is None:
+		return _emit(_retired_conflict_result("unavailable", "input_unreadable"))
+	return _emit(classify_retired_host_only_conflicts(conflict_lines, manifest_text, base_lines, policy))
+
+
+# ---------------------------------------------------------------------------
 # Unrouted replies on blocked issues (issue #6630)
 # ---------------------------------------------------------------------------
 # The poller's sweep-only tick flags an open ai:blocked issue whose newest
@@ -4121,6 +4263,12 @@ def build_parser() -> argparse.ArgumentParser:
 	p_completion_lessons.add_argument("--state-file", required=True)
 	p_completion_lessons.add_argument("--tracking-issue", required=True)
 	p_completion_lessons.set_defaults(func=cmd_completion_lessons)
+
+	p_retired = subparsers.add_parser("retired-conflict-check", help="Classify a PR conflict on retired host-only files (stall recovery reissue)")
+	p_retired.add_argument("--support-dir", required=True)
+	p_retired.add_argument("--conflict-paths-file", required=True)
+	p_retired.add_argument("--base-present-file", required=True)
+	p_retired.set_defaults(func=cmd_retired_conflict_check)
 
 	p_extract_branch = subparsers.add_parser(
 		"extract-integration-branch",

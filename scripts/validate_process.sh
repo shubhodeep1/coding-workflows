@@ -373,6 +373,21 @@ tg_notify()
   fi
 }
 
+# _poll_recovers_level <level>: DEBUG on a tracked (orchestrator) run, else
+# <level>. For failures the orchestrator poller picks up through
+# ai:validation-failed (mark_validation_failed sends the project back to the
+# judge while recovery budget remains and pages CRITICAL when it runs out),
+# this run's own alert is informational. A standalone run has no poller
+# behind it, so it keeps the given level.
+_poll_recovers_level()
+{
+  if [ "${TRACKING_ISSUE_NUM:-0}" -gt 0 ] 2>/dev/null; then
+    printf 'DEBUG'
+  else
+    printf '%s' "$1"
+  fi
+}
+
 # gh_retry is provided by scripts/gh_helpers.sh (rate-limit-aware).
 # Fallback definition in case gh_helpers.sh was not sourced.
 if ! type gh_retry >/dev/null 2>&1; then
@@ -876,7 +891,7 @@ attempt_self_heal_and_reexec()
     return 0
   fi
   if [ "${SELF_HEAL_ATTEMPT:-0}" -ge "${MAX_SELF_HEAL_ATTEMPTS}" ]; then
-    tg_notify "Validation self-heal budget exhausted for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS}); falling back to hard-fail." "WARNING"
+    tg_notify "Validation self-heal budget exhausted for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS}); falling back to hard-fail." "DEBUG"
     return 0
   fi
 
@@ -1071,7 +1086,7 @@ dispatch_self_heal_improvements()
       exit 0
     fi
 
-    tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT} patch(es)); improvements dispatched to ${upstream}." "WARNING"
+    tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT} patch(es)); improvements dispatched to ${upstream}." "DEBUG"
   ) || true
 }
 
@@ -1979,7 +1994,7 @@ fail_validate_codex_phase()
   fi
 
   write_result_files "error" "Validate workflow failed before runtime validation could complete" "${failure_summary}" "codex_failure"
-  tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "$(_poll_recovers_level ERROR)"
   exit "${exit_code}"
 }
 
@@ -4193,7 +4208,7 @@ case "${DIAG_STATUS}" in
       post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
       set_tracking_phase_label "ai:validation-failed"
       write_result_files "fail" "Runtime validation failed" "${failure_summary}" "harness_error"
-      tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: invalid diagnosis payload." "ERROR"
+      tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: invalid diagnosis payload." "$(_poll_recovers_level ERROR)"
       exit 0
     fi
 
@@ -4291,7 +4306,7 @@ case "${DIAG_STATUS}" in
       set_tracking_phase_label "ai:validation-fixing"
       failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Reused existing fix-up issue #${EXISTING_FIXUP_NUM} (cycle ${VALIDATION_CYCLE}); no duplicate created."
       write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
-      tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes; reused existing fix-up #${EXISTING_FIXUP_NUM}." "WARNING"
+      tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes; reused existing fix-up #${EXISTING_FIXUP_NUM}." "DEBUG"
       exit 0
     fi
 
@@ -4311,7 +4326,7 @@ case "${DIAG_STATUS}" in
 	  post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
 	  set_tracking_phase_label "ai:validation-failed"
 	  write_result_files "fail" "Runtime validation failed" "${failure_summary}" "harness_error"
-	  tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unable to create consolidated fix-up issue." "ERROR"
+	  tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unable to create consolidated fix-up issue." "$(_poll_recovers_level ERROR)"
 	  exit 0
 	fi
 	CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
@@ -4339,7 +4354,7 @@ case "${DIAG_STATUS}" in
 
     failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). A single consolidated fix-up issue was created for ${FIX_COUNT} root cause(s)."
     write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
-    tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} root cause(s) consolidated into 1 issue)." "WARNING"
+    tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} root cause(s) consolidated into 1 issue)." "DEBUG"
     ;;
 
   harness_error)
@@ -4383,7 +4398,7 @@ case "${DIAG_STATUS}" in
     post_tracking_comment "## ❌ Runtime validation infeasible\n\n${DIAG_TEXT}"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "fail" "Validation marked infeasible" "${failure_summary}" "infeasible"
-    tg_notify "Validation infeasible for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    tg_notify "Validation infeasible for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "$(_poll_recovers_level ERROR)"
     ;;
 
   *)
@@ -4392,7 +4407,7 @@ case "${DIAG_STATUS}" in
     post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "fail" "Validation failed" "${failure_summary}" "harness_error"
-    tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unknown diagnosis status." "ERROR"
+    tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unknown diagnosis status." "$(_poll_recovers_level ERROR)"
     ;;
 esac
 

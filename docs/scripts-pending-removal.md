@@ -103,6 +103,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
+### `scripts/propagate_consumer_secrets.sh` + `.github/workflows/propagate-consumer-secrets.yml`
+
+- **Introduced in:** #6709 (2026-10-08); weekly only-missing schedule added in #6712 (2026-10-08)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view propagate-consumer-secrets.yml -R shubhodeep1/coding-workflows` shows the push trigger on `.github/ai/consumer_repos.json` and the weekly schedule.
+  - For each entry in `.github/ai/consumer_repos.json`, `gh secret list -R <consumer> --json name` lists `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY` and `TG_BOT_SECRET`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_propagate_consumer_secrets.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_retro.py`
 
 - **Introduced in:** #3532 (2026-06-26)
