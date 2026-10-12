@@ -26,7 +26,8 @@ Rules enforced here:
     offered again, on this item or anywhere in the same project;
   - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
     per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
-    round with the item still blocked, the only outcome is the terminal close;
+    round on the same stop id and fingerprint with the item still blocked,
+    the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
     issue, and its paths never include `.github/`, `.claude/` or
     `workflow-templates/` (case-insensitive) in any repository, or `scripts/`
@@ -71,6 +72,10 @@ verdict, 2 unreadable input):
       hold marker (<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff
       run=<r> -->) already follows it. Read-only: it never makes
       `override_guard` available (UNBLOCK_PROTECTED_HANDOFF_ENABLED, #7060).
+  automation-rejection --item <n> --comments-file <path> --trusted-login <login>
+      The newest trusted guard rejection on the item when it is an
+      automation-path one not yet re-granted: `{status: ok, run, paths}`;
+      otherwise `{status: none, reason}`.
   marker --item <n> --stop <id> --fingerprint <fp> --verdict <v> --round <k>
          [--override bulk_delete]
       The marker line to end the verdict comment with.
@@ -193,6 +198,15 @@ AUTOMATION_PATH_REJECTION_RE = re.compile(
 OPERATOR_HANDOFF_RE = re.compile(
 	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) reason=operator_handoff run=(?P<run>[0-9]+) -->$"
 )
+# The automation-path grant guard writes the same marker with its own guard
+# name. It is never overridable by a verdict; the judge only re-runs that guard
+# (automation-rejection) to clear a latch the current guard would not set.
+AUTOMATION_REJECTION_RE = re.compile(
+	r"^<!-- ai:guard-rejection:v1 item=(?P<item>[1-9][0-9]*) guard=automation-path "
+	r"reason=(?P<reason>[a-z-]+) run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) "
+	r"truncated=(?P<truncated>true|false) paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
+)
+REGRANT_MARKER_RE = re.compile(r"^<!-- ai:unblock-regrant:v1 item=(?P<item>[1-9][0-9]*) run=(?P<run>[0-9]+) -->$")
 GUARD_REJECTION_HEADERS = (
 	"🚨 **files_touched scope guard rejected this implementation run.**",
 	"🚨 **Issue scope-lock rejected this implementation run.**",
@@ -460,6 +474,64 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 		"comment_id": comment.get("id"), "created_at": comment.get("created_at", ""),
 		"handoff_pending": newest_handoff_index > index,
 	}
+def latest_automation_rejection(comments: object, trusted_login: str, item: int) -> dict:
+	"""The newest trusted guard rejection on the item, when it is an automation-path one.
+
+	`status: ok` carries its `run` and `paths` so the caller can re-run the
+	current guard on them. Any other newest rejection (scope, scope-lock,
+	destructive, an unencodable one), a truncated or malformed marker, or a run
+	already re-granted once (`<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->`)
+	gives `status: none`: the item goes to the judge as before. Only comments by
+	`trusted_login` count.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest = None
+	regranted: set[str] = set()
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		last = lines[-1]
+		regrant = REGRANT_MARKER_RE.fullmatch(last)
+		if regrant and int(regrant.group("item")) == item:
+			regranted.add(regrant.group("run"))
+			continue
+		rejection_item = re.match(r"^<!-- ai:guard-rejection:v1 item=([1-9][0-9]*)\b", last)
+		if rejection_item and int(rejection_item.group(1)) == item:
+			newest = last
+		elif lines[0] in GUARD_REJECTION_HEADERS:
+			# A rejection that could not encode its marker is the newest one,
+			# and it is not re-checkable.
+			newest = ""
+	if newest is None:
+		return {"status": "none", "reason": "missing"}
+	match = AUTOMATION_REJECTION_RE.fullmatch(newest)
+	if not match:
+		return {"status": "none", "reason": "not_automation_path"}
+	if match.group("truncated") == "true":
+		return {"status": "none", "reason": "truncated"}
+	try:
+		encoded = match.group("paths")
+		if len(encoded) > 512000:
+			raise ValueError("oversized rejection")
+		paths = json.loads(base64.b64decode(encoded, validate=True))
+		count = int(match.group("count"))
+		if not isinstance(paths, list) or not 0 < count < 100 or len(paths) != count:
+			raise ValueError("invalid rejection count")
+		cleaned = [_clean_path(path) for path in paths]
+		if len(set(cleaned)) != len(cleaned):
+			raise ValueError("duplicate rejection path")
+	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
+		return {"status": "none", "reason": "malformed"}
+	if match.group("run") in regranted:
+		return {"status": "none", "reason": "already_regranted", "run": match.group("run")}
+	return {"status": "ok", "run": match.group("run"), "paths": cleaned}
 
 
 def decide(
@@ -520,7 +592,18 @@ def decide(
 	# able to abandon a blocked item. `close` is offered only below, once a
 	# deterministic terminal condition holds.
 	options = [verdict for verdict in allowed if verdict != TERMINAL_VERDICT]
-	last_times = [_parse_time(entry["created_at"]) for entry in pool if entry["item"] == item and entry["created_at"]]
+	# The 24-hour clock measures how long *this* block has outlived its last
+	# round, so only rounds on the same stop and fingerprint count. A round on
+	# an earlier, cleared block must not make a new block terminal on sight:
+	# binance-blessings#249 was closed on the first round of a new
+	# harness-broken block because its previous round, on another
+	# fingerprint, was three days old. The item and project caps still bound
+	# an item whose fingerprint keeps changing.
+	last_times = [
+		_parse_time(entry["created_at"])
+		for entry in pool
+		if entry["item"] == item and entry["created_at"] and entry["stop"] == stop and entry["fingerprint"] == fp
+	]
 	# A fix-up's follow-up (the reset posted after it merged) restarts the
 	# 24-hour clock, so the reset gets its chance before the terminal close.
 	if last_times and last_activity is not None:
@@ -721,11 +804,15 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			raise UsageError("operator_step needs 'placeholder': an upper-case flag or env var name")
 		if not flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX) and not flag.endswith("_ENABLED"):
 			raise UsageError(
-				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default off) "
+				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default on, an off switch) "
 				f"or a placeholder ending in {OPERATOR_PLACEHOLDER_SUFFIX}"
 			)
 		normalised["placeholder"] = flag
-		normalised["operator_instructions"] = _clean_text(verdict.get("operator_instructions"), "operator_instructions", True)
+		# Only an _UNSET_OPERATOR_STEP placeholder pages a person, so only it needs
+		# operator steps; an _ENABLED off switch is finished by the fix-up alone.
+		normalised["operator_instructions"] = _clean_text(
+			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
+		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
 	return normalised
 
@@ -787,6 +874,10 @@ def build_parser() -> argparse.ArgumentParser:
 	protected_cmd.add_argument("--item", required=True)
 	protected_cmd.add_argument("--comments-file", required=True)
 	protected_cmd.add_argument("--trusted-login", required=True)
+	automation_cmd = sub.add_parser("automation-rejection")
+	automation_cmd.add_argument("--item", required=True)
+	automation_cmd.add_argument("--comments-file", required=True)
+	automation_cmd.add_argument("--trusted-login", required=True)
 	marker_cmd = sub.add_parser("marker")
 	marker_cmd.add_argument("--item", required=True)
 	marker_cmd.add_argument("--stop", required=True)
@@ -819,6 +910,11 @@ def run(argv: list[str] | None = None) -> dict:
 		if not LOGIN_RE.fullmatch(args.trusted_login):
 			raise UsageError("--trusted-login is not a GitHub login")
 		return latest_protected_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
+			_check_item(args.item))
+	if args.command == "automation-rejection":
+		if not LOGIN_RE.fullmatch(args.trusted_login):
+			raise UsageError("--trusted-login is not a GitHub login")
+		return latest_automation_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
 			_check_item(args.item))
 	if args.command == "decide":
 		if not LOGIN_RE.match(args.trusted_login):

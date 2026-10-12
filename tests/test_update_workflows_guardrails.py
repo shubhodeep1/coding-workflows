@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -10,6 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 UPDATE_WORKFLOWS_WF = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
@@ -84,7 +88,7 @@ def test_install_profile_docs_and_agents_contracts() -> None:
 	assert "[`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt)" in readme
 	assert "Profile downgrades are non-destructive:" in readme
 
-	agents = AGENTS_MD.read_text(encoding="utf-8")
+	agents = _agents_text_with_fragments()
 	assert "## Workflow install profiles" in agents
 	assert "PROFILE.default=full" in agents
 	assert _agents_profile_line("core") in agents
@@ -275,6 +279,96 @@ def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 		assert f"@{VALID_RELEASE_SHA} # stable" in rendered_text
 
 
+_SUPPORT_TEMPLATE = """jobs:
+  review:
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out sweep support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .security-hold-support
+          persist-credentials: false
+      - name: Check out outage support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .provider-outage-support
+      - name: Other repo
+        uses: actions/checkout@v5
+        with:
+          repository: someone/else
+          ref: stable
+          path: .security-hold-support
+      - name: Not a checkout
+        uses: actions/setup-python@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .security-hold-support
+"""
+
+
+def test_renderer_pins_security_hold_support_checkout_to_release_sha() -> None:
+	"""Issue #7209: the sweep's support checkout runs the pinned release, never moving stable."""
+	rendered_text = pin_reusable_workflow_refs(_SUPPORT_TEMPLATE, VALID_RELEASE_SHA.upper())
+	expected = _SUPPORT_TEMPLATE.replace(
+		"review_autofix.yml@stable", f"review_autofix.yml@{VALID_RELEASE_SHA} # stable"
+	).replace(
+		"          ref: stable\n          path: .security-hold-support\n          persist-credentials: false",
+		f"          ref: {VALID_RELEASE_SHA} # stable\n          path: .security-hold-support\n          persist-credentials: false",
+		1,
+	)
+	assert rendered_text == expected
+	# Other repositories, other paths and non-checkout steps keep `ref: stable`.
+	assert rendered_text.count("ref: stable\n") == 3
+
+
+def test_renderer_fails_closed_on_unpinnable_support_checkout() -> None:
+	for broken in (
+		_SUPPORT_TEMPLATE.replace("ref: stable\n          path: .security-hold-support\n          persist", "ref: main\n          path: .security-hold-support\n          persist", 1),
+		_SUPPORT_TEMPLATE.replace("          ref: stable\n          path: .security-hold-support\n          persist", "          path: .security-hold-support\n          persist", 1),
+	):
+		try:
+			pin_reusable_workflow_refs(broken, VALID_RELEASE_SHA)
+		except ValueError as exc:
+			assert ".security-hold-support" in str(exc)
+		else:
+			raise AssertionError("unpinnable support checkout was accepted")
+
+
+def test_ai_review_template_pins_only_the_sweep_support_checkout() -> None:
+	template_path = WORKFLOW_TEMPLATES_DIR / "ai-review.yml"
+	template_text = template_path.read_text(encoding="utf-8")
+	rendered_text = pin_reusable_workflow_refs(template_text, VALID_RELEASE_SHA)
+	assert rendered_text.count(f"ref: {VALID_RELEASE_SHA} # stable") == 1
+	try:
+		import yaml
+	except ImportError:
+		return
+	jobs = yaml.safe_load(rendered_text)["jobs"]
+	assert jobs["security-hold-sweep"]["steps"][0]["with"]["ref"] == VALID_RELEASE_SHA
+	assert jobs["provider-outage-resume"]["steps"][0]["with"]["ref"] == "stable"
+
+
+def test_other_templates_render_unchanged_by_support_pin() -> None:
+	for template_path in sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml")):
+		if template_path.name == "ai-review.yml":
+			continue
+		template_text = template_path.read_text(encoding="utf-8")
+		uses_only = re.sub(
+			r"(uses:[ \t]+shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml)@stable\b(?:[ \t]+#[^\r\n]*)?$",
+			rf"\1@{VALID_RELEASE_SHA} # stable",
+			template_text,
+			flags=re.MULTILINE,
+		)
+		assert pin_reusable_workflow_refs(template_text, VALID_RELEASE_SHA) == uses_only, template_path.name
+
+
 def test_seed_commands_require_immutable_wrapper_rendering() -> None:
 	for command_path in SEED_COMMANDS:
 		command_text = command_path.read_text(encoding="utf-8")
@@ -301,6 +395,10 @@ def main() -> int:
 	test_success_path_contracts_are_preserved()
 	test_wrapper_ref_renderer_contract()
 	test_every_wrapper_template_renders_to_an_immutable_ref()
+	test_renderer_pins_security_hold_support_checkout_to_release_sha()
+	test_renderer_fails_closed_on_unpinnable_support_checkout()
+	test_ai_review_template_pins_only_the_sweep_support_checkout()
+	test_other_templates_render_unchanged_by_support_pin()
 	test_seed_commands_require_immutable_wrapper_rendering()
 	return 0
 

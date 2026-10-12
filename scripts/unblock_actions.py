@@ -17,7 +17,13 @@ the network; the shell only executes.
        `has_plan` is true when the issue already has an implementation plan;
        `security_finding_id` is optional and validated before reuse).
        PR provenance is validated again here; missing or malformed fields fail
-       closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
+       closed for issue-creating PR verdicts. Optional `source_issue_body` /
+       `source_issue_labels` (a trusted PR's single linked issue, sent only by
+       the conflict resolver's host-only re-issue, issue #6748; the unblock
+       judge never sends them) carry that issue's security finding marker,
+       `Integration branch` and `Depends on` lines onto a PR re-issue; optional
+       `pr_base_branch` (same caller) is the Integration branch when the
+       linked issue declares none. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
@@ -31,9 +37,36 @@ the network; the shell only executes.
        `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`,
        an operator step and a WARNING) and create no fix-up; the issue stays
        blocked. A malformed value is dropped and the normal path runs.
+      An optional `ci_owner` object `{"number", "state", "head_sha",
+      "head_ref", "base_ref"}` carries the facts scripts/unblock_judge.sh read
+      about the pull request that owns a CI-failure issue (#7032). `state` is
+      `superseded` (merged into the default or declared integration branch
+      with its required checks green: the `reissue` verdict closes the issue
+      as not planned instead of re-issuing it), `open` (the re-issue carries
+      the triage PR marker and a standalone `- Integration branch:` line with
+      the verified PR head ref), `verified` (the marker only) or `unverified`.
+      A missing or malformed object keeps today's re-issue unchanged. Only
+      standalone, non-security issues use it.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
+  ci-owner --item-file PATH --repo R
+      Reads the already-fetched item JSON and prints
+      `{"pr": n|null, "reason": s, "declared_branch": s|null}`: the pull
+      request that owns a CI-failure issue (label `ai:check-triage` /
+      `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
+      and the issue's single line-anchored integration branch. Conflicting PR
+      numbers or a URL into another repository give `pr: null`.
+  regrant --context-file PATH --rejection-file PATH
+      For a scope-blocked issue whose newest automation-path rejection
+      (`unblock_ledger.py automation-rejection`) the current guard now grants:
+      a comment ending in `<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->`,
+      then the stop's resume command. No verdict, no operator step.
+  fixup-escalate --context-file PATH --origin N
+      For a blocked fix-up issue the judge filed for item N: one entry in the
+      `ai:operator-step` issue, a comment ending in
+      `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, and one WARNING. The
+      judge never files a fix-up for a fix-up.
 
 Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "comment", "issue": n, "body": s}
@@ -92,6 +125,16 @@ PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
 PROTECTED_HANDOFF_MAX_PATHS = 100
 PROTECTED_HANDOFF_SHOWN_PATHS = 20
 PROTECTED_HANDOFF_PATH_MAX_LEN = 300
+# CI-failure issues and the PR that owns them (#7032). check_failure_triage.sh
+# writes both the label and the marker; unblock re-issues copy the marker.
+CHECK_TRIAGE_LABELS = ("ai:check-triage", "ai:check-triage-escalated")
+CHECK_TRIAGE_PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([0-9]{1,9}) -->[ \t]*$", re.MULTILINE)
+CHECK_TRIAGE_PR_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?\*\*Pull request:\*\*\s*https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]{1,9})(?![0-9])",
+	re.MULTILINE,
+)
+CI_OWNER_STATES = ("superseded", "open", "verified", "unverified")
+CI_OWNER_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 
 
 class UsageError(Exception):
@@ -118,6 +161,65 @@ def _one_line(text: str) -> str:
 	return " ".join(str(text or "").split())[:MAX_COMMAND_TEXT]
 
 
+def _safe_branch_ref(branch: str) -> bool:
+	return (
+		bool(SECURITY_BRANCH_REF_RE.fullmatch(branch)) and ".." not in branch and "//" not in branch
+		and not branch.endswith(("/", ".", ".lock"))
+	)
+
+
+def ci_owner_candidate(body: str, labels: list[str], repo: str) -> dict:
+	"""The PR that owns a CI-failure issue, from its body only (no network)."""
+	body = body if isinstance(body, str) else ""
+	markers = {int(match.group(1)) for match in CHECK_TRIAGE_PR_MARKER_RE.finditer(body)}
+	if not markers and not any(label in CHECK_TRIAGE_LABELS for label in labels):
+		return {"pr": None, "reason": "not_ci_failure"}
+	numbers = set(markers)
+	foreign = False
+	for match in CHECK_TRIAGE_PR_LINE_RE.finditer(body):
+		if match.group(1).lower() == repo.lower():
+			numbers.add(int(match.group(2)))
+		else:
+			foreign = True
+	numbers.discard(0)
+	if len(numbers) > 1:
+		return {"pr": None, "reason": "conflicting_pr"}
+	if not numbers:
+		return {"pr": None, "reason": "foreign_repo" if foreign else "no_pr"}
+	return {"pr": numbers.pop(), "reason": "marker" if markers else "pull_request_line"}
+
+
+def declared_integration_branch(body: str) -> str | None:
+	"""The single valid line-anchored `Integration branch:` value, or None."""
+	branches = {match.group(1).strip() for match in INTEGRATION_BRANCH_LINE_RE.finditer(body if isinstance(body, str) else "")}
+	if len(branches) != 1:
+		return None
+	branch = branches.pop()
+	return branch if _safe_branch_ref(branch) else None
+
+
+def _ci_owner(raw: object) -> dict | None:
+	"""Validate the shell's owning-PR facts; anything malformed is `unverified`."""
+	if raw is None:
+		return None
+	unverified = {"state": "unverified"}
+	if not isinstance(raw, dict):
+		return unverified
+	number, state = raw.get("number"), raw.get("state")
+	head_sha, head_ref = raw.get("head_sha"), raw.get("head_ref")
+	if isinstance(number, bool) or not isinstance(number, int) or number < 1 or state not in CI_OWNER_STATES or state == "unverified":
+		return unverified
+	if head_sha is not None and (not isinstance(head_sha, str) or not CI_OWNER_SHA_RE.fullmatch(head_sha)):
+		return unverified
+	if head_ref is not None and (not isinstance(head_ref, str) or not _safe_branch_ref(head_ref)):
+		return unverified
+	if state == "superseded" and head_sha is None:
+		return unverified
+	if state == "open" and head_ref is None:
+		return unverified
+	return {"number": number, "state": state, "head_sha": head_sha, "head_ref": head_ref}
+
+
 def _security_reissue_metadata(body: str, labels: list[str], item: int) -> tuple[int | None, str | None, bool]:
 	try:
 		dependency = security_dependency_number({"number": item, "body": body, "labels": labels})
@@ -126,10 +228,7 @@ def _security_reissue_metadata(body: str, labels: list[str], item: int) -> tuple
 	branches = [match.group(1).strip() for match in INTEGRATION_BRANCH_LINE_RE.finditer(body)]
 	if not branches:
 		branches = [(match.group(1) or match.group(2)).strip() for match in TARGET_BRANCH_LINE_RE.finditer(body)]
-	if len(set(branches)) > 1 or any(
-		not SECURITY_BRANCH_REF_RE.fullmatch(branch) or ".." in branch or "//" in branch
-		or branch.endswith(("/", ".", ".lock")) for branch in branches
-	):
+	if len(set(branches)) > 1 or any(not _safe_branch_ref(branch) for branch in branches):
 		return None, None, True
 	return dependency, branches[0] if branches else None, False
 
@@ -179,6 +278,41 @@ def _context(raw: object) -> dict:
 	)
 	if security_source_body is not None and SECURITY_FINDING_MARKER_PREFIX in security_source_body and finding_id is None:
 		security_metadata_unsafe = True
+	# A trusted PR's linked issue is the lineage source for a PR re-issue; the
+	# PR body itself stays author-controlled and is never read for metadata.
+	source_body = raw.get("source_issue_body")
+	source_labels = raw.get("source_issue_labels")
+	pr_source_present = (
+		pr_trusted
+		and isinstance(source_body, str)
+		and len(source_body) <= 65536
+		and isinstance(source_labels, list)
+		and all(isinstance(label, str) for label in source_labels)
+	)
+	pr_source_finding_id = None
+	pr_source_depends_on, pr_source_target_branch, pr_source_metadata_unsafe = None, None, False
+	if pr_source_present:
+		linked = raw.get("linked_issue")
+		pr_source_depends_on, pr_source_target_branch, pr_source_metadata_unsafe = _security_reissue_metadata(
+			source_body, source_labels, linked if isinstance(linked, int) and linked > 0 else item
+		)
+		if SECURITY_LABEL in source_labels and SECURITY_FINDING_MARKER_PREFIX in source_body:
+			marker = re.search(r"<!-- ai:security-finding:(.*?) -->", source_body)
+			candidate = marker.group(1) if marker else ""
+			if SECURITY_FINDING_ID_RE.fullmatch(candidate):
+				pr_source_finding_id = candidate
+			else:
+				pr_source_metadata_unsafe = True
+	# Optional trusted-PR base branch (sent only by the host-only re-issue,
+	# issue #6748): the replacement's Integration branch when the linked issue
+	# declares none. An invalid value is dropped, never trusted.
+	base_branch = raw.get("pr_base_branch")
+	pr_base_branch = (
+		base_branch
+		if pr_trusted and isinstance(base_branch, str) and SECURITY_BRANCH_REF_RE.fullmatch(base_branch)
+		and ".." not in base_branch and "//" not in base_branch and not base_branch.endswith(("/", ".", ".lock"))
+		else None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -199,6 +333,13 @@ def _context(raw: object) -> dict:
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
 		"protected_rejection": protected_rejection,
+		"ci_owner": _ci_owner(raw.get("ci_owner")) if kind == "issue" else None,
+		"pr_source_present": pr_source_present,
+		"pr_source_finding_id": pr_source_finding_id,
+		"pr_source_depends_on": pr_source_depends_on,
+		"pr_source_target_branch": pr_source_target_branch,
+		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
+		"pr_base_branch": pr_base_branch,
 	}
 
 
@@ -244,7 +385,9 @@ def _untrusted_pr_ops(ctx: dict, verdict_name: str) -> list[dict]:
 		},
 		{"op": "close", "issue": item, "reason": "not_planned", "pr": True},
 		{"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]},
-		{"op": "telegram", "level": "WARNING", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
+		# DEBUG: closing the untrusted PR is the finished outcome; nothing is
+		# left for a person to do.
+		{"op": "telegram", "level": "DEBUG", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
 	]
 
 
@@ -309,6 +452,19 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 	return [{"op": "remove_label", "issue": item, "label": present}] if present else []
 
 
+def _placeholder_needs_person(placeholder: str) -> bool:
+	"""True when an operator_step placeholder waits on a person.
+
+	An `_UNSET_OPERATOR_STEP` placeholder stands for a value only a person can
+	supply (a secret, a setting), so the step is recorded and paged. An
+	`_ENABLED` flag is an off switch on code the fix-up finishes and ships on:
+	nobody is paged to turn it on (the old default-off contract held fixes
+	back until someone did, #6710, #6793, #7171).
+	"""
+	# Same suffix as unblock_ledger.OPERATOR_PLACEHOLDER_SUFFIX, which validates it.
+	return placeholder.endswith("_UNSET_OPERATOR_STEP")
+
+
 def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 	lines = [
 		f"<!-- ai:unblock-fixup:v1 item={ctx['item']} round={verdict['round']} -->",
@@ -319,10 +475,21 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 		f"Change: {verdict.get('instructions', '')}",
 	]
 	if verdict.get("placeholder"):
+		if _placeholder_needs_person(verdict["placeholder"]):
+			gate = (
+				f"Keep the new behaviour off until a person finishes the operator step: gate only the new code path behind `{verdict['placeholder']}`"
+				" (a placeholder env var; while it is unset the new code skips safely)."
+			)
+		else:
+			gate = (
+				f"Ship the new behaviour on: gate only the new code path behind `{verdict['placeholder']}` as an off switch."
+				" Unset, empty or `true` (any case) keeps it on; `false` turns it off; any other value also turns it off"
+				" and logs a warning. Nothing waits on a person: this change alone must clear the block."
+			)
 		lines += [
 			"",
-			f"Keep the new behaviour off until a person finishes the operator step: gate it behind `{verdict['placeholder']}`"
-			" (a feature flag that defaults off, or a placeholder env var that makes the code skip safely).",
+			gate + " Never put an existing path behind it: with the flag unset, everything that runs today (releases, tagging,"
+			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
 	if _provenance_line(ctx):
@@ -431,6 +598,8 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops += _fixup_ops(ctx, verdict, "descope")
 	elif name == "operator_step":
 		ops += _fixup_ops(ctx, verdict, "operator step")
+		if not _placeholder_needs_person(verdict["placeholder"]):
+			return ops
 		ops.append(
 			{
 				"op": "operator_step",
@@ -472,10 +641,44 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			if ctx.get("security_depends_on") is not None:
 				body += f"\n- Depends on: #{ctx['security_depends_on']}"
 		labels = [SECURITY_LABEL] if security_issue else []
+		owner = ctx.get("ci_owner") if ctx["kind"] == "issue" and not ctx["tracking"] and not security_issue else None
+		if owner and owner["state"] == "superseded":
+			# #7032: the PR that owned this CI failure already merged green, so a
+			# replacement issue would redo finished work.
+			return [
+				{
+					"op": "comment",
+					"issue": item,
+					"body": f"Superseded: owning PR #{owner['number']} merged with its required checks passing at head `{owner['head_sha']}`. No re-issue was created.",
+				},
+				{"op": "close", "issue": item, "reason": "not_planned", "pr": False},
+			]
+		if owner and owner["state"] in ("open", "verified"):
+			body = f"<!-- check-failure-triage:pr={owner['number']} -->\n{body}"
+			if owner["state"] == "open":
+				# Only the verified, open, same-repository PR head ref; never model text.
+				body += f"\n\n- Integration branch: `{owner['head_ref']}`"
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
-			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": [], "wait_on": None})
+			pr_labels: list[str] = []
+			pr_target_branch = None
+			if ctx.get("pr_source_present"):
+				if ctx.get("pr_source_metadata_unsafe"):
+					return [
+						{"op": "comment", "issue": item, "body": "This pull request stays open: its linked issue's security finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
+						{"op": "telegram", "level": "WARNING", "text": f"Could not safely re-issue PR #{item}; its linked issue's metadata needs correction."},
+					]
+				if ctx.get("pr_source_finding_id"):
+					body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['pr_source_finding_id']} -->\n{body}"
+					pr_labels = [SECURITY_LABEL]
+				pr_target_branch = ctx.get("pr_source_target_branch")
+			pr_target_branch = pr_target_branch or ctx.get("pr_base_branch")
+			if pr_target_branch:
+				body += f"\n\n- Integration branch: `{pr_target_branch}`"
+			if ctx.get("pr_source_present") and ctx.get("pr_source_depends_on") is not None:
+				body += f"\n- Depends on: #{ctx['pr_source_depends_on']}"
+			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": pr_labels, "wait_on": None})
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
 		elif ctx["tracking"]:
 			ops.append(
@@ -545,6 +748,64 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	return ops
 
 
+def regrant_ops(ctx: dict, run_id: str, paths: list[str]) -> list[dict]:
+	"""Clear an automation-path latch the current guard no longer sets (Q54).
+
+	The marker comment goes first: it is the once-per-rejection-run record, so
+	a resume that fails afterwards is never retried for the same run.
+	"""
+	if ctx["kind"] != "issue" or ctx["stop"] != "scope-blocked":
+		raise UsageError("regrant applies only to a scope-blocked issue")
+	if not re.fullmatch(r"[0-9]+", str(run_id)) or not paths or not all(isinstance(path, str) for path in paths):
+		raise UsageError("regrant needs the rejection run and its paths")
+	item = ctx["item"]
+	listing = "\n".join(f"- `{path}`" for path in paths)
+	body = "\n".join([
+		f"The automation-path grant guard rejected run {run_id}. The current guard grants every path it rejected,"
+		" so the unblock judge cleared the latch without a verdict and resumed this issue. The implementation run"
+		" checks the grant again before it commits.",
+		"",
+		listing,
+		"",
+		f"<!-- ai:unblock-regrant:v1 item={item} run={run_id} -->",
+	])
+	return [{"op": "comment", "issue": item, "body": body}] + reset_ops(ctx, f"current guard grants rejection run {run_id}")
+
+
+def fixup_escalate_ops(ctx: dict, origin: int) -> list[dict]:
+	"""A blocked unblock fix-up goes to the operator once, never to another fix-up (Q56)."""
+	if ctx["kind"] != "issue" or origin < 1:
+		raise UsageError("fixup-escalate needs a fix-up issue and its original item")
+	item = ctx["item"]
+	return [
+		{
+			"op": "operator_step",
+			"key": f"unblock-fixup-{item}",
+			"source": f"Unblock judge, fix-up #{item}",
+			"steps": [
+				{
+					"title": f"Unblock fix-up #{item} is blocked ({ctx['stop']})",
+					"instructions": (
+						f"#{item} is the unblock judge's fix-up for #{origin}, and it is blocked itself. The judge never files"
+						f" a fix-up for a fix-up. Clear the block on #{item}, or close #{item} and decide #{origin} directly."
+					),
+				}
+			],
+		},
+		{
+			"op": "comment",
+			"issue": item,
+			"body": "\n".join([
+				f"This is the unblock judge's fix-up for #{origin}, and it is blocked ({ctx['stop']}). The judge does not file"
+				" another fix-up for it; it is listed in the `ai:operator-step` issue instead.",
+				"",
+				f"<!-- ai:unblock-fixup-escalated:v1 item={item} -->",
+			]),
+		},
+		{"op": "telegram", "level": "WARNING", "text": f"Unblock fix-up #{item} (for #{origin}) is blocked ({ctx['stop']}); listed under Operator steps"},
+	]
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = _Parser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
@@ -554,16 +815,41 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	owner_cmd = sub.add_parser("ci-owner")
+	owner_cmd.add_argument("--item-file", required=True)
+	owner_cmd.add_argument("--repo", required=True)
+	regrant_cmd = sub.add_parser("regrant")
+	regrant_cmd.add_argument("--context-file", required=True)
+	regrant_cmd.add_argument("--rejection-file", required=True)
+	escalate_cmd = sub.add_parser("fixup-escalate")
+	escalate_cmd.add_argument("--context-file", required=True)
+	escalate_cmd.add_argument("--origin", required=True, type=int)
 	return parser
 
 
 def run(argv: list[str] | None = None) -> dict:
 	args = build_parser().parse_args(argv)
+	if args.command == "ci-owner":
+		item = _read_json(args.item_file, "--item-file")
+		if not isinstance(item, dict):
+			raise UsageError("--item-file must hold a JSON object")
+		labels = [label.get("name") for label in item.get("labels") or [] if isinstance(label, dict) and isinstance(label.get("name"), str)]
+		body = item.get("body") if isinstance(item.get("body"), str) else ""
+		result = ci_owner_candidate(body, labels, args.repo)
+		result["declared_branch"] = declared_integration_branch(body)
+		return result
 	ctx = _context(_read_json(args.context_file, "--context-file"))
 	if args.command == "followup":
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
 		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	if args.command == "regrant":
+		rejection = _read_json(args.rejection_file, "--rejection-file")
+		if not isinstance(rejection, dict) or rejection.get("status") != "ok":
+			raise UsageError("--rejection-file must hold an ok automation-path rejection")
+		return {"ops": regrant_ops(ctx, rejection.get("run", ""), rejection.get("paths") or [])}
+	if args.command == "fixup-escalate":
+		return {"ops": fixup_escalate_ops(ctx, args.origin)}
 	verdict = _read_json(args.verdict_file, "--verdict-file")
 	if not isinstance(verdict, dict):
 		raise UsageError("--verdict-file must hold a JSON object")

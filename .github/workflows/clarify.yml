@@ -17,7 +17,7 @@ env:
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:'))))
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -72,6 +72,7 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -130,13 +131,21 @@ jobs:
           fi
 
           chmod +x "${resolver_script}"
-          if integration_branch="$({
+          # Exit 3 means CI-triage PR-branch routing was required but could
+          # not be verified; never fall back to the default branch then.
+          resolver_rc=0
+          integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
             bash "${resolver_script}"
-          })"; then
+          })" || resolver_rc=$?
+          if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_rc}" -eq 3 ]; then
+            echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
@@ -179,13 +188,25 @@ jobs:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -234,8 +255,13 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
 
+          # Host Python helpers run outside the issue branch checkout.
+          CLARIFY_HOST_PYTHON_DIR="${RUNNER_TEMP}/clarify-host-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p -- "${CLARIFY_HOST_PYTHON_DIR}"
+          echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
+
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -245,6 +271,10 @@ jobs:
               exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            case "${f}" in
+              load_workflow_overlay.py|security_dependency.py)
+                install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}" ;;
+            esac
             _fetched_scripts+=("${f}")
           done
 
@@ -320,7 +350,8 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # Isolated mode also excludes PYTHONPATH and the checkout's cwd.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -490,14 +521,15 @@ jobs:
           # /answer write until the issue it depends on has merged (issue
           # #4934). The target is already fetched; only a dependent issue
           # costs one additional issue read (scripts/security_dependency.py).
-          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
+          # The runner-temp copy is staged from verified support, not the issue branch.
+          DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
           if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
             # Retain the issue in the scheduled standalone poller's existing
             # candidate set; it releases this label once the fix merges.
             source scripts/gh_helpers.sh
-            if ! gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+            if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
               echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
               exit 1
             fi
@@ -594,7 +626,7 @@ jobs:
               --remove-label 'ai:planning' --remove-label 'ai:awaiting-approval' \
               --remove-label 'ai:implementing' --remove-label 'ai:done' >/dev/null 2>&1 || true
           else
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+            GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           fi
 
       - name: Orchestrator-managed fast path
@@ -862,6 +894,81 @@ jobs:
             echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"
             bash scripts/workflow_failure_heal_evidence.sh
           fi
+
+      # scripts/clarify_isolated_run.sh builds scripts/clarify_sandbox/Dockerfile
+      # (FROM node:<tag>) with a plain `docker build`, which on a fresh runner
+      # is an anonymous Docker Hub pull. Docker Hub answered 429 Too Many
+      # Requests on every attempt of runs 37990077414 and 37990177613 (heal
+      # issue #6985), so retrying never helped. This step loads the same
+      # official-image tag from a vendor-run mirror and tags it under its
+      # Docker Hub name; `docker build` without --pull then uses the local
+      # image and sends no request to Docker Hub. Always exits 0: if every
+      # mirror fails the build behaves exactly as before.
+      - name: Pre-seed clarify sandbox base image
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        continue-on-error: true
+        env:
+          CLARIFY_BASE_IMAGE_MIRRORS: ${{ vars.CLARIFY_BASE_IMAGE_MIRRORS || 'public.ecr.aws/docker/library mirror.gcr.io/library' }}
+          CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS: ${{ vars.CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS || '300' }}
+        run: |
+          set -uo pipefail
+          preseed_dockerfile="scripts/clarify_sandbox/Dockerfile"
+          # Only an implicit Docker Hub official image (`name:tag`) maps onto
+          # `<mirror>/<name>:<tag>`; anything else is left to docker build.
+          preseed_ref_re='^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._-]{1,128}$'
+          # The first character must be alphanumeric so an entry can never be
+          # parsed by `docker pull` as a CLI flag (for example `-x/lib`).
+          preseed_mirror_re='^[a-z0-9][a-z0-9.-]*(/[a-z0-9._-]+)*$'
+          preseed_sanitize() { printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._:/@-' '_' | cut -c1-200; }
+          preseed_docker() { env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker "$@"; }
+
+          preseed_timeout="${CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS:-300}"
+          if ! [[ "${preseed_timeout}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${preseed_timeout}))" -lt 30 ] || [ "$((10#${preseed_timeout}))" -gt 1800 ]; then
+            preseed_timeout=300
+          fi
+          preseed_timeout=$((10#${preseed_timeout}))
+
+          if [ ! -f "${preseed_dockerfile}" ]; then
+            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=dockerfile_missing"
+            exit 0
+          fi
+          preseed_ref="$(awk 'toupper($1) == "FROM" { print $2; exit }' "${preseed_dockerfile}")"
+          if ! [[ "${preseed_ref}" =~ ${preseed_ref_re} ]]; then
+            preseed_safe_ref="$(preseed_sanitize "${preseed_ref}")"
+            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=${preseed_safe_ref:-none} outcome=skip reason=unsupported_ref"
+            exit 0
+          fi
+
+          if preseed_docker image inspect "${preseed_ref}" >/dev/null 2>&1; then
+            echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=present"
+            exit 0
+          fi
+
+          read -r -a preseed_mirrors <<< "${CLARIFY_BASE_IMAGE_MIRRORS:-}"
+          preseed_attempted=0
+          for preseed_mirror in "${preseed_mirrors[@]}"; do
+            if ! [[ "${preseed_mirror}" =~ ${preseed_mirror_re} ]]; then
+              echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=mirror_skipped source=$(preseed_sanitize "${preseed_mirror}") reason=invalid_mirror"
+              continue
+            fi
+            preseed_attempted=$((preseed_attempted + 1))
+            preseed_source="${preseed_mirror}/${preseed_ref}"
+            # Actions runs this body under `bash -e`; a failed assignment from a
+            # command substitution would exit before the next mirror, so the
+            # status is captured with `||` instead of a separate `$?` read.
+            preseed_pull_rc=0
+            preseed_pull_out="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout "${preseed_timeout}" docker pull --quiet "${preseed_source}" 2>&1)" || preseed_pull_rc=$?
+            if [ "${preseed_pull_rc}" -eq 0 ] \
+              && preseed_docker tag "${preseed_source}" "${preseed_ref}" >/dev/null 2>&1 \
+              && preseed_docker image inspect "${preseed_ref}" >/dev/null 2>&1; then
+              echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=seeded source=${preseed_mirror}"
+              exit 0
+            fi
+            preseed_detail="$(printf '%s' "${preseed_pull_out}" | tail -n 1 | tr -c 'A-Za-z0-9._:/@ -' '_' | cut -c1-200)"
+            echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=mirror_failed source=${preseed_mirror} rc=${preseed_pull_rc} detail=${preseed_detail:-none}"
+          done
+          echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=unavailable mirrors=${preseed_attempted}"
+          exit 0
 
       - name: Run Codex
         id: run_codex
@@ -1237,7 +1344,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
         run: |
           set -euo pipefail
@@ -1341,7 +1448,7 @@ jobs:
           ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           AUTO_DECIDE_CLARIFICATION_COMMENT_ID: ${{ steps.post_questions.outputs.comment_id }}
         run: |
           set -euo pipefail
@@ -1480,7 +1587,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           CLARIFY_AUTO_DECIDE_ANSWERED: ${{ steps.standalone_auto_decide.outputs.answered || 'false' }}
           CLARIFY_AUTO_DECIDE_DELEGATED: ${{ steps.standalone_auto_decide.outputs.delegated || 'false' }}
         run: |
@@ -1641,7 +1748,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1656,7 +1763,9 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+          # DEBUG: the heal-report job and the unblock judge (ai:clarify-failed)
+          # pick this up and page when a person is needed.
+          tg_send_phase_failure clarify "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
 
       - name: Record GH_PAT budget at clarify end
         if: always()
@@ -1676,15 +1785,17 @@ jobs:
     # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
     # clarify job has finished and the intake reads its complete log. Only a
     # `failure` result is reported: a cancelled run was superseded or timed
-    # out. `permissions: {}` keeps the job inside any caller's grant;
-    # GH_PAT does the work. The reporter always exits 0.
+    # out. The job is granted only `id-token: write` (every caller wrapper
+    # grants it) so the reporter can attach the OIDC report identity the heal
+    # intake verifies; GH_PAT does the work. The reporter always exits 0.
     needs: clarify
     if: >-
       always() && needs.clarify.result == 'failure' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions: {}
+    permissions:
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
@@ -1707,13 +1818,25 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
