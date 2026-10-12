@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:_unsafe_conflict_path_category (function body; `parts = PurePosixPath(name).parts if name else ()`) | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The reviewers report that a NUL-bearing path name reaches `PurePosixPath(name).parts` before the NUL check and can raise an uncaught `ValueError`.\n  WHY: They say this aborts resolver handling instead of classifying the name as unsafe; anthropic_claude-sonnet-5_5 and qwen_qwen3_7-plus explicitly dispute the premise, reporting that `PurePosixPath` accepts NUL bytes and the implementation handles them.\n- scripts/workflow_failure_heal_intake.sh:scope marker guard in _open_issue\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer reports that the scope marker guard blocks valid escalation reports, such as `consumer-app-defect`, when they have no run IDs.\n  WHY: The reviewer says reports with `runs=[]` produce a marker that fails validation; anthropic_claude-sonnet-5_5 and qwen_qwen3_7-plus explicitly report that stopping on an empty marker is intended.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py:_unsafe_conflict_path_category (first line) | confidence=4\n  PROBLEM: PurePosixPath(name).parts is called before checking for NUL bytes.\n  WHY: The PurePosixPath constructor or accessing .parts will raise a ValueError if the input path name contains an embedded NUL byte, causing the resolver to crash instead of gracefully classifying the path as unsafe.\n- scripts/workflow_failure_heal_intake.sh:scope marker guard in _open_issue | confidence=3\n  PROBLEM: The marker guard enforces path/run shape rules on all escalation report classifications.\n  WHY: Valid escalation reports (such as consumer-app-defect) frequently lack run ID lists (runs=[]), which causes the intake-rendered scope marker to fail validation, erroneously blocking the filing of these legitimate issues.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:`_unsafe_conflict_path_category` (function body, the `parts = PurePosixPath(name).parts if name else ()` line that runs before the `\"\\x00\" in name` guard) | severity=MAJOR | confidence=5\n  PROBLEM: The function computes `PurePosixPath(name).parts` before the explicit NUL-byte check, but `pathlib.PurePosixPath` raises `ValueError: embedded null byte` for any name containing `\\x00`.\n  WHY: `check_paths` rejects a NUL-bearing conflicted name through the `except LookupError` branch. `_host_only_or_unsafe` short-circuits on the `REPORTABLE_PATH_RE` regex mismatch and returns `\"unsafe\"` without ever calling `PurePosixPath`. The handler then calls `_unsafe_conflict_path_category(host, name)` to compute the new `unsafe<TAB><category><TAB><depth>` entry. That call re-enters the NUL path: `PurePosixPath(name).parts` raises `ValueError`, the new exception fires from inside the active `except` handler, no surrounding `except` catches it, and the resolver aborts with an unhandled exception on the input class the PR explicitly promises to handle (\"Never walk the host for a name that could leave the checkout\"). The previous version handled `ValueError` by appending the bare `unsafe` token; the LAST RUN moved the diagnostic computation outside the try block, making NUL-bearing paths a regression.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "44d761eb1c2cac7e5587a9861b7a787566a6d04b6f641353679961eabf5e28ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7065,
+    "run_id": "38292671059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38292671059",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012202721_4bf568f25c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7065,
+    "run_id": "38292671059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T20:27:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
