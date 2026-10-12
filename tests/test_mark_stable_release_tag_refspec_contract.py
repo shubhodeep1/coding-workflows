@@ -800,7 +800,11 @@ def test_script_validates_git_identity_for_annotated_tag() -> None:
 
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TESTED_SHA = "a" * 40
-PUBLISHING_STEP_IF = "        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}\n"
+# The publishing steps also carry the RELEASE_TAGGING_ENABLED kill switch (#7029).
+PUBLISHING_STEP_IF = (
+	"        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true'"
+	" && steps.release_tagging.outputs.enabled == 'true' }}\n"
+)
 CI_SUITE_ID = 7
 CI_WORKFLOW_RUNS_BODY = json.dumps({
 	"total_count": 1,
@@ -1183,7 +1187,10 @@ def test_release_job_disabled_path_skips_every_publishing_step() -> None:
 		assert "\n      checks: read\n" in release_job.split("    outputs:", 1)[0], workflow_path.name
 		assert "      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}\n" in release_job
 		assert "      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}\n" in release_job
-		assert "      release_enabled: ${{ steps.release_switch.outputs.enabled }}\n" in release_job
+		assert (
+			"      release_enabled: ${{ steps.release_switch.outputs.enabled == 'true'"
+			" && steps.release_tagging.outputs.enabled == 'true' && 'true' || 'false' }}\n"
+		) in release_job
 		for step_name in (
 			"Tag version and update stable pointer",
 			"Create GitHub Release",
@@ -1208,7 +1215,7 @@ def test_release_job_disabled_path_skips_every_publishing_step() -> None:
 	assert "needs.release.outputs.release_enabled == 'true'" in sync_if
 	notify_job = _top_level_job_block(gate_text, "notify")
 	assert "RELEASE_ENABLED: ${{ needs.release.outputs.release_enabled }}" in notify_job
-	assert "publishing disabled (STABLE_RELEASE_ENABLED off)" in notify_job
+	assert "publishing disabled (STABLE_RELEASE_ENABLED or RELEASE_TAGGING_ENABLED off)" in notify_job
 
 
 def test_disabled_switch_assembles_changelog_without_committing() -> None:
