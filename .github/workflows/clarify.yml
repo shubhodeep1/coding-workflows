@@ -887,7 +887,7 @@ jobs:
           preseed_timeout=$((10#${preseed_timeout}))
 
           if [ ! -f "${preseed_dockerfile}" ]; then
-            echo "CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=dockerfile_missing"
+            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=dockerfile_missing"
             exit 0
           fi
           preseed_ref="$(awk 'toupper($1) == "FROM" { print $2; exit }' "${preseed_dockerfile}")"
