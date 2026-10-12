@@ -160,6 +160,10 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_UNBLOCK_JUDGE: ${{ vars.AI_ENGINE_UNBLOCK_JUDGE || '' }}
+          # #7032: the CI-failure supersede check reads the same named CI check
+          # and CI workflow binding as review_autofix.yml's auto-merge wait.
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
         run: |
           SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \
