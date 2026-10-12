@@ -91,6 +91,24 @@ def test_flag_defaults_off_in_workflow_and_shell() -> None:
 	assert '"${UPDATER_PR_DELIVERY_ENABLED:-false}"' in step["run"]
 
 
+def test_assembly_outputs_reach_the_body_through_env() -> None:
+	# The run: body must carry no ${{ }} expression: assembler outputs travel
+	# through env: so they are data, not script source (#7219).
+	step = _step()
+	env = step["env"]
+	expected = {
+		"CHANGELOG_ASSEMBLED": "${{ steps.changelog_assemble.outputs.changelog_assembled }}",
+		"CHANGELOG_FRAGMENT_COUNT": "${{ steps.changelog_assemble.outputs.changelog_fragment_count }}",
+		"CHANGELOG_LAYOUT": "${{ steps.changelog_assemble.outputs.changelog_layout }}",
+		"AGENTS_ASSEMBLED": "${{ steps.agents_assemble.outputs.agents_assembled }}",
+		"AGENTS_FRAGMENT_COUNT": "${{ steps.agents_assemble.outputs.agents_fragment_count }}",
+		"AGENTS_FILE": "${{ steps.agents_assemble.outputs.agents_file }}",
+	}
+	for key, value in expected.items():
+		assert env[key] == value, key
+	assert "${{" not in step["run"]
+
+
 def test_branch_pattern_never_matches_merge_train_or_forward_merge() -> None:
 	run = _run_text()
 	assert 'BRANCH="auto/update-workflows-${UPSTREAM_SHA:0:12}"' in run
@@ -285,12 +303,6 @@ class Fixture:
 		self.stage_change()
 		self.output.write_text("", encoding="utf-8")
 		script = _run_text().replace("/tmp/", f"{self.state}/")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_assembled }}", "false")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_fragment_count }}", "0")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_layout }}", "none")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_assembled }}", "false")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_file }}", "AGENTS.md")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_fragment_count }}", "0")
 		assert "${{" not in script
 		env = {
 			**_clean_env(),
@@ -306,6 +318,12 @@ class Fixture:
 			"RELEASE_TAG": release_tag,
 			"DEFAULT_BRANCH": "main",
 			"UPDATER_PR_DELIVERY_ENABLED": flag,
+			"CHANGELOG_ASSEMBLED": "false",
+			"CHANGELOG_FRAGMENT_COUNT": "0",
+			"CHANGELOG_LAYOUT": "none",
+			"AGENTS_ASSEMBLED": "false",
+			"AGENTS_FILE": "AGENTS.md",
+			"AGENTS_FRAGMENT_COUNT": "0",
 			"FAKE_GH_LOG": str(self.gh_log),
 			"FAKE_PR_LIST": str(self.pr_list),
 			"FAKE_STALE_LIST": str(self.stale_list),
