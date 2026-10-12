@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:837 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The \"Commit and push updates\" run body is 19,821 characters and exceeds the 18,000-character guard for expression-containing run bodies.\n  WHY: `test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard` fails and causes the aggregate `lint` check to fail; severity differs, with Sonnet rating the issue NIT and Minimax and GPT rating it MAJOR, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"not part of issue #7172.\" The unrelated failing workflow run body should be moved into `scripts/` and each `${{ }}` value passed through `env:`.\n  expected_change_site: `.github/workflows/update_workflows.yml`, step \"Commit and push updates\"\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR changed-files list holds only `implement.yml`, the changelog fragment, the handler and the test file; `.github/workflows/update_workflows.yml` was not touched, and the failure was already on `orchestrator/project-7126`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: not part of issue #7172. The failing check is `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard`. Its log reports `.github/workflows/update_workflows.yml job=update-wrappers step=Commit and push updates length=19,821`. That is over the 18,000-character guard for `run:` bodies containing `${{ }}`.\n  Expected change site: `.github/workflows/update_workflows.yml`, step \"Commit and push updates\". Per \u00a724, the body should move into `scripts/` and each `${{ }}` value should pass through `env:`.\n  Evidence of absence: the PR changed-files list holds only `implement.yml`, the changelog fragment, the handler and the test file, so this PR did not touch that workflow. The failure was already on `orchestrator/project-7126`. No change in this PR can turn `lint` green, so it needs its own fix on the integration branch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/update_workflows.yml | severity=MAJOR | confidence=5\n  PROBLEM: \"Commit and push updates\" run body (length=19,821) exceeds the 18,000-character guard.\n  WHY: `tests-promote-stall-and-review` fails on `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard`; the workflow is not in the PR changed-files list, and the failure is pre-existing on the integration branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/update_workflows.yml, `jobs.update-wrappers.steps[\"Commit and push updates\"].run` (line 837) | severity=MAJOR | confidence=5\n  PROBLEM: The expression-containing run body is 19,821 characters, exceeding the 18,000-character guard in `tests/test_workflow_file_size_limit.py` at lines 87-97.\n  WHY: `tests-promote-stall-and-review` fails that guard, causing the aggregate `lint` check to fail; this workflow is outside the PR\u2019s changed files, so the failure is not caused by this change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/update_workflows.yml, \"Commit and push updates\" run body | PROBLEM: The run body is 19,821 characters, over the 18,000-character guard. WHY: The pre-existing integration-branch CI failure is outside this PR, which does not touch that file.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "411c732f4a52c68655a175a2e99bfcbd92d04d777826e1bffe4d68889148adfa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7211,
+    "run_id": "38215233791",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38215233791",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012092600_f67ab62008",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7211,
+    "run_id": "38215233791"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T09:26:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
