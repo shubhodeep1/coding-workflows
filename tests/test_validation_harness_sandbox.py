@@ -427,3 +427,396 @@ def test_provision_still_fails_closed_when_the_packages_cannot_be_installed() ->
 def test_ci_runs_this_file() -> None:
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_validation_harness_sandbox.py" in ci
+
+
+# Daily sandbox check (Q39: C, item 9): smoke validations skip the sandbox, so
+# a runner-image change that broke provisioning showed up only when every
+# project validation failed (#6959). The nightly self-test workflow now runs
+# provision, the isolation self-check, a staged run and log copy-back.
+
+NIGHTLY = REPO_ROOT / ".github" / "workflows" / "nightly-validation-selftest.yml"
+
+# Stand-in for the sandbox helper: `checked-run` runs the entry in a scratch
+# copy and copies validation/logs back, the way the real helper does.
+FAKE_HELPER = r"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${FAKE_CALLS}"
+case "$1" in
+	provision) exit "${FAKE_PROVISION_RC:-0}" ;;
+	checked-run)
+		[[ "$2" =~ ^[0-9]+$ ]] || exit 3
+		work="$(mktemp -d)"
+		(cd "${work}" && bash "$3") || exit $?
+		dest="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:?}"
+		mkdir -p "${dest}"
+		cp -R "${work}/validation/logs/." "${dest}/"
+		;;
+	cleanup) exit 0 ;;
+esac
+"""
+
+
+def _nightly_step(job: str, name: str) -> str:
+	import yaml
+
+	steps = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))["jobs"][job]["steps"]
+	return next(step for step in steps if step.get("name") == name)["run"]
+
+
+def _run_nightly_check(tmp: Path, *, docker_body: str, provision_rc: int = 0) -> subprocess.CompletedProcess:
+	(tmp / "scripts").mkdir()
+	helper = tmp / "scripts" / "validation_harness_sandbox.sh"
+	helper.write_text(FAKE_HELPER, encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text(f"#!/bin/sh\n{docker_body}\n", encoding="utf-8")
+	docker.chmod(0o755)
+	runner_temp = tmp / "runner-temp"
+	runner_temp.mkdir()
+	env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp), "RUNNER_TEMP": str(runner_temp),
+		"FAKE_CALLS": str(tmp / "calls"), "FAKE_PROVISION_RC": str(provision_rc)}
+	return subprocess.run(["bash", "-c", _nightly_step("harness-sandbox-check", "Provision and exercise the validation harness sandbox")],
+		cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_nightly_sandbox_check_is_wired_on_a_fresh_read_only_runner() -> None:
+	import yaml
+
+	workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+	on = workflow.get("on", workflow.get(True))
+	assert on["schedule"] == [{"cron": "15 2 * * *"}]
+	job = workflow["jobs"]["harness-sandbox-check"]
+	assert job["permissions"] == {"contents": "read"}
+	assert "needs" not in job and job["timeout-minutes"] <= 20
+	checkout = job["steps"][0]
+	assert checkout["uses"].startswith("actions/checkout@") and checkout["with"]["persist-credentials"] is False
+	run = _nightly_step("harness-sandbox-check", "Provision and exercise the validation harness sandbox")
+	assert "bash scripts/validation_harness_sandbox.sh provision" in run
+	assert 'bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"' in run
+	assert 'VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}"' in run
+	cleanup = next(step for step in job["steps"] if step.get("name") == "Clean up the validation harness sandbox")
+	assert cleanup["if"] == "always()" and "validation_harness_sandbox.sh cleanup" in cleanup["run"]
+
+
+def test_nightly_sandbox_check_passes_when_rootless_docker_answers() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		result = _run_nightly_check(Path(td), docker_body="echo 'server=27.0.0 rootless=[\"name=rootless\"]'")
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok server=27.0.0" in result.stdout
+		calls = (Path(td) / "calls").read_text().splitlines()
+		assert calls[0] == "provision" and calls[1].startswith("checked-run ") and calls[1].endswith("/harness_sandbox_probe.sh")
+
+
+@pytest.mark.parametrize("docker_body,provision_rc,reason", (("exit 1", 0, "checked_run_failed"), ("echo ok", 3, "provision_failed")))
+def test_nightly_sandbox_check_fails_when_docker_or_provision_fails(docker_body, provision_rc, reason) -> None:
+	with tempfile.TemporaryDirectory() as td:
+		result = _run_nightly_check(Path(td), docker_body=docker_body, provision_rc=provision_rc)
+		assert result.returncode != 0
+		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok" not in result.stdout
+		assert f"VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason={reason}" in result.stdout
+
+
+def test_nightly_sandbox_check_fails_when_no_log_copies_back() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		result = _run_nightly_check(tmp, docker_body="echo ok")
+		assert result.returncode == 0
+		# A copy-back that delivers nothing is a failure, not a silent pass.
+		helper = tmp / "scripts" / "validation_harness_sandbox.sh"
+		helper.write_text(FAKE_HELPER.replace('cp -R "${work}/validation/logs/." "${dest}/"', ": copy-back lost"), encoding="utf-8")
+		(tmp / "runner-temp" / "harness-sandbox-probe-logs" / "harness_sandbox_probe.log").unlink()
+		env = {"PATH": f"{tmp / 'bin'}:/usr/bin:/bin", "HOME": str(tmp), "RUNNER_TEMP": str(tmp / "runner-temp"), "FAKE_CALLS": str(tmp / "calls")}
+		again = subprocess.run(["bash", "-c", _nightly_step("harness-sandbox-check", "Provision and exercise the validation harness sandbox")],
+			cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
+		assert again.returncode == 1
+		assert "VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing" in again.stdout
+
+
+# --- cgroup driver for the sandbox's rootless dockerd (#7063, Q57) -----------
+# Rootless dockerd picks the systemd cgroup driver on a systemd cgroup v2 host;
+# without a user session for the sandbox user every container start failed with
+# "open /sys/fs/cgroup/user.slice/user-<uid>.slice/cgroup.controllers"
+# (#6902, #6664). Provision now sets up the session, proves a container starts,
+# and falls back to cgroupfs before failing closed.
+
+def _driver(tmp: Path, *, session: bool, probe: dict[str, int], mode: str = "auto", ready: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Run sandbox_start_verified_dockerd with its collaborators stubbed out.
+
+	probe maps the daemon's driver (systemd/cgroupfs/reused) to the probe's exit code.
+	"""
+	calls = tmp / "calls"
+	status = tmp / "status"
+	probes = " ".join(f"[{key}]={value}" for key, value in probe.items())
+	script = f'''
+source "{HELPER}"
+sudo() {{ :; }}
+build_sandbox_env() {{ :; }}
+declare -A PROBE=({probes})
+DAEMON="{"reused" if ready else ""}"
+sandbox_systemd_session() {{ echo "session $*" >> "{calls}"; {"return 0" if session else "return 1"}; }}
+rootless_docker_ready() {{ [ -n "${{DAEMON}}" ]; }}
+start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
+stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
+rootless_docker_container_probe() {{ echo "probe ${{DAEMON}}" >> "{calls}"; return "${{PROBE[$DAEMON]:-1}}"; }}
+sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp), "VALIDATION_HARNESS_SANDBOX_CGROUP_MODE": mode,
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+	return result, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+
+
+def test_a_working_systemd_session_is_used_once_a_container_starts(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 0})
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]
+	assert "outcome=ok reason=systemd_user_session" in result.stderr
+	assert "outcome=ok reason=container_probe_systemd" in result.stderr
+
+
+def test_a_container_that_fails_under_systemd_restarts_the_daemon_with_cgroupfs(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 1, "cgroupfs": 0})
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd", "stop", "start cgroupfs", "probe cgroupfs"]
+	assert "outcome=retry reason=container_start_failed_systemd" in result.stderr
+	assert "outcome=ok reason=container_probe_cgroupfs" in result.stderr
+
+
+def test_no_systemd_session_goes_straight_to_cgroupfs(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=False, probe={"cgroupfs": 0})
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+	assert "outcome=ok reason=systemd_user_session_unavailable" in result.stderr
+
+
+def test_a_container_that_fails_under_both_drivers_fails_provision_closed(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 1, "cgroupfs": 1})
+	assert result.returncode == 3
+	assert calls[-2:] == ["start cgroupfs", "probe cgroupfs"]
+	assert "outcome=fail reason=container_start_failed" in result.stderr
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail provision container_start_failed\n"
+
+
+def test_cgroupfs_mode_never_touches_the_systemd_session(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode="cgroupfs")
+	assert result.returncode == 0, result.stderr
+	assert calls == ["start cgroupfs", "probe cgroupfs"]
+
+
+def test_an_inconclusive_probe_keeps_the_daemon_and_says_so(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 2})
+	assert result.returncode == 0, result.stderr
+	assert "stop" not in calls
+	assert "outcome=ok reason=container_probe_inconclusive" in result.stderr
+
+
+def test_a_reused_daemon_is_tested_too_and_replaced_when_containers_fail(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"reused": 1, "cgroupfs": 0}, ready=True)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["session ai-validation 1002", "probe reused", "stop", "start cgroupfs", "probe cgroupfs"]
+
+
+CGROUP_ERR = "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory"
+
+
+def _probe(tmp: Path, run_rc: int, message: str = CGROUP_ERR) -> subprocess.CompletedProcess:
+	script = f'''
+source "{HELPER}"
+as_sandbox() {{
+	case "$*" in
+		"docker image inspect"*) return 0 ;;
+		"docker run"*) echo "{message}" >&2; return {run_rc} ;;
+	esac
+}}
+rootless_docker_container_probe
+'''
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp)})
+
+
+# The Docker CLI (runStartContainerErr) exits 127 for a start error containing
+# "no such file or directory", so the #7063 cgroup error arrives as 127.
+NOT_FOUND_ERR = "docker: Error response from daemon: exec: /usr/bin/true: executable file not found in PATH"
+
+
+@pytest.mark.parametrize("run_rc,message,expected", (
+	(0, CGROUP_ERR, 0), (125, CGROUP_ERR, 1), (127, CGROUP_ERR, 1), (126, CGROUP_ERR, 1),
+	(126, NOT_FOUND_ERR, 2), (127, NOT_FOUND_ERR, 2),
+))
+def test_only_a_daemon_refusal_counts_as_a_failed_container_start(tmp_path: Path, run_rc: int, message: str, expected: int) -> None:
+	result = _probe(tmp_path, run_rc, message)
+	assert result.returncode == expected, result.stderr
+	if run_rc:
+		assert f"probe_exit={run_rc} detail={message[:60]}" in result.stderr
+
+
+@pytest.mark.skipif(shutil.which("ldd") is None or not Path("/usr/bin/true").exists(), reason="needs ldd and /usr/bin/true")
+def test_the_probe_image_is_built_locally_from_true_and_its_libraries(tmp_path: Path) -> None:
+	captured = tmp_path / "image.tar"
+	script = f'''
+source "{HELPER}"
+as_sandbox() {{
+	case "$*" in
+		"docker image inspect"*) return 1 ;;
+		"docker import"*) printf '%s\\n' "$*" > "{tmp_path}/import_args"; cat > "{captured}" ;;
+	esac
+}}
+build_probe_image
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	assert (tmp_path / "import_args").read_text(encoding="utf-8").strip() == 'docker import --change CMD ["/usr/bin/true"] - ai-validation-probe:local'
+	with tarfile.open(captured) as archive:
+		names = archive.getnames()
+		assert "usr/bin/true" in names
+		assert any(name.endswith("libc.so.6") for name in names) or len(names) == 1
+		assert all(archive.getmember(name).isfile() for name in names), "symlinks are dereferenced"
+		assert not any(name.startswith("/") or ".." in name for name in names)
+
+
+def _session(tmp: Path, *, systemd: bool = True, linger_rc: int = 0, bus: bool = True) -> tuple[subprocess.CompletedProcess, str]:
+	run_dir = tmp / "run-systemd"
+	if systemd:
+		run_dir.mkdir()
+	cgroup = tmp / "cgroup"
+	(cgroup / "user.slice" / "user-1002.slice").mkdir(parents=True)
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "loginctl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(bin_dir / "loginctl").chmod(0o755)
+	log = tmp / "sudo.log"
+	script = f'''
+source "{HELPER}"
+sudo() {{
+	shift
+	echo "$*" >> "{log}"
+	case "$1" in
+		loginctl) return {linger_rc} ;;
+		test) {"return 0" if bus else "return 1"} ;;
+	esac
+	return 0
+}}
+sleep() {{ :; }}
+sandbox_systemd_session ai-validation 1002
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "HOME": str(tmp), "SANDBOX_SYSTEMD_RUN_DIR": str(run_dir),
+			"SANDBOX_CGROUP_ROOT": str(cgroup), "SANDBOX_SESSION_WAIT_SECS": "2"})
+	return result, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_the_systemd_session_is_lingered_and_waits_for_the_user_bus(tmp_path: Path) -> None:
+	result, sudo_log = _session(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "loginctl enable-linger ai-validation" in sudo_log
+	assert "systemctl start user@1002.service" in sudo_log
+	assert "test -S /run/user/1002/bus" in sudo_log
+
+
+@pytest.mark.parametrize("kwargs", ({"systemd": False}, {"linger_rc": 1}, {"bus": False}))
+def test_the_systemd_session_reports_unavailable(tmp_path: Path, kwargs: dict) -> None:
+	result, _ = _session(tmp_path, **kwargs)
+	assert result.returncode == 1
+
+
+def test_dockerd_gets_the_user_bus_or_the_cgroupfs_driver(tmp_path: Path) -> None:
+	log = tmp_path / "sudo.log"
+	script = f'''
+source "{HELPER}"
+sudo() {{ printf '%s\\n' "$*" >> "{log}"; }}
+rootless_docker_ready() {{ return 0; }}
+start_rootless_dockerd systemd /home/ai-validation /run/user/1002
+start_rootless_dockerd cgroupfs /home/ai-validation /run/user/1002
+wait
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	systemd_line, cgroupfs_line = sorted(log.read_text(encoding="utf-8").splitlines(), key=lambda line: "cgroupfs" in line)
+	assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus" in systemd_line
+	assert "native.cgroupdriver" not in systemd_line
+	assert "XDG_RUNTIME_DIR=/run/user/1002" in cgroupfs_line
+	assert cgroupfs_line.endswith("setsid dockerd-rootless.sh --exec-opt native.cgroupdriver=cgroupfs")
+	assert "DBUS_SESSION_BUS_ADDRESS" not in cgroupfs_line
+
+
+def test_stopping_the_daemon_signals_only_as_the_sandbox_user() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	body = text.split("stop_rootless_dockerd()", 1)[1].split("\n}\n", 1)[0]
+	for line in body.splitlines():
+		if "pkill" in line or "pgrep" in line or "rm -rf" in line:
+			assert 'sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" --' in line, line
+
+
+def test_a_refused_probe_image_import_counts_as_a_daemon_refusal(tmp_path: Path) -> None:
+	script = f'''
+source "{HELPER}"
+as_sandbox() {{
+	case "$*" in
+		"docker image inspect"*) return 1 ;;
+		"docker import"*) cat >/dev/null; echo "Error response from daemon: import refused by test" >&2; return 1 ;;
+		"docker run"*) echo "docker run must not be reached" >&2; return 0 ;;
+	esac
+}}
+rootless_docker_container_probe
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	if shutil.which("ldd") is None or not Path("/usr/bin/true").exists():
+		assert result.returncode == 2, result.stderr
+		return
+	assert result.returncode == 1, result.stderr
+	assert "probe_exit=1 stage=import detail=Error response from daemon: import refused by test" in result.stderr
+	assert "docker run must not be reached" not in result.stderr
+
+
+def test_docker_info_ok_but_container_start_refused_fails_provision_before_any_harness(tmp_path: Path) -> None:
+	"""#7063: `docker info` answers, `docker run` hits the cgroup error under both drivers.
+
+	Uses the real probe (only the docker CLI is stubbed) and asserts that nothing after
+	provisioning, standing in for the harness launch, ever runs.
+	"""
+	calls = tmp_path / "calls"
+	status = tmp_path / "status"
+	script = f'''
+source "{HELPER}"
+sudo() {{ :; }}
+build_sandbox_env() {{ :; }}
+sandbox_systemd_session() {{ return 0; }}
+DAEMON=""
+start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
+stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
+as_sandbox() {{
+	case "$*" in
+		"docker info"*) [ -n "${{DAEMON}}" ] ;;
+		"docker image inspect"*) return 0 ;;
+		"docker run"*) echo "run ${{DAEMON}}" >> "{calls}"; echo "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory" >&2; return 127 ;;
+	esac
+}}
+sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
+echo "HARNESS_LAUNCHED" >> "{calls}"
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+	assert result.returncode == 3, result.stderr
+	lines = calls.read_text(encoding="utf-8").splitlines()
+	assert lines == ["start systemd", "run systemd", "stop", "start cgroupfs", "run cgroupfs"]
+	assert "HARNESS_LAUNCHED" not in lines
+	assert status.read_text(encoding="utf-8") == "fail provision container_start_failed\n"
+
+
+def test_a_non_integer_session_wait_falls_back_to_the_default(tmp_path: Path) -> None:
+	result = subprocess.run(["bash", "-c", f'source "{HELPER}"; printf "%s" "${{SANDBOX_SESSION_WAIT_SECS}}"'],
+		capture_output=True, text=True, timeout=60,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "SANDBOX_SESSION_WAIT_SECS": "15s"})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "15"
+
+
+def test_an_unrecognized_cgroup_mode_is_logged_and_uses_auto(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"systemd": 0}, mode="cgoupfs")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=ok reason=cgroup_mode_unrecognized_using_auto" in result.stderr
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]

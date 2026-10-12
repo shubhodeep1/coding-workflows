@@ -119,11 +119,44 @@ jobs:
       RESTORE_AWAITING_APPROVAL_ON_SKIP: "false"
 
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Precheck approval phase label
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           RUNTIME_DIR="/tmp/codex-implement-${GITHUB_RUN_ID}"
           mkdir -p "${RUNTIME_DIR}"
           ISSUE_META_FILE="${RUNTIME_DIR}/issue_meta.json"
@@ -135,7 +168,7 @@ jobs:
           # Codex / install cost. Without the state gate, implement runs on
           # the closed issue, posts a misleading "implementation-failed"
           # diagnostics comment, and burns budget.
-          ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          ISSUE_PAYLOAD="$(gh_api_retry "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
           printf '%s\n' "${ISSUE_PAYLOAD}" > "${ISSUE_META_FILE}"
           ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
@@ -180,7 +213,7 @@ jobs:
             SMOKE_TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | sed -n 's/.*Tracking issue: #\([0-9][0-9]*\).*/\1/p' | head -n1)"
             if [ -n "${SMOKE_TRACKING_NUM:-}" ]; then
               SMOKE_TRACKING_TITLE=""
-              if SMOKE_TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${SMOKE_TRACKING_NUM}" 2>/dev/null)"; then
+              if SMOKE_TRACKING_PAYLOAD="$(gh_api_retry --optional "repos/${{ github.repository }}/issues/${SMOKE_TRACKING_NUM}" 2>/dev/null)"; then
                 SMOKE_TRACKING_TITLE="$(printf '%s' "${SMOKE_TRACKING_PAYLOAD}" | jq -r '.title // ""' 2>/dev/null || echo "")"
               fi
               if printf '%s' "${SMOKE_TRACKING_TITLE}" | grep -qiE '^\[Orchestrator\] E2E '; then
@@ -286,7 +319,12 @@ jobs:
           repo_owner="${repo_slug%%/*}"
           impl_head="ai/issue-${ISSUE_NUMBER}"
           closing_kw_re="(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#${ISSUE_NUMBER}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#${ISSUE_NUMBER}|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/${ISSUE_NUMBER})([^[:alnum:]_-]|$)"
-          cross_ref_pr_candidates="$(gh api --paginate \
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+          # A failed listing is not "no PR" (issue #6634): fail instead of
+          # risking a duplicate implementation PR.
+          cross_ref_rc=0
+          cross_ref_pr_candidates="$(gh_api_retry --paginate \
             "repos/${repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '
               [.[]
@@ -298,10 +336,19 @@ jobs:
               | unique_by(.number)
               | .[]
               | "\(.number)\t\(.html_url)"
-            ' || true)"
-          open_pr_inventory="$(gh api --paginate \
+            ')" || cross_ref_rc=$?
+          if [ "${cross_ref_rc}" -ne 0 ]; then
+            echo "::error::IMPLEMENT_PR_SAFETY_CHECK outcome=api_unavailable listing=timeline rc=${cross_ref_rc}"
+            exit 1
+          fi
+          open_pr_inventory_rc=0
+          open_pr_inventory="$(gh_api_retry --paginate \
             "repos/${repo_slug}/pulls?state=open&per_page=100" \
-            --jq '.[] | "\(.number)\t\(.html_url)\t\(.head.ref // "")\t\(.head.repo.owner.login // "")\t\((.body // "") | @base64)"' || true)"
+            --jq '.[] | "\(.number)\t\(.html_url)\t\(.head.ref // "")\t\(.head.repo.owner.login // "")\t\((.body // "") | @base64)"')" || open_pr_inventory_rc=$?
+          if [ "${open_pr_inventory_rc}" -ne 0 ]; then
+            echo "::error::IMPLEMENT_PR_SAFETY_CHECK outcome=api_unavailable listing=open_prs rc=${open_pr_inventory_rc}"
+            exit 1
+          fi
           cross_ref_prs=""
           head_branch_prs=""
           while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_head_owner inventory_body_b64; do
@@ -360,13 +407,25 @@ jobs:
 
       - name: Resolve workflow support ref for duplicate PR notice
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "DUPLICATE_NOTICE_SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "DUPLICATE_NOTICE_SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "DUPLICATE_NOTICE_SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout support source for duplicate PR notice
@@ -409,7 +468,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           mkdir -p scripts
@@ -430,7 +489,8 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "WARNING"
+            # DEBUG: the existing PR carries on through review.
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
             echo "::warning::Telegram helper unavailable; skipping duplicate PR Telegram notification."
           fi
@@ -538,6 +598,19 @@ jobs:
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
           else
+            resolver_rc=$?
+            # A resolver that stayed rate-limited (exit 75, issue #6634) must
+            # not silently fall back to the default branch.
+            if [ "${resolver_rc}" -eq 75 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc}"
+              exit 1
+            fi
+            # Exit 2 is an API failure (retries exhausted or a permanent error);
+            # only exit 1 (declared branch missing) keeps the fallback below.
+            if [ "${resolver_rc}" -eq 2 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc}"
+              exit 1
+            fi
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
@@ -960,13 +1033,25 @@ jobs:
 
       - name: Resolve workflow support ref
         if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -1043,8 +1128,9 @@ jobs:
           _staged_support_installed_paths=()
 
           mkdir -p scripts
+          mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1054,6 +1140,9 @@ jobs:
               exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            if [ "${f}" = load_workflow_overlay.py ]; then
+              install -m 0755 "${src}" "${RUNTIME_DIR}/host_python/${f}"
+            fi
             _fetched_scripts+=("${f}")
             _staged_support_installed_paths+=("scripts/${f}")
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
@@ -1213,7 +1302,9 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # Use the runner-temp copy from verified support, outside the branch
+          # checkout; isolated mode also excludes PYTHONPATH and the cwd.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${RUNTIME_DIR}/host_python/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -1396,6 +1487,14 @@ jobs:
           _staged_support_hooks_src=".github/ai/workspace_hooks/implement"
           _staged_support_hooks_dest="${RUNTIME_DIR}/staged_support_run/.github/ai/workspace_hooks/implement"
           rm -rf -- "${RUNTIME_DIR}/staged_support_run/.github"
+          for _staged_support_hook_file in .github .github/ai .github/ai/workspace_hooks "${_staged_support_hooks_src}" \
+            "${_staged_support_hooks_src}/after_create.sh" "${_staged_support_hooks_src}/before_run.sh" \
+            "${_staged_support_hooks_src}/after_run.sh" "${_staged_support_hooks_src}/before_remove.sh"; do
+            if [ -L "${_staged_support_hook_file}" ]; then
+              echo "::error::Implement workspace hook staging refused symlink: ${_staged_support_hook_file}" >&2
+              exit 125
+            fi
+          done
           if [ -d "${_staged_support_hooks_src}" ] && [ ! -L "${_staged_support_hooks_src}" ]; then
             while IFS= read -r -d '' _staged_support_hook_file; do
               _staged_support_hook_file="${_staged_support_hook_file#./}"
@@ -1511,7 +1610,8 @@ jobs:
         id: workspace_after_create_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement after_create
+          # Run the trusted pre-editor copy (#7158), like after_run / before_remove.
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement after_create
 
       - name: Detect preexisting Serena project config
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1661,13 +1761,18 @@ jobs:
           # it cannot supply this grant's pipeline identity before the editor.
           pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
           automation_grant_path="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_grant.json"
+          # --origin-repo (Q82): for a pipeline-authored re-issue or unblock
+          # fix-up the guard reads each source issue once (gh api, at most 8
+          # reads) so an untrusted author's request never becomes an
+          # automation-path grant. Plain issues cost no extra call.
           python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
             --emit-automation-grant "${automation_grant_path}" \
-            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" || true
+            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" \
+            --origin-repo "${GITHUB_REPOSITORY:-}" || true
           echo "AUTOMATION_PATH_GRANT_FILE=${automation_grant_path}" >> "$GITHUB_ENV"
           if [ -f "${automation_grant_path}" ]; then
             jq -r --arg issue "${ISSUE_NUMBER}" \
-              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association)"' \
+              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association) origin_issues=\((.origin_issues // []) | map(tostring) | join(",") | if . == "" then "none" else . end)"' \
               "${automation_grant_path}" || echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_error paths=0"
           else
             echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_unavailable paths=0"
@@ -1841,7 +1946,17 @@ jobs:
             exit 0
           fi
           printf '%s\n' "${DEPENDENCY_META}" > "${ISSUE_META_FILE}"
-          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          # Run the trusted runtime copy in isolated mode (issue #7159): the
+          # checkout's scripts/ is branch-controlled, and Python would import a
+          # branch-added scripts/json.py from the script's directory while
+          # GH_TOKEN holds GH_PAT. A missing or symlinked copy fails closed.
+          _security_dependency_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/security_dependency.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_security_dependency_helper}" ] || [ -L "${_security_dependency_helper}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=trusted_helper_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
           if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
@@ -2022,7 +2137,14 @@ jobs:
             echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
             exit 0
           fi
-          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py rejection-snapshot \
+          # Trusted runtime copy, isolated mode (issue #7159): never import
+          # branch-controlled modules from the checkout's scripts/ with GH_PAT.
+          _unblock_ledger_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/unblock_ledger.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_unblock_ledger_helper}" ] || [ -L "${_unblock_ledger_helper}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=trusted_helper_unavailable"
+            exit 0
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/unblock_ledger.py" rejection-snapshot \
               --run-file "${rejection_dir}/run.json" --artifact-file "${rejection_dir}/artifact.json" \
               --zip-file "${rejection_dir}/snapshot.zip" --item "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --approved-json "${approved_deletions}" > "${rejection_dir}/verified.json"; then
@@ -2224,7 +2346,15 @@ jobs:
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
-          verdict="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          # Trusted runtime copy, isolated mode (issue #7159); see "Validate
+          # approval phase label". A missing or symlinked copy fails closed.
+          _security_dependency_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/security_dependency.py"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${_security_dependency_helper}" ] || [ -L "${_security_dependency_helper}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=trusted_helper_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
           if [ "$(printf '%s' "${verdict}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held_before_edits outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
@@ -2235,7 +2365,8 @@ jobs:
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement before_run
+          # Run the trusted pre-editor copy (#7158), like after_run / before_remove.
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement before_run
 
       # Claude engine (replace-claude-sessions plan Phase 5b): IMPLEMENT,
       # IMPLEMENT_REPAIR and IMPLEMENT_DIAGNOSE each resolve their engine from
@@ -2442,6 +2573,20 @@ jobs:
           differs), proceed with the codebase truth and note the conflict in
           your output.
 
+          agents.md discipline: never add text to `agents.md` (or `AGENTS.md`)
+          directly, even when the plan says "document in agents.md";
+          concurrent PRs collide on the same few sections. Write one fragment
+          at `agents.d/<issue-or-pr>-<slug>.md` instead. Each block starts
+          with `<!-- agents: section="<exact ## heading>" -->` and its text
+          is appended to that section; for a new log prefix use
+          `<!-- agents: section="Stable log prefixes (contractual)" -->`
+          followed by the `` - `PREFIX` `` bullet and the
+          `LOG_PREFIX.name=PREFIX` line. Add ` new` inside the marker only to
+          create a section that does not exist yet. Edit the agents file
+          directly only to correct or remove existing text. A scope that
+          lists `agents.md` covers its `agents.d/` fragments. CI fails a pull
+          request that adds to the agents file directly.
+
           ## Pre-commit security checklist
 
           - Validate external input at every trust boundary.
@@ -2474,6 +2619,14 @@ jobs:
           the edit. The post-Codex commit step diffs the worktree against
           HEAD; an empty diff is treated as no-actionable-output even if the
           assistant message describes the change.
+          `BLOCKED: <reason>` means an obstacle stopped you (scope-lock
+          violation, unavailable tooling, contradictory requirements). It is
+          NOT the marker for "there was nothing to do". When the approved
+          plan requires no repository edits because the requested state is
+          already present on the branch, end your final message with exactly
+          `No changes needed.` on its own line instead of a `BLOCKED:` line.
+          Automation closes that as done; a `BLOCKED:` line, or the same
+          news in other words, fails the run.
           </completeness_contract>
 
           Output: repository changes only.
@@ -2951,6 +3104,11 @@ jobs:
           - Describing the new content does not write it. The workflow's
             stuck-detection counts an empty worktree diff as no-actionable
             output regardless of how detailed the assistant message is.
+          - The one exception: if the approved plan itself says no
+            repository edit is required (verification only, or the
+            requested state is already present on the branch) and you have
+            confirmed that, do not invent an edit. End your final message
+            with exactly `No changes needed.` on its own line.
 
           RETRY_EOF
                 if [ -n "${prior_exec_history}" ]; then
@@ -3490,10 +3648,10 @@ jobs:
           fi
 
       - name: Run workspace after_run hook
-        if: always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'
+        if: always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''
         run: |
           set -euo pipefail
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement after_run
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement after_run
 
       - name: Write run summary
         if: env.SKIP_IMPLEMENT != 'true' && always()
@@ -5894,7 +6052,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh" ]; then
@@ -5914,7 +6072,9 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_phase_failure >/dev/null 2>&1; then
-            tg_send_phase_failure implement "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+            # DEBUG: the heal-report job and the unblock judge pick this up
+            # and page when a person is needed.
+            tg_send_phase_failure implement "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi
@@ -6073,10 +6233,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Run workspace before_remove hook
-        if: always() && env.SKIP_IMPLEMENT != 'true'
+        if: always() && env.SKIP_IMPLEMENT != 'true' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''
         run: |
           set -euo pipefail
-          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement before_remove
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement before_remove
 
       - name: Cleanup temporary artifacts
         if: always()
@@ -6106,8 +6266,10 @@ jobs:
     # `failure` result is reported: a cancelled run was superseded or timed
     # out. A run that ended in a deliberate terminal state (guard block,
     # diagnosed fix-up issues, BLOCKED verdict) sets no heal_report output and
-    # is not reported. `permissions: {}` keeps the job inside any caller's
-    # grant; GH_PAT does the work. The reporter always exits 0.
+    # is not reported. The job is granted only `id-token: write` (every
+    # caller wrapper grants it) so the reporter can attach the OIDC report
+    # identity the heal intake verifies; GH_PAT does the work. The reporter
+    # always exits 0.
     needs: implement
     if: >-
       always() && needs.implement.result == 'failure' &&
@@ -6115,7 +6277,8 @@ jobs:
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions: {}
+    permissions:
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
@@ -6125,13 +6288,25 @@ jobs:
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
     steps:
       - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source

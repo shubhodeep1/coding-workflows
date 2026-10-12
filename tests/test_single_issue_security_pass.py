@@ -13,6 +13,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "review_single_issue_security_pass.sh"
 REVIEW = ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -904,7 +909,9 @@ def test_report_without_pipeline_pending_marker_does_not_authorize_merge(tmp_pat
 
 
 def _steps(path: Path, job: str) -> dict:
-	workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+	# review_autofix.yml step bodies moved to scripts/ are read inlined again.
+	text = expanded_review_autofix_text() if path == REVIEW else path.read_text(encoding="utf-8")
+	workflow = yaml.safe_load(text)
 	return {step.get("name", ""): step for step in workflow["jobs"][job]["steps"]}
 
 

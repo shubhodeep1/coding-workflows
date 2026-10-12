@@ -299,7 +299,8 @@ security_audit_append_prompt_context() {
 			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
 			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
 			echo "Rules for accepted findings:" || return 1
-			echo "- Never re-report the same accepted exploit under any finding_id. Report a different exploit even when its file, category and line are near an accepted finding; an acceptance covers only its documented scenario." || return 1
+			echo "- Do not report an accepted finding again. If you do report the same defect, reuse its original finding_id; a finding under any other finding_id is treated as a new, blocking finding." || return 1
+			echo "- Report a different exploit even when its file, category and line are near an accepted finding; an acceptance covers only its documented scenario." || return 1
 			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
 		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
@@ -372,11 +373,14 @@ fi
 # the orchestrator's security-pass exhaustion judge accepted as known risks
 # for the audited project (findings-json mode only).  They are appended to the
 # prompt as accepted findings the model must not report again, and the
-# post-filter drops any re-report deterministically: an exact `finding_id`
-# match, or the same file, category, severity and exploit scenario within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
-# ids drift between runs and fix commits move lines).  Counted as
-# `suppressed_waived`.  Malformed input fails closed like prior findings.
+# post-filter drops a re-report deterministically only when its non-empty
+# `finding_id` exactly matches the waiver's and every category, severity and
+# exploit scenario the waiver recorded also matches.  There is no proximity
+# match: a finding under a different `finding_id` is a new finding, even at
+# the waived file and line, so an accepted defect must keep its original id.
+# Counted as `suppressed_waived`.  Malformed input fails closed like prior
+# findings.  SECURITY_AUDIT_WAIVER_LINE_WINDOW is still accepted and validated
+# for compatibility, but it no longer controls suppression.
 SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
@@ -1205,6 +1209,22 @@ def text_field(finding: dict, key: str) -> str:
 	return sanitized_prompt_value
 
 
+def raw_lower(value: object) -> str:
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.lower().split())
+
+
+def raw_scenario(value: object) -> str:
+	# Backticks are dropped and whitespace collapsed (as the prompt renders
+	# the scenario), then both sides are cut to 600 characters (the poller's
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.replace("`", "").split())[:600]
+
+
 normalized: list[dict] = []
 prompt_lines: list[str] = []
 for index, finding in enumerate(waived_findings):
@@ -1213,6 +1233,8 @@ for index, finding in enumerate(waived_findings):
 	finding_id = text_field(finding, "finding_id")
 	if not finding_id:
 		raise SystemExit(f"waived finding #{index} is missing its finding_id")
+	raw_finding_id_value = finding.get("finding_id")
+	raw_finding_id = raw_finding_id_value.strip() if isinstance(raw_finding_id_value, str) else ""
 	relative_file = ""
 	file_value = finding.get("file")
 	if isinstance(file_value, str) and file_value.strip():
@@ -1230,14 +1252,24 @@ for index, finding in enumerate(waived_findings):
 		line_number = line_value
 	category = text_field(finding, "owasp_or_stride_category")
 	waived_finding = finding.get("finding")
+	# Match fields are normalized from the raw values, not the prompt-sanitized
+	# ones (stripping backticks or fence markers would distort the comparison).
+	# They are never rendered into the prompt.
+	match_exploit_scenario = raw_scenario(finding.get("exploit_scenario"))
+	if not match_exploit_scenario and isinstance(waived_finding, dict):
+		match_exploit_scenario = raw_scenario(waived_finding.get("exploit_scenario"))
 	normalized.append(
 		{
 			"finding_id": finding_id,
+			"match_finding_id": raw_finding_id,
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
 			"severity": text_field(finding, "severity"),
 			"exploit_scenario": text_field(finding, "exploit_scenario") or (text_field(waived_finding, "exploit_scenario") if isinstance(waived_finding, dict) else ""),
+			"match_category": raw_lower(finding.get("owasp_or_stride_category")),
+			"match_severity": raw_lower(finding.get("severity")),
+			"match_exploit_scenario": match_exploit_scenario,
 		}
 	)
 	location = relative_file or "(location not recorded)"
@@ -1266,7 +1298,8 @@ PY
 		exit 1
 	fi
 	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
-	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (match: exact finding_id plus recorded category/severity/exploit scenario)"
+	echo "security-audit: SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW} is accepted for compatibility but no longer controls waiver suppression"
 fi
 
 # Full scans export every eligible oversized tracked file; listed prior-finding
@@ -1411,62 +1444,230 @@ else
 fi
 [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
 
+# The fallback reason also goes to stdout (the poller sends this script's
+# stderr to a file, so the AI_ENGINE_FALLBACK line never reached the job log).
+security_audit_claude_fallback()
+{
+	local fallback_reason="${1:?fallback reason required}"
+	if [ "${fallback_reason}" = "claude_run" ]; then
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-unknown}"
+	else
+		ai_engine_fallback SECURITY_AUDIT "${fallback_reason}"
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-${fallback_reason}}"
+	fi
+	echo "SECURITY_AUDIT_CLAUDE_FALLBACK reason=${fallback_reason}"
+}
+
 # Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
 # post-filter reads), or 1 after logging the fallback reason.
 security_audit_try_claude()
 {
-	local claude_rc=0 claude_include="" claude_check_reason=""
+	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason=""
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
-		ai_engine_fallback SECURITY_AUDIT all_gated
+		security_audit_claude_fallback all_gated
 		return 1
 	fi
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
 		claude_include="${OVERSIZED_EXPORT_DIR}"
 	fi
+	AI_ENGINE_LAST_FALLBACK_REASON=""
 	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
 		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
 		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
 	case "${claude_rc}" in
 		0) ;;
 		# claude_run already logged AI_ENGINE_FALLBACK with its reason.
-		75) return 1 ;;
-		124) ai_engine_fallback SECURITY_AUDIT timeout; return 1 ;;
-		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}"; return 1 ;;
+		75) security_audit_claude_fallback claude_run; return 1 ;;
+		124) security_audit_claude_fallback timeout; return 1 ;;
+		*) security_audit_claude_fallback "crashed_rc_${claude_rc}"; return 1 ;;
 	esac
 	# Same top-level contract the post-filter enforces on codex output: a JSON
-	# array. One outer ```json fence is stripped; anything else falls back.
-	if ! claude_check_reason="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
+	# array. A reply that is one JSON array, or one outer ```json fence around
+	# it, is used as is. Otherwise the last top-level JSON array in the reply
+	# whose items are all objects with a finding_id is used (orchestrator run
+	# 38113094454 and others fell back to codex with malformed_output, so a
+	# sentence around the array cost the Claude result). An empty array
+	# counts there only when nothing but a closing fence follows it, so a
+	# "[]" inside prose or a cut-off reply is never read as a clean audit.
+	# The post-filter's field checks apply to whatever is accepted. Anything
+	# else falls back.
+	if ! claude_check_result="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 try:
-	text = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+	text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").strip()
 except OSError:
 	text = ""
 if not text:
 	print("missing_output")
 	sys.exit(1)
+
+
+def accept(findings, note: str) -> None:
+	Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
+	print(note)
+	sys.exit(0)
+
+
+strict_text = text
 fenced = re.fullmatch(r"```json[ \t]*\n(.*)\n```", text, re.S)
 if fenced:
-	text = fenced.group(1).strip()
+	strict_text = fenced.group(1).strip()
 try:
-	findings = json.loads(text)
-except ValueError:
+	findings = json.loads(strict_text)
+except (ValueError, RecursionError):
+	findings = None
+else:
+	if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
+		print("schema_mismatch")
+		sys.exit(1)
+	accept(findings, "ok")
+
+# Top-level arrays only: after a parsed array or object the scan resumes past
+# its end, so an array nested in a JSON value that parsed is never a candidate.
+# An empty array never replaces a non-empty one, and it counts only when it
+# starts a line and nothing but a closing fence follows it. Any candidate
+# inside an unclosed value (`Results:\n{"findings":\n[]`) is rejected: earlier
+# failed openers must close first, read both with and without JSON string
+# quoting; bracketed prose such as `Files checked: [a.py, b.py].` closes.
+decoder = json.JSONDecoder()
+opener = re.compile(r"[\[{]")
+
+
+def next_open(start: int) -> int:
+	match = opener.search(text, start)
+	return match.start() if match else -1
+
+
+def closes_before(start: int, stop: int) -> bool:
+	for quoted in (False, True):
+		bracket_stack = []
+		in_string = escaped = False
+		for ch in text[start:stop]:
+			if quoted and in_string:
+				if escaped:
+					escaped = False
+				elif ch == "\\":
+					escaped = True
+				elif ch == '"':
+					in_string = False
+			elif quoted and ch == '"':
+				in_string = True
+			elif ch in "[{":
+				bracket_stack.append(ch)
+			elif ch in "]}":
+				if not bracket_stack or bracket_stack[-1] != (
+					"[" if ch == "]" else "{"
+				):
+					return False
+				bracket_stack.pop()
+				if not bracket_stack:
+					break
+		else:
+			return False
+	return True
+
+
+candidate = None
+failed_opens = []
+position = next_open(0)
+while position != -1:
+	try:
+		value, end = decoder.raw_decode(text, position)
+	except (ValueError, RecursionError):
+		failed_opens.append(position)
+		position = next_open(position + 1)
+		continue
+	if (
+		isinstance(value, list)
+		and all(isinstance(item, dict) and "finding_id" in item for item in value)
+		and all(closes_before(failed, position) for failed in failed_opens)
+	):
+		if value:
+			candidate = (value, position, end)
+		elif (
+			candidate is None
+			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
+			and re.fullmatch(r"\s*(```)?\s*", text[end:])
+		):
+			candidate = (value, position, end)
+	position = next_open(end)
+if candidate is None:
 	print("malformed_output")
 	sys.exit(1)
-if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
-	print("schema_mismatch")
-	sys.exit(1)
-Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
-print("ok")
+value, start, end = candidate
+accept(value, f"extracted items={len(value)} leading_chars={start} trailing_chars={len(text) - end}")
 PY
 )"; then
-		ai_engine_fallback SECURITY_AUDIT "${claude_check_reason:-malformed_output}"
+		claude_check_reason="${claude_check_result:-malformed_output}"
+		security_audit_claude_fallback "${claude_check_reason}"
+		security_audit_log_rejected_claude_reply "${claude_check_reason}"
 		return 1
 	fi
+	case "${claude_check_result}" in
+		extracted\ *) echo "SECURITY_AUDIT_CLAUDE_EXTRACTED ${claude_check_result#extracted }" ;;
+	esac
 	return 0
+}
+
+# A rejected reply is logged to stdout as one line from its start and one from
+# its end (printable ASCII, whitespace collapsed, credentials redacted as in
+# security_audit_sanitize_log_value), so the next failure shows its shape.
+# SECURITY_AUDIT_CLAUDE_REJECTED_OUT (default unset) keeps the first 64 KiB of
+# the reply there. Diagnostics only: any error here is ignored.
+security_audit_log_rejected_claude_reply()
+{
+	python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${1:-unknown}" "${SECURITY_AUDIT_CLAUDE_REJECTED_OUT:-}" <<'PY' || true
+import re
+import sys
+from pathlib import Path
+
+reply_path, reason, kept_path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+	raw = Path(reply_path).read_bytes()
+except OSError:
+	raw = b""
+kept = "none"
+if kept_path and raw:
+	try:
+		Path(kept_path).parent.mkdir(parents=True, exist_ok=True)
+		Path(kept_path).write_bytes(raw[:65536])
+		kept = kept_path
+	except OSError:
+		kept = "write_failed"
+excerpt_source = raw.decode("utf-8", errors="replace")
+excerpt_source = re.sub(r"\s+", " ", excerpt_source)
+excerpt_source = "".join(ch for ch in excerpt_source if " " <= ch <= "~")
+excerpt_source = re.sub(r" {2,}", " ", excerpt_source).strip()
+
+
+def redact(value: str) -> str:
+	value = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@", r"\1[redacted]@", value)
+	value = re.sub(r"([Aa]uthorization:\s*)(([Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+", r"\1[redacted]", value)
+	value = re.sub(r"([Bb]earer\s+)\S+", r"\1[redacted]", value)
+	value = re.sub(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+", r"\1[redacted]", value)
+	value = re.sub(r"(sk-or-)[A-Za-z0-9_-]+", r"\1[redacted]", value)
+	# Further key formats an audit reply may quote from the audited code.
+	value = re.sub(r"(sk-)[A-Za-z0-9_-]{20,}", r"\1[redacted]", value)
+	value = re.sub(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", r"\1[redacted]", value)
+	value = re.sub(r"\b(AIza)[0-9A-Za-z_-]{35}", r"\1[redacted]", value)
+	value = re.sub(r"\b(xox[abposr]-)[A-Za-z0-9-]+", r"\1[redacted]", value)
+	value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[redacted private key]", value)
+	return value
+
+
+# Redact before slicing, so a token cut by the 300-character boundary is
+# still recognised by its prefix.
+redacted_source = redact(excerpt_source)
+print(f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes={len(raw)} chars={len(excerpt_source)} kept={kept}")
+if redacted_source:
+	print("security-audit: rejected Claude reply starts: " + redacted_source[:300])
+if len(redacted_source) > 300:
+	print("security-audit: rejected Claude reply ends: " + redacted_source[-300:])
+PY
 }
 
 if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] && security_audit_try_claude; then
@@ -1537,7 +1738,9 @@ summary_path = Path(sys.argv[6])
 audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
 waived_findings_path = Path(sys.argv[9])
-waiver_line_window = int(sys.argv[10])
+# Still passed (and validated by the caller) to keep the argument order
+# stable; it no longer controls waiver suppression.
+_unused_waiver_line_window = int(sys.argv[10])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1736,36 +1939,37 @@ if not isinstance(waived_findings_input, list):
 def matching_waiver(finding: dict[str, object]) -> str | None:
 	"""Return the waived finding_id this finding re-reports, if any.
 
-	Exact id first; otherwise the same file and category within the line
-	window of the waived line, because the auditor mints a new id on every
-	run and a fix commit shifts the cited line.
+	A waiver suppresses a finding only when its non-empty finding_id exactly
+	matches and every category, severity and exploit scenario the waiver
+	recorded also matches.  There is no proximity match: a finding under a
+	different finding_id is a new finding, even at the waived location.
 	"""
-	finding_id = str(finding.get("finding_id") or "")
-	finding_file = str(finding.get("file") or "")
+	finding_id = finding.get("finding_id")
+	if not isinstance(finding_id, str) or not finding_id:
+		return None
 	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
-	finding_line = int(finding.get("line") or 0)
+	finding_severity = " ".join(str(finding.get("severity") or "").lower().split())
+	# Same canonical form as the waiver side (raw_scenario above).
+	finding_scenario = " ".join(str(finding.get("exploit_scenario") or "").replace("`", "").split())[:600]
 	for waiver in waived_findings_input:
 		if not isinstance(waiver, dict):
 			continue
-		waived_id = str(waiver.get("finding_id") or "")
-		waived_file = str(waiver.get("file") or "")
-		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
-		waived_severity = str(waiver.get("severity") or "").strip().lower()
-		waived_scenario = " ".join(str(waiver.get("exploit_scenario") or "").lower().split())
-		finding_scenario = " ".join(str(finding.get("exploit_scenario") or "").lower().split())
-		if (waived_id and waived_id == finding_id
-			and (not waived_category or waived_category == finding_category)
-			and (not waived_severity or waived_severity == str(finding.get("severity") or "").strip().lower())
-			and (not waived_scenario or waived_scenario == finding_scenario)):
-			return waived_id
-		waived_line = waiver.get("line")
-		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
+		# Exact match on the raw recorded id only.  The prompt-sanitized
+		# finding_id (backticks dropped, whitespace collapsed) is never an
+		# alias: it would let a waiver for one id suppress a distinct id.
+		waived_id = waiver.get("match_finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip() or waived_id.strip() != finding_id:
 			continue
-		if (waived_file == finding_file and waived_category == finding_category
-			and waived_severity == str(finding.get("severity") or "").strip().lower()
-			and waived_scenario and waived_scenario == finding_scenario
-			and abs(waived_line - finding_line) <= waiver_line_window):
-			return waived_id or "(unnamed waiver)"
+		waived_category = str(waiver.get("match_category") or "")
+		waived_severity = str(waiver.get("match_severity") or "")
+		waived_scenario = str(waiver.get("match_exploit_scenario") or "")
+		if waived_category and waived_category != finding_category:
+			continue
+		if waived_severity and waived_severity != finding_severity:
+			continue
+		if waived_scenario and waived_scenario != finding_scenario:
+			continue
+		return finding_id
 	return None
 
 
