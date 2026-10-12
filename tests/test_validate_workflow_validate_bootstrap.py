@@ -1062,6 +1062,288 @@ def test_stage_workflow_support_helper_routes_self_repo_renderer_to_trusted_comm
 	assert "VALIDATE_TRUSTED_RENDERER_OVERRIDE path=" in helper
 
 
+_SAFETY_ASSETS = (
+	"scripts/templates/slot_manifest.schema.json",
+	"scripts/validation_harness_sandbox.sh",
+	"scripts/validate_driver.sh",
+	"scripts/validate_process.sh",
+)
+_SAFETY_MANIFEST = {"self_repo_trusted_support_files": list(_SAFETY_ASSETS)}
+_SAFETY_TESTS = (
+	"tests/test_render_validation_templates_shell_quoting.py",
+	"tests/test_validation_harness_sandbox.py",
+	"tests/test_validate_driver_credential_scrub.py",
+)
+
+
+def _trusted_safety(rel: str) -> str:
+	return f"# trusted {rel}\n"
+
+
+def _stale_safety(rel: str) -> str:
+	return f"# stale integration copy of {rel}\n"
+
+
+def test_self_repo_validation_safety_assets_come_from_verified_support_commit() -> None:
+	# Issue #6865: an integration checkout supplied its own validate_process.sh,
+	# credential scrub, sandbox and slot schema to its own validation run.
+	with tempfile.TemporaryDirectory() as tmpdir:
+		for baseline in (True, False):
+			result, workspace = _run_validate_staging(
+				Path(tmpdir) / ("baseline" if baseline else "fixed"),
+				source_files={
+					_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE,
+					_RENDERER_REL: _TRUSTED_RENDERER,
+					**{rel: _trusted_safety(rel) for rel in _SAFETY_ASSETS},
+				},
+				manifest_paths=[_TEMPLATE_REL],
+				workspace_files={_RENDERER_REL: _STALE_RENDERER, **{rel: _stale_safety(rel) for rel in _SAFETY_ASSETS}},
+				manifest_extra={} if baseline else {**_RENDERER_MANIFEST, **_SAFETY_MANIFEST},
+			)
+			assert result.returncode == 0, result.stdout + result.stderr
+			for rel in _SAFETY_ASSETS:
+				content = (workspace / rel).read_text(encoding="utf-8")
+				if baseline:
+					assert content == _stale_safety(rel)
+				else:
+					assert content == _trusted_safety(rel)
+					assert f"VALIDATE_TRUSTED_SUPPORT_OVERRIDE path={rel} ref=" in result.stdout
+			if baseline:
+				assert "VALIDATE_TRUSTED_SUPPORT" not in result.stdout
+				continue
+			assert "VALIDATE_TRUSTED_SUPPORT staged=4 ref=" in result.stdout
+			for rel in _SAFETY_ASSETS:
+				assert os.access(workspace / rel, os.X_OK) == rel.endswith(".sh")
+			assert (workspace / _RENDERER_REL).read_text(encoding="utf-8") == _TRUSTED_RENDERER
+
+
+def test_self_repo_validation_safety_assets_fail_closed_when_the_trusted_copy_is_missing() -> None:
+	missing = "scripts/validate_driver.sh"
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={rel: _trusted_safety(rel) for rel in _SAFETY_ASSETS if rel != missing},
+			manifest_paths=[],
+			workspace_files={rel: _stale_safety(rel) for rel in _SAFETY_ASSETS},
+			manifest_extra=_SAFETY_MANIFEST,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert f"::error::Required trusted validation safety asset {missing} is missing from" in result.stderr
+		assert (workspace / missing).read_text(encoding="utf-8") == _stale_safety(missing)
+
+
+def test_self_repo_validation_safety_assets_fail_closed_without_trusted_commit() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={rel: _trusted_safety(rel) for rel in _SAFETY_ASSETS},
+			manifest_paths=[],
+			workspace_files={rel: _stale_safety(rel) for rel in _SAFETY_ASSETS},
+			manifest_extra=_SAFETY_MANIFEST,
+			support_ref="0" * 40,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		for rel in _SAFETY_ASSETS:
+			assert (workspace / rel).read_text(encoding="utf-8") == _stale_safety(rel)
+
+
+def test_self_repo_validation_safety_assets_reject_symlinked_destination() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, _workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={rel: _trusted_safety(rel) for rel in _SAFETY_ASSETS},
+			manifest_paths=[],
+			workspace_files={rel: _stale_safety(rel) for rel in _SAFETY_ASSETS},
+			manifest_extra=_SAFETY_MANIFEST,
+			workspace_scripts_symlink=True,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing non-file or symlinked validation safety asset path" in result.stderr
+		outside = Path(tmpdir) / "outside_scripts"
+		for rel in _SAFETY_ASSETS:
+			assert (outside / rel.removeprefix("scripts/")).read_text(encoding="utf-8") == _stale_safety(rel)
+
+
+def test_self_repo_validation_safety_assets_reject_directory_destination() -> None:
+	target = "scripts/validate_process.sh"
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={rel: _trusted_safety(rel) for rel in _SAFETY_ASSETS},
+			manifest_paths=[],
+			workspace_files={f"{target}/keep": "x\n"},
+			manifest_extra={"self_repo_trusted_support_files": [target]},
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing non-file or symlinked validation safety asset path" in result.stderr
+		assert (workspace / target).is_dir()
+
+
+def test_self_repo_validation_safety_assets_reject_paths_outside_scripts() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, _workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={"agents.md": "x\n"},
+			manifest_paths=[],
+			manifest_extra={"self_repo_trusted_support_files": ["agents.md", "scripts/../agents.md"]},
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "is not a validation safety asset under scripts/" in result.stderr
+
+
+def test_consumer_and_explicit_target_skip_trusted_safety_pass() -> None:
+	for label, kwargs in (
+		("consumer", {"repository": "other/repo"}),
+		("explicit", {"extra_env": {"VALIDATE_AUTHORIZED_TARGET_SHA": "0" * 40}}),
+	):
+		with tempfile.TemporaryDirectory() as tmpdir:
+			result, _workspace = _run_validate_staging(
+				Path(tmpdir) / label,
+				source_files={rel: _trusted_safety(rel) for rel in _SAFETY_ASSETS},
+				manifest_paths=[],
+				workspace_files={rel: _stale_safety(rel) for rel in _SAFETY_ASSETS},
+				manifest_extra=_SAFETY_MANIFEST,
+				**kwargs,
+			)
+			assert result.returncode == 0, label + result.stdout + result.stderr
+			assert "VALIDATE_TRUSTED_SUPPORT" not in result.stdout, label
+
+
+def test_validate_manifest_lists_trusted_safety_assets_and_helper_gates_the_pass() -> None:
+	wf = _workflow_text()
+	block = wf.split('"self_repo_trusted_support_files": [', 1)[1].split("]", 1)[0]
+	assert re.findall(r'"([^"]+)"', block) == list(_SAFETY_ASSETS)
+	helper = _helper_text()
+	assert 'json_array_lines "self_repo_trusted_support_files"' in helper
+	assert 'if [ "${IS_SELF_REPO}" != "true" ] || [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then' in helper
+	assert "stage_self_repo_validation_safety_entry" in helper
+	assert "VALIDATE_TRUSTED_SUPPORT_OVERRIDE path=" in helper
+
+
+def test_validation_security_tests_run_in_ci_and_both_release_gates() -> None:
+	workflows = REPO_ROOT / ".github" / "workflows"
+	for gate in ("test-and-mark-stable.yml", "mark-stable.yml"):
+		text = (workflows / gate).read_text(encoding="utf-8")
+		assert any(all(t in line for t in _SAFETY_TESTS) for line in text.splitlines()), gate
+	ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+	for test_file in _SAFETY_TESTS:
+		assert test_file in ci, test_file
+
+
+# Q39: C (item 10): the renderer fix generalised to the harness infrastructure.
+# Project #6664 revalidated with its integration branch's
+# validation_harness_sandbox.sh, which predated the rootless-package fix
+# (#6959), and could not provision the sandbox.
+_SANDBOX_REL = "scripts/validation_harness_sandbox.sh"
+_STALE_SANDBOX = "#!/usr/bin/env bash\n# stale sandbox without install_rootless_packages\n"
+_TRUSTED_SANDBOX = "#!/usr/bin/env bash\ninstall_rootless_packages() { :; }\n"
+_TRUSTED_SUPPORT_MANIFEST = {"self_repo_trusted_scripts": [_SANDBOX_REL]}
+
+
+def test_self_repo_harness_infrastructure_comes_from_the_verified_support_commit() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE, _SANDBOX_REL: _TRUSTED_SANDBOX},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_files={_SANDBOX_REL: _STALE_SANDBOX},
+			manifest_extra=_TRUSTED_SUPPORT_MANIFEST,
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert (workspace / _SANDBOX_REL).read_text(encoding="utf-8") == _TRUSTED_SANDBOX
+		assert os.access(workspace / _SANDBOX_REL, os.X_OK)
+		assert f"VALIDATE_TRUSTED_SUPPORT_OVERRIDE path={_SANDBOX_REL}" in result.stdout
+		assert f"VALIDATE_TRUSTED_SUPPORT path={_SANDBOX_REL} ref=" in result.stdout
+
+
+def test_self_repo_harness_infrastructure_unchanged_copy_logs_no_override() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE, _SANDBOX_REL: _TRUSTED_SANDBOX},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_files={_SANDBOX_REL: _TRUSTED_SANDBOX},
+			manifest_extra=_TRUSTED_SUPPORT_MANIFEST,
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "VALIDATE_TRUSTED_SUPPORT_OVERRIDE" not in result.stdout
+		assert f"VALIDATE_TRUSTED_SUPPORT path={_SANDBOX_REL} ref=" in result.stdout
+
+
+def test_self_repo_harness_infrastructure_fails_closed_when_the_trusted_copy_is_missing() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_files={_SANDBOX_REL: _STALE_SANDBOX},
+			manifest_extra=_TRUSTED_SUPPORT_MANIFEST,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert f"::error::Required trusted validation support script {_SANDBOX_REL} is missing from" in result.stderr
+		assert (workspace / _SANDBOX_REL).read_text(encoding="utf-8") == _STALE_SANDBOX
+
+
+def test_self_repo_harness_infrastructure_refuses_paths_outside_scripts() -> None:
+	for bad_path in ("workflow-templates/x.sh", "scripts/../x.sh", "scripts//x.sh"):
+		with tempfile.TemporaryDirectory() as tmpdir:
+			result, _workspace = _run_validate_staging(
+				Path(tmpdir),
+				source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+				manifest_paths=[_TEMPLATE_REL],
+				manifest_extra={"self_repo_trusted_scripts": [bad_path]},
+			)
+			assert result.returncode != 0, result.stdout + result.stderr
+			assert "::error::Refusing" in result.stderr and bad_path in result.stderr, bad_path
+
+
+def test_self_repo_harness_infrastructure_rejects_symlinked_parent_directory() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, _workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE, _SANDBOX_REL: _TRUSTED_SANDBOX},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_files={_SANDBOX_REL: _STALE_SANDBOX},
+			manifest_extra=_TRUSTED_SUPPORT_MANIFEST,
+			workspace_scripts_symlink=True,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "symlinked validation support path" in result.stderr
+		assert (Path(tmpdir) / "outside_scripts" / "validation_harness_sandbox.sh").read_text(encoding="utf-8") == _STALE_SANDBOX
+
+
+def test_consumer_and_explicit_target_runs_keep_their_support_staging() -> None:
+	for extra in ({"repository": "other/repo"}, {"extra_env": {"VALIDATE_AUTHORIZED_TARGET_SHA": "0" * 40}}):
+		with tempfile.TemporaryDirectory() as tmpdir:
+			result, _workspace = _run_validate_staging(
+				Path(tmpdir),
+				source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE, _SANDBOX_REL: _TRUSTED_SANDBOX},
+				manifest_paths=[],
+				workspace_files={_SANDBOX_REL: _STALE_SANDBOX},
+				manifest_extra=_TRUSTED_SUPPORT_MANIFEST,
+				**extra,
+			)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert "VALIDATE_TRUSTED_SUPPORT" not in result.stdout, extra
+
+
+def test_validate_workflow_lists_the_trusted_harness_infrastructure() -> None:
+	wf = _workflow_text()
+	manifest = wf.split("cat > \"${manifest_path}\" <<'EOF'", 1)[1].split("\n          EOF", 1)[0]
+	data = json.loads(manifest)
+	assert data["self_repo_trusted_scripts"] == [
+		"scripts/validation_harness_sandbox.sh",
+		"scripts/codex_isolated_workspace.py",
+		"scripts/validate_driver.sh",
+	]
+	staged = set(data["required_scripts"]) | set(data["required_remote_when_external_scripts"])
+	for path in data["self_repo_trusted_scripts"]:
+		assert path in staged, path
+		assert (REPO_ROOT / path).is_file(), path
+	helper = _helper_text()
+	assert 'done < <(json_array_lines "self_repo_trusted_scripts")' in helper
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
@@ -1088,6 +1370,15 @@ def main() -> int:
 	test_consumer_validation_renderer_keeps_the_preserve_rule()
 	test_explicit_target_validation_renderer_keeps_the_preserve_rule()
 	test_stage_workflow_support_helper_routes_self_repo_renderer_to_trusted_commit()
+	test_self_repo_validation_safety_assets_come_from_verified_support_commit()
+	test_self_repo_validation_safety_assets_fail_closed_when_the_trusted_copy_is_missing()
+	test_self_repo_validation_safety_assets_fail_closed_without_trusted_commit()
+	test_self_repo_validation_safety_assets_reject_symlinked_destination()
+	test_self_repo_validation_safety_assets_reject_directory_destination()
+	test_self_repo_validation_safety_assets_reject_paths_outside_scripts()
+	test_consumer_and_explicit_target_skip_trusted_safety_pass()
+	test_validate_manifest_lists_trusted_safety_assets_and_helper_gates_the_pass()
+	test_validation_security_tests_run_in_ci_and_both_release_gates()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()
 	test_codex_heartbeat_helper_contract()
@@ -1095,8 +1386,16 @@ def main() -> int:
 	test_run_validation_repo_checks_override_preserves_quoted_arguments()
 	test_run_validation_repo_checks_override_preserves_env_prefix_assignments()
 	test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metacharacters()
+	test_self_repo_harness_infrastructure_comes_from_the_verified_support_commit()
+	test_self_repo_harness_infrastructure_unchanged_copy_logs_no_override()
+	test_self_repo_harness_infrastructure_fails_closed_when_the_trusted_copy_is_missing()
+	test_self_repo_harness_infrastructure_refuses_paths_outside_scripts()
+	test_self_repo_harness_infrastructure_rejects_symlinked_parent_directory()
+	test_consumer_and_explicit_target_runs_keep_their_support_staging()
+	test_validate_workflow_lists_the_trusted_harness_infrastructure()
 	return 0
 
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+

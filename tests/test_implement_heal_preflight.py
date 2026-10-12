@@ -80,7 +80,28 @@ def _make_support(tmp_path: Path, branch: str = "main", detach: bool = True, kee
 	return sha
 
 
-def _run(tmp_path: Path, state: dict, script_ref: str | None = None, labels: list[str] | None = None, args: list[str] | None = None) -> tuple[subprocess.CompletedProcess, Path, Path]:
+def _make_decoy_workspace(tmp_path: Path, branch: str = "issue") -> str:
+	"""Make the outer workspace its own repository (like the primary checkout).
+
+	Its HEAD differs from the support checkout's, so a read that lands here
+	instead of .codex-workflow-src shows up as a wrong `actual_sha` (#7193).
+	"""
+	workspace = tmp_path / "workspace"
+	workspace.mkdir(parents=True, exist_ok=True)
+	_git(["init", "-q", "-b", branch, str(workspace)], tmp_path)
+	(workspace / "decoy.txt").write_text("decoy workspace\n")
+	_git(["add", "decoy.txt"], workspace)
+	_git(["-c", "user.name=d", "-c", "user.email=d@example.invalid", "commit", "-q", "-m", "decoy"], workspace)
+	return _git(["rev-parse", "HEAD"], workspace)
+
+
+def _workspace_git_env(tmp_path: Path) -> dict:
+	"""The GIT_DIR / GIT_WORK_TREE pair implement.yml exports for the workspace."""
+	workspace = tmp_path / "workspace"
+	return {"GIT_DIR": str(workspace / ".git"), "GIT_WORK_TREE": str(workspace)}
+
+
+def _run(tmp_path: Path, state: dict, script_ref: str | None = None, labels: list[str] | None = None, args: list[str] | None = None, extra_env: dict | None = None) -> tuple[subprocess.CompletedProcess, Path, Path]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
@@ -111,6 +132,8 @@ def _run(tmp_path: Path, state: dict, script_ref: str | None = None, labels: lis
 	env.pop("SCRIPT_REF", None)
 	if script_ref is not None:
 		env["SCRIPT_REF"] = script_ref
+	if extra_env:
+		env.update(extra_env)
 	try:
 		result = subprocess.run(["bash", str(SCRIPT), *(args or [])], env=env, capture_output=True, text=True, check=False)
 	finally:
@@ -271,3 +294,71 @@ def test_ordinary_issue_skips_heal_route_without_gh(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert env_file.read_text().splitlines() == ["HEAL_ROUTE=false"]
 	assert calls.read_text() == ""
+
+
+# --- #7193: the support checks must ignore the workspace's exported GIT_DIR ---
+
+
+@needs_jq
+def test_exported_workspace_git_dir_does_not_hide_matching_support_head(tmp_path: Path) -> None:
+	sha = _make_support(tmp_path)
+	decoy_sha = _make_decoy_workspace(tmp_path)
+	assert decoy_sha != sha
+	result, env_file, calls = _run(tmp_path, {"live": _live_issue()}, script_ref=sha, extra_env=_workspace_git_env(tmp_path))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "HEAL_SCOPE_REFUSED" not in result.stdout
+	assert f"::notice::Heal support ref verified expected_ref={sha} expected_sha={sha} actual_sha={sha} fallback=false" in result.stdout
+	assert decoy_sha not in result.stdout
+	env_text = env_file.read_text()
+	assert "HEAL_ROUTE=true" in env_text
+	assert "SKIP_IMPLEMENT=true" not in env_text
+	assert "issue comment" not in calls.read_text()
+
+
+@needs_jq
+def test_exported_workspace_git_dir_real_mismatch_reports_support_head(tmp_path: Path) -> None:
+	sha = _make_support(tmp_path)
+	decoy_sha = _make_decoy_workspace(tmp_path)
+	result, env_file, calls = _run(tmp_path, {"live": _live_issue()}, script_ref=OTHER_SHA, extra_env=_workspace_git_env(tmp_path))
+	_assert_refused(result, env_file, calls, "unavailable", "support_ref_mismatch")
+	assert f"expected_sha={OTHER_SHA} actual_sha={sha} fallback=false" in result.stdout
+	assert decoy_sha not in result.stdout
+
+
+@needs_jq
+def test_workspace_head_matching_ref_never_verifies_a_different_support_head(tmp_path: Path) -> None:
+	sha = _make_support(tmp_path)
+	decoy_sha = _make_decoy_workspace(tmp_path)
+	result, env_file, calls = _run(tmp_path, {"live": _live_issue()}, script_ref=decoy_sha, extra_env=_workspace_git_env(tmp_path))
+	_assert_refused(result, env_file, calls, "unavailable", "support_ref_mismatch")
+	assert f"expected_sha={decoy_sha} actual_sha={sha} fallback=false" in result.stdout
+
+
+@needs_jq
+def test_exported_workspace_git_dir_still_reports_support_fallback(tmp_path: Path) -> None:
+	sha = _make_support(tmp_path, branch="main", detach=False)
+	_make_decoy_workspace(tmp_path)
+	result, env_file, calls = _run(tmp_path, {"live": _live_issue()}, script_ref=OTHER_SHA, extra_env=_workspace_git_env(tmp_path))
+	_assert_refused(result, env_file, calls, "unavailable", "support_ref_fallback")
+	assert f"expected_sha={OTHER_SHA} actual_sha={sha} fallback=true" in result.stdout
+
+
+@needs_jq
+def test_exported_workspace_git_dir_resolves_stable_in_support(tmp_path: Path) -> None:
+	sha = _make_support(tmp_path, branch="stable", detach=False)
+	decoy_sha = _make_decoy_workspace(tmp_path, branch="stable")
+	assert decoy_sha != sha
+	result, env_file, _calls = _run(tmp_path, {"live": _live_issue()}, script_ref="stable", extra_env=_workspace_git_env(tmp_path))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "HEAL_SCOPE_REFUSED" not in result.stdout
+	assert f"expected_ref=stable expected_sha={sha} actual_sha={sha} fallback=false" in result.stdout
+	assert "HEAL_ROUTE=true" in env_file.read_text()
+
+
+@needs_jq
+def test_support_without_own_repository_is_refused(tmp_path: Path) -> None:
+	_make_support(tmp_path)
+	shutil.rmtree(tmp_path / "workspace/.codex-workflow-src/.git")
+	decoy_sha = _make_decoy_workspace(tmp_path)
+	result, env_file, calls = _run(tmp_path, {"live": _live_issue()}, script_ref=decoy_sha)
+	_assert_refused(result, env_file, calls, "unavailable", "support_not_repository")

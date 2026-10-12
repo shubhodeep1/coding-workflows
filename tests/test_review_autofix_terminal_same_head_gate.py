@@ -26,6 +26,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -38,7 +42,8 @@ MARKER_AUTHOR_LOGIN = "workflow-pat-user"
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# The gate body lives in scripts/review_autofix_step_evaluate_gate.sh.
+	return expanded_review_autofix_text()
 
 
 def _gate_block() -> str:
@@ -158,7 +163,9 @@ def test_gate_head_sha_rides_on_existing_pulls_fetch() -> None:
 	# The terminal skip reuses the initial projection. A second read occurs
 	# only before posting a head-bound intentional-skip notice: that head may
 	# have moved since the original gate fetch (issue #4985).
-	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 2
+	# The first read goes through the classified retry helper (issue #6634).
+	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	assert gate.count('_pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
 	assert 'skip_notice_live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq' in gate
 	assert 'head_sha: (.head.sha // "")' in gate
 	assert """pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")\"""" in gate

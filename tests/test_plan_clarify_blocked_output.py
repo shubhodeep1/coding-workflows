@@ -223,8 +223,12 @@ def test_plan_workflow_includes_ref_context_and_mismatch_rule() -> None:
 	assert "git symbolic-ref --short -q HEAD" in wf
 	assert "PLANNING_REF_INTEGRATION_BRANCH_META" in wf
 	assert "PLANNING REF CONTEXT" in wf
-	assert "If checked-out ref mismatches Integration branch metadata, emit exactly" in plan_runner
-	assert "`BLOCKED: integration branch mismatch`" in plan_runner
+	# Issue #7172: the rule keys on the workflow's computed line, not on git
+	# inside the model's snapshot workspace (branch `isolated`).
+	for prompt_text in (plan_runner, _read(PROMPT_PLAN)):
+		assert "If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads\n  `true`, emit exactly `BLOCKED: integration branch mismatch`." in prompt_text
+		assert "snapshot on a local branch named `isolated`" in prompt_text
+	assert "plan_output_contradicts_ref_context" in plan_runner
 
 
 def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
@@ -246,7 +250,7 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
 	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
-	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do" in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
 	assert "--sandbox read-only" in runner

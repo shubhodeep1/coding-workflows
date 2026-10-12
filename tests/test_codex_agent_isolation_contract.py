@@ -19,6 +19,10 @@ import re
 from pathlib import Path
 
 import pytest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
@@ -342,7 +346,7 @@ def test_poller_judges_stay_on_the_review_sandbox():
 	]
 	assert isolated_exec_uses == [], POLLER_JUDGE_DECISION
 
-	agents = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents = _agents_text_with_fragments()
 	section = agents[agents.index("## Isolated Codex agents"):]
 	section = section[: section.index("\n## ")]
 	assert "review_untrusted_sandbox.sh" in section
@@ -593,3 +597,33 @@ def test_claude_run_refuses_a_pool_inside_the_workdir_before_launch(tmp_path: Pa
 	allowed = run(tmp_path / "pool")
 	assert "reason=pool_overlap" not in allowed.stderr, allowed.stderr
 	assert marker.exists(), allowed.stdout + allowed.stderr
+
+
+# --- implement's bounded image-build retry (issue #7196) ------------------------------
+
+IMAGE_BUILD_RETRY_PREPARE = 'CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps'
+
+
+@pytest.mark.parametrize("step", ["Run Codex implementation", "Attempt post-Codex syntax repair"])
+def test_implement_prepare_retries_only_the_image_build_and_fails_closed(step):
+	block = step_block((WORKFLOWS / "implement.yml").read_text(encoding="utf-8"), step)
+	assert block.count(IMAGE_BUILD_RETRY_PREPARE) == 1
+	after = block[block.index(IMAGE_BUILD_RETRY_PREPARE):]
+	assert after.index('echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."') < after.index("exit 1")
+	# Every other mention of the knob would widen the retry past prepare.
+	assert block.count("CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS") == 1
+
+
+def test_image_build_retry_knob_is_never_exported_by_implement():
+	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	assert text.count("CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS") == 2
+	assert text.count(IMAGE_BUILD_RETRY_PREPARE) == 2
+	assert not re.search(r"^\s*CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS:", text, re.M)
+	assert not re.search(r"CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=[^\n]*GITHUB_ENV", text)
+	assert "export CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS" not in text
+
+
+def test_helper_defaults_to_a_single_image_build_attempt():
+	text = HELPER.read_text(encoding="utf-8")
+	assert 'max_attempts="${CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS:-1}"' in text
+	assert '[ "${max_attempts}" -le 5 ] || max_attempts=5' in text
