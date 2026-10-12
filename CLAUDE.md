@@ -940,6 +940,54 @@ remains wired as a transport fallback for environments where REST is gated
 instead. The fallback is a retry of the same question on a different
 transport, never a second query.
 
+### E) Push Command Shape
+
+Write every `git push` as one plain command with literal arguments:
+`git push -u origin <branch>`, or after a §21.A reset
+`git push --force-with-lease origin <branch>` (or
+`--force-with-lease=<branch>:<sha>` with the SHA typed out). Never put a push
+inside a `for`/`while` retry loop: the guard cannot tell which directory the
+push runs in, so it asks for confirmation in every permission mode. Keep
+`$VAR` and `$(...)` out of the push arguments too, so the allow rules below
+can match. When a push fails on a network error, retry it as a new call with
+the same plain command.
+
+`.claude/settings.json` allows the plain `git push` and
+`git push --force-with-lease` forms to `origin claude/*` without a prompt
+(§23.C makes force-pushing the session's own working branch routine). Its
+`ask` rules cover pushes that delete a branch with `--delete`, `-d` or
+`--prune`, or that name `main` or `master` as a destination. The trailing `*`
+of a `claude/*` allow rule also matches a second refspec, so the
+`pr_merge_status_guard.py` hook (§21.B) checks the parsed refspecs as well. It
+asks for every branch deletion (`--delete`, `-d`, a `:ref` refspec, `--prune`),
+and for every refspec whose destination is the repository's resolved default
+branch, with or without a `+` prefix (`claude/x +main`, `claude/x:main`), so a
+consumer repo whose default branch has another name is covered too. When
+neither `origin/HEAD` nor `git ls-remote --symref origin HEAD` names the
+default branch, it asks for every destination outside `claude/*`. What still
+passes without a prompt: `claude/x:release` (a non-default branch, checked
+only against its merged PR), a short `heads/<name>` destination such as
+`claude/x:heads/main` (the hook compares it unexpanded), a push to a renamed
+default branch while the checkout's cached `origin/HEAD` still names the old
+one, and
+`--force-with-lease=claude/a:<sha> origin claude/b` (which leases a different
+branch from the one it overwrites). `CLAUDE_PR_MERGE_GUARD=off` turns these
+deletion and default-branch asks off together with the merged-PR check; the
+`settings.json` ask rules still apply. So push exactly one plain branch name, give
+`--force-with-lease=` the same branch as the destination, and never add a
+second refspec, a `+` refspec or a `src:dst` refspec to a push.
+
+The same rule of one plain command applies to cleanup. Delete files with
+their absolute path, in a call of their own, never chained after a `cd` (for
+example `rm -rf /tmp/.../scratchpad/rel_shards`, not
+`cd <dir> && ...; rm -rf ../../rel_shards`). Claude Code's built-in
+critical-path check on `rm` appears to resolve a relative target against the
+session's working directory rather than the earlier `cd`, so `../../x` from
+`/home/user` reads as `/x`, a direct child of `/`. That check prompts in every
+permission mode, and no allow rule or hook can approve it. Files under the
+session scratchpad need no cleanup at all: the scratchpad goes away with the
+container.
+
 ---
 
 ## §22. DigitalOcean Access (MANDATORY)

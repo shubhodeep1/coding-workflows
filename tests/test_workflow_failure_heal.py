@@ -168,6 +168,8 @@ heal = _load_lib()
 
 
 def _yaml(path: Path) -> dict:
+	if path == REVIEW_AUTOFIX_WORKFLOW:
+		return yaml.safe_load(expanded_review_autofix_text())
 	return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
