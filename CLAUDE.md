@@ -84,6 +84,40 @@ Rules:
 - Do NOT use numeric question numbering (1, 2, 3) — only Q-IDs.
 - If multiple selections allowed, state explicitly.
 
+### Clear-Winner Assumptions
+
+A `(RECOMMENDED)` mark alone is not a reason to ask: the format above puts one
+on every question. When a decision has a clear winner, take it without asking
+and list it as an assumption instead. A decision is a clear winner only when
+**all** of these hold:
+
+- One option is clearly correct: an existing repo convention, the code or
+  docs require it, it follows from an answer the user already gave, or it is
+  the only option that is not unsafe or breaking. If the rationale would
+  start with "it depends", it is not a clear winner.
+- It is cheap to undo: a change on the session's working branch, not an
+  action outside the repository.
+- It is not about what the user wants built (feature intent, scope, target
+  repo or environment) and not a tradeoff the user should weigh.
+- It is not ask-first anywhere else in this file, including: the PRE-TASK
+  stop for missing or unclear context, §6 renames and removals, §10 DB /
+  index / contract changes, §12.D, §18.A manual scripts, §18.D gates, §22.B,
+  §23.C, §24.D and §29.B operations, §22.C / §24.F missing resource IDs, or
+  any deletion of data.
+
+Assumptions share the Q-ID sequence with the open questions and appear in the
+same message, under an **Assumed** heading, before any work starts:
+
+> **Assumed**
+> - **Q3: \<question\>** — took **A** (\<option\>) because \<one-line reason\>.
+>   Other options: **B** — \<description\>. Reply `Q3: B` to override.
+
+If open questions remain, wait for the answers as usual; an override arrives
+with them. If every decision was a clear winner, give the Assumed list at the
+top of the reply and proceed. This subsection is the only exception §2 itself
+makes to §0 and to the Forbidden list below (§12 keeps the precedence it
+declares for PR Review Mode); everything else in §0 and §2 still applies.
+
 ### When to Ask
 
 Ask if any of these are unclear:
@@ -94,7 +128,8 @@ Ask if any of these are unclear:
 - **Operations:** timing, concurrency, rollback/recovery.
 
 ### Forbidden
-- Guessing intent or applying "reasonable defaults" without confirmation.
+- Guessing intent or applying "reasonable defaults" without confirmation
+  (a clear-winner assumption listed under **Assumed** is not a default).
 - Silent refactors, cleanups, or speculative fixes.
 
 ---
@@ -162,7 +197,8 @@ In every final response:
 - List all files changed with line ranges of major logic changes (skip
   formatting-only).
 - If behavior changes: update `README.md` / `agents.md` with env vars,
-  DB behavior, indexes, operational steps, failure modes.
+  DB behavior, indexes, operational steps, failure modes. Additions to
+  `agents.md` go in an `agents.d/` fragment (§30).
 - In user-facing replies, describe file changes as `edited path/to/file`
   rather than naming internal edit tools such as `Edit`, `Write`, or
   `apply_patch`; internal logs and code comments may still name concrete
@@ -904,6 +940,45 @@ remains wired as a transport fallback for environments where REST is gated
 instead. The fallback is a retry of the same question on a different
 transport, never a second query.
 
+### E) Push Command Shape
+
+Write every `git push` as one plain command with literal arguments:
+`git push -u origin <branch>`, or after a §21.A reset
+`git push --force-with-lease origin <branch>` (or
+`--force-with-lease=<branch>:<sha>` with the SHA typed out). Never put a push
+inside a `for`/`while` retry loop: the guard cannot tell which directory the
+push runs in, so it asks for confirmation in every permission mode. Keep
+`$VAR` and `$(...)` out of the push arguments too, so the allow rules below
+can match. When a push fails on a network error, retry it as a new call with
+the same plain command.
+
+`.claude/settings.json` allows the plain `git push` and
+`git push --force-with-lease` forms to `origin claude/*` without a prompt
+(§23.C makes force-pushing the session's own working branch routine). Its
+`ask` rules cover pushes that delete a branch with `--delete`, `-d` or
+`--prune`, or that name `main` or `master` as a destination. They do not cover
+every refspec the trailing `*` of a `claude/*` allow rule also matches:
+`claude/x:release`, a colon deletion such as `claude/x :release`, a
+force-prefixed refspec such as `claude/x +main` or `claude/x +master` (which
+force-pushes the local default branch), and
+`--force-with-lease=claude/a:<sha> origin claude/b` (which leases a different
+branch from the one it overwrites) still pass without a prompt. So push exactly
+one plain branch name, give `--force-with-lease=` the same branch as the
+destination, and never add a second refspec, a `+` refspec or a `src:dst`
+refspec to a push.
+A consumer repo whose default branch has another name gets no ask rule for it.
+
+The same rule of one plain command applies to cleanup. Delete files with
+their absolute path, in a call of their own, never chained after a `cd` (for
+example `rm -rf /tmp/.../scratchpad/rel_shards`, not
+`cd <dir> && ...; rm -rf ../../rel_shards`). Claude Code's built-in
+critical-path check on `rm` appears to resolve a relative target against the
+session's working directory rather than the earlier `cd`, so `../../x` from
+`/home/user` reads as `/x`, a direct child of `/`. That check prompts in every
+permission mode, and no allow rule or hook can approve it. Files under the
+session scratchpad need no cleanup at all: the scratchpad goes away with the
+container.
+
 ---
 
 ## §22. DigitalOcean Access (MANDATORY)
@@ -990,6 +1065,7 @@ Rules:
   resolves with one read API call (§22.A), then add it to the
   `## DigitalOcean resources` section of the agents file **in the same
   PR/commit as the work that needed it**, so it is never asked for again.
+  Add the row through an `agents.d/` fragment (§30).
   Create the section if the file lacks it.
 - IDs are identifiers under §6 — never remove or rewrite an existing
   entry without the §2 ask flow; correcting a stale ID requires telling
@@ -1264,7 +1340,7 @@ and classifies it:
 
 | Class | What | Outcome |
 |---|---|---|
-| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input`. A complete `for VAR in TOKEN…; do BODY; done` over literal IDs is also approved when every item is a vetted `gh api` read, `gh run view/list` or `gh pr view` read, or literal/`$VAR` echo (§23.H below). | not prompted by the hook |
+| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input`. A complete `for VAR in TOKEN…; do BODY; done` over literal IDs is also approved when every item is a vetted `gh api` read, `gh run view/list` or `gh pr view` read, or literal/`$VAR` echo (§23.H below). A bare `gh api --help` or `gh api -h` with no other argument is a read too (it prints usage and sends no API request); `--help` / `-h` next to an endpoint, any other flag or `--` stays unreadable and prompts (#6668). | not prompted by the hook |
 | routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
 | write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
 | malformed jq | a `-q`/`--jq` value that is one of jq's own command-line options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`); `gh api` has no such flags, so the call could never work (#4891) | denied with a reason that says how to fix the command; nothing runs and no human is needed |
@@ -1496,7 +1572,7 @@ Rules (same as §22.C):
 - **Save once provided.** Verify a supplied identifier resolves with one
   read call (§24.B), then record it in the agents file **in the same
   PR/commit as the work that needed it**. Create the section if the file
-  lacks it.
+  lacks it. Add it through an `agents.d/` fragment (§30).
 - Entries are identifiers under §6 — never remove or rewrite an existing
   entry without the §2 ask flow.
 
@@ -1746,6 +1822,70 @@ with the key; do not hand the user a command to run (§18).
 - The unattended pipelines read `unattended_system_instructions.md` and
   never see this file, so §29 grants no new access to any codex-driven
   phase.
+
+---
+
+## §30. agents.md Fragments (MANDATORY)
+
+**Never add to `agents.md` (or `AGENTS.md`) directly.** Write a fragment
+instead. About a third of all commits touch `agents.md`, mostly the same few
+places (the workflow architecture narrative and the two log-prefix
+registries), so concurrently open PRs conflict there and hold the merge train.
+One fragment file per PR makes those conflicts impossible: two PRs never touch
+the same path. This mirrors §20 for `CHANGELOG.md`.
+
+### A) Where it goes
+
+Create `agents.d/<issue-or-pr>-<slug>.md`, for example
+`agents.d/3712-soft-deadline-finalization.md`. Each block starts with a marker naming an
+existing `## ` heading of the agents file exactly as written there; the text
+after it is copied verbatim to the end of that section:
+
+```md
+<!-- agents: section="Workflow architecture" -->
+New paragraph, bullets or table rows.
+
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `NEW_PREFIX` (`scripts/x.sh`: `outcome=`)
+LOG_PREFIX.name=NEW_PREFIX
+```
+
+- One fragment may hold several blocks.
+- In `## Stable log prefixes (contractual)`, `` - `PREFIX` `` bullets land
+  after the last registry bullet and `LOG_PREFIX.name=` lines after the last
+  name line, so both registries stay contiguous.
+- A table row or list item continues the table or list it follows.
+- Add ` new` to create a section (`<!-- agents: section="Topic" new -->`).
+  Without it an unknown heading fails CI, so a typo cannot create a stray
+  section.
+- Never target `## Repo-tree (auto-generated)`; `make generate` owns it.
+- A scope (`files_touched`, `ai:scope:`) that covers `agents.md` or
+  `AGENTS.md` covers its top-level `agents.d/*.md` fragments.
+
+### B) What still edits the agents file directly
+
+- `make generate` (the TREE blocks);
+- correcting or removing existing text, which fragments cannot do. Keep such
+  edits small and separate from new documentation.
+
+### C) How it reaches the agents file
+
+`scripts/assemble_agents.py` folds fragments in filename order and deletes
+them. It runs from automation only (§18.A/§18.B), never by hand:
+
+- **this repo**: in the release job's "Assemble changelog fragments" step of
+  `.github/workflows/mark-stable.yml` and
+  `.github/workflows/test-and-mark-stable.yml`, in the same commit as the
+  changelog fold;
+- **consumer repos**: on the existing sync, in
+  `.github/workflows/update_workflows.yml` (step "Assemble agents.md
+  fragments").
+
+CI runs `python3 scripts/assemble_agents.py check --repo-root .` and fails a
+fragment that would not fold. Readers see pending fragments: the static
+context (`scripts/build_static_context.sh`), the materiality check and the
+tests read the agents file through `assemble_agents.py render` or
+`tests/agents_doc.py`.
 
 ---
 
