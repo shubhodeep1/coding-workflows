@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from review_autofix_step_scripts import expanded_review_autofix_text
+
 ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = ROOT / "scripts" / "review_untrusted_sandbox.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -159,7 +161,8 @@ def test_invalid_retry_sleep_falls_back_instead_of_aborting(tmp_path):
 
 
 def _step(name: str) -> str:
-	text = WORKFLOW.read_text(encoding="utf-8")
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
+	text = expanded_review_autofix_text()
 	return text.split(f"- name: {name}\n", 1)[1].split("\n      - name: ", 1)[0]
 
 

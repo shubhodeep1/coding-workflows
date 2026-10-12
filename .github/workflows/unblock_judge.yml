@@ -144,7 +144,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PYTHONDONTWRITEBYTECODE: "1"
           REPOSITORY: ${{ github.repository }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -154,8 +154,16 @@ jobs:
           UNBLOCK_JUDGE_REASONING: ${{ vars.THINKING_LEVEL_UNBLOCK_JUDGE || 'high' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           UNBLOCK_JUDGE_FIXUP_WAIT_HOURS: ${{ vars.UNBLOCK_JUDGE_FIXUP_WAIT_HOURS || '72' }}
+          # The automation-path re-check runs the implement guard with the
+          # same ALLOW_WORKFLOW_EDITS default implement.yml uses.
+          UNBLOCK_JUDGE_REGRANT_ENABLED: ${{ vars.UNBLOCK_JUDGE_REGRANT_ENABLED || 'true' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_UNBLOCK_JUDGE: ${{ vars.AI_ENGINE_UNBLOCK_JUDGE || '' }}
+          # #7032: the CI-failure supersede check reads the same named CI check
+          # and CI workflow binding as review_autofix.yml's auto-merge wait.
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
         run: |
           SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \
