@@ -433,6 +433,7 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 		raise InputError("comments must be a JSON array")
 	newest_guard = None
 	newest_handoff_index = -1
+	newest_handoff_id = None
 	untrusted = False
 	for index, comment in enumerate(comments):
 		if not isinstance(comment, dict):
@@ -451,6 +452,7 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 		handoff = OPERATOR_HANDOFF_RE.fullmatch(line)
 		if handoff and int(handoff.group("item")) == item:
 			newest_handoff_index = index
+			newest_handoff_id = comment.get("id")
 		elif rejection_item and int(rejection_item.group(1)) == item:
 			newest_guard = (index, AUTOMATION_PATH_REJECTION_RE.fullmatch(line), comment, line)
 		elif lines[0] in GUARD_REJECTION_HEADERS:
@@ -473,7 +475,10 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 		"run": match.group("run"), "paths": cleaned, "truncated": match.group("truncated") == "true",
 		"comment_id": comment.get("id"), "created_at": comment.get("created_at", ""),
 		"handoff_pending": newest_handoff_index > index,
+		"handoff_comment_id": newest_handoff_id if newest_handoff_index > index else None,
 	}
+
+
 def latest_automation_rejection(comments: object, trusted_login: str, item: int) -> dict:
 	"""The newest trusted guard rejection on the item, when it is an automation-path one.
 

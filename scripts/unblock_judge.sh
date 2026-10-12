@@ -880,8 +880,10 @@ unblock_main()
 	fi
 	# Protected-path handoff (#7060), off by default. Reads only the comments
 	# already fetched; it never changes the guard or override eligibility.
+	# The automation-path guard always latches ai:scope-blocked, so only that
+	# stop is held: an old rejection cannot hold a later, unrelated block.
 	if [ "$(printf '%s' "${UNBLOCK_PROTECTED_HANDOFF_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ] \
-		&& [ "${ITEM_KIND}" = "issue" ]; then
+		&& [ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "scope-blocked" ]; then
 		local protected_file="${RUNTIME_DIR}/protected_rejection.json"
 		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" protected-rejection --item "${ITEM}" \
 			--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${protected_file}" \
@@ -890,7 +892,25 @@ unblock_main()
 			unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=unreadable"
 		fi
 		if jq -e '.status == "ok" and .handoff_pending == true' "${protected_file}" >/dev/null 2>&1; then
-			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=operator_handoff_pending run=$(jq -r '.run' "${protected_file}")"
+			# Refresh the hold comment, as the fix-up wait does, so the poller's
+			# scan (UNBLOCK_JUDGE_RETRY_HOURS on the marker's updatedAt) does
+			# not re-dispatch a judge run that would only skip again.
+			local handoff_id handoff_run
+			handoff_id="$(jq -r '.handoff_comment_id // empty' "${protected_file}")"
+			handoff_run="$(jq -r '.run' "${protected_file}")"
+			if [[ "${handoff_id}" =~ ^[0-9]+$ ]] && [[ "${handoff_run}" =~ ^[0-9]+$ ]]; then
+				jq -r --argjson id "${handoff_id}" '[.[] | select(.id == $id) | (.body // "")] | first // ""' \
+					"${RUNTIME_DIR}/item_comments.json" 2>/dev/null \
+					| grep -v -e '^<!-- ai:unblock-wait:v1 ' -e '^Still waiting for an operator; last checked ' \
+					> "${RUNTIME_DIR}/handoff_body.txt" || true
+				# Trailing blank lines are dropped so repeated refreshes do not grow the body.
+				unblock_patch_comment "${handoff_id}" "$(cat "${RUNTIME_DIR}/handoff_body.txt")
+Still waiting for an operator; last checked ${now}.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} reason=operator_handoff run=${handoff_run} -->" \
+					|| unblock_log "item=${ITEM} op=handoff_refresh outcome=failed"
+			fi
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=operator_handoff_pending run=${handoff_run}"
 			return 0
 		fi
 		if jq -e '.status == "ok"' "${protected_file}" >/dev/null 2>&1; then

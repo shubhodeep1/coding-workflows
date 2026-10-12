@@ -33,10 +33,10 @@ the network; the shell only executes.
        UNBLOCK_PROTECTED_HANDOFF_ENABLED=true, #7060): the newest trusted
        guard comment on the issue is an automation-path grant rejection, so a
        fix-up would hit the same guard. `descope` and `operator_step` then
-       record an operator handoff (a comment ending in the hold marker
+       record an operator handoff (an operator step, then a comment ending in
+       the hold marker
        `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`,
-       an operator step and a WARNING) and create no fix-up; the issue stays
-       blocked. A malformed value is dropped and the normal path runs.
+       then a WARNING) and create no fix-up; the issue stays blocked. A malformed value is dropped and the normal path runs.
       An optional `ci_owner` object `{"number", "state", "head_sha",
       "head_ref", "base_ref"}` carries the facts scripts/unblock_judge.sh read
       about the pull request that owns a CI-failure issue (#7032). `state` is
@@ -553,11 +553,16 @@ def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
 			]
 		),
 	}
-	if name == "operator_step" and verdict.get("placeholder"):
+	# Only a placeholder a person must set keeps code dormant; an `_ENABLED`
+	# flag ships on (see _placeholder_needs_person).
+	if name == "operator_step" and verdict.get("placeholder") and _placeholder_needs_person(verdict["placeholder"]):
 		step["dormant_until"] = verdict["placeholder"]
+	# The operator step goes first: unblock_run_ops skips later writes after a
+	# failure, so the hold marker (which stops later judge runs) is posted only
+	# once the operator step is recorded, and a failed write is retried.
 	return [
-		{"op": "comment", "issue": item, "body": body},
 		{"op": "operator_step", "key": f"unblock-{item}", "source": f"Unblock judge, #{item}", "steps": [step]},
+		{"op": "comment", "issue": item, "body": body},
 		{
 			"op": "telegram", "level": "WARNING",
 			"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",

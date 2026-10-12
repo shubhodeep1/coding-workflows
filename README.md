@@ -109,7 +109,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
-| `UNBLOCK_PROTECTED_HANDOFF_ENABLED` | No | `false` | unblock_judge | When `true`, an issue whose newest trusted guard comment is an automation-path grant rejection gets an operator handoff instead of a fix-up for a `descope` or `operator_step` verdict: a comment naming the rejected run and paths, an `ai:operator-step` entry and a Telegram WARNING. The issue stays blocked, and later judge runs skip it (`reason=operator_handoff_pending`) until a newer guard comment appears or a person clears the block label. The guard itself is unchanged. |
+| `UNBLOCK_PROTECTED_HANDOFF_ENABLED` | No | `false` | unblock_judge | When `true`, a `scope-blocked` issue whose newest trusted guard comment is an automation-path grant rejection gets an operator handoff instead of a fix-up for a `descope` or `operator_step` verdict: an `ai:operator-step` entry, then a comment naming the rejected run and paths, then a Telegram WARNING. The issue stays blocked, and later judge runs skip it (`reason=operator_handoff_pending`, refreshing the hold comment) until a newer guard comment appears or a person clears the block label. The guard itself is unchanged. |
 | `UNBLOCK_JUDGE_REGRANT_ENABLED` | No | `true` | unblock_judge | Re-check a scope-blocked issue's automation-path rejection with the current grant guard before asking the judge, and resume it without a verdict when every rejected path is now granted (once per rejection run). `false` sends every such item to the judge. The re-check reads `ALLOW_WORKFLOW_EDITS` with the same `true` default as `implement.yml`. |
 | `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (both Codex and Claude run in a read-only, network-isolated container; their credentials stay in host-side relays. The Claude path follows `.github/ai/claude_engine.json` and falls back to isolated Codex only when unavailable). |
 | `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
@@ -3556,13 +3556,14 @@ and resolver chains, a failed project) now goes to the unblock judge
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
-  With `UNBLOCK_PROTECTED_HANDOFF_ENABLED=true`, an issue whose newest
-  trusted guard comment is an automation-path grant rejection gets no fix-up
+  With `UNBLOCK_PROTECTED_HANDOFF_ENABLED=true`, a `scope-blocked` issue whose
+  newest trusted guard comment is an automation-path grant rejection gets no fix-up
   for these two verdicts, because the fix-up would hit the same guard: the
   judge posts a handoff comment ending in
   `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`,
-  records an operator step and sends a WARNING, and the issue stays blocked.
-  Later runs skip it with `reason=operator_handoff_pending` until a newer
+  records an operator step (first, so a failed write leaves no hold) and sends
+  a WARNING, and the issue stays blocked. Later runs skip it with
+  `reason=operator_handoff_pending` and refresh the hold comment until a newer
   guard comment appears. `override_guard` stays unavailable for that
   rejection.
   An `operator_step` fix-up gates only the new code path behind its

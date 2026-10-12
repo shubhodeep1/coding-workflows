@@ -2483,22 +2483,29 @@ PROTECTED = {"guard": "automation-path", "run": "555", "paths": ["scripts/a.sh",
 
 
 @pytest.mark.parametrize(("name", "extra"), [
-	("operator_step", {"instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "grant the paths"}),
+	("operator_step", {"instructions": "gate it", "placeholder": "NIGHTLY_UNSET_OPERATOR_STEP", "operator_instructions": "grant the paths"}),
 	("descope", {"instructions": "drop the workflow edit"}),
 ])
 @pytest.mark.parametrize("tracking", [None, 40])
 def test_protected_rejection_hands_off_without_a_fixup(name: str, extra: dict, tracking: int | None) -> None:
 	ops = actions.plan(_verdict(name, **extra), _ctx(tracking=tracking, protected_rejection=PROTECTED))
-	assert [op["op"] for op in ops] == ["comment", "operator_step", "telegram"]
+	# The operator step precedes the hold marker, so a failed step leaves no hold.
+	assert [op["op"] for op in ops] == ["operator_step", "comment", "telegram"]
 	assert all(op.get("issue") in (None, 7) for op in ops)
-	body = ops[0]["body"]
+	body = ops[1]["body"]
 	assert body.splitlines()[-1] == "<!-- ai:unblock-wait:v1 item=7 reason=operator_handoff run=555 -->"
 	assert "`scripts/a.sh`" in body and "run 555" in body
 	assert not COMMAND_LINE.search(body)
-	step = ops[1]["steps"][0]
+	step = ops[0]["steps"][0]
 	assert "Rejected run: 555" in step["instructions"]
-	assert step.get("dormant_until") == ("NIGHTLY_ENABLED" if name == "operator_step" else None)
+	assert step.get("dormant_until") == ("NIGHTLY_UNSET_OPERATOR_STEP" if name == "operator_step" else None)
 	assert ops[2]["level"] == "WARNING"
+
+
+def test_protected_handoff_keeps_an_enabled_flag_out_of_dormant_until() -> None:
+	verdict = _verdict("operator_step", instructions="gate it", placeholder="NIGHTLY_ENABLED", operator_instructions="grant")
+	ops = actions.plan(verdict, _ctx(protected_rejection=PROTECTED))
+	assert "dormant_until" not in ops[0]["steps"][0]
 
 
 @pytest.mark.parametrize("bad", [
@@ -2537,16 +2544,31 @@ def _fixups(state: dict) -> list[dict]:
 	return [created for created in state["created"] if "ai:unblock-fixup:v1" in created.get("body", "")]
 
 
+def _handoff_rejection(created_at: str = "2026-10-04T10:00:00Z") -> dict:
+	return dict(_comment(_automation_marker(), created_at=created_at), id=2)
+
+
 def test_judge_protected_handoff_is_off_by_default(tmp_path: Path) -> None:
-	result, state = _judge(tmp_path, ISSUE, [_comment(_automation_marker())], verdict=HANDOFF_VERDICT)
+	result, state = _judge(tmp_path, _scope_blocked_issue(), [_handoff_rejection()], verdict=HANDOFF_VERDICT,
+		UNBLOCK_JUDGE_REGRANT_ENABLED="false")
+	assert "verdict=operator_step round=1 outcome=acted" in result.stdout, result.stdout
+	assert _fixups(state)
+	assert not any("operator_handoff" in comment["body"] for comment in state["comments"])
+
+
+def test_judge_protected_handoff_ignores_a_rejection_under_another_stop(tmp_path: Path) -> None:
+	# The automation-path guard latches ai:scope-blocked; an old rejection on an
+	# item now blocked for something else must not hold it.
+	result, state = _judge(tmp_path, ISSUE, [_handoff_rejection()], verdict=HANDOFF_VERDICT,
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true")
 	assert "verdict=operator_step round=1 outcome=acted" in result.stdout, result.stdout
 	assert _fixups(state)
 	assert not any("operator_handoff" in comment["body"] for comment in state["comments"])
 
 
 def test_judge_protected_handoff_records_operator_step_and_keeps_item_blocked(tmp_path: Path) -> None:
-	result, state = _judge(tmp_path, ISSUE, [_comment(_automation_marker())], verdict=HANDOFF_VERDICT,
-		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true")
+	result, state = _judge(tmp_path, _scope_blocked_issue(), [_handoff_rejection()], verdict=HANDOFF_VERDICT,
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true", UNBLOCK_JUDGE_REGRANT_ENABLED="false")
 	assert "verdict=operator_step round=1 outcome=acted" in result.stdout, result.stdout
 	assert _fixups(state) == []
 	assert state["labels_removed"] == []
@@ -2556,15 +2578,32 @@ def test_judge_protected_handoff_records_operator_step_and_keeps_item_blocked(tm
 	assert not any(comment["body"].startswith(("/approved", "/answer", "/reclarify")) for comment in state["comments"])
 
 
+def test_judge_protected_handoff_posts_no_hold_when_the_operator_step_fails(tmp_path: Path) -> None:
+	_result, state = _judge(tmp_path, _scope_blocked_issue(), [_handoff_rejection()], verdict=HANDOFF_VERDICT,
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true", UNBLOCK_JUDGE_REGRANT_ENABLED="false", FAKE_GH_FAIL_CREATE="1")
+	# Without the hold marker the next judge run retries the handoff.
+	assert not any("reason=operator_handoff" in comment["body"] for comment in state["comments"])
+	assert _fixups(state) == []
+
+
 def test_judge_skips_while_the_operator_handoff_is_pending(tmp_path: Path) -> None:
 	comments = [
-		_comment(_automation_marker(), created_at="2026-10-04T01:00:00Z"),
-		_comment(_marker(verdict="operator_step"), created_at="2026-10-04T02:00:00Z"),
-		_comment(_handoff_marker(), created_at="2026-10-04T02:00:01Z"),
+		_handoff_rejection(created_at="2026-10-04T01:00:00Z"),
+		dict(_comment(_marker(stop="scope-blocked", verdict="operator_step"), created_at="2026-10-04T02:00:00Z"), id=3),
+		dict(_comment(_handoff_marker(), created_at="2026-10-04T02:00:01Z"), id=4),
 	]
-	result, state = _judge(tmp_path, ISSUE, comments, verdict="must not be read", UNBLOCK_PROTECTED_HANDOFF_ENABLED="TRUE")
+	result, state = _judge(tmp_path, _scope_blocked_issue(), comments, verdict="must not be read",
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="TRUE", UNBLOCK_JUDGE_REGRANT_ENABLED="false")
 	assert "outcome=skip reason=operator_handoff_pending run=555" in result.stdout, result.stdout
 	assert state["comments"] == [] and state["created"] == [] and state["labels_removed"] == []
+	# The hold comment is refreshed in place so the poller's scan keeps treating it as recent.
+	assert len(state["patched"]) == 1
+	endpoint, fields = state["patched"][0]
+	assert endpoint == "repos/o/r/issues/comments/4"
+	lines = fields["body"].splitlines()
+	assert lines[0] == "Handoff"
+	assert lines[-1] == "<!-- ai:unblock-wait:v1 item=7 reason=operator_handoff run=555 -->"
+	assert sum(line.startswith("Still waiting for an operator") for line in lines) == 1
 
 
 # --- #7032 end to end: the judge reads the owning PR before a reissue --------
