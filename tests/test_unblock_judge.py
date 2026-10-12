@@ -1139,6 +1139,8 @@ if owner_pr is not None and endpoint == "repos/o/r/pulls/" + str(owner_pr.get("n
 	done(json.dumps(owner_pr))
 if endpoint.startswith("repos/o/r/commits/") and "/check-runs" in endpoint and "--slurp" in args:
 	done(os.environ.get("FAKE_GH_OWNER_CHECKS", ""))
+if endpoint.startswith("repos/o/r/actions/runs?head_sha="):
+	done(os.environ.get("FAKE_GH_OWNER_RUNS", ""))
 if endpoint.startswith("repos/o/r/git/ref/heads/"):
 	if not os.environ.get("FAKE_GH_OWNER_REF"):
 		json.dump(state, open(state_path, "w"))
@@ -2371,13 +2373,16 @@ def _owner_pr(**extra) -> dict:
 	return pr
 
 
-GREEN_CHECKS = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]}])
+CI_RUN_URL = "https://github.com/o/r/actions/runs/555/job/1"
+GREEN_CHECKS = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success", "details_url": CI_RUN_URL}]}])
+# The CI workflow run on the owner head that the named check is bound to.
+CI_RUNS = json.dumps({"workflow_runs": [{"id": 555, "name": "CI", "status": "completed", "conclusion": "success"}]})
 REISSUE = {"verdict": "reissue", "reason": "r", "instructions": "correct spec"}
 
 
 def test_merged_green_owner_closes_the_issue_without_a_reissue(tmp_path: Path) -> None:
 	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
-		AUTO_MERGE_REQUIRED_CI_CHECK="CI")
+		FAKE_GH_OWNER_RUNS=CI_RUNS, AUTO_MERGE_REQUIRED_CI_CHECK="CI", AUTO_MERGE_WAIT_WORKFLOWS="CI")
 	assert f"op=reissue outcome=superseded pr=6786 head={'c' * 40}" in result.stdout, result.stdout + result.stderr
 	assert state["created"] == []
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state_reason") == "not_planned" for endpoint, fields in state["patched"])
@@ -2389,6 +2394,24 @@ def test_merged_owner_without_a_named_ci_check_is_not_superseded(tmp_path: Path)
 	# run of any name is no proof that the required checks ran, so reissue as today.
 	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
 		AUTO_MERGE_REQUIRED_CI_CHECK="")
+	assert "outcome=superseded" not in result.stdout, result.stdout + result.stderr
+	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
+
+
+def test_same_named_check_from_another_workflow_does_not_supersede(tmp_path: Path) -> None:
+	# A green `CI` check-run from a workflow run that is not an
+	# AUTO_MERGE_WAIT_WORKFLOWS run (here run 777) is not CI's result.
+	other = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success",
+		"details_url": "https://github.com/o/r/actions/runs/777/job/2"}]}])
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=other,
+		FAKE_GH_OWNER_RUNS=CI_RUNS, AUTO_MERGE_REQUIRED_CI_CHECK="CI", AUTO_MERGE_WAIT_WORKFLOWS="CI")
+	assert "outcome=superseded" not in result.stdout, result.stdout + result.stderr
+	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
+
+
+def test_unreadable_ci_runs_listing_does_not_supersede(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
+		AUTO_MERGE_REQUIRED_CI_CHECK="CI", AUTO_MERGE_WAIT_WORKFLOWS="CI")
 	assert "outcome=superseded" not in result.stdout, result.stdout + result.stderr
 	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
 

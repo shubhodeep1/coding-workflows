@@ -52,8 +52,8 @@
 # project's item) and
 # the planned operations (at most about six writes). For a standalone `reissue`
 # of a CI-failure issue (#7032, unblock_resolve_ci_owner): one owning-PR read,
-# then either the shared check gate (one protection read plus paginated
-# check-runs) or one `git/ref` read. A scope re-grant also
+# then either one `actions/runs?head_sha=` read plus the shared check gate
+# (one protection read plus paginated check-runs) or one `git/ref` read. A scope re-grant also
 # reads the source issues a pipeline-authored item names (files_touched_scope_guard.py
 # --origin-repo: at most 8 issues, two attempts each). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
@@ -616,6 +616,20 @@ unblock_resolve_ci_owner()
 					source "${SUPPORT_DIR}/scripts/pr_checks_lib.sh" >/dev/null 2>&1 || exit 1
 					declare -F _pr_checks_completed >/dev/null 2>&1 || exit 1
 					export PR_CHECKS_REPOSITORY="${REPOSITORY}"
+					# Bind the named CI check to an AUTO_MERGE_WAIT_WORKFLOWS run on
+					# this head, as _pr_wait_for_required_checks does: other workflows
+					# also have a `lint` job, and their success is not CI's. With no
+					# named check, or an unreadable runs listing, nothing proves CI
+					# passed (AUTO_MERGE_WAIT_WORKFLOWS=none matches by name only).
+					case "$(_pr_auto_merge_required_ci_check_name "${owner_base_ref}" 2>/dev/null)" in
+						""|none|__invalid__) exit 1 ;;
+					esac
+					_pr_head_ci_runs_pending "${owner_head_sha}"
+					case "${PR_CHECKS_RUNS_READ}" in
+						true) PR_CHECKS_CI_RUN_IDS="${PR_CHECKS_RUNS_IDS}" ;;
+						disabled) unset PR_CHECKS_CI_RUN_IDS ;;
+						*) exit 1 ;;
+					esac
 					# Three arguments: the shared required-checks filter applies.
 					_pr_checks_completed "${owner_pr}" "${owner_head_sha}" "${owner_base_ref}" >/dev/null 2>&1 || exit 1
 					# A head with no check-runs at all is not evidence of green checks,
