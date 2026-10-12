@@ -374,9 +374,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`, or the verified support ref's branch for a
-    review/autofix failure from a PR in this repo (`stable` or main ancestor),
-    falling back to the PR head if unresolved; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`; a review/autofix failure from this repo
+    targets its PR head only when `script_ref` equals the head SHA,
+    the verified support branch for `stable` or a main-ancestor ref,
+    and otherwise has no Target branch and targets the default branch
+    (`target_branch_source=shared_workflow`, issue #6680);
+    `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
     `already-fixed` → Telegram + comment only, honoured only when its
     `## Fixed by` section cites a commit that landed after the failing SHA,
@@ -484,8 +487,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the API (`workflow_failure_heal.py verify-report-identity` /
     `bind-report`). A report without a token passes on the binding checks
     while `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (default) and is skipped
-    when `true` (phase reports, whose `heal-report` job has
-    `permissions: {}`, are exempt). Only label-escalation reports have their
+    when `true` (phase reports included: their `heal-report` job is granted
+    `id-token: write` and attaches a token). Only label-escalation reports have their
     runs bound here (claimed runs that all fail binding reject the report as
     `no_bound_runs`; title, URL and body excerpt come from the fetched issue,
     and an unauthenticated report's comments excerpt is dropped; autofix reports take theirs from the fetched PR); phase, autofix and `workflow_run` runs stay with the
@@ -568,7 +571,10 @@ its `workflow-templates/` twin exempts an unquoted literal-ID loop counter
 only when the entire loop passes the read-only body validator. Unvetted
 loops with unquoted `gh api` arguments still prompt; the two hooks must stay
 byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
-inside a loop prompt even when the loop counter is not expanded.
+inside a loop prompt even when the loop counter is not expanded. A `gh api`
+call whose only argument is `--help` or `-h` is a read (it prints usage and
+sends no API request); `--help` / `-h` next to any endpoint, flag or `--`
+stays unreadable and prompts (#6668).
 
 The merged-PR guard in `.claude/hooks/pr_merge_status_guard.py` and its
 `workflow-templates/` twin distinguish numeric branch refspecs from adjacent
@@ -578,18 +584,23 @@ the branch `2`; `2>out` does not. The copies stay byte-identical.
 Security finding #6755 (`merged-pr-guard-misses-wrapped-git`) is fixed in
 both `pr_merge_status_guard.py` copies, which stay byte-identical. The guard
 parses `bash`/`sh`/`zsh`/`dash` `-c` scripts, `eval` text, `$(...)`, backtick
-and `<(...)` bodies up to three levels deep and runs the normal merged-PR
-check on each Git commit or push found there; wrapped text it cannot read
-safely (a dynamic command word, an unterminated body, deeper nesting) asks for
-confirmation when it could run a Git write. `sudo`, `timeout`, `xargs` and
-pipes into `bash` keep their existing handling, and so does the `command`
-builtin: `command git push ...`, bare or inside `bash -c`, is not yet
-inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack it; the fix needs both
-hook copies, which the pipeline cannot write). Tests run against both copies
-in `tests/test_pr_merge_status_guard.py`. The interactive session applied the
-change because the pipeline's editors cannot write `.claude/hooks/**`; the
-former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder is retired
-and nothing reads it.
+and `<(...)` bodies up to three levels deep (`_MAX_SHELL_WRAPPER_DEPTH`) and
+runs the normal merged-PR check on each Git commit or push found there;
+wrapped text it cannot read safely (a dynamic command word, an unterminated
+body, deeper nesting) asks for confirmation when it could run a Git write.
+`sudo`, `timeout`, `xargs` and pipes into `bash` keep their existing handling,
+and so does the `command` builtin: `command git push ...`, bare or inside
+`bash -c`, is not yet inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack
+it; the fix needs both hook copies, which the pipeline cannot write). The live
+hook runs on every Bash call through its `PreToolUse` settings entry; no
+variable or operator step enables it. `CLAUDE_PR_MERGE_GUARD=off` disables
+only the merged-PR check, not the API-write confirmation safeguard. Tests run
+against both copies in `tests/test_pr_merge_status_guard.py`. The interactive
+session applied the change because the pipeline's editors cannot write
+`.claude/hooks/**`; the former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP`
+placeholder is retired and nothing reads it. The full rules are in the
+"Merged-PR guard" bullet under
+"Isolated Codex agents".
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
@@ -1415,7 +1426,7 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | Same as pass 1 · `PANEL_REVIEWER` for the Claude slot |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
-| security audit (weekly / dispatch, orchestrator security pass) | `openai/gpt-6-sol` on codex | `xhigh` on codex; `high` on Claude | `low` | Claude (Opus 5.5 at `high`; codex `gpt-6-sol` fallback on any Claude failure, including every account at the 90% usage gate) · `SECURITY_AUDIT` |
+| security audit (weekly / dispatch, orchestrator security pass) | `openai/gpt-6-sol` on codex | `xhigh` on codex; `high` on Claude | `low` | Claude (Opus 5.5 at `high`; codex `gpt-6-sol` fallback on any Claude failure, including every account at the 95% usage gate) · `SECURITY_AUDIT` |
 | validate generate, diagnose | `openai/gpt-6-sol` | `high` | `low` | codex · `VALIDATE` |
 | validate discover | `openai/gpt-6-sol` | `high` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` | codex · `VALIDATE` |
 | validate fix-harness, self-heal | `openai/gpt-6-sol` | `high` | `low` | codex · `VALIDATE_SELF_HEAL` |
@@ -1664,6 +1675,74 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   ships) and deletes a consumer copy only when it is byte-identical to a
   released version (log prefix `RETIRED_FILE_REMOVED`); a locally modified copy
   is kept (`RETIRED_FILE_KEPT_MODIFIED`).
+- Attested release manifest (#6943). The `release` job of `mark-stable.yml`
+  and `test-and-mark-stable.yml` runs `scripts/release_manifest_publish.sh build`
+  after the version tag is pushed: it checks that the tag peels to the release
+  SHA, checks that commit out into a detached worktree and runs that tree's own
+  `scripts/release_manifest.py build`, writing `release-manifest.v1.json`
+  (`RELEASE_MANIFEST_ASSET_NAME`, default set in the helper; schema
+  `ai-memory/schemas/release_manifest.v1.json`). The job attests the file with
+  `actions/attest-build-provenance@v3` (only that job holds `id-token: write`
+  and `attestations: write`), and `upload` adds it to the GitHub Release
+  (`--clobber`; the manifest is deterministic per tag) and checks the asset
+  landed. Any failure prints `::error::RELEASE_MANIFEST outcome=failed
+  reason=<token>` and stops the release before "Notify consumer repos via
+  repository_dispatch". Log prefix `RELEASE_MANIFEST`; tests
+  `tests/test_release_manifest.py` and
+  `tests/test_release_manifest_workflow_contract.py`.
+- Fail-closed verification (#6957). The `Verify attested release manifest`
+  step (`id: verify_release_manifest`) of `update_workflows.yml` acts only when
+  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `false`; off it logs
+  `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` and makes no API
+  call). It resolves the `vX.Y.Z` release whose tag points at the `stable`
+  commit, downloads the asset, runs `gh attestation verify` with a
+  `--cert-identity-regex` limited to this repo's `mark-stable.yml` /
+  `test-and-mark-stable.yml` at `refs/heads/stable`, hash-checks the
+  verifier modules against the manifest (`verifier_unattested` for releases
+  whose manifest predates them, `verifier_hash_mismatch`), and runs
+  `scripts/verify_release_manifest.py verify` on every file the updater reads
+  (the `verify-pr-tree` subcommand serves the `verify` job below). A rejection
+  logs `UPDATER_MANIFEST_VERIFY outcome=rejected reason=<token>
+  stage=<input|tag|release|download|attestation|header|bootstrap|paths|verify>`
+  and stops the run before any consumer file is written; the summary shows
+  `ERR_RELEASE_MANIFEST_VERIFY_FAILED`. Verifier reasons include
+  `schema_invalid`, `repository_mismatch`, `sha_mismatch`, `unlisted_path`,
+  `missing_file`, `hash_mismatch`, `mode_mismatch`, `size_mismatch`,
+  `symlink_mismatch`, `read_failed` and `internal_error`. The step logic stays
+  inline because in consumer runs the only `scripts/` copy is the release tree
+  under verification. Tests `tests/test_verify_release_manifest.py` and
+  `tests/test_update_workflows_manifest_verify.py`.
+- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) its `Commit and push
+  updates` step (`id: commit_push`) never pushes to the default branch: it
+  commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
+  the merge train ignores it) with a `Updater-Release-SHA:` trailer, pushes
+  with `--force-with-lease`, fails closed on commits it did not write (an
+  existing branch is replaced only when the repository activity API shows
+  every push to it came from the `GH_PAT` account and the newest produced its
+  tip; committer email and trailer alone are forgeable), lints
+  the PR text with `scripts/lint_pr_body_auto_close.py` (now part of the
+  attested release manifest) and opens or refreshes one PR; for a
+  `verified=true` release it records `auto_merge=pending_verify`. PR calls use
+  `GH_PAT`; no job requests a `pull-requests` permission because a reusable
+  job cannot raise the caller's grant. Log prefix `UPDATER_PR_DELIVERY`.
+- The separate `verify` job (#7004; job id `verify`, status context
+  `ai-update-workflows/verify` and log prefix `UPDATER_PR_VERIFY` as shipped in
+  `update_workflows.yml`) runs after a PR was opened
+  or refreshed. It checks the PR head out without credentials and never runs
+  code from it, re-attests the release manifest, hash-checks every release
+  module it runs, checks that the PR adds one commit with the
+  `Updater-Release-SHA:` trailer on top of the default branch, and runs
+  `scripts/verify_release_manifest.py verify-pr-tree`, which accepts a changed
+  path only when it matches the attested release (re-rendered wrapper,
+  manifest hash, attested retired-file hash, or the audit-gate/changelog
+  output the attested scripts reproduce on the PR's parent). It posts the
+  commit status `ai-update-workflows/verify` with the job token and is the
+  only place that enables auto-merge (bound to the verified head, `verified=true`
+  releases only). It has no job-level `permissions:` (a reusable job asking for
+  more than the caller grants fails the whole run at startup); the consumer
+  template grants `contents`, `pull-requests` and `statuses: write`, and
+  `tests/test_update_workflows_template_gate.py` pins that contract. Log prefix
+  `UPDATER_PR_VERIFY`.
 - Stable-release repository dispatch payloads carry both `version` and the peeled
   commit `sha`. Consumers validate the payload but independently resolve current
   `stable`, so delayed events cannot downgrade installed pins.
@@ -2358,6 +2437,10 @@ and shipped:
 - `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
+- `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
+- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
+- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
+- `UPDATER_PR_VERIFY` (`update_workflows.yml` job `verify`, runs only after the PR path opened or refreshed a pull request: `outcome=passed reason=ok pr= head= auto_merge=enabled|failed|skipped_unverified`, `outcome=rejected reason= stage=`)
 - `VALIDATE_CHANGED_FILES_SYNTAX`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -2615,6 +2698,10 @@ LOG_PREFIX.name=GH_API_RETRY
 LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
+LOG_PREFIX.name=RELEASE_MANIFEST
+LOG_PREFIX.name=UPDATER_MANIFEST_VERIFY
+LOG_PREFIX.name=UPDATER_PR_DELIVERY
+LOG_PREFIX.name=UPDATER_PR_VERIFY
 LOG_PREFIX.name=VALIDATE_CHANGED_FILES_SYNTAX
 
 ---
@@ -2827,7 +2914,7 @@ depend on it.
 - `.github/workflows/security-audit.yml` (weekly `0 8 * * 0` plus `workflow_dispatch` plus `workflow_call`, gated by `SECURITY_AUDIT_ENABLED`, default `true`) is a default-branch maintenance audit that runs on the source repo and, via the synced `workflow-templates/ai-security-audit.yml` wrapper, on every consumer repo against its own default branch (consumer runs stage this repo's `scripts/` + `prompts/` from a `@stable` support checkout into `SECURITY_AUDIT_SUPPORT_DIR` and need `OPENROUTER_API_KEY`, optionally `GH_PAT`). It runs `scripts/security_audit.sh` with `prompts/mode-security-audit.txt`, appends dated findings sections to the stable `AI Security Audit Tracker` issue (`ai:security-audit`, marker `<!-- ai:security-audit-tracker:v1 -->`), and opens one `ai:security` follow-up issue for every finding that survives confidence-gate + false-positive-exclusion filtering, with no per-run or weekly cap (the former 3-per-week cap deferred findings silently: tracker #3576, run 35996690244, surfaced 5 and filed 3). Findings whose `<!-- ai:security-finding:<id> -->` marker is already on any `ai:security` issue, open or closed, are skipped; that dedupe reads every such issue with one paginated REST listing (`gh api --paginate --slurp repos/<repo>/issues?labels=ai:security&state=all`), so it no longer stops at 200 issues, and it ignores pull requests. The orchestrator's `[security-pass] Advisory: …` issues carry the same marker and label, so the audit never re-files a finding the security pass already filed. Each completed default-branch run records the audited HEAD on the tracker body (marker `<!-- ai:security-audit-last-sha:… -->`) unless a full scan skipped over-cap text: findings and the partial-coverage tracker comment still post, a WARNING is sent, the SHA remains unchanged, and `<!-- ai:security-audit-partial-coverage:v1 -->` is stored on the tracker body. While this marker remains, subsequent default-branch runs repeat a full scan even when HEAD is unchanged or incremental diff scope would normally apply; a complete scan clears it when advancing the SHA. Binary skips do not hold the marker. Otherwise unchanged HEAD skips (`SECURITY_AUDIT_SKIP_IF_UNCHANGED=true`, log-only skip) and changed HEAD diff-scopes the audit (`SECURITY_AUDIT_INCREMENTAL=true`; the post-filter drops findings citing unchanged files as `suppressed_out_of_scope`; first runs, history rewrites, and >200-file diffs fall back to the full scope). `.github/workflows/internal-clarify.yml` skips `ai:security-audit` issues so tracker bookkeeping never recurses into the normal clarify/plan pipeline.
 - **Security dependency hold (issue #4934).** When the audit files a second finding for a file it already filed one for, the new `ai:security` issue carries one `- Depends on: #<n>` line. `scripts/security_dependency.py security-dependency --issue-json <file> --repo <owner/repo> --issue-number <n> [--number-only]` prints `{"status": "none" | "ready" | "held", "reason", "depends_on"}`; a malformed, repeated or unverifiable declaration is `held` (fail closed). Clarify (`Decide clarify route`), both implement gates and the standalone stall poller hold such an issue until #<n> is closed with `ai:merged`; the poller then posts one `/reclarify` with the `<!-- ai:security-dependency-released:<n> -->` marker. The check costs one issue read, only for an issue that declares a dependency. It moved unchanged from the retired Claude issue router.
 - **Standalone clarify auto-decide (port P3).** On an issue that is not `ai:orchestrator-managed`, `clarify.yml`'s "Standalone auto-decide" step answers freshly posted questions with each question's RECOMMENDED option: `scripts/auto_decisions.py parse` builds the `Q1: A` lines and `scripts/orchestrate_parse_and_post_answer.sh` posts them with its loop guard (an exhausted guard still escalates to `ai:blocked`). Every pick becomes an `AD-<n>` entry (question, pick, why, alternatives) in the single trusted `<!-- ai:auto-decisions:v1 -->` comment, edited in place; `implement.yml` copies the entries into the PR body with `#<digits>` broken up. The existing clarify comment read is now paginated once (one API call per page), shared with semantic-cache history and auto-decide; the prompt still gets only the oldest 50, while the auto-decide fallback guard counts prior auto-answers from the full snapshot. If pagination fails, clarification stops before the answer; if the full history cannot be read at auto-decide time, it skips the answer. Skipped after a human `/reclarify`, when a question has no RECOMMENDED option, or with `STANDALONE_AUTO_DECIDE_ENABLED=false`. Costs one comment write for the answer and one for the AD comment; no additional comment read at the auto-decide step.
-- **Unblock judge (Phase 7).** Markers, all trusted only when posted by the pipeline's own login (the GH_PAT user): `<!-- ai:unblock:v1 item=<n> stop=<id> fingerprint=<12 hex> verdict=<v> round=<k>[ override=bulk_delete] -->` as the last line of each verdict comment, on the item and, for a project's item, on the tracking issue (the ledger `scripts/unblock_ledger.py` counts rounds and never repeats a verdict per fingerprint from these); `<!-- ai:unblock-wait:v1 item=<n> fixup=<m>[ done] -->` (or `reason=invalid_verdict`) while a fix-up is pending, refreshed in place; `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->` opening a standalone fix-up issue; `<!-- ai:unblock-fixup-request:v1 item=<n> id=unblock-<n>-r<k> -->` on a tracking issue, which `handle_unblock_judge_project_hooks` files into the current wave (local id in `issue_number_map`, so once only); `<!-- ai:unblock-override-used:v1 comment=<id> -->`, which `implement.yml` posts when it spends a bulk-delete override. PR-derived issues carry the audit-only `<!-- ai:unblock-provenance:v1 source_pr=<n> author=<login> head_repo=<owner/repo> head_sha=<sha> -->`; issue-creating verdicts for PRs without a verified same-repository head and trusted author close the PR without creating an issue. Label `ai:unblock-closed` marks an item the judge closed; on a tracking issue the poller sets state `abandoned` and closes the issue only when the newest pipeline-authored verdict marker for that tracking issue is `close`, no later pipeline-authored V1 or V2 state comment supersedes it, and the project is still `failed` with the verdict's stop label (unless it is already `abandoned` for a close retry). State field `judge_output_failures` counts project-judge runs with no usable output (`JUDGE_OUTPUT_FAILURE_MAX`). The `close` verdict is offered and accepted only after a fixed terminal condition (item or project round cap, 24 hours still blocked after the last round, or an exhausted menu; `TERMINAL_REASONS` in `scripts/unblock_ledger.py`), never on the model's choice, so comment text cannot make the judge abandon an item (#6557). Before recording a close, the judge re-reads the item and requires it to be open with the same block stop (`reason=block_state_changed` / `block_state_recheck_unavailable` otherwise, no marker posted). Kill switch `UNBLOCK_JUDGE_ENABLED` (default `true`).
+- **Unblock judge (Phase 7).** Markers, all trusted only when posted by the pipeline's own login (the GH_PAT user): `<!-- ai:unblock:v1 item=<n> stop=<id> fingerprint=<12 hex> verdict=<v> round=<k>[ override=bulk_delete] -->` as the last line of each verdict comment, on the item and, for a project's item, on the tracking issue (the ledger `scripts/unblock_ledger.py` counts rounds and never repeats a verdict per fingerprint from these); `<!-- ai:unblock-wait:v1 item=<n> fixup=<m>[ done] -->` (or `reason=invalid_verdict`) while a fix-up is pending, refreshed in place; `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->` opening a standalone fix-up issue; `<!-- ai:unblock-fixup-request:v1 item=<n> id=unblock-<n>-r<k> -->` on a tracking issue, which `handle_unblock_judge_project_hooks` files into the current wave (local id in `issue_number_map`, so once only); `<!-- ai:unblock-override-used:v1 comment=<id> -->`, which `implement.yml` posts when it spends a bulk-delete override. PR-derived issues carry the audit-only `<!-- ai:unblock-provenance:v1 source_pr=<n> author=<login> head_repo=<owner/repo> head_sha=<sha> -->`; issue-creating verdicts for PRs without a verified same-repository head and trusted author close the PR without creating an issue. Label `ai:unblock-closed` marks an item the judge closed; on a tracking issue the poller sets state `abandoned` and closes the issue only when the newest pipeline-authored verdict marker for that tracking issue is `close`, no later pipeline-authored V1 or V2 state comment supersedes it, and the project is still `failed` with the verdict's stop label (unless it is already `abandoned` for a close retry). State field `judge_output_failures` counts project-judge runs with no usable output (`JUDGE_OUTPUT_FAILURE_MAX`). The `close` verdict is offered and accepted only after a fixed terminal condition (item or project round cap, 24 hours still blocked after the last round on the same stop and fingerprint, or an exhausted menu; `TERMINAL_REASONS` in `scripts/unblock_ledger.py`), never on the model's choice, so comment text cannot make the judge abandon an item (#6557). Before recording a close, the judge re-reads the item and requires it to be open with the same block stop (`reason=block_state_changed` / `block_state_recheck_unavailable` otherwise, no marker posted). Kill switch `UNBLOCK_JUDGE_ENABLED` (default `true`).
   The poller reads V1/V2 state only from the authenticated GH_PAT login's comments, skipping the tracking issue if identity is unavailable. Project reset commands require that login or a human OWNER/MEMBER/COLLABORATOR; outsider comments cannot resume failed work.
   An unavailable identity sends one fail-open CRITICAL Telegram alert per tick when Telegram is configured; the login probe is cached across projects.
   For `ai:security` issues, a terminal verdict leaves the issue open with `ai:unblock-closed` and its block label; reissue copies a validated finding marker, `ai:security` label, dependency and integration-branch metadata onto a standalone replacement before closing the original. A malformed finding marker or other metadata prevents replacement creation, and a create response missing the requested label leaves the original open. `accept_with_followup` is never offered for an `ai:security` issue (`unblock_ledger.py decide --security-issue`), and `unblock_actions.py` refuses it again with a keep-open comment and a WARNING, so a finding is never waived with an unbound follow-up (#6541). A tracked (project) security reissue puts the finding marker in its fix-up request, and the poller labels that successor `ai:security`; a tracked security issue without a valid marker is not split.
@@ -2847,7 +2934,7 @@ depend on it.
 - **Activation verification (port P4) and operator steps (Q33).** After a merge into the default branch (`issue_pr_status.yml` job `activation-verify`) and at project completion (poller `run_project_activation_verify`, after every `emit_orchestrator_completion_lessons`), `scripts/activation_verify.sh` grades the work LIVE or DORMANT. The poller also retries completed projects with trusted partial verdict comments while fewer than three exist and until 30 minutes after the first partial comment; a failed follow-up write may be retried within that window, but failures without an initial partial comment are not retried after completion. PR mode gets the merged file list from the paginated PR-files API, falling back to the merge diff only for a merge commit or a known single-commit PR; project mode reads the final PR's file list or the state's planned file hints when no final PR exists. Missing/incomplete scope skips verification rather than grading only part of a rebase. Project verification waits for a complete tracking-comment fetch before deduplicating, trims trailing whitespace from verdict comments, and uses a unique worktree and runtime directory that are cleaned up after the run. The model's OpenRouter key is redacted from normalized text before posting it to GitHub. Because the read-only model sandbox omits symlinks from its snapshot and synthetic git tree, the script lists the target's tracked symlinks on the host from git objects (at most 200, no GitHub API call, fail-open to an empty list) and passes them in the context as `tracked_symlinks` / `tracked_symlinks_truncated`, so a tracked link is never reported missing. Markers: `<!-- ai:activation:v1 verdict=<V> source=<pr-N|project-N> -->` on a complete verdict comment (the poller trusts only a terminal marker by a repository-associated author), `<!-- ai:activation:v1 partial=true source=<pr-N|project-N> -->` on an incomplete verdict, `<!-- ai:activation-fix:v1 source=... -->` as the first line of the code-gap issue (a merge that closes such an issue is not verified again), and the `ai:operator-step` issue (`<!-- ai:operator-step:v1 -->`, one `<!-- ai:operator-step:entry key=<key> -->` section per source, replaced in place) written only by `scripts/operator_step_issue.py`. A failed fix-issue lookup does not create another issue or finalize the verdict; operator steps and a non-terminal comment still surface the failure (PR mode needs a rerun after recovery). The operator-step writer reconciles observed duplicates and reads its just-created issue directly if the label list lags, with bounded retry backoff. Whole-body GitHub PATCHes are not atomic across independent writers: concurrent upserts can still lose an entry. `ai:operator-step` is excluded from issue-opened clarification. Kill switch `ACTIVATION_VERIFY_ENABLED` (default `true`).
 - `scripts/security_audit.sh` exposes `SECURITY_AUDIT_OUTPUT_MODE=findings-json` for the default-on orchestrator project security pass. It accepts an optional project-spec file, supports a fail-closed explicit `SECURITY_AUDIT_DIFF_BASE`/`SECURITY_AUDIT_DIFF_HEAD` range, optionally narrows that range with `SECURITY_AUDIT_DIFF_SINCE` (only range files changed since that commit stay in scope; fails closed on an unresolvable or non-ancestor commit) and re-verifies `SECURITY_AUDIT_PRIOR_FINDINGS` (a JSON array of earlier findings whose files stay in scope and which the prompt asks the model to re-emit under the same ID if they persist, alongside every remaining instance of the same class; fails closed on malformed input), applies the existing validation/exclusion/confidence/scope filters, and atomically publishes `security_audit_findings.v1` to `SECURITY_AUDIT_FINDINGS_OUT`. This mode performs no GitHub tracker, label, follow-up, last-SHA, or notification side effects; the default `issues` path remains the production weekly mode.
 - The security audit chunks explicitly scoped changed/prior-finding/fix-cycle files over 2 MiB, and in full scans every other filter-eligible oversized text file. Explicitly scoped files take the cap budget first and fail closed above the per-file or total cap, or when filtered as a credential/hidden path. Other oversized files that are binary (a NUL byte in the first 8 KiB) or would pass a cap, and in incremental scans every unscoped oversized file, are listed as a coverage note (`unscoped_oversized`, each with a `reason`).
-- The security audit runs on the Claude engine by default (`SECURITY_AUDIT` role in `.github/ai/claude_engine.json`, Opus 5.5 at `high`, read-only tool profile, same credential-free isolated container as codex via `claude_run`). `scripts/security_audit.sh` resolves the engine with `ai_engine_for_role SECURITY_AUDIT` (project labels via `AI_ENGINE_LABELS`, so `ai:codex` keeps a project's audit on codex; then `AI_ENGINE_SECURITY_AUDIT`, `AI_ENGINE`). Any Claude failure reruns the same prompt on codex (`openai/gpt-6-sol`) and logs `AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=`: `all_gated` (every pool account at or above `gate_utilization` 0.9, passed in as `CLAUDE_POOL_REASON`), `no_credential`, `isolation_unavailable`, `all_accounts_failed`, `timeout`, `crashed_rc_<n>`, `missing_output`, `malformed_output`, or `schema_mismatch` (not a JSON array of objects; one outer ```` ```json ```` fence is stripped first). A valid empty array from Claude counts as clean, with no codex cross-check. The run log names the engine that produced the findings (`security-audit: engine=claude|codex`). `security-audit.yml` installs the CLI and fetches the pool only when the role resolves to Claude; `orchestrate_poll.yml` already fetches them for its judges and now also when `SECURITY_AUDIT` resolves to Claude.
+- The security audit runs on the Claude engine by default (`SECURITY_AUDIT` role in `.github/ai/claude_engine.json`, Opus 5.5 at `high`, read-only tool profile, same credential-free isolated container as codex via `claude_run`). `scripts/security_audit.sh` resolves the engine with `ai_engine_for_role SECURITY_AUDIT` (project labels via `AI_ENGINE_LABELS`, so `ai:codex` keeps a project's audit on codex; then `AI_ENGINE_SECURITY_AUDIT`, `AI_ENGINE`). Any Claude failure reruns the same prompt on codex (`openai/gpt-6-sol`) and logs `AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=`: `all_gated` (every pool account at or above `gate_utilization` 0.95, passed in as `CLAUDE_POOL_REASON`), `no_credential`, `isolation_unavailable`, `all_accounts_failed`, `timeout`, `crashed_rc_<n>`, `missing_output`, `malformed_output`, or `schema_mismatch` (not a JSON array of objects; one outer ```` ```json ```` fence is stripped first; a reply that is not JSON as a whole falls back only when it holds no top-level array of objects with a `finding_id`, see below). A valid empty array from Claude counts as clean, with no codex cross-check. The run log names the engine that produced the findings (`security-audit: engine=claude|codex`). `security-audit.yml` installs the CLI and fetches the pool only when the role resolves to Claude; `orchestrate_poll.yml` already fetches them for its judges and now also when `SECURITY_AUDIT` resolves to Claude.
 - On a Codex execution failure, `scripts/security_audit.sh` emits only a sanitized stderr tail (at most 40 lines and 4,096 rendered bytes) between `security-audit: codex-stderr-tail begin/end` markers and adds `provider=402|401|429|5xx|unknown` to the existing failure line; successful runs emit no tail.
 - `.github/workflows/workflow-log-analysis.yml` now also has a source-repo-only weekly retro path (cron `0 9 * * 1`, gated by `WORKFLOW_RETRO_ENABLED`, default `true`). `WORKFLOW_RETRO_CRON` defaults to the same cron string and must stay in sync with the trigger because GitHub does not interpolate vars into `on.schedule`. The workflow builds retro context with `scripts/workflow_retro.py`, renders the narrative through `prompts/mode-workflow-analysis.txt` in retro mode using `WORKFLOW_RETRO_MODEL` / `WORKFLOW_RETRO_REASONING` (defaults `openai/gpt-6-luna` / `medium`), and posts into the stable `AI Workflow Weekly Retro` tracker issue (`ai:retro`, marker `<!-- ai:retro-tracker:v1 -->`). Zero-activity windows (no workflow runs and no merged PRs; `has_activity: false` in the `workflow_retro.v1` JSON) skip the LLM pass and the tracker comment when `WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY=true` (default), leaving only a `WORKFLOW_RETRO_SKIP_V1:` line in the run log and no Telegram alert. After the source-repo retro, the `Consumer retro fan-out` step (gated by `WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED`, default `true`) runs `scripts/workflow_retro_fanout.sh`: for each repo in `.github/ai/consumer_repos.json` (source repo excluded) it builds a per-repo retro from the same collect-logs artifact, honors the consumer's own `WORKFLOW_RETRO_ENABLED` repo var (one fail-open `gh api` GET per consumer per week), applies the same no-activity skip, and upserts the week-marked comment on that consumer's `AI Workflow Weekly Retro` tracker via `GH_PAT` (§14 repo scope). Per-repo outcomes are logged as `WORKFLOW_RETRO_FANOUT_V1: repo=… status=posted|refreshed|up_to_date|skipped_no_activity|skipped_disabled|failed`; individual failures fail open and the step errors only when every attempted consumer fails. Both `.github/workflows/internal-clarify.yml` (source repo) and the consumer-facing gate in `.github/workflows/clarify.yml` skip `ai:retro` / `ai:security-audit` issues so tracker upkeep never recurses into the clarify/plan pipeline.
 - `scripts/orchestrate_poll_process.sh` gates last-resort `orchestrator/project-*` branch rebuilds behind `BRANCH_REBUILD_ENABLED`, `BRANCH_REBUILD_THRESHOLD_HOURS`, and `BRANCH_REBUILD_COOLDOWN_HOURS`. Audit snapshots are persisted as `BranchRebuildAuditV1` in `ai-memory/schemas/branch_rebuild_audit.v1.json` (this shipped artifact supersedes the old plan placeholder name `BRANCH_REBUILD_AUDIT_V1`; there is no literal runtime marker with that string).

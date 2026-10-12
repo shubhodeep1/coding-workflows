@@ -1444,62 +1444,230 @@ else
 fi
 [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
 
+# The fallback reason also goes to stdout (the poller sends this script's
+# stderr to a file, so the AI_ENGINE_FALLBACK line never reached the job log).
+security_audit_claude_fallback()
+{
+	local fallback_reason="${1:?fallback reason required}"
+	if [ "${fallback_reason}" = "claude_run" ]; then
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-unknown}"
+	else
+		ai_engine_fallback SECURITY_AUDIT "${fallback_reason}"
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-${fallback_reason}}"
+	fi
+	echo "SECURITY_AUDIT_CLAUDE_FALLBACK reason=${fallback_reason}"
+}
+
 # Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
 # post-filter reads), or 1 after logging the fallback reason.
 security_audit_try_claude()
 {
-	local claude_rc=0 claude_include="" claude_check_reason=""
+	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason=""
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
-		ai_engine_fallback SECURITY_AUDIT all_gated
+		security_audit_claude_fallback all_gated
 		return 1
 	fi
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
 		claude_include="${OVERSIZED_EXPORT_DIR}"
 	fi
+	AI_ENGINE_LAST_FALLBACK_REASON=""
 	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
 		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
 		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
 	case "${claude_rc}" in
 		0) ;;
 		# claude_run already logged AI_ENGINE_FALLBACK with its reason.
-		75) return 1 ;;
-		124) ai_engine_fallback SECURITY_AUDIT timeout; return 1 ;;
-		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}"; return 1 ;;
+		75) security_audit_claude_fallback claude_run; return 1 ;;
+		124) security_audit_claude_fallback timeout; return 1 ;;
+		*) security_audit_claude_fallback "crashed_rc_${claude_rc}"; return 1 ;;
 	esac
 	# Same top-level contract the post-filter enforces on codex output: a JSON
-	# array. One outer ```json fence is stripped; anything else falls back.
-	if ! claude_check_reason="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
+	# array. A reply that is one JSON array, or one outer ```json fence around
+	# it, is used as is. Otherwise the last top-level JSON array in the reply
+	# whose items are all objects with a finding_id is used (orchestrator run
+	# 38113094454 and others fell back to codex with malformed_output, so a
+	# sentence around the array cost the Claude result). An empty array
+	# counts there only when nothing but a closing fence follows it, so a
+	# "[]" inside prose or a cut-off reply is never read as a clean audit.
+	# The post-filter's field checks apply to whatever is accepted. Anything
+	# else falls back.
+	if ! claude_check_result="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 try:
-	text = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+	text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").strip()
 except OSError:
 	text = ""
 if not text:
 	print("missing_output")
 	sys.exit(1)
+
+
+def accept(findings, note: str) -> None:
+	Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
+	print(note)
+	sys.exit(0)
+
+
+strict_text = text
 fenced = re.fullmatch(r"```json[ \t]*\n(.*)\n```", text, re.S)
 if fenced:
-	text = fenced.group(1).strip()
+	strict_text = fenced.group(1).strip()
 try:
-	findings = json.loads(text)
-except ValueError:
+	findings = json.loads(strict_text)
+except (ValueError, RecursionError):
+	findings = None
+else:
+	if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
+		print("schema_mismatch")
+		sys.exit(1)
+	accept(findings, "ok")
+
+# Top-level arrays only: after a parsed array or object the scan resumes past
+# its end, so an array nested in a JSON value that parsed is never a candidate.
+# An empty array never replaces a non-empty one, and it counts only when it
+# starts a line and nothing but a closing fence follows it. Any candidate
+# inside an unclosed value (`Results:\n{"findings":\n[]`) is rejected: earlier
+# failed openers must close first, read both with and without JSON string
+# quoting; bracketed prose such as `Files checked: [a.py, b.py].` closes.
+decoder = json.JSONDecoder()
+opener = re.compile(r"[\[{]")
+
+
+def next_open(start: int) -> int:
+	match = opener.search(text, start)
+	return match.start() if match else -1
+
+
+def closes_before(start: int, stop: int) -> bool:
+	for quoted in (False, True):
+		bracket_stack = []
+		in_string = escaped = False
+		for ch in text[start:stop]:
+			if quoted and in_string:
+				if escaped:
+					escaped = False
+				elif ch == "\\":
+					escaped = True
+				elif ch == '"':
+					in_string = False
+			elif quoted and ch == '"':
+				in_string = True
+			elif ch in "[{":
+				bracket_stack.append(ch)
+			elif ch in "]}":
+				if not bracket_stack or bracket_stack[-1] != (
+					"[" if ch == "]" else "{"
+				):
+					return False
+				bracket_stack.pop()
+				if not bracket_stack:
+					break
+		else:
+			return False
+	return True
+
+
+candidate = None
+failed_opens = []
+position = next_open(0)
+while position != -1:
+	try:
+		value, end = decoder.raw_decode(text, position)
+	except (ValueError, RecursionError):
+		failed_opens.append(position)
+		position = next_open(position + 1)
+		continue
+	if (
+		isinstance(value, list)
+		and all(isinstance(item, dict) and "finding_id" in item for item in value)
+		and all(closes_before(failed, position) for failed in failed_opens)
+	):
+		if value:
+			candidate = (value, position, end)
+		elif (
+			candidate is None
+			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
+			and re.fullmatch(r"\s*(```)?\s*", text[end:])
+		):
+			candidate = (value, position, end)
+	position = next_open(end)
+if candidate is None:
 	print("malformed_output")
 	sys.exit(1)
-if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
-	print("schema_mismatch")
-	sys.exit(1)
-Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
-print("ok")
+value, start, end = candidate
+accept(value, f"extracted items={len(value)} leading_chars={start} trailing_chars={len(text) - end}")
 PY
 )"; then
-		ai_engine_fallback SECURITY_AUDIT "${claude_check_reason:-malformed_output}"
+		claude_check_reason="${claude_check_result:-malformed_output}"
+		security_audit_claude_fallback "${claude_check_reason}"
+		security_audit_log_rejected_claude_reply "${claude_check_reason}"
 		return 1
 	fi
+	case "${claude_check_result}" in
+		extracted\ *) echo "SECURITY_AUDIT_CLAUDE_EXTRACTED ${claude_check_result#extracted }" ;;
+	esac
 	return 0
+}
+
+# A rejected reply is logged to stdout as one line from its start and one from
+# its end (printable ASCII, whitespace collapsed, credentials redacted as in
+# security_audit_sanitize_log_value), so the next failure shows its shape.
+# SECURITY_AUDIT_CLAUDE_REJECTED_OUT (default unset) keeps the first 64 KiB of
+# the reply there. Diagnostics only: any error here is ignored.
+security_audit_log_rejected_claude_reply()
+{
+	python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${1:-unknown}" "${SECURITY_AUDIT_CLAUDE_REJECTED_OUT:-}" <<'PY' || true
+import re
+import sys
+from pathlib import Path
+
+reply_path, reason, kept_path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+	raw = Path(reply_path).read_bytes()
+except OSError:
+	raw = b""
+kept = "none"
+if kept_path and raw:
+	try:
+		Path(kept_path).parent.mkdir(parents=True, exist_ok=True)
+		Path(kept_path).write_bytes(raw[:65536])
+		kept = kept_path
+	except OSError:
+		kept = "write_failed"
+excerpt_source = raw.decode("utf-8", errors="replace")
+excerpt_source = re.sub(r"\s+", " ", excerpt_source)
+excerpt_source = "".join(ch for ch in excerpt_source if " " <= ch <= "~")
+excerpt_source = re.sub(r" {2,}", " ", excerpt_source).strip()
+
+
+def redact(value: str) -> str:
+	value = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@", r"\1[redacted]@", value)
+	value = re.sub(r"([Aa]uthorization:\s*)(([Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+", r"\1[redacted]", value)
+	value = re.sub(r"([Bb]earer\s+)\S+", r"\1[redacted]", value)
+	value = re.sub(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+", r"\1[redacted]", value)
+	value = re.sub(r"(sk-or-)[A-Za-z0-9_-]+", r"\1[redacted]", value)
+	# Further key formats an audit reply may quote from the audited code.
+	value = re.sub(r"(sk-)[A-Za-z0-9_-]{20,}", r"\1[redacted]", value)
+	value = re.sub(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", r"\1[redacted]", value)
+	value = re.sub(r"\b(AIza)[0-9A-Za-z_-]{35}", r"\1[redacted]", value)
+	value = re.sub(r"\b(xox[abposr]-)[A-Za-z0-9-]+", r"\1[redacted]", value)
+	value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[redacted private key]", value)
+	return value
+
+
+# Redact before slicing, so a token cut by the 300-character boundary is
+# still recognised by its prefix.
+redacted_source = redact(excerpt_source)
+print(f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes={len(raw)} chars={len(excerpt_source)} kept={kept}")
+if redacted_source:
+	print("security-audit: rejected Claude reply starts: " + redacted_source[:300])
+if len(redacted_source) > 300:
+	print("security-audit: rejected Claude reply ends: " + redacted_source[-300:])
+PY
 }
 
 if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] && security_audit_try_claude; then

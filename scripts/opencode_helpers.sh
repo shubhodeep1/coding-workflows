@@ -166,8 +166,16 @@ opencode_emit_failure_alert()
 		# shellcheck disable=SC1091
 		source "${_opencode_helpers_dir}/tg_helpers.sh" 2>/dev/null || true
 	fi
+	# Setup defects (config, binary, version, isolation, missing helpers) need
+	# a person: ERROR. Runtime model-call failures are retried, failed open or
+	# recovered by the caller, and a run that still fails reaches the job's
+	# own failure path: DEBUG.
+	local alert_level="DEBUG"
+	case "${failure_class}" in
+		config_*|binary_missing|version_mismatch|invalid_expected_version|isolation_unavailable|helpers_missing) alert_level="ERROR" ;;
+	esac
 	if type tg_send_msg >/dev/null 2>&1; then
-		tg_send_msg "${payload}" "ERROR" >/dev/null || true
+		tg_send_msg "${payload}" "${alert_level}" >/dev/null || true
 	fi
 
 	return "${alert_rc}"

@@ -304,13 +304,25 @@ jobs:
 
       - name: Resolve workflow support ref
         if: steps.check_orchestrator.outputs.respond == 'true'
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_clarify_respond\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -1117,7 +1129,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -1187,7 +1199,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1395,7 +1407,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1406,7 +1418,9 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
+          # DEBUG: the stall ladder's 60-minute auto-answer is the backstop and
+          # ai:clarify-respond-failed goes to the unblock judge.
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Cleanup git auth remote
         if: always() && steps.check_orchestrator.outputs.respond == 'true'

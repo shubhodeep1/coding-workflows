@@ -137,7 +137,7 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' && 'true' || 'false' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -uo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
