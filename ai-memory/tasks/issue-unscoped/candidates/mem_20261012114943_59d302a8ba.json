@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The failing CI check-run `tests-promote-stall-and-review` (and the aggregating `lint` job) is caused by the oversized `run:` body in \u201cCommit and push updates\u201d; move the body into a `scripts/` file and pass each `${{ }}` value through `env:`.\n  expected_change_site: `.github/workflows/update_workflows.yml`, step \"Commit and push updates\"\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard` rejects the 19,821-character `run:` body because the guard is 18,000; `pr_changed_files.txt` lists only `implement.yml`, the changelog fragment, the handler and its test; `.github/workflows/update_workflows.yml` is not touched by this PR and the failure predates it on `orchestrator/project-7126`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- Requirement: Issue #7172's deliverables are:\n  - Stage `gh_helpers.sh` into `${RUNTIME_DIR}`.\n  - Source it in the handler with a fail-open fallback.\n  - Route label add/remove, the label read and label creation through `gh_retry`, with comment posts kept single-attempt.\n  - Add tests in `tests/test_implement_post_codex_recovery.py`.\n  - Add a changelog fragment.\n  Expected change site: `.github/workflows/implement.yml` (\"Stage workflow support files\"), `scripts/implement_handle_guard_block.sh`, `tests/test_implement_post_codex_recovery.py` and `changelog.d/`.\n  Evidence of absence: None. All of these are in the PR diff:\n  - The staging install (`implement.yml` around line 1167).\n  - The fail-open sourcing block.\n  - Retry coverage: 6 `guard_block_gh gh issue edit` calls, 3 `gh_retry gh issue view` reads and 3 `guard_block_ensure_label` call sites.\n  - The new tests: transient-retry, scope, existing-label, no-helpers fallback and wiring contract.\n  - `changelog.d/7172-guard-block-gh-retry.md`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: The failing check-runs `tests-promote-stall-and-review` and `lint` are concrete defects. `lint` fails only because it aggregates `tests-promote-stall-and-review`. The cause is `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard`. It rejects `.github/workflows/update_workflows.yml`, job `update-wrappers`, step \"Commit and push updates\", whose `run:` body containing `${{ }}` is 19,821 characters. The guard is 18,000.\n  Expected change site: `.github/workflows/update_workflows.yml`, step \"Commit and push updates\". Move the body into `scripts/` and pass each `${{ }}` value through `env:` (unattended \u00a724).\n  Evidence of absence: `pr_changed_files.txt` lists only `implement.yml`, the changelog fragment, the handler and its test. This PR does not touch `update_workflows.yml`, and that file is outside issue #7172's scope. The failure was therefore already on `orchestrator/project-7126`. CI stays red on this PR until the step is fixed separately on the integration branch. I did not measure the 19,821 figure myself. It comes from the CI log.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: The failing check-run `tests-promote-stall-and-review`, and `lint`, which fails only because it aggregates that job.\n  Expected change site: .github/workflows/update_workflows.yml, step \"Commit and push updates\" (line 826)\n  Evidence of absence: The PR changes only .github/workflows/implement.yml, the changelog fragment, the handler, and its test, per pr_changed_files.txt. None of them touches update_workflows.yml, so the failing step already existed on orchestrator/project-7126 and was not introduced by this PR. The PR therefore cannot turn this check green on its own, and CI stays red on this PR until that step is fixed separately on the integration branch per \u00a724.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The CI check-run `tests-promote-stall-and-review` (and therefore the aggregating `lint` job) fails on this PR's head SHA, blocking merge to the default branch.\n  Expected change site: `.github/workflows/update_workflows.yml`, step \"Commit and push updates\" at line 826 \u2014 the `run:` body containing `${{ }}` is 19,821 characters, over the 18,000-character guard in `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard`. Fix: move the body into a `scripts/` file and pass each `${{ }}` value through `env:` (unattended \u00a724, CLAUDE.md \u00a727).\n  Evidence of absence: The PR's changed-file list is `.github/workflows/implement.yml`, `changelog.d/7172-guard-block-gh-retry.md`, `scripts/implement_handle_guard_block.sh`, and `tests/test_implement_post_codex_recovery.py` \u2014 `update_workflows.yml` is not touched. The 19,821-character run body therefore predates this PR (already failing on `orchestrator/project-7126`) and is outside issue #7172's `files_touched`. Issue #7172 itself does not defer this fix; the CI failure is a consequence of an independent, pre-existing oversize run body on the integration branch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6e05262f4c87633334ad9e07255e258414d1565bd366ef57aeee3276c4e4b85d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7211,
+    "run_id": "38243798042",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38243798042",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012114943_59d302a8ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7211,
+    "run_id": "38243798042"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T11:49:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
