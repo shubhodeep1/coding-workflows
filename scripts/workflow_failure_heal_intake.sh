@@ -97,7 +97,8 @@
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
 #   WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED  "false" (exact value) files workflow-defect /
-#                                         inconclusive / base-self-inflicted issues even when the
+#                                         inconclusive / base-self-inflicted / consumer-app-defect
+#                                         heal issues even when the
 #                                         intake-rendered scope marker is missing or invalid; default
 #                                         true refuses to file them (skip reason=scope_marker_unresolved)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
@@ -1537,12 +1538,13 @@ _open_issue()
 	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
 	# Fail closed on an unresolved scope (#7059): an issue the heal implementer
 	# must fix is refused by implement preflight without a valid intake-authored
-	# marker (#6866 was filed with an empty one). Check it with the same parser
+	# marker (#6866 was filed with an empty one). consumer-app-defect issues carry
+	# the same heal label and preflight, so they are checked too. Check it with the same parser
 	# implement uses before filing; nothing is persisted before this point, so
 	# the next report of this fingerprint retries.
 	if [ "${SCOPE_MARKER_GUARD_ENABLED}" != "false" ]; then
 		case "${CLASSIFICATION}" in
-			workflow-defect|inconclusive|base-self-inflicted)
+			workflow-defect|inconclusive|base-self-inflicted|consumer-app-defect)
 				local scope_check_json="" scope_check_status="unknown" scope_check_rc=0
 				scope_check_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${scope_marker_file}" 2>/dev/null)" || scope_check_rc=$?
 				scope_check_status="$(jq -r '.status // "unknown"' <<< "${scope_check_json}" 2>/dev/null || echo unknown)"

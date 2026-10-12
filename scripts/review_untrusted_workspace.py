@@ -630,11 +630,13 @@ def _unsafe_conflict_path_category(host, name):
 	Diagnostics only: computed after the rejection, never used to admit a path.
 	"""
 	depth = _directory_depth_bucket(name) if name else "1"
+	parts = PurePosixPath(name).parts if name else ()
+	# Never walk the host for a name that could leave the checkout.
+	if not parts or name.startswith("/") or ".." in parts or "\x00" in name:
+		return "unsafe_name", depth
+	odd_name = not REPORTABLE_PATH_RE.fullmatch(name) or "//" in name or _path_rejection_reason(name) == "unsafe_name"
+	# Filesystem shape first, so a symlink with an odd name still reads as a symlink.
 	try:
-		if (not REPORTABLE_PATH_RE.fullmatch(name) or ".." in PurePosixPath(name).parts or "//" in name
-			or _path_rejection_reason(name) == "unsafe_name"):
-			return "unsafe_name", depth
-		parts = PurePosixPath(name).parts
 		path = host
 		for index, part in enumerate(parts):
 			path = path / part
@@ -642,11 +644,9 @@ def _unsafe_conflict_path_category(host, name):
 				return ("symlink" if index == len(parts) - 1 else "symlink_in_path"), depth
 		if path.exists() and not path.is_file():
 			return "special_file", depth
-	except OSError:
-		return "unreadable", depth
-	except ValueError:
-		return "other", depth
-	return "other", depth
+	except (OSError, ValueError):
+		return ("unsafe_name" if odd_name else "unreadable"), depth
+	return ("unsafe_name" if odd_name else "other"), depth
 
 
 def _host_only_or_unsafe(host, name):

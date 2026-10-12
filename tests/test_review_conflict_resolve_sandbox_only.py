@@ -490,7 +490,13 @@ def _make_odd_name(tmp_path):
 	return "assets/odd $name.svg", "unsafe_name", "2"
 
 
-@pytest.mark.parametrize("make", [_make_symlinked_file, _make_symlinked_parent, _make_fifo, _make_odd_name])
+def _make_odd_named_symlink(tmp_path):
+	(tmp_path / "assets").mkdir(exist_ok=True)
+	os.symlink("/etc/passwd", tmp_path / "assets/odd $link.svg")
+	return "assets/odd $link.svg", "symlink", "2"
+
+
+@pytest.mark.parametrize("make", [_make_symlinked_file, _make_symlinked_parent, _make_fifo, _make_odd_name, _make_odd_named_symlink])
 @pytest.mark.parametrize("integration", ["false", "true"])
 def test_unsafe_path_category_is_named_without_the_path(tmp_path, make, integration):
 	_sandbox, calls = _stub(tmp_path)

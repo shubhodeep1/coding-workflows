@@ -245,12 +245,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     sandbox policy keeps on the host, the resolver logs one
     `::error::Conflict resolver: host-only conflicted path(s) need a manual
     merge: <paths>` line and fails closed with `sandbox_path_host_only`;
-    symlinks and odd names keep the nameless `sandbox_path_unsupported`,
-    preceded since #7059 by one `::error::Conflict resolver: conflicted
-    path(s) cannot enter the sandbox: unsafe=<n> host_only=<m>
-    categories=<c,...> depths=<1|2|3+|none>` line (fixed categories
-    `symlink`, `symlink_in_path`, `special_file`, `unsafe_name`, `unreadable`,
-    `other`; never a name), which becomes the failure's First error. No
+    symlinks and odd names keep the nameless `sandbox_path_unsupported`. No
     model runs in either case, because a merge commit needs every path
     resolved. Outside integration-sync PRs every fail-closed reason is
     exported as `AUTOFIX_FAILURE_REASON=conflict_resolver_<reason>`, so the
@@ -521,13 +516,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     outside this gate even when their issue/comment-derived `run_refs` are
     present; those reports can still fetch unverified job logs with the shared
     `GH_PAT`. The intake redacts logs before disk, then writes a scope marker
-    derived from verified paths (or leaves it absent when unresolved). Since
-    #7059 it files no `workflow-defect`, `inconclusive` or
-    `base-self-inflicted` issue without a marker that passes
-    `heal-scope check-marker` (the implement-side parser and shape rules):
-    it logs `WORKFLOW_HEAL skip reason=scope_marker_unresolved`, sends a
-    CRITICAL alert and fails the run, so the next report retries
-    (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED=false` restores filing). Heal
+    derived from verified paths (or leaves it absent when unresolved). Heal
     planning uses the read-only container; implementation verifies the PAT
     author's unedited marker and runs an editor in a disposable container,
     transferring only scoped paths. An unverifiable marker latches

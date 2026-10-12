@@ -6230,9 +6230,10 @@ def test_intake_refuses_to_file_without_scope_marker(diagnosis: str, classificat
 	assert result.returncode != 0
 	assert "outcome=unresolved" in result.stdout
 	assert re.search(rf"^WORKFLOW_HEAL skip reason=scope_marker_unresolved fp=[0-9a-f]{{64}} classification={classification} status=missing source=", result.stdout, re.M)
-	assert state_after["issues_created"] == []
+	# The fake gh creates these keys lazily, so they are absent when nothing was written.
+	assert not state_after.get("issues_created")
 	# No outcome comment on the source and no occurrence comment anywhere.
-	assert not [c for c in state_after["comments_posted"] if "workflow-failure-heal:outcome" in c["body"]]
+	assert not [c for c in state_after.get("comments_posted", []) if "workflow-failure-heal:outcome" in c["body"]]
 	assert "issue_compose_failed" not in result.stdout and "created issue=" not in result.stdout
 
 
@@ -6243,7 +6244,7 @@ def test_intake_scope_guard_sends_critical_alert() -> None:
 			(work / "scripts" / "tg_helpers.sh").write_text(
 				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
 		result, state_after, _prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup, scope_marker_guard=True)
-		assert result.returncode != 0 and state_after["issues_created"] == []
+		assert result.returncode != 0 and not state_after.get("issues_created")
 		calls = (tg_dir / "calls.txt").read_text(encoding="utf-8").splitlines()
 		critical = [line for line in calls if line.startswith("CRITICAL|") and "valid intake-authored scope marker" in line]
 		assert len(critical) == 1
@@ -6257,14 +6258,16 @@ def test_intake_scope_guard_covers_base_self_inflicted() -> None:
 	result, state_after, _prompt = _run_intake(payload, _self_inflicted_state(), diagnosis=DIAG_BASE_SELF_INFLICTED, setup_git=_ownership_git_origin, scope_marker_guard=True)
 	assert result.returncode != 0
 	assert "skip reason=scope_marker_unresolved" in result.stdout and "classification=base-self-inflicted" in result.stdout
-	assert state_after["issues_created"] == []
+	assert not state_after.get("issues_created")
 
 
-def test_intake_scope_guard_leaves_consumer_app_defect_unchanged() -> None:
+def test_intake_scope_guard_covers_consumer_app_defect() -> None:
+	# consumer-app-defect issues carry the same heal label, so implement
+	# preflight would refuse an empty marker there too.
 	result, state_after, _prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_CONSUMER_APP_SCOPE, scope_marker_guard=True)
-	assert result.returncode == 0, result.stderr + result.stdout
-	assert "scope_marker_unresolved" not in result.stdout
-	assert len(_composed_issues(state_after)) == 1 and _composed_issues(state_after)[0]["repo"] == CONSUMER_REPO
+	assert result.returncode != 0
+	assert "skip reason=scope_marker_unresolved" in result.stdout and "classification=consumer-app-defect" in result.stdout
+	assert not state_after.get("issues_created")
 
 
 def test_intake_scope_guard_disabled_files_as_before() -> None:
@@ -6286,7 +6289,7 @@ def test_intake_scope_guard_defaults_on_and_sits_before_compose() -> None:
 	assert scope_log < guard < compose < create
 	branch = open_issue[guard:compose]
 	assert "skip reason=scope_marker_unresolved" in branch and "return 1" in branch
-	assert "workflow-defect|inconclusive|base-self-inflicted)" in open_issue[:compose]
+	assert "workflow-defect|inconclusive|base-self-inflicted|consumer-app-defect)" in open_issue[:compose]
 
 
 # ---------------------------------------------------------------------------
