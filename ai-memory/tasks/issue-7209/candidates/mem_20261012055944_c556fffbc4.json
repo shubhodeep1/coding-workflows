@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7209,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7209\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7213\",\"pr_number\":7213,\"branch\":\"ai/issue-7209\",\"run_id\":\"38208768491\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38208768491\",\"changed_files\":[\"changelog.d/7209-security-hold-sweep-pinned-support.md\",\"scripts/review_security_hold_sweep.py\",\"scripts/workflow_wrapper_refs.py\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_review_security_hold_sweep.py\",\"tests/test_update_workflows_guardrails.py\",\"workflow-templates/ai-review.yml\"]}",
+  "fingerprint": "3fe0e5ee968be865785f5cb7e2c2a32cea6e0ffee797e38addda1e807f4cd487",
+  "lineage": {
+    "issue_number": 7209,
+    "parent_ids": [],
+    "pr_number": 7213,
+    "run_id": "38208768491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38208768491",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7213"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261012055944_c556fffbc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7209,
+    "level": "run",
+    "pr_number": 7213,
+    "run_id": "38208768491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7209: https://github.com/shubhodeep1/coding-workflows/pull/7213",
+  "timestamps": {
+    "created_at": "2026-10-12T05:59:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
