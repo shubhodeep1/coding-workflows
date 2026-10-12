@@ -1685,8 +1685,8 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
-- **Integration branch line (off by default):** with
-  `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true`, a failing PR whose head is an
+- **Integration branch line (on by default):** unless
+  `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=false`, a failing PR whose head is an
   `orchestrator/project-<N>` branch of this repository gets a
   `- **Integration branch:** \`orchestrator/project-<N>\`` line in its triage
   issue, so the fix is planned and implemented against that branch instead of
@@ -2367,8 +2367,8 @@ through `clarify → plan → implement → review`.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
-| `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` | `false` | Add an API-verified `Integration branch:` line to a check-failure triage issue when the failing PR's head is an existing `orchestrator/project-<N>` branch of this repository (issue #6726). Off until the operator enables it. |
-| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress is never read as an older success), a non-Actions check with that check's newest run on the base branch tip. While that base run or check is still in progress the issue is deferred (`CHECK_TRIAGE skip reason=base_pending`). When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. A failure routed to a verified `orchestrator/project-<N>` head (`TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true`) skips the gate and is filed (`reason=integration_branch`). `false` files every failure. |
+| `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` | `true` | Add an API-verified `Integration branch:` line to a check-failure triage issue when the failing PR's head is an existing `orchestrator/project-<N>` branch of this repository (issue #6726). Unset, empty or `true` (any case) adds it; `false` turns it off; any other value also turns it off and logs a warning. |
+| `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED` | `true` | File a triage issue only when the base branch also fails the check. A failed CI workflow run is compared with the newest push run of the same workflow on the PR's base branch (a run still in progress is never read as an older success), a non-Actions check with that check's newest run on the base branch tip. While that base run or check is still in progress the issue is deferred (`CHECK_TRIAGE skip reason=base_pending`). When the base result is `success`, the failure is PR-specific: the run logs `CHECK_TRIAGE skip reason=pr_specific_failure` and the PR's own review/autofix loop owns it (an issue implemented on the base branch cannot change that PR, #7020). Any other or unknown base result files the issue as before. A failure routed to a verified `orchestrator/project-<N>` head (`TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` on, the default) skips the gate and is filed (`reason=integration_branch`). `false` files every failure. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `high` | Reasoning effort for the check-failure triage diagnosis call. |
 | `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
@@ -3539,8 +3539,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
   An `operator_step` fix-up gates only the new code path behind its
-  placeholder flag; existing paths (releases, tagging, dispatches, merges)
-  keep running while the flag is unset.
+  placeholder; existing paths (releases, tagging, dispatches, merges)
+  keep running while it is unset. A placeholder ending in `_ENABLED` is an
+  off switch on code that ships on by default (`false` turns it off), and
+  nobody is paged. Only a placeholder ending in `_UNSET_OPERATOR_STEP`, a
+  value a person must supply, keeps the new code skipping until it is set.
 - **Before a verdict.** Two deterministic exits run before the judge is asked.
   (1) A scope-blocked issue whose newest trusted rejection comes from the
   automation-path grant guard is re-checked with today's
@@ -3586,8 +3589,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   Telegram. A fork PR targeting a project is never bound to project state;
   its non-issue-creating, non-close verdicts are skipped. If the explanation write fails,
   closure still proceeds and a failed close sends a failure WARNING.
-  `operator_step` also writes the `ai:operator-step` issue and sends a
-  Telegram WARNING. New operator steps are appended as keyed comments, never
+  An `operator_step` with an `_UNSET_OPERATOR_STEP` placeholder also writes
+  the `ai:operator-step` issue and sends a Telegram WARNING; one with an
+  `_ENABLED` flag does neither. New operator steps are appended as keyed comments, never
   written back into the shared issue body. The newest trusted comment for a
   key is authoritative; older comments and legacy body entries remain as
   history. A missing or stale tracker listing fails closed after bounded
