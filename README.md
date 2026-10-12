@@ -1698,6 +1698,10 @@ the way to a fix PR without human action.
   (`integration_branch`); a value that fails validation there stops the run
   (`integration_branch_metadata_invalid`), and the body validator accepts
   exactly that one line in the header and rejects every other routing key.
+  The flag affects only triage issues filed after it is turned on: it never
+  edits or backfills an existing triage issue such as #6710. For an issue
+  filed earlier, a trusted person must add the integration-branch line to that
+  issue, or re-file it, before the fix can target the integration branch.
 - **Base-branch gate:** the issue is implemented as a new PR off the default
   branch, so it can only fix a failure the base branch shares. After the
   open-issue dedup, the script reads the base branch's result for the same

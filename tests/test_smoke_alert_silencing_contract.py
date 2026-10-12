@@ -31,7 +31,12 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -120,6 +125,10 @@ FIXTURE_TAG_RE = re.compile(r"\[E2E [^\]\n]*\]")
 
 
 def _read(name: str, base: Path = WORKFLOWS) -> str:
+	# review_autofix.yml sources some step bodies (including smoke detection)
+	# from scripts/; read it with those bodies inlined.
+	if name == "review_autofix.yml" and base == WORKFLOWS:
+		return expanded_review_autofix_text()
 	return (base / name).read_text(encoding="utf-8")
 
 

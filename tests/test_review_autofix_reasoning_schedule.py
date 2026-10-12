@@ -12,8 +12,13 @@ produces empty output — same failure mode as reasoning=none).
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -23,7 +28,8 @@ OPENCODE_HELPERS = REPO_ROOT / "scripts" / "opencode_helpers.sh"
 
 
 def _workflow() -> str:
-	return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
+	return expanded_review_autofix_text()
 
 
 def _step_block(step_name: str) -> str:
