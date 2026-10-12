@@ -956,17 +956,21 @@ the same plain command.
 `git push --force-with-lease` forms to `origin claude/*` without a prompt
 (§23.C makes force-pushing the session's own working branch routine). Its
 `ask` rules cover pushes that delete a branch with `--delete`, `-d` or
-`--prune`, or that name `main` or `master` as a destination. They do not cover
-every refspec the trailing `*` of a `claude/*` allow rule also matches:
-`claude/x:release`, a colon deletion such as `claude/x :release`, a
-force-prefixed refspec such as `claude/x +main` or `claude/x +master` (which
-force-pushes the local default branch), and
+`--prune`, or that name `main` or `master` as a destination. The trailing `*`
+of a `claude/*` allow rule also matches a second refspec, so the
+`pr_merge_status_guard.py` hook (§21.B) checks the parsed refspecs as well. It
+asks for every branch deletion (`--delete`, `-d`, a `:ref` refspec, `--prune`),
+and for every refspec whose destination is the repository's resolved default
+branch, with or without a `+` prefix (`claude/x +main`, `claude/x:main`), so a
+consumer repo whose default branch has another name is covered too. When
+neither `origin/HEAD` nor `git ls-remote --symref origin HEAD` names the
+default branch, it asks for every destination outside `claude/*`. What still
+passes without a prompt: `claude/x:release` (a non-default branch, checked
+only against its merged PR) and
 `--force-with-lease=claude/a:<sha> origin claude/b` (which leases a different
-branch from the one it overwrites) still pass without a prompt. So push exactly
-one plain branch name, give `--force-with-lease=` the same branch as the
-destination, and never add a second refspec, a `+` refspec or a `src:dst`
-refspec to a push.
-A consumer repo whose default branch has another name gets no ask rule for it.
+branch from the one it overwrites). So push exactly one plain branch name, give
+`--force-with-lease=` the same branch as the destination, and never add a
+second refspec, a `+` refspec or a `src:dst` refspec to a push.
 
 The same rule of one plain command applies to cleanup. Delete files with
 their absolute path, in a call of their own, never chained after a `cd` (for
