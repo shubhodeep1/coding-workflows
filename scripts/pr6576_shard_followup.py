@@ -364,7 +364,74 @@ def _excerpt(log_path: Path, name: str) -> list[str]:
 	return []
 
 
-def rerun(evidence: dict[str, Any], main_dir: Path, old_dir: Path | None, out: Path, timeout: int) -> dict[str, Any]:
+def run_old_head(old_dir: Path, out: Path, timeout: int) -> dict[str, Any]:
+	"""Run the CI partition at the recorded head. Runs on its own runner (``rerun-old``)."""
+	out.mkdir(parents=True, exist_ok=True)
+	old: dict[str, Any] = {"groups": [], "old_head_failures": [], "old_head_process_failure": False}
+	try:
+		layout = ci_partition(module_test_names(old_dir / POLL_MODULE))
+	except (OSError, SyntaxError):
+		old["old_head_process_failure"] = True
+		layout = {"fast_fail": [], "groups": []}
+	if layout["fast_fail"]:
+		ff = _run_batch(old_dir, [("old-fast-fail", layout["fast_fail"])], out, timeout)
+		old["fast_fail"] = ff[0] if ff else None
+	for group in layout["groups"]:
+		shard_results = _run_batch(old_dir, [(f"old-g{group['group']}-s{s}", names) for s, names in enumerate(group["shards"])], out, timeout)
+		old["groups"].append({"group": group["group"], "shards": shard_results})
+	old_failed: list[str] = []
+	entries = [old.get("fast_fail")] + [s for g in old["groups"] for s in g["shards"]]
+	for entry in entries:
+		if not entry:
+			continue
+		old_failed.extend(n for n in entry["failed"] if n not in old_failed)
+		if entry["process_failure"]:
+			old["old_head_process_failure"] = True
+	old["old_head_failures"] = old_failed
+	return old
+
+
+def _clean_old_entry(entry: Any) -> dict[str, Any] | None:
+	if entry is None:
+		return None
+	if not isinstance(entry, dict):
+		raise ValueError("old-head entry is not an object")
+	return {
+		"label": _neutralize(entry.get("label"), 40),
+		"rc": int(entry["rc"]),
+		"tests": int(entry["tests"]),
+		"failed": _safe_names(entry.get("failed")),
+		"process_failure": entry.get("process_failure") is True,
+		"log": _neutralize(entry.get("log"), 60),
+	}
+
+
+def clean_old_results(raw: Any) -> dict[str, Any]:
+	"""Re-validate old-head results produced on the untrusted ``rerun-old`` runner.
+
+	That runner executes #6576's historical code, so its artifact is data only:
+	every field is coerced or filtered here, and a test name it reports counts as
+	reproduced only if it fails twice in this (separate, clean) runner's main
+	reruns. Malformed input raises ValueError (fail closed).
+	"""
+	if not isinstance(raw, dict) or not isinstance(raw.get("groups"), list):
+		raise ValueError("old-head results malformed")
+	groups = []
+	for group in raw["groups"][:GROUPS]:
+		if not isinstance(group, dict) or not isinstance(group.get("shards"), list):
+			raise ValueError("old-head group malformed")
+		groups.append({"group": int(group["group"]), "shards": [_clean_old_entry(s) for s in group["shards"][:SHARDS] if s is not None]})
+	cleaned: dict[str, Any] = {
+		"groups": groups,
+		"old_head_failures": _safe_names(raw.get("old_head_failures")),
+		"old_head_process_failure": raw.get("old_head_process_failure") is True,
+	}
+	if raw.get("fast_fail") is not None:
+		cleaned["fast_fail"] = _clean_old_entry(raw.get("fast_fail"))
+	return cleaned
+
+
+def rerun(evidence: dict[str, Any], main_dir: Path, old_dir: Path | None, out: Path, timeout: int, old_results: dict[str, Any] | None = None) -> dict[str, Any]:
 	out.mkdir(parents=True, exist_ok=True)
 	head_sha = evidence.get("head_sha") or ""
 	if not SHA_RE.match(head_sha):
@@ -373,29 +440,14 @@ def rerun(evidence: dict[str, Any], main_dir: Path, old_dir: Path | None, out: P
 	results: dict[str, Any] = {"source": source, "head_sha": head_sha, "groups": [], "old_head_failures": [], "old_head_process_failure": False}
 	candidates = _safe_names(evidence.get("names"))
 	if source == "fallback":
-		if old_dir is None:
-			raise FollowupError("old_dir_required")
-		try:
-			layout = ci_partition(module_test_names(old_dir / POLL_MODULE))
-		except (OSError, SyntaxError):
-			results["old_head_process_failure"] = True
-			layout = {"fast_fail": [], "groups": []}
-		if layout["fast_fail"]:
-			ff = _run_batch(old_dir, [("old-fast-fail", layout["fast_fail"])], out, timeout)
-			results["fast_fail"] = ff[0] if ff else None
-		for group in layout["groups"]:
-			shard_results = _run_batch(old_dir, [(f"old-g{group['group']}-s{s}", names) for s, names in enumerate(group["shards"])], out, timeout)
-			results["groups"].append({"group": group["group"], "shards": shard_results})
-		old_failed: list[str] = []
-		entries = [results.get("fast_fail")] + [s for g in results["groups"] for s in g["shards"]]
-		for entry in entries:
-			if not entry:
-				continue
-			old_failed.extend(n for n in entry["failed"] if n not in old_failed)
-			if entry["process_failure"]:
-				results["old_head_process_failure"] = True
-		results["old_head_failures"] = old_failed
-		candidates = old_failed
+		if old_results is not None:
+			old = clean_old_results(old_results)
+		elif old_dir is not None:
+			old = run_old_head(old_dir, out, timeout)
+		else:
+			raise FollowupError("old_results_required")
+		results.update(old)
+		candidates = list(old["old_head_failures"])
 	main_names = set(module_test_names(main_dir / POLL_MODULE))
 	present = [n for n in candidates if n in main_names]
 	absent = [n for n in candidates if n not in main_names]
@@ -424,13 +476,27 @@ def cmd_rerun(args: argparse.Namespace) -> int:
 	try:
 		evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
 		timeout = int(os.environ.get("PR6576_SHARD_TIMEOUT_SECONDS") or "1800")
-		results = rerun(evidence, Path(args.main_dir), Path(args.old_dir) if args.old_dir else None, Path(args.out), timeout)
-	except (FollowupError, OSError, ValueError) as exc:
+		old_results = json.loads(Path(args.old_results).read_text(encoding="utf-8")) if args.old_results else None
+		results = rerun(evidence, Path(args.main_dir), Path(args.old_dir) if args.old_dir else None, Path(args.out), timeout, old_results)
+	except (FollowupError, OSError, ValueError, KeyError, TypeError) as exc:
 		_log("failed", "rerun_failed", detail=str(exc).replace(" ", "_"))
 		return 1
 	main = results["main"]
 	_log("rerun", results["source"] or "unknown", reproduced=len(main["reproduced_on_main"]), flaky=len(main["flaky_on_main"]), absent=len(main["absent_on_main"]))
 	_write_output(reproduced_count=len(main["reproduced_on_main"]))
+	return 0
+
+
+def cmd_rerun_old(args: argparse.Namespace) -> int:
+	try:
+		timeout = int(os.environ.get("PR6576_SHARD_TIMEOUT_SECONDS") or "1800")
+		out = Path(args.out)
+		old = run_old_head(Path(args.old_dir), out, timeout)
+		(out / "old_results.json").write_text(json.dumps(old, indent=2) + "\n", encoding="utf-8")
+	except (OSError, ValueError) as exc:
+		_log("failed", "rerun_old_failed", detail=str(exc).replace(" ", "_"))
+		return 1
+	_log("rerun_old", "fallback", failed=len(old["old_head_failures"]))
 	return 0
 
 
@@ -595,8 +661,13 @@ def main(argv: list[str] | None = None) -> int:
 	p.add_argument("--evidence", required=True)
 	p.add_argument("--main-dir", required=True)
 	p.add_argument("--old-dir", default="")
+	p.add_argument("--old-results", default="")
 	p.add_argument("--out", required=True)
 	p.set_defaults(func=cmd_rerun)
+	p = sub.add_parser("rerun-old")
+	p.add_argument("--old-dir", required=True)
+	p.add_argument("--out", required=True)
+	p.set_defaults(func=cmd_rerun_old)
 	p = sub.add_parser("file-defect")
 	p.add_argument("--repo", required=True)
 	p.add_argument("--results", required=True)

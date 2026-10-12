@@ -112,12 +112,70 @@ jobs:
           path: evidence/
           if-no-files-found: error
 
-  rerun:
+  rerun-old:
     needs: locate
-    if: needs.locate.outputs.done == 'false'
+    if: needs.locate.outputs.done == 'false' && needs.locate.outputs.source == 'fallback'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # No secrets: the fallback executes PR #6576's historical head code.
+    # Runs PR #6576's historical head code on its own runner, with no secrets.
+    # Its artifact is untrusted data: the rerun job re-validates it and reruns
+    # each named test on a separate, clean runner before anything is filed.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate recorded head
+        env:
+          HEAD_SHA: ${{ needs.locate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::PR6576_FOLLOWUP outcome=failed reason=head_sha_invalid"
+            exit 1
+          fi
+
+      - name: Checkout the recorded head of PR 6576
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.locate.outputs.head_sha }}
+          path: old
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: Run the CI partition at the recorded head
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py rerun-old \
+            --old-dir old --out old-results
+
+      - name: Upload old-head results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr6576-old-results
+          path: old-results/
+          if-no-files-found: warn
+
+  rerun:
+    needs: [locate, rerun-old]
+    if: always() && needs.locate.outputs.done == 'false' && (needs.rerun-old.result == 'success' || (needs.rerun-old.result == 'skipped' && needs.locate.outputs.source == 'log'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # No secrets. Old-head code never runs on this runner.
     permissions:
       contents: read
     outputs:
@@ -135,24 +193,12 @@ jobs:
           name: pr6576-evidence
           path: evidence
 
-      - name: Validate recorded head
+      - name: Download old-head results
         if: needs.locate.outputs.source == 'fallback'
-        env:
-          HEAD_SHA: ${{ needs.locate.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::PR6576_FOLLOWUP outcome=failed reason=head_sha_invalid"
-            exit 1
-          fi
-
-      - name: Checkout the recorded head of PR 6576
-        if: needs.locate.outputs.source == 'fallback'
-        uses: actions/checkout@v5
+        uses: actions/download-artifact@v6
         with:
-          ref: ${{ needs.locate.outputs.head_sha }}
-          path: old
-          persist-credentials: false
+          name: pr6576-old-results
+          path: old-results
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -172,7 +218,7 @@ jobs:
           set -euo pipefail
           old_args=()
           if [ "${EVIDENCE_SOURCE}" = "fallback" ]; then
-            old_args=(--old-dir old)
+            old_args=(--old-results old-results/old_results.json)
           fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/pr6576_shard_followup.py rerun \
             --evidence evidence/evidence.json --main-dir . "${old_args[@]}" --out results

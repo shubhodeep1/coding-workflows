@@ -14,4 +14,4 @@ What this means for operators: nothing to start by hand. The first `main` push a
 
 ### For contributors
 
-The job that reruns old test code (`rerun`) holds no secrets and only `contents: read`; only `locate` and `report` see `GH_PAT`, and they run only on the default branch. Log text is neutralised before it reaches a comment or issue, so a test's output cannot forge `<!-- ai: -->` markers or workflow commands. `tests/test_pr6576_shard_followup.py` runs in the workflow's own `self-test` job on pull requests that touch these files.
+The job that runs #6576's old test code (`rerun-old`) runs on its own runner with no secrets and only `contents: read`. The `rerun` job re-validates that job's artifact and confirms each named test on a separate, clean runner, so old code cannot tamper with the `main` reruns; only `locate` and `report` see `GH_PAT`, and they run only on the default branch. Log text is neutralised before it reaches a comment or issue, so a test's output cannot forge `<!-- ai: -->` markers or workflow commands. `tests/test_pr6576_shard_followup.py` runs in the workflow's own `self-test` job on pull requests that touch these files.
