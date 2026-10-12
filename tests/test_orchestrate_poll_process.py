@@ -24436,6 +24436,29 @@ def test_managed_auto_approve_holds_protected_plan_with_flag_off() -> None:
 	assert "- `scripts/security_audit.sh`" in holds[0]
 
 
+def test_managed_hold_comment_keeps_globs_and_renotifies_on_new_paths() -> None:
+	# The poller hold comment names the plan's raw paths (globs kept), and a
+	# hold note for a different path list does not suppress a new one.
+	old_note = {
+		"body": "**old**\n\n<!-- ai:automation-path-plan-hold:v1 issue=10 "
+			"reason=automation_path_plan_auto_approval_disabled source=poller paths=WyJzY3JpcHRzL29sZC5zaCJd -->",
+		"user": {"login": _PLAN_GATE_LOGIN},
+		"author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(("scripts/**/*.py",)), old_note]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	holds = [c.get("body", "") for c in result["issues"]["10"]["comments"]
+		if "source=poller" in c.get("body", "") and "**old**" not in c.get("body", "")]
+	assert len(holds) == 1, log
+	assert "- `scripts/**/*.py`" in holds[0]
+
+
 def test_managed_auto_approve_posts_for_ordinary_plan() -> None:
 	result = _run_poller(
 		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",

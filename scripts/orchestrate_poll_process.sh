@@ -15424,6 +15424,7 @@ _plan_auto_approval_gate()
   local gate_decision="hold"
   local gate_reason=""
   local gate_paths="none"
+  local gate_display_paths="[]"
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -15475,6 +15476,12 @@ _plan_auto_approval_gate()
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
         gate_paths="$(printf '%s' "${gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+        # The hold comment names the raw plan paths (globs kept, so the
+        # maintainer sees what the plan lists); log_paths strips `*?[]`.
+        gate_display_paths="$(printf '%s' "${gate_result}" | jq -c '
+          (if ((.denied_paths // []) | length) > 0 then .denied_paths else (.protected_paths // []) end)
+          | [ .[]? | strings | gsub("[^A-Za-z0-9._/*?\\[\\]-]"; "") | select(length > 0) ]
+          | sort | unique | .[:50]' 2>/dev/null)" || gate_display_paths="[]"
       fi
     fi
   fi
@@ -15487,15 +15494,17 @@ _plan_auto_approval_gate()
   gate_paths="$(printf '%s' "${gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
-  _plan_auto_approval_hold_notify "${issue_num}" "${comments_json}" "${gate_reason:-plan_gate_error}" "${gate_paths:-none}" "${gate_login}" || true
+  _plan_auto_approval_hold_notify "${issue_num}" "${comments_json}" "${gate_reason:-plan_gate_error}" "${gate_paths:-none}" "${gate_login}" "${gate_display_paths:-[]}" || true
   return 1
 }
 
 # Issue #6769: a poller hold reaches a human once. Posts one
 # ai:automation-path-plan-hold:v1 comment (source=poller) and one WARNING,
-# unless a trusted hold marker for this issue and reason is already in the
-# caller's comment snapshot. Failures only warn; the hold stands either way.
+# unless a trusted hold marker for this issue, reason and path list is
+# already in the caller's comment snapshot (a re-plan with different paths
+# gets a fresh note). Failures only warn; the hold stands either way.
 # Args: <issue_num> <comments_json> <reason (sanitized)> <paths (sanitized, comma-joined)> <login>
+#       [<display paths JSON array>]
 _plan_auto_approval_hold_notify()
 {
   local issue_num="$1"
@@ -15503,21 +15512,25 @@ _plan_auto_approval_hold_notify()
   local reason="$3"
   local paths_csv="$4"
   local login="$5"
+  local display_paths_json="${6:-}"
   local paths_json="[]" paths_b64="" duplicate="false" hold_body=""
 
-  if [ -n "${paths_csv}" ] && [ "${paths_csv}" != "none" ]; then
+  if printf '%s' "${display_paths_json}" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+    paths_json="$(printf '%s' "${display_paths_json}" | jq -c '.' 2>/dev/null)" || paths_json="[]"
+  elif [ -n "${paths_csv}" ] && [ "${paths_csv}" != "none" ]; then
     paths_json="$(printf '%s' "${paths_csv}" | jq -R -c 'split(",") | map(select(length > 0))' 2>/dev/null)" || paths_json="[]"
   fi
   [ -n "${paths_json}" ] || paths_json="[]"
   paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
-  duplicate="$(printf '%s' "${comments_json:-[]}" | jq -r --arg issue "${issue_num}" --arg reason "${reason}" --arg login "${login}" '
+  duplicate="$(printf '%s' "${comments_json:-[]}" | jq -r --arg issue "${issue_num}" --arg reason "${reason}" --arg login "${login}" --arg paths "${paths_b64}" '
     [ .[]?
       | select(type == "object")
       | select(((.user.login // "") == $login and $login != "")
           or ((.user.login // "") | test("\\[bot\\]$"))
           or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
       | (.body // "")
-      | select(contains("<!-- ai:automation-path-plan-hold:v1 issue=" + $issue + " reason=" + $reason + " "))
+      | select(contains("<!-- ai:automation-path-plan-hold:v1 issue=" + $issue + " reason=" + $reason + " ")
+          and contains(" paths=" + $paths + " -->"))
     ] | length > 0' 2>/dev/null)" || duplicate="false"
   if [ "${duplicate}" = "true" ]; then
     return 0
