@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The issue explicitly says this fix-up is \"tracking, not authorization\", and that the change should be made only \"once a separate maintainer-authored issue explicitly grants\" `scripts/unblock_ledger.py`, `scripts/unblock_judge.sh`, `scripts/unblock_actions.py` and `tests/test_unblock_judge.py`. The issue also notes that the verified heal-scope marker on the source (#7171, still open) covers only implement.yml, tests and changelog files. An automatically created fix-up would therefore not get these automation paths from the source-chain grant check, so B would just end in another `ai:scope-blocked` stop. That is the loop the unblock judge's `operator_step` verdict was meant to break. C needs the number of an existing maintainer grant issue. Neither the issue nor the GitHub facts show one, and choosing C without that number would create a circular clarification loop. So the conservative choice is to hold this issue as a tracking record. The grant-guard decision is a security boundary and should not be bypassed or tested by trial.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot needed. The decision is a letter.\n\nESCALATION (required for any ESCALATE decision):\nNot needed.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- MAINTAINER_GRANT_ISSUE (resource): an OWNER, MEMBER or COLLABORATOR opens a separate issue whose `files_touched` block lists exactly `scripts/unblock_ledger.py`, `scripts/unblock_judge.sh`, `scripts/unblock_actions.py`, `tests/test_unblock_judge.py` and a `changelog.d/` fragment. That issue carries the change described here, including the new path behind `UNBLOCK_AUTOMATION_REJECTION_HANDOFF_ENABLED`, which defaults to off. Until that issue exists, planning for this issue stops with `BLOCKED: awaiting maintainer-authored grant issue for scripts/unblock_* and tests/test_unblock_judge.py`, nothing is implemented, and current unblock-judge behaviour stays as it is.",
+  "fingerprint": "b667ff51ba92360c913c4af48aa8b17749d4619af609baded6c03e5dd722aa51",
+  "lineage": {
+    "issue_number": 7214,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38211508385",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38211508385",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7214"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012062313_84ab250c22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7214,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38211508385"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7214",
+  "timestamps": {
+    "created_at": "2026-10-12T06:23:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
