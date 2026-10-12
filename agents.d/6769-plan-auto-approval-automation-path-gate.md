@@ -17,5 +17,8 @@ with `plan_comment_unavailable`), and the batched issue GraphQL now carries
 `<!-- ai:automation-path-plan-hold:v1 ... -->` comment and a WARNING; a
 poller hold logs `AI_PHASE_GATE_V1 phase=stall_recovery ... outcome=defer` and
 `STALL_SKIP ... reason=automation_path_plan_hold`, posts the same comment with
-`source=poller` once per reason, and does not count a recovery attempt. The implement-time guard and the staged-support latch release are
+`source=poller` once per reason and path list (a re-plan listing different
+paths gets a new comment), and does not count a recovery attempt. Both gate
+callers pass `--origin-repo`, so a pipeline-authored issue that names a source
+issue gets the same origin-chain check as at implement time. The implement-time guard and the staged-support latch release are
 unchanged.

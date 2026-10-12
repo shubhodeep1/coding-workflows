@@ -38,7 +38,8 @@ Inputs:
                           Verify staged automation paths against the snapshot.
   --plan-auto-approval-gate --plan-file PATH --flag-enabled VALUE
                           [--issue-meta-file PATH --pipeline-login LOGIN
-                          --allow-workflow-edits VALUE --issue-number NUMBER]
+                          --allow-workflow-edits VALUE --issue-number NUMBER
+                          --origin-repo OWNER/NAME]
                           Decide whether an automatic `/approved` may be posted
                           for a plan that lists automation paths (issue #6769).
                           Prints one JSON line; exit 0 approves, 30 holds.
@@ -639,8 +640,13 @@ def _flag_enabled(value: str) -> bool:
 
 
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
-	pipeline_login: str, allow_workflow_edits: str, issue_number: str) -> tuple[dict, int]:
-	"""CLI body: returns (decision record, exit code). Errors always hold."""
+	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "") -> tuple[dict, int]:
+	"""CLI body: returns (decision record, exit code). Errors always hold.
+
+	``origin_repo`` (owner/name) lets a pipeline-authored issue that names a
+	source issue pass the Q82 origin-chain check, as the implement-time grant
+	does; without it such an issue holds with ``origin_unverified``.
+	"""
 	protected: list[str] = []
 	try:
 		with open(plan_file, encoding="utf-8") as handle:
@@ -658,7 +664,9 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				return record, EXIT_AUTOMATION_UNGRANTED
 			with open(issue_meta_file, encoding="utf-8") as handle:
 				metadata = json.load(handle)
-			grant = build_automation_grant(metadata, pipeline_login)
+			repo = origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", origin_repo or "") else ""
+			fetch_origin = (lambda number: fetch_issue_with_gh(repo, number)) if repo else None
+			grant = build_automation_grant(metadata, pipeline_login, fetch_origin)
 		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
 			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
@@ -709,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
 	args = parser.parse_args(argv)
 	if args.plan_auto_approval_gate:
 		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
-			args.pipeline_login, args.allow_workflow_edits, args.issue_number)
+			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo)
 		sys.stdout.write(json.dumps(record) + "\n")
 		return code
 	if args.emit_automation_grant:

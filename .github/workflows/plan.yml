@@ -2251,6 +2251,7 @@ jobs:
                     --issue-meta-file "${plan_gate_meta_file}" \
                     --pipeline-login "${plan_gate_login}" \
                     --allow-workflow-edits "${plan_gate_allow_edits}" \
+                    --origin-repo "${GITHUB_REPOSITORY:-}" \
                     --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true
                 }
                 plan_gate_result="$(run_plan_gate)"

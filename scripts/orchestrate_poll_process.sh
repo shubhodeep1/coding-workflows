@@ -15472,16 +15472,20 @@ _plan_auto_approval_gate()
           --issue-meta-file "${gate_meta_arg}" \
           --pipeline-login "${gate_login}" \
           --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" \
+          --origin-repo "${GITHUB_REPOSITORY:-}" \
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
         gate_paths="$(printf '%s' "${gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
         # The hold comment names the raw plan paths (globs kept, so the
         # maintainer sees what the plan lists); log_paths strips `*?[]`.
+        # The list stays raw and uncapped here, like plan.yml's, so both
+        # markers fingerprint the same paths; the comment renderer
+        # sanitizes and caps it for display only.
         gate_display_paths="$(printf '%s' "${gate_result}" | jq -c '
           (if ((.denied_paths // []) | length) > 0 then .denied_paths else (.protected_paths // []) end)
-          | [ .[]? | strings | gsub("[^A-Za-z0-9._/*?\\[\\]-]"; "") | select(length > 0) ]
-          | sort | unique | .[:50]' 2>/dev/null)" || gate_display_paths="[]"
+          | [ .[]? | strings | select(length > 0) ]
+          | sort | unique' 2>/dev/null)" || gate_display_paths="[]"
       fi
     fi
   fi
@@ -15536,7 +15540,9 @@ _plan_auto_approval_hold_notify()
     return 0
   fi
   if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${issue_num}" --arg reason "${reason}" --arg b64 "${paths_b64}" '
-      [
+      ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
+      | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
+      | [
         (if $reason == "automation_path_plan_auto_approval_disabled"
           then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
           elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable"))
@@ -15545,7 +15551,9 @@ _plan_auto_approval_hold_notify()
         "",
         "Reason: `\($reason)`",
         "",
-        (if ($paths | length) > 0 then ($paths | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+        (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+        (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
+        (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
         "",
         "Stall recovery did not post `/approved`. To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way.",
         "",

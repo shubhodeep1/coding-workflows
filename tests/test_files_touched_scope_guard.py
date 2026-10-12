@@ -919,6 +919,43 @@ def test_plan_gate_log_paths_are_sanitized() -> None:
 	assert guard.plan_gate_log_paths([]) == "none"
 
 
+def test_plan_gate_origin_repo_verifies_pipeline_source_chain() -> None:
+	# Regression: the plan gate built the grant without an origin fetcher, so
+	# an exact grant on a pipeline-authored derived issue always held with
+	# origin_unverified, unlike the implement-time guard (--origin-repo).
+	body = _body("scripts/a.sh") + ("\n---\n**Orchestrator metadata** (do not edit)\n"
+		"- Type: implement-fix-up (post-codex-validation)\n- Source issue: #41\n")
+	meta = {"number": 42, "user": {"login": "pipeline[bot]"}, "author_association": "NONE", "body": body}
+	plan = "### Files likely to change\n- `scripts/a.sh`\n"
+	reads: list[tuple[str, int]] = []
+
+	def fake_fetch(repo: str, number: int):
+		reads.append((repo, number))
+		return {"number": number, "user": {"login": "maintainer"}, "author_association": "OWNER", "body": "x"}
+
+	original = guard.fetch_issue_with_gh
+	guard.fetch_issue_with_gh = fake_fetch
+	try:
+		with tempfile.TemporaryDirectory() as td:
+			plan_file = Path(td) / "plan.md"
+			plan_file.write_text(plan, encoding="utf-8")
+			meta_file = Path(td) / "meta.json"
+			meta_file.write_text(json.dumps(meta), encoding="utf-8")
+			held, code = guard.run_plan_auto_approval_gate(str(plan_file), "true", str(meta_file),
+				"pipeline[bot]", "true", "42")
+			assert code == guard.EXIT_AUTOMATION_UNGRANTED and held["reason"] == "origin_unverified"
+			assert reads == []
+			record, code = guard.run_plan_auto_approval_gate(str(plan_file), "true", str(meta_file),
+				"pipeline[bot]", "true", "42", "owner/repo")
+			assert code == 0 and record["decision"] == "approve" and record["reason"] == "granted", record
+			assert reads == [("owner/repo", 41)]
+			bad, _ = guard.run_plan_auto_approval_gate(str(plan_file), "true", str(meta_file),
+				"pipeline[bot]", "true", "42", "not a repo")
+			assert bad["reason"] == "origin_unverified"
+	finally:
+		guard.fetch_issue_with_gh = original
+
+
 # --- Q82: a pipeline-authored derived issue inherits its source's trust ---
 
 PIPELINE = "pipeline[bot]"
