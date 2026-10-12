@@ -222,7 +222,7 @@ def locate(repo: str, pr: str, branch: str, out: Path) -> dict[str, Any]:
 				for job in (jobs or {}).get("jobs") or []:
 					if not isinstance(job, dict) or not isinstance(job.get("id"), int):
 						continue
-					if not JOB_NAME_RE.match(job.get("name") or "") or job.get("conclusion") not in ("failure", "timed_out"):
+					if not JOB_NAME_RE.match(job.get("name") or "") or job.get("conclusion") not in ("failure", "timed_out", "cancelled"):
 						continue
 					if len(selected) >= MAX_LOGS:
 						break
@@ -604,9 +604,12 @@ def main(argv: list[str] | None = None) -> int:
 	p.add_argument("--defect-issue", default="")
 	p.set_defaults(func=cmd_report)
 	args = parser.parse_args(argv)
-	for name in ("repo", "issue", "pr"):
+	repo_value = getattr(args, "repo", None)
+	if repo_value is not None and not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo_value):
+		parser.error("invalid --repo")
+	for name in ("issue", "pr"):
 		value = getattr(args, name, None)
-		if value is not None and not re.match(r"^(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[0-9]+)$", value):
+		if value is not None and not re.match(r"^[0-9]+$", value):
 			parser.error(f"invalid --{name}")
 	if getattr(args, "branch", None) is not None and not re.match(r"^[A-Za-z0-9_./-]+$", args.branch):
 		parser.error("invalid --branch")

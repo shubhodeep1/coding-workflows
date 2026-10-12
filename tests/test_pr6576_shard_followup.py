@@ -269,6 +269,17 @@ def test_file_defect_dedupe_read_error_fails(monkeypatch, tmp_path):
 	assert mod.main(["file-defect", "--repo", REPO, "--results", str(tmp_path / "r.json"), "--evidence", str(tmp_path / "e.json")]) == 1
 
 
+@pytest.mark.parametrize("argv", [
+	["guard", "--repo", REPO, "--issue", "o/r"],
+	["guard", "--repo", "7072", "--issue", "7072"],
+	["locate", "--repo", REPO, "--pr", "fork/branch", "--branch", "ai/issue-6573", "--out", "x"],
+])
+def test_cli_rejects_wrong_shape_ids(argv):
+	with pytest.raises(SystemExit) as exc:
+		mod.main(argv)
+	assert exc.value.code == 2
+
+
 # ------------------------------------------------------------------ workflow
 
 def _workflow():
