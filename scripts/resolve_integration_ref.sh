@@ -147,6 +147,16 @@ get_issue_json() {
 	gh api "repos/${REPO}/issues/${issue_num}"
 }
 
+# Rate-limit-aware GET for the PR and branch reads below; falls back to a
+# plain `gh api` when gh_helpers.sh is not staged. Any failure still refuses.
+ci_triage_gh_get() {
+	if type gh_api_retry >/dev/null 2>&1; then
+		gh_api_retry "$@"
+		return $?
+	fi
+	gh api "$@"
+}
+
 ci_triage_refuse() {
 	local reason="$1"
 	local pr="${2:-none}"
@@ -270,7 +280,7 @@ sys.exit(0 if isinstance(data, dict) and data.get("ref") == "refs/heads/" + sys.
 # where `set -e` does not apply.
 resolve_ci_triage_branch() {
 	local issue_json="$1"
-	local parsed verdict pr ref reason pr_json encoded_ref ref_json ref_err
+	local parsed verdict pr ref reason pr_json encoded_ref ref_json ref_err ref_err_file
 	if ! parsed="$(printf '%s' "${issue_json}" | python3 -I -c "${CI_TRIAGE_PARSE_PY}" "${REPO}")"; then
 		ci_triage_refuse "issue_parse_failed" "none"
 		return "${CI_TRIAGE_REFUSED_RC}"
@@ -296,7 +306,7 @@ resolve_ci_triage_branch() {
 			;;
 	esac
 
-	if ! pr_json="$(gh api "repos/${REPO}/pulls/${pr}" 2>/dev/null)"; then
+	if ! pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)"; then
 		ci_triage_refuse "pr_lookup_failed" "${pr}"
 		return "${CI_TRIAGE_REFUSED_RC}"
 	fi
@@ -314,17 +324,22 @@ resolve_ci_triage_branch() {
 		ci_triage_refuse "branch_lookup_failed" "${pr}"
 		return "${CI_TRIAGE_REFUSED_RC}"
 	fi
-	# Same capture as branch_exists(); any stderr noise on success makes the
-	# JSON check below fail, which refuses (fail closed).
-	if ! ref_json="$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1)"; then
-		ref_err="${ref_json}"
-		if printf '%s' "${ref_err}" | grep -Eq '404|Not Found'; then
+	# stderr goes to a file so retry/log lines never reach the JSON check.
+	if ! ref_err_file="$(mktemp)"; then
+		ci_triage_refuse "branch_lookup_failed" "${pr}"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+	if ! ref_json="$(ci_triage_gh_get "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>"${ref_err_file}")"; then
+		ref_err="$(cat "${ref_err_file}" 2>/dev/null || true)"
+		rm -f "${ref_err_file}"
+		if printf '%s' "${ref_err}" | grep -Eq 'status=404|HTTP 404|Not Found'; then
 			ci_triage_refuse "branch_missing" "${pr}"
 		else
 			ci_triage_refuse "branch_lookup_failed" "${pr}"
 		fi
 		return "${CI_TRIAGE_REFUSED_RC}"
 	fi
+	rm -f "${ref_err_file}"
 	if ! printf '%s' "${ref_json}" | python3 -I -c "${CI_TRIAGE_REF_MATCH_PY}" "${ref}"; then
 		ci_triage_refuse "branch_missing" "${pr}"
 		return "${CI_TRIAGE_REFUSED_RC}"
@@ -523,6 +538,9 @@ def main() -> int:
 		if issue.get("read_error"):
 			print("gh: Not Found (HTTP 404)", file=sys.stderr)
 			return 1
+		if "raw_response" in issue:
+			print(issue["raw_response"])
+			return 0
 		body = issue.get("body", "")
 		if "--jq" in args:
 			jq_expr = args[args.index("--jq") + 1]
@@ -549,6 +567,10 @@ def main() -> int:
 		ref = endpoint.split("/git/ref/heads/", 1)[1]
 		from urllib.parse import unquote
 		ref_name = unquote(ref)
+		branch_error = fixture.get("branch_errors", {}).get(ref_name)
+		if branch_error:
+			print(branch_error, file=sys.stderr)
+			return 1
 		exists_map = fixture.get("branch_exists", {})
 		exists = bool(exists_map.get(ref_name, False))
 		if exists:

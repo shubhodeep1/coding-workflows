@@ -36,6 +36,9 @@ REFUSAL_REASONS = {
 	"head_ref_invalid",
 	"branch_missing",
 	"issue_read_failed",
+	"issue_parse_failed",
+	"issue_json_invalid",
+	"branch_lookup_failed",
 }
 
 
