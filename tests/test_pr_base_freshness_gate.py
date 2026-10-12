@@ -537,6 +537,14 @@ class RequiredChecksWiring(unittest.TestCase):
 		judge = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
 		self.assertIn(line, judge)
 
+	def test_deterministic_skip_merge_passes_the_pr_base_to_the_wait(self) -> None:
+		"""The `lint` default is scoped by base ref; an empty base would require it on bases CI never runs on."""
+		text = WORKFLOW.read_text(encoding="utf-8")
+		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
+		self.assertIn("PR_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}", job)
+		self.assertEqual(job.count('_pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"'), 2)
+		self.assertNotIn('_pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""', job)
+
 	def test_review_enable_auto_merge_waits_before_both_tails(self) -> None:
 		text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
 		wait_at = text.index('_pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"')
@@ -547,7 +555,7 @@ class RequiredChecksWiring(unittest.TestCase):
 	def test_deterministic_skip_merge_waits_before_both_auto_merge_calls(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
-		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
+		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
 		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", job)
 
