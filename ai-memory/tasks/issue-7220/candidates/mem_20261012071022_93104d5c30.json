@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\n\nRATIONALE:\nQ1: The pipeline can't make this change itself. agents.md says its editors cannot write `.claude/**`, and the merged-PR guard fix \"needs both hook copies, which the pipeline cannot write.\" `.claude/` is also left out of this isolated snapshot. CI won't accept a template-only change either: `.claude/hooks/**` and `.claude/settings.json` are never prepared by the dry-run sync, and the live and template copies must match byte for byte (`tests/test_claude_template_live_parity.py`). So B would keep the PR red, and C would knowingly ship a security hook that differs between this repo and consumers. The interactive session should change these together:\n- `.claude/hooks/pr_merge_status_guard.py`\n- `workflow-templates/.claude/hooks/pr_merge_status_guard.py`\n- `tests/test_pr_merge_status_guard.py`\n- the limitation note in `CLAUDE.md`\n\nThe guard should ask for confirmation in these cases:\n- any branch deletion, including `:ref` and `--delete`/`-d`;\n- any refspec in a multi-refspec push whose destination is the resolved default branch, with or without a `+` prefix (for example `git push origin claude/x +main`).\n\nThe wildcard rules in `settings.json` stay as they are, as a second layer.\n\nQ2: `default_branch()` (`workflow-templates/.claude/hooks/pr_merge_status_guard.py:1453-1473`) already falls back to `git ls-remote --symref origin HEAD`, so option C's network call already happens. An empty result therefore means both the local and the remote lookup failed. In that case \u00a76 says a security check should fail closed, so the guard should ask for every push whose destination is not `claude/*`. That covers `main`/`master` (option A) and any other default-branch name. It costs almost nothing in practice: if origin can't be reached, the push would fail anyway, and interactive sessions push to `claude/*`, which is still allowed. A test should check that an unresolved default branch asks for `git push origin feature` and `git push origin claude/x +develop`, but not for `git push origin claude/x`.",
+  "fingerprint": "7fadf9070460b6643aaccf397c9d67cb54f6128bfccef85acd3d07c9d10c2cd9",
+  "lineage": {
+    "issue_number": 7220,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38215336264",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38215336264",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7220"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012071022_93104d5c30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7220,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38215336264"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7220",
+  "timestamps": {
+    "created_at": "2026-10-12T07:10:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
