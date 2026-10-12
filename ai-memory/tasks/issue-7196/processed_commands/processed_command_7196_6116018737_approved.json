@@ -5,13 +5,28 @@
   "entry_id": "processed_command_7196_6116018737_approved",
   "issue_number": 7196,
   "metadata": {
+    "branch": "ai/issue-7196",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      "agents.d/7196-implement-image-build-retry.md",
+      "changelog.d/7196-implement-sandbox-image-build-retry.md",
+      "scripts/codex_isolated_exec.sh",
+      "tests/codex_isolation_fakes.py",
+      "tests/test_codex_agent_isolation_contract.py",
+      "tests/test_codex_isolated_exec.py"
+    ],
+    "issue_number": 7196,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7196",
+    "pr_number": 7198,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7198",
+    "run_attempt": "1",
+    "run_id": "38191173044",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38191173044"
   },
   "run_attempt": 1,
   "run_id": "38191173044",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-12T01:17:34Z",
+  "status": "completed",
+  "timestamp": "2026-10-12T01:34:49Z",
   "workflow": "implement"
 }
