@@ -191,20 +191,39 @@ jobs:
           # Exit 3 means CI-triage PR-branch routing was required but could
           # not be verified; never fall back to the default branch then.
           resolver_rc=0
+          # Resolver stderr is captured (then replayed) so a branch that came
+          # from CI-triage PR-head routing, not from an explicit body line,
+          # can be told apart for the check-triage branch guard (#7064).
+          resolver_err_file="${resolver_stage_root}/resolver.err"
           integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
-            bash "${resolver_script}"
+            bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
+          if [ -s "${resolver_err_file}" ]; then
+            cat "${resolver_err_file}" >&2
+          fi
           if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
             if [ -n "${integration_branch}" ]; then
               echo "integration_branch_meta=${integration_branch}" >> "$GITHUB_OUTPUT"
               # resolver_status (#7064) feeds the check-triage branch guard:
-              # resolved / none / failed / unavailable.
-              echo "resolver_status=resolved" >> "$GITHUB_OUTPUT"
+              # resolved / routed / none / failed / unavailable. "routed"
+              # means the branch is a verified PR head from CI-triage routing
+              # and the issue body declared no branch line.
+              triage_routed=false
+              while IFS= read -r resolver_err_line; do
+                case "${resolver_err_line}" in
+                  "CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} pr="*" outcome=routed branch=${integration_branch}") triage_routed=true ;;
+                esac
+              done < "${resolver_err_file}"
+              if [ "${triage_routed}" = "true" ]; then
+                echo "resolver_status=routed" >> "$GITHUB_OUTPUT"
+              else
+                echo "resolver_status=resolved" >> "$GITHUB_OUTPUT"
+              fi
             else
               echo "resolver_status=none" >> "$GITHUB_OUTPUT"
             fi
@@ -1149,7 +1168,7 @@ jobs:
           # Closed vocabulary; anything else counts as "could not verify".
           resolver_status="${CHECK_TRIAGE_RESOLVER_STATUS:-}"
           case "${resolver_status}" in
-            resolved|none|failed|unavailable) ;;
+            resolved|routed|none|failed|unavailable) ;;
             *) resolver_status="unknown" ;;
           esac
           issue_ref="${ISSUE_NUMBER:-}"
@@ -1158,8 +1177,12 @@ jobs:
             echo "CHECK_TRIAGE_BRANCH_GUARD issue=${issue_ref} enabled=${guard_enabled} check_triage=$1 resolver_status=${resolver_status} outcome=$2 reason=$3"
           }
           guard_block() {
-            if [ "${resolver_status}" = "none" ]; then
-              printf '%s\n' 'BLOCKED: ai:check-triage issue has no explicit target-branch metadata; add a standalone "Target branch: <branch>" or "Integration branch: <branch>" line to the issue body, then reply /answer' > "${CODEX_OUTPUT_FILE}"
+            # The message follows the block reason, so an unreadable label
+            # list is never reported as missing branch metadata.
+            if [ "$2" = "labels_unavailable" ]; then
+              printf '%s\n' "BLOCKED: ai:check-triage target-branch guard could not be verified because the issue labels were unreadable (resolver_status=${resolver_status}); re-run planning with /answer" > "${CODEX_OUTPUT_FILE}"
+            elif [ "$2" = "no_target_branch_metadata" ]; then
+              printf '%s\n' 'BLOCKED: ai:check-triage issue has no explicit target-branch metadata; add a standalone `Target branch: BRANCH_NAME` or `Integration branch: BRANCH_NAME` line to the issue body, then reply /answer' > "${CODEX_OUTPUT_FILE}"
             else
               printf '%s\n' "BLOCKED: ai:check-triage issue target branch could not be verified (resolver_status=${resolver_status}); correct the issue's branch metadata, then reply /answer" > "${CODEX_OUTPUT_FILE}"
             fi
@@ -1183,6 +1206,13 @@ jobs:
           fi
           if [ "${resolver_status}" = "resolved" ]; then
             guard_log true pass metadata_present
+            exit 0
+          fi
+          # A verified PR head from CI-triage routing (exit 3 on any failed
+          # check) is not a default-branch fallback, so it passes with its
+          # own reason rather than being reported as body metadata.
+          if [ "${resolver_status}" = "routed" ]; then
+            guard_log true pass pr_head_routed
             exit 0
           fi
           if [ "${resolver_status}" = "none" ]; then
@@ -1245,14 +1275,14 @@ jobs:
           echo "engine=${engine}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
-        if: env.SKIP_PLAN != 'true' && steps.ai_engine.outputs.engine == 'claude'
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true' && steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Resolve Claude credential
-        if: env.SKIP_PLAN != 'true' && steps.ai_engine.outputs.engine == 'claude'
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true' && steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:

@@ -140,7 +140,7 @@ def test_disabled_guard_never_blocks(tmp_path: Path, enabled: str | None) -> Non
 @NEEDS_JQ
 @pytest.mark.parametrize("enabled", ["true", "TRUE", "1", "on", "yes"])
 def test_enabled_guard_ignores_issues_without_check_triage_label(tmp_path: Path, enabled: str) -> None:
-	for status in ("none", "failed", "unavailable", "resolved", ""):
+	for status in ("none", "failed", "unavailable", "resolved", "routed", ""):
 		sub = tmp_path / (status or "empty")
 		sub.mkdir()
 		result = _run_guard(sub, enabled=enabled, labels=["ai:planning"], status=status)
@@ -156,10 +156,23 @@ def test_enabled_guard_passes_with_resolved_metadata(tmp_path: Path) -> None:
 
 
 @NEEDS_JQ
+def test_enabled_guard_passes_verified_pr_head_route_with_its_own_reason(tmp_path: Path) -> None:
+	# A routed branch is a verified PR head, not body metadata: it passes,
+	# but the log must not claim metadata_present.
+	result = _run_guard(tmp_path, enabled="true", labels=["ai:check-triage"], status="routed")
+	_assert_not_blocked(result, "pass")
+	assert "reason=pr_head_routed" in result["stdout"]
+	assert "metadata_present" not in result["stdout"]
+
+
+@NEEDS_JQ
 def test_enabled_guard_blocks_without_metadata(tmp_path: Path) -> None:
 	result = _run_guard(tmp_path, enabled="true", labels=["ai:check-triage"], status="none")
 	_assert_blocked(result, "no explicit target-branch metadata")
 	assert "reason=no_target_branch_metadata" in result["stdout"]
+	# Placeholders sit in inline code, never as a bare <tag> GitHub strips.
+	assert "<branch>" not in result["output"]
+	assert "`Target branch: BRANCH_NAME`" in result["output"]
 
 
 @NEEDS_JQ
@@ -172,9 +185,12 @@ def test_enabled_guard_blocks_when_branch_unverified(tmp_path: Path, status: str
 	assert "INJECTED" not in result["env"]
 
 
-def test_enabled_guard_fails_closed_on_unreadable_labels(tmp_path: Path) -> None:
-	result = _run_guard(tmp_path, enabled="true", labels=None, status="resolved")
+@pytest.mark.parametrize("status", ["resolved", "none"])
+def test_enabled_guard_fails_closed_on_unreadable_labels(tmp_path: Path, status: str) -> None:
+	result = _run_guard(tmp_path, enabled="true", labels=None, status=status)
 	_assert_blocked(result, "could not be verified")
+	assert "issue labels were unreadable" in result["output"]
+	assert "no explicit target-branch metadata" not in result["output"]
 	assert "reason=labels_unavailable" in result["stdout"]
 
 
@@ -203,13 +219,19 @@ def test_guard_step_wiring_contract() -> None:
 	assert guard < names.index("Run Codex planning") < names.index("Parse planning output")
 	codex = _step_text("Run Codex planning")
 	assert "if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'" in codex
+	for name in ("Install Claude Code CLI", "Resolve Claude credential"):
+		assert "env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'" in _step_text(name), name
 
 
 def test_refctx_emits_resolver_status_on_every_exit_path() -> None:
 	body = _run_body("Resolve integration ref")
 	assert body.count('echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"') == 3
-	for status in ("resolved", "none", "failed"):
+	for status in ("resolved", "routed", "none", "failed"):
 		assert body.count(f'echo "resolver_status={status}" >> "$GITHUB_OUTPUT"') == 1
+	# "routed" only when the resolver's own routing line names this issue and
+	# exactly the branch it printed.
+	assert 'bash "${resolver_script}" 2>"${resolver_err_file}"' in body
+	assert '"CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} pr="*" outcome=routed branch=${integration_branch}") triage_routed=true ;;' in body
 	assert body.count("exit 0") == body.count('echo "resolver_status=unavailable"')
 	# Checkout ref selection is unchanged.
 	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in _workflow_text()
