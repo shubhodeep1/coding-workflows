@@ -2332,6 +2332,28 @@ class CheckFailureTriagePrBranchRoutingTests(unittest.TestCase):
 		self.assertEqual(outputs.get("ready"), "true")
 		self.assertEqual(metadata.get("routing_target_branch"), "ai/issue-41")
 
+	def test_green_base_does_not_drop_target_branch_route(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="plain issue\n", pr_payload_overrides=ROUTING_BASE_REPO, extra_env=ROUTING_FLAG_ON,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"}, gh_calls=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertNotIn("pr_specific_failure", proc.stdout)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file reason=target_branch_route branch=ai/issue-41 pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("routing_target_branch"), "ai/issue-41")
+		self.assertFalse([call for call in calls if "/actions/" in call])
+
+	def test_green_base_still_skips_with_routing_flag_off(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="plain issue\n", pr_payload_overrides=ROUTING_BASE_REPO,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
+		self.assertEqual(metadata, {})
+
 	def test_flag_unset_records_no_routing(self) -> None:
 		proc, outputs, metadata = _run_collect_stage(parent_body="plain issue\n", pr_payload_overrides=ROUTING_BASE_REPO)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -2425,6 +2447,13 @@ class CheckFailureTriagePrBranchRoutingTests(unittest.TestCase):
 				self.assertIn("CHECK_TRIAGE routing outcome=skip reason=invalid_ref", proc.stdout)
 				self.assertEqual(outputs.get("ready"), "true")
 				self.assertNotRegex(body, r"(?mi)^\s*(?:-\s*)?(?:\*\*)?(?:Target|Integration) branch:")
+
+	def test_handoff_route_must_match_recorded_head(self) -> None:
+		proc, body, outputs = _run_target_branch_diagnose_stage(routing_target_branch="stable", routing_enabled=True, diagnosis="## Summary\nok\n")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE routing outcome=skip reason=handoff_mismatch", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertNotRegex(body, r"(?mi)^\s*(?:-\s*)?(?:\*\*)?(?:Target|Integration) branch:")
 
 	def test_validator_allows_only_one_trusted_line_before_separator(self) -> None:
 		header = "\n".join([

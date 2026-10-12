@@ -1694,7 +1694,10 @@ the way to a fix PR without human action.
   diagnosis (`CHECK_TRIAGE routing outcome=emit target_branch=<ref>`), so
   clarify, plan and implement route the fix to that branch. The final body check
   accepts only that exact line, once, above the first `---`; diagnosis text is
-  still neutralized. Off by default, so issues are unchanged until it is set.
+  still neutralized. A verified route skips the base-branch gate
+  (`CHECK_TRIAGE base_gate outcome=file reason=target_branch_route`), because
+  the fix lands on the PR's branch. Off by default, so issues are unchanged
+  until it is set.
 - **Integration branch line (on by default):** unless
   `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=false`, a failing PR whose head is an
   `orchestrator/project-<N>` branch of this repository gets a

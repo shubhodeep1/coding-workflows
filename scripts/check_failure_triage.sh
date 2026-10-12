@@ -641,6 +641,11 @@ elif [ -n "${INTEGRATION_BRANCH}" ]; then
 elif [ -n "${ROUTING_REF}" ]; then
 	# Issue #6974: routed to the failing PR's verified head ref (see above).
 	log "base_gate outcome=file reason=pr_head_route branch=${ROUTING_REF} pr=${PR_NUMBER}"
+elif [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+	# Issue #7056: the issue carries a verified "Target branch:" line naming the
+	# failing PR's own head, so its fix lands on that branch and a green base
+	# branch does not make the failure unfixable. No API reads.
+	log "base_gate outcome=file reason=target_branch_route branch=${ROUTING_TARGET_BRANCH} pr=${PR_NUMBER}"
 elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
 	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
 else
@@ -798,6 +803,10 @@ if [ -n "${ROUTING_TARGET_BRANCH}" ]; then
 		ROUTING_TARGET_BRANCH=""
 	elif ! triage_routing_ref_is_safe "${ROUTING_TARGET_BRANCH}"; then
 		log "routing outcome=skip reason=invalid_ref"
+		ROUTING_TARGET_BRANCH=""
+	elif [ "${ROUTING_TARGET_BRANCH}" != "${HEAD_REF}" ]; then
+		# The route must name the PR head recorded beside it.
+		log "routing outcome=skip reason=handoff_mismatch"
 		ROUTING_TARGET_BRANCH=""
 	fi
 fi
