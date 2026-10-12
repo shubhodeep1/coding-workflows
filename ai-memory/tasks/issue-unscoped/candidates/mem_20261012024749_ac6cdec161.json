@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_codex_step_extraction.py:401 | confidence=1\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The retry-prompt assertion can pass even if the original planning context is dropped, because the retry note itself contains `Integration branch mismatch: false`.\n  WHY: The assertion does not verify that any content unique to the original planning context remains in `retry_prompt`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The retry prompt should be the original prompt plus one note.\n  expected_change_site: `tests/test_plan_codex_step_extraction.py`, `test_ref_mismatch_block_contradicting_the_workflow_is_retried`, line 401\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: `assert \"Integration branch mismatch: false\" in retry_prompt` is satisfied by the RETRY NOTE text, so it would still pass if the original planning context were dropped or truncated; a string supplied only by the original prompt would verify context preservation. The note-count assertion and the `prompt-1.txt` absence check cover note-once.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- Requirement: Per the PR description, the test covers \"retry, then plan, with the note added once\". The retry prompt should therefore be the original prompt plus one note.\n  Expected change site: `tests/test_plan_codex_step_extraction.py`, `test_ref_mismatch_block_contradicting_the_workflow_is_retried`, line 401.\n  Evidence of absence: `assert \"Integration branch mismatch: false\" in retry_prompt` is already satisfied by the RETRY NOTE text, which contains `Integration branch mismatch: false`. The assertion would still pass if the original planning context were dropped from the retry prompt. A string that only the original prompt supplies would pin that. The note-count assertion and `prompt-1.txt` absence check do cover note-once, so this is a weak assertion and not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: The retry-prompt test should show the retry prompt is the original prompt plus the one note.\n  Expected change site: tests/test_plan_codex_step_extraction.py, test_ref_mismatch_block_contradicting_the_workflow_is_retried\n  Evidence of absence: The assertion assert \"Integration branch mismatch: false\" in retry_prompt only checks if the string exists in the combined prompt. Because the string \"Integration branch mismatch: false\" also appears within the new RETRY NOTE text itself, this assertion will pass even if the entire original planning context is accidentally dropped or truncated during the retry. The test fails to verify the structural requirement that the original context is preserved.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: tests/test_plan_codex_step_extraction.py\n  Location: line 401, `test_ref_mismatch_block_contradicting_the_workflow_is_retried`\n  Issue: The retry note itself contains `Integration branch mismatch: false`, so this assertion does not verify that the original planning context remains in the retry prompt.\n  Suggested minimal fix: Also assert that a distinct marker from the original planning context, such as `DYNAMIC PLANNING CONTEXT`, appears in `retry_prompt`.\n  Estimated lines changed: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1e120c8a5493f16e7fabc92a0dd74444bb5306c77b5599ab580354f1334de453",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7199,
+    "run_id": "38195996868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38195996868",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012024749_ac6cdec161",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7199,
+    "run_id": "38195996868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T02:47:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
