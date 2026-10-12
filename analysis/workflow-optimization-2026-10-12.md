@@ -236,3 +236,53 @@ No `TODO`, `FIXME`, or `HACK` marker was found in the scoped workflows or script
 | Code modularization | `scripts/assemble_prompt.sh`, `scripts/render_prompt.sh`, three review scripts, `scripts/orchestrate_poll_process.sh`, `.github/workflows/plan.yml`, shared helpers and tests | Large |
 | Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/update_workflows.yml`, extracted scripts and contract tests | Large |
 | Medium/Low fixes | `scripts/review_collect_pr_metadata.sh`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/ci.yml`, related tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-12)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` meets the stated equivalence and safety conditions; `NEEDS_VERIFICATION` requires specified checks; `RISKY_SKIP` must not be auto-implemented because a protected retry, pagination, or race-sensitive path is involved.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001` · **Safety tag:** `RISKY_SKIP`  
+  **Calls:** `scripts/orchestrate_poll_process.sh:25526` and `scripts/orchestrate_poll_process.sh:25527`. **Current → proposed call count:** 2 → 1 GET per eligible reissue, excluding retries. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{if_issue}`.  
+  **Evidence:** Adjacent `_safe_gh_jq` calls read `.title` and `.body` from the same issue; no mutation separates them.  
+  **Proposed fix:** In the implementation-failed reissue loop, fetch one issue object and derive `IF_TITLE` and `IF_BODY` from it, preserving their empty-on-failure behavior.  
+  **Safety rationale:** This is inside `orchestrate_poll_process.sh`; additionally, the two current reads can fail independently, so a shared failed read could change reissue behavior.  
+  **Downstream signal:** Do not auto-implement. Manually test asymmetric read failures and concurrent issue edits before deciding whether one snapshot preserves the reissue contract.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001` · **Safety tag:** `RISKY_SKIP`  
+  **Calls:** `.github/workflows/test-and-mark-stable.yml:1576-1585` (the two PR-head reads per attempt) and `.github/workflows/test-and-mark-stable.yml:1606-1609` (the subsequent full-PR read). **Current → proposed call count:** `2k + 1` → `2k` GETs after `k` stability attempts. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{PR_NUMBER}`.  
+  **Evidence:** The full-PR read follows a loop that already fetched the same PR for `HEAD_B`; it checks whether the PR closed before the bait push.  
+  **Proposed fix:** Only if freshness parity can be established, retain the final `HEAD_B` response as a full PR object and derive its SHA and state from that snapshot; keep the two time-separated head reads.  
+  **Safety rationale:** The head reads are explicitly in a retry loop defending against an upstream push race, while the later read is a fresh closed-PR guard.  
+  **Downstream signal:** Do not auto-implement. Manually verify that reuse cannot miss a PR closing between the last head read and the bait push, including the exhausted-loop path.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Same-PR reads overlap, but the poller’s final-merge path requires race review.
+- BATCH-001: `RISKY_SKIP` — Full comment-history pagination and the fresh pre-POST issue check must retain authorization parity.
+- BATCH-002: `RISKY_SKIP` — The paginated timeline read and GraphQL-to-REST fallback require manual recovery-path review.
+- API-002: `RISKY_SKIP` — Changing `gh_retry` alters retry and rate-limit handling across callers.
+- API-003: `RISKY_SKIP` — Changing `curl_gh_api` alters its backoff and rate-limit handling.
+
+### Summary Counts
+
+*Counts include net-new findings above, not cross-references.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
