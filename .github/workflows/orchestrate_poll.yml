@@ -1102,6 +1102,68 @@ jobs:
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 
+      # Q99: GitHub runs the */5 cron every 25-60 minutes, so a project that
+      # could take its next step now (a merged wave, a new phase) waited for
+      # the next cron run. When this tick moved a project forward
+      # (scripts/orchestrate_poll_process.sh record_poll_progress_if_advanced),
+      # dispatch the caller workflow once more. The poll job's concurrency
+      # group keeps at most one pending run, so this queues one run behind
+      # this one. The 300-second force-tick cooldown per tracking issue stops
+      # a chain from polling faster than the cron's nominal */5 cadence.
+      - name: Queue a follow-up poll after progress
+        if: success() && steps.find_tracking.outputs.has_work == 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          POLL_FOLLOW_UP_ON_PROGRESS_ENABLED: ${{ vars.POLL_FOLLOW_UP_ON_PROGRESS_ENABLED || 'true' }}
+          POLL_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          FORCE_TICK_COOLDOWN_SECONDS: '300'
+        run: |
+          set -euo pipefail
+          progress_file="${RUNTIME_DIR}/poll_progress_tracking_issues"
+          if [ ! -s "${progress_file}" ]; then
+            echo "POLL_FOLLOW_UP outcome=skip reason=no_progress"
+            exit 0
+          fi
+          case "$(printf '%s' "${POLL_FOLLOW_UP_ON_PROGRESS_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            ''|true) ;;
+            false)
+              echo "POLL_FOLLOW_UP outcome=skip reason=disabled"
+              exit 0
+              ;;
+            *)
+              echo "::warning::POLL_FOLLOW_UP_ON_PROGRESS_ENABLED has an unrecognised value; no follow-up poll is queued. Use true or false."
+              echo "POLL_FOLLOW_UP outcome=skip reason=invalid_switch"
+              exit 0
+              ;;
+          esac
+          tracking_issue="$(head -n 1 "${progress_file}")"
+          if ! [[ "${tracking_issue}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "POLL_FOLLOW_UP outcome=skip reason=invalid_tracking_issue"
+            exit 0
+          fi
+          helper=".codex-workflow-src/scripts/orchestrate_force_tick.sh"
+          if [ ! -f "${helper}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; no follow-up poll is queued, cron remains the fallback."
+            echo "POLL_FOLLOW_UP outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          # The poll wrapper's file name differs per repository
+          # (internal-orchestrate-poll.yml here, ai-orchestrate-poll.yml in
+          # consumer repos); github.workflow_ref names the caller.
+          caller_path="${POLL_CALLER_WORKFLOW_REF%%@*}"
+          caller_file="${caller_path##*/}"
+          if ! [[ "${caller_file}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+            caller_file="internal-orchestrate-poll.yml"
+          fi
+          echo "POLL_FOLLOW_UP outcome=request tracking_issue=${tracking_issue} workflow=${caller_file}"
+          ORCHESTRATE_POLL_WORKFLOW_FILE="${caller_file}" bash "${helper}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tracking-issue "${tracking_issue}" \
+            --reason "poll-progress" \
+            --source-workflow "orchestrate_poll" \
+            --run-id "${GITHUB_RUN_ID}"
+
       - name: Build state snapshot
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         shell: bash

@@ -748,6 +748,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
       - name: Orchestrator completion lessons + lesson retrieval tests

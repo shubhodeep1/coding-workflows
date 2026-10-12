@@ -3045,6 +3045,50 @@ post_issue_comment_json() {
 	rm -f "${response_file}"
 }
 
+# poll_progress_fingerprint <state-file>
+#
+# Prints a sha256 of the state fields that only change when a project moves
+# forward: project status, current wave, integration / final-merge /
+# security-pass status, the security-pass cycle, and each wave issue's id,
+# GitHub number and last seen phase. Timestamps, counters and caches are left
+# out, so a tick that only refreshes them does not count as progress. Prints
+# nothing when the file cannot be read.
+poll_progress_fingerprint() {
+  local progress_fields
+  progress_fields="$(jq -cS '{
+      status, current_wave, integration_sync_status, final_merge_status,
+      security_pass_status, security_pass_cycle,
+      issues: [(.waves // [])[] | (.issues // [])[] | {id, github_issue, last_seen_phase}]
+    }' "${1}" 2>/dev/null)" || return 0
+  [ -n "${progress_fields}" ] || return 0
+  printf '%s' "${progress_fields}" | sha256sum | awk '{print $1}'
+}
+
+# record_poll_progress_if_advanced
+#
+# Called after post_state_comment persists the state. When the persisted
+# progress fingerprint differs from the one this tick loaded for the same
+# tracking issue (POLL_PROGRESS_BASELINE_FP / POLL_PROGRESS_BASELINE_TRACKING_NUM),
+# appends the tracking issue to ${RUNTIME_DIR}/poll_progress_tracking_issues.
+# The workflow's "Queue a follow-up poll after progress" step reads that file
+# and queues one more poll run (Q99). No GitHub API calls.
+# Logs: POLL_PROGRESS tracking_issue=<n> outcome=advanced
+record_poll_progress_if_advanced() {
+  local current_fp progress_file
+  [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] || return 0
+  [ -n "${POLL_PROGRESS_BASELINE_FP:-}" ] || return 0
+  [ "${POLL_PROGRESS_BASELINE_TRACKING_NUM:-}" = "${TRACKING_NUM:-}" ] || return 0
+  current_fp="$(poll_progress_fingerprint "${STATE_FILE}")"
+  [ -n "${current_fp}" ] || return 0
+  [ "${current_fp}" != "${POLL_PROGRESS_BASELINE_FP}" ] || return 0
+  progress_file="${RUNTIME_DIR}/poll_progress_tracking_issues"
+  if ! grep -qx "${TRACKING_NUM}" "${progress_file}" 2>/dev/null; then
+    printf '%s\n' "${TRACKING_NUM}" >> "${progress_file}"
+    echo "POLL_PROGRESS tracking_issue=${TRACKING_NUM} outcome=advanced"
+  fi
+  return 0
+}
+
 post_state_comment() {
   # Persist orchestrator state as a V2 chunked-comment chain so a snapshot
   # bigger than GitHub's 65,536-byte comment-body cap still lands.  The
@@ -3113,6 +3157,7 @@ post_state_comment() {
   fi
   rm -rf "${pack_dir}"
   _mirror_task_state_files_from_state
+  record_poll_progress_if_advanced || true
   return 0
 }
 
@@ -21129,6 +21174,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
+  # Progress baseline for the follow-up poll (record_poll_progress_if_advanced).
+  POLL_PROGRESS_BASELINE_FP="$(poll_progress_fingerprint "${STATE_FILE}")"
+  POLL_PROGRESS_BASELINE_TRACKING_NUM="${TRACKING_NUM}"
   SECURITY_PASS_STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
   ensure_security_pass_state_fields || {
     echo "::warning::Unable to normalize security-pass state for tracking issue #${TRACKING_NUM}; skipping this cycle."
