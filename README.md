@@ -3561,7 +3561,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   for these two verdicts, because the fix-up would hit the same guard: the
   judge posts a handoff comment ending in
   `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`,
-  records an operator step (first, so a failed write leaves no hold) and sends
+  records an operator step (first, so a failed write posts no hold; the WARNING
+  still goes out, saying the handoff is incomplete) and sends
   a WARNING, and the issue stays blocked. Later runs skip it with
   `reason=operator_handoff_pending` and refresh the hold comment until a newer
   guard comment appears. `override_guard` stays unavailable for that

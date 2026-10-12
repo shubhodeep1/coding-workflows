@@ -542,7 +542,8 @@ def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
 			f"<!-- ai:unblock-wait:v1 item={item} reason=operator_handoff run={run} -->",
 		]
 	)
-	operator_text = verdict.get("operator_instructions") if name == "operator_step" else verdict.get("instructions")
+	# An `_ENABLED` operator_step may carry no operator_instructions; fall back to the change itself.
+	operator_text = (verdict.get("operator_instructions") if name == "operator_step" else "") or verdict.get("instructions")
 	step = {
 		"title": f"Make the protected-path change for #{item}",
 		"instructions": "\n".join(
@@ -559,7 +560,8 @@ def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
 		step["dormant_until"] = verdict["placeholder"]
 	# The operator step goes first: unblock_run_ops skips later writes after a
 	# failure, so the hold marker (which stops later judge runs) is posted only
-	# once the operator step is recorded, and a failed write is retried.
+	# once the operator step is recorded. The verdict is already recorded, so a
+	# failed handoff is not retried; unblock_run_ops still sends a WARNING.
 	return [
 		{"op": "operator_step", "key": f"unblock-{item}", "source": f"Unblock judge, #{item}", "steps": [step]},
 		{"op": "comment", "issue": item, "body": body},

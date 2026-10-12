@@ -385,6 +385,10 @@ PY
 						# The untrusted-PR close (unblock_actions.py) reports at DEBUG when it
 						# lands; a failed close leaves the PR open, which needs a person.
 						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
+					elif [ "${ITEM_KIND}" = "issue" ] && jq -e '.ops[0].op == "operator_step" and .ops[2].op == "telegram" and ((.ops[2].text // "") | startswith("Operator handoff for #"))' "${ops_file}" >/dev/null 2>&1; then
+						# Protected-path handoff (#7060): the verdict is already recorded,
+						# so a failed write is not retried; the WARNING is the only page.
+						unblock_tg "WARNING" "Operator handoff for #${ITEM} is incomplete: a write failed and the verdict will not be retried; the item stays blocked (${REPOSITORY})."
 					fi
 					continue
 				fi

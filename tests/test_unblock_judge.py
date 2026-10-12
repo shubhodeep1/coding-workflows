@@ -2506,6 +2506,8 @@ def test_protected_handoff_keeps_an_enabled_flag_out_of_dormant_until() -> None:
 	verdict = _verdict("operator_step", instructions="gate it", placeholder="NIGHTLY_ENABLED", operator_instructions="grant")
 	ops = actions.plan(verdict, _ctx(protected_rejection=PROTECTED))
 	assert "dormant_until" not in ops[0]["steps"][0]
+	empty = dict(verdict, operator_instructions="")
+	assert actions.plan(empty, _ctx(protected_rejection=PROTECTED))[0]["steps"][0]["instructions"].splitlines()[0] == "gate it"
 
 
 @pytest.mark.parametrize("bad", [
@@ -2581,9 +2583,29 @@ def test_judge_protected_handoff_records_operator_step_and_keeps_item_blocked(tm
 def test_judge_protected_handoff_posts_no_hold_when_the_operator_step_fails(tmp_path: Path) -> None:
 	_result, state = _judge(tmp_path, _scope_blocked_issue(), [_handoff_rejection()], verdict=HANDOFF_VERDICT,
 		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true", UNBLOCK_JUDGE_REGRANT_ENABLED="false", FAKE_GH_FAIL_CREATE="1")
-	# Without the hold marker the next judge run retries the handoff.
+	# A failed operator-step write posts no hold marker.
 	assert not any("reason=operator_handoff" in comment["body"] for comment in state["comments"])
 	assert _fixups(state) == []
+
+
+def test_judge_protected_handoff_still_warns_when_a_write_fails(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py", "operator_step_issue.py", "security_dependency.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf "%s|%s\\n" "$2" "$1" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8",
+	)
+	alerts = tmp_path / "alerts.txt"
+	result, state = _judge(tmp_path, _scope_blocked_issue(), [_handoff_rejection()], verdict=HANDOFF_VERDICT,
+		SUPPORT_DIR=str(support), FAKE_TG_ALERTS=str(alerts), FAKE_GH_FAIL_OPERATOR="1",
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true", UNBLOCK_JUDGE_REGRANT_ENABLED="false")
+	assert "op=operator_step outcome=failed" in result.stdout, result.stdout
+	assert not any("reason=operator_handoff" in comment["body"] for comment in state["comments"])
+	sent = alerts.read_text(encoding="utf-8").splitlines()
+	assert len(sent) == 1 and sent[0].startswith("WARNING|Operator handoff for #7 is incomplete")
 
 
 def test_judge_skips_while_the_operator_handoff_is_pending(tmp_path: Path) -> None:

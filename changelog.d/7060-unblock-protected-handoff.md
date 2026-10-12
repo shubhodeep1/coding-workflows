@@ -2,7 +2,7 @@
 - **The unblock judge can hand a protected-path rejection to a person instead of filing a fix-up that would hit the same guard.** Off by default; turn it on with `UNBLOCK_PROTECTED_HANDOFF_ENABLED=true` (issue #7060, from the unblock judge's `operator_step` verdict on #6887).
 
 When the automation-path grant guard rejects an implementation run, any fix-up issue the unblock judge files for `descope` or `operator_step` touches the same ungranted paths and is rejected again. With the flag on, the judge reads the newest pipeline-authored guard comment on a `scope-blocked` issue (`scripts/unblock_ledger.py protected-rejection`). If it is an automation-path rejection, these two verdicts:
-- record an `ai:operator-step` entry first, so a failed write leaves no hold and the next run retries;
+- record an `ai:operator-step` entry first, so a failed write posts no hold marker; the verdict is already recorded, so the handoff is not retried with the same verdict, and the WARNING still goes out saying the handoff is incomplete;
 - post a handoff comment naming the rejected run and paths, ending in `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`, and send a Telegram WARNING;
 - create no fix-up, remove no label and post no resume command, so the issue stays blocked.
 
