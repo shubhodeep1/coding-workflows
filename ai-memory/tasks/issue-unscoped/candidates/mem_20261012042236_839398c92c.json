@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:4140-4178 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Gemini task-gap claim is incorrect because the support-SHA test checks every marker call structurally rather than asserting a fixed count.\n  WHY: The test already covers 2, 3, or N call sites, so no test update is required.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the test to reflect all three sites of the support-SHA export.\n  expected_change_site: tests/test_workflow_failure_heal.py and tests/test_workflow_file_size_limit.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Neither of these test files was modified in the current PR diff to account for the third support-SHA export.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update the test to reflect all three sites of the support-SHA export.\n  Expected change site: tests/test_workflow_failure_heal.py and tests/test_workflow_file_size_limit.py\n  Evidence of absence: The original issue identified failures in tests/test_workflow_failure_heal.py::test_review_autofix_passes_support_sha_to_every_marker_site and tests/test_workflow_file_size_limit.py. Neither of these test files was modified in the current PR diff to account for the third support-SHA export, which the issue stated must be kept.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py:4140-4178 | severity=NIT | confidence=5\n  PROBLEM: The Gemini finding claims these tests still assert a fixed count (the original `assert 3 == 2`) and therefore need to be updated for the third support-SHA export, but the on-disk test no longer asserts a count: it iterates through every `autofix-failure-fingerprint` call block (`calls = wf.split(\"autofix-failure-fingerprint \\\\\\n\")[1:]`), asserts that each block contains `--support-sha \"${REVIEW_SUPPORT_SHA:-}\"`, and the docstring explicitly states \"Structural, not counted: ... A new marker site or consumer then has to follow the rule instead of breaking an occurrence count.\" It correctly handles 2, 3, or N call sites. `tests/test_workflow_file_size_limit.py:39-53` is a pure byte-threshold check (`path.stat().st_size >= WORKFLOW_FILE_SIZE_GUARD_BYTES`), so the current 429,152-byte workflow passes it; it never counted exports. The issue's suggested-fix paragraph also defers the test update (\"update ... only if it is [required]\"), and the third export is structurally validated by the existing on-disk test, not by count.\n  WHY: No runtime failure. The editor's previous summary is correct: no test update is required, and adopting the Gemini finding would force a no-op rewrite of an already-correct structural test (the \u00a710/\u00a76 backward-compatibility and \u00a75 minimal-change rules bind here).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "47f19b17b159b66d3b0f0acb7ae5403b20cf8fcc8c770531b04a7e5d1a62ce8d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6971,
+    "run_id": "38201336299",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38201336299",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012042236_839398c92c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6971,
+    "run_id": "38201336299"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T04:22:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
