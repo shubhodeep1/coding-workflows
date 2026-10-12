@@ -539,6 +539,12 @@ OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	# This exit also skips PR-head routing; report an unverified route here too
+	# (local payload check only, no API call).
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ] &&
+		! routing_result="$(triage_verify_pr_head_route "${PR_JSON_FILE}" "${HEAD_SHA}")"; then
+		triage_report_routing_unverified
+	fi
 	exit 0
 fi
 

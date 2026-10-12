@@ -1275,7 +1275,7 @@ case "$*" in
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
-  "api --paginate --method GET repos/owner/repo/issues "*) printf '[]\\n' ;;
+  "api --paginate --method GET repos/owner/repo/issues "*) printf '%s\\n' "${MOCK_OPEN_TRIAGE:-[]}" ;;
   "label create "*) ;;
   *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 2 ;;
 esac
@@ -2125,6 +2125,26 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 
+	def test_collect_duplicate_issue_reports_unverified_route(self) -> None:
+		fp = hashlib.sha256(b"owner/repo|pr=17|check=CI").hexdigest()
+		open_triage = json.dumps([{"number": 99, "body": f"<!-- check-failure-triage:fp={fp} -->"}])
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="plain issue\n",
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, "MOCK_OPEN_TRIAGE": open_triage},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+		self.assertIn("CHECK_TRIAGE skip reason=routing_unverified detail=sha_mismatch pr=17", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+		# A verified route on a duplicate skips quietly.
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="plain issue\n",
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "MOCK_OPEN_TRIAGE": open_triage},
+		)
+		self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+		self.assertNotIn("routing_unverified", proc.stdout)
+
 	def test_collect_flag_off_never_routes_or_blocks(self) -> None:
 		for flag_env in ({}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "false"}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "nope"}):
 			with self.subTest(env=flag_env):
@@ -2187,15 +2207,21 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
 		self.assertIn('PR_HEAD_ROUTING_ENABLED="${CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED:-false}"', script_text)
 		self.assertIn('log "skip reason=routing_unverified detail=${routing_result}', script_text)
-		gate = script_text.split('log "skip reason=routing_unverified', 1)[1].split("exit 0", 1)[0]
-		self.assertIn('"WARNING"', gate)
+		helper = script_text.split("triage_report_routing_unverified()", 1)[1].split("\n}\n", 1)[0]
+		self.assertIn('log "skip reason=routing_unverified detail=${routing_result}', helper)
+		self.assertIn('"WARNING"', helper)
+		# The routing gate itself must call the helper before its exit.
+		gate = script_text.split("--- PR-head routing gate", 1)[1].split("# --- Collect failing check-run context", 1)[0]
+		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
+		dedup = script_text.split("skip reason=duplicate_open_issue", 1)[1].split("exit 0", 1)[0]
+		self.assertIn("triage_report_routing_unverified", dedup)
 		# Base-gate skips (success and pending) also report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
 		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 2)
 		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" <<\'PY\'', script_text)
-		self.assertLess(script_text.index('log "skip reason=routing_unverified'), script_text.index("# --- Collect failing check-run context"))
+		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Collect failing check-run context"))
 		triage_env = _workflow()["jobs"]["triage"]["env"]
 		self.assertEqual(
 			triage_env["CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED"],
