@@ -1,0 +1,16 @@
+<!-- agents: section="Workflow architecture" -->
+Clarify sandbox base image pre-seed (#6985, #7215): `scripts/clarify_base_image_preseed.sh [DOCKERFILE]`
+pulls the `FROM` image of `scripts/clarify_sandbox/Dockerfile` from a Docker Official Images
+mirror and tags it under its Docker Hub name, so the build without `--pull` does not hit Docker
+Hub's anonymous-pull 429. `clarify_image_build` in `scripts/clarify_isolated_run.sh` runs it
+(output to stderr, credentials unset) before every build, which covers clarify, plan,
+clarify-respond, check-failure triage, the unblock judge and the Claude engine smoke; clarify's
+"Pre-seed clarify sandbox base image" step also calls it with the repository-variable overrides.
+It always exits 0. Defaults live in the helper: `CLARIFY_BASE_IMAGE_MIRRORS` unset means
+`public.ecr.aws/docker/library mirror.gcr.io/library` (set but empty means no mirrors) and
+`CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS` is `300` (30-1800). A support tree without the helper logs
+`reason=helper_missing` and builds as before.
+
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `CLARIFY_BASE_IMAGE_PRESEED` (`scripts/clarify_base_image_preseed.sh`: `image= outcome=present|seeded|mirror_failed|mirror_skipped|unavailable|skip reason=dockerfile_missing|unsupported_ref|invalid_mirror|helper_missing source= rc= detail= mirrors=`)
+LOG_PREFIX.name=CLARIFY_BASE_IMAGE_PRESEED

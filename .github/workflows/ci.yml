@@ -570,6 +570,9 @@ jobs:
             tests/test_auto_decisions.py \
             tests/test_clarify_respond_standalone.py \
             tests/test_clarify_github_facts.py
+          # The fake docker lives in a temp dir, so TMPDIR must allow executables.
+          TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Single-issue security pass tests (port P1)
         run: |
