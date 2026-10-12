@@ -1827,12 +1827,97 @@ def test_deletion_and_tag_only_pushes_to_other_repository_ask(merged_branch_repo
 
 @pytest.mark.parametrize("remote", ["origin"])
 def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeypatch, capsys, remote: str) -> None:
+	# A deletion still skips the PR lookup, but since #7220 it always asks.
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("deletions must not check PR history"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": f"git push {remote} :feature/x"}})
 	assert code == 0 and message == ""
-	assert "permissionDecision" not in capsys.readouterr().out
+	decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "ask"
+	assert "git push deletes remote branches: `:feature/x`" in decision["permissionDecisionReason"]
+
+
+def _claude_push_repo(merged_branch_repo, monkeypatch, *branches: str) -> Path:
+	"""The merged-branch fixture plus local branches; no branch has a PR."""
+	repo, _ = merged_branch_repo
+	for name in ("claude/x", *branches):
+		_git(repo, "branch", name, "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [])
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	return repo
+
+
+def _push_decision(repo: Path, command: str, capsys) -> dict | None:
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == "", message
+	out = capsys.readouterr().out
+	if "permissionDecision" not in out:
+		return None
+	return json.loads(out)["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin claude/x +main",
+	"git push origin claude/x claude/x:main",
+	"git push origin +claude/x:refs/heads/main",
+	"git push --force-with-lease origin claude/x +main",
+	"git push origin main",
+])
+def test_push_to_the_default_branch_asks(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	# #7220: the settings.json wildcard allow rules for claude/* also match a
+	# second or `+` refspec; the hook asks on the parsed default-branch destination.
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch)
+	decision = _push_decision(repo, command, capsys)
+	assert decision and decision["permissionDecision"] == "ask", command
+	assert "git push writes to the default branch: `main` is the default branch" in decision["permissionDecisionReason"]
+
+
+def test_push_to_a_non_main_default_branch_asks(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch, "trunk")
+	_git(repo, "update-ref", "refs/remotes/origin/trunk", _git(repo, "rev-parse", "main"))
+	_git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+	decision = _push_decision(repo, "git push origin claude/x +trunk", capsys)
+	assert decision and "`trunk` is the default branch" in decision["permissionDecisionReason"]
+	# `main` is an ordinary branch in this repository: no default-branch ask.
+	assert _push_decision(repo, "git push origin claude/x main", capsys) is None
+
+
+@pytest.mark.parametrize(("command", "named"), [
+	("git push origin :claude/old", "`:claude/old`"),
+	("git push origin claude/x :claude/old", "`:claude/old`"),
+	("git push origin --delete claude/old", "--delete of `claude/old`"),
+	("git push -d origin claude/old", "--delete of `claude/old`"),
+	("git push --prune origin claude/x", "--prune of remote branches without a local counterpart"),
+])
+def test_branch_deletion_asks(merged_branch_repo, monkeypatch, capsys, command: str, named: str) -> None:
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch)
+	decision = _push_decision(repo, command, capsys)
+	assert decision and decision["permissionDecision"] == "ask", command
+	assert f"git push deletes remote branches: {named}" in decision["permissionDecisionReason"]
+
+
+def test_plain_claude_branch_pushes_still_pass(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch)
+	for command in (
+		"git push origin claude/x",
+		"git push -u origin claude/x",
+		"git push --force-with-lease origin claude/x",
+		"git push --no-prune origin claude/x",
+	):
+		assert _push_decision(repo, command, capsys) is None, command
+
+
+def test_unresolved_default_branch_asks_for_every_non_claude_destination(merged_branch_repo, monkeypatch, capsys) -> None:
+	# AD-2 on #7220: neither origin/HEAD nor `ls-remote --symref` resolved.
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch, "feature-y", "develop")
+	monkeypatch.setattr(guard, "default_branch", lambda cwd: "")
+	for command, branch in (("git push origin feature-y", "feature-y"), ("git push origin claude/x +develop", "develop")):
+		decision = _push_decision(repo, command, capsys)
+		assert decision and decision["permissionDecision"] == "ask", command
+		assert f"could not resolve the default branch, so `{branch}` may be it" in decision["permissionDecisionReason"]
+	assert _push_decision(repo, "git push origin claude/x", capsys) is None
 
 
 @pytest.mark.parametrize("args", [":feature/x", "--delete feature/x", "--tags"])

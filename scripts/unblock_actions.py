@@ -417,6 +417,19 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 	return [{"op": "remove_label", "issue": item, "label": present}] if present else []
 
 
+def _placeholder_needs_person(placeholder: str) -> bool:
+	"""True when an operator_step placeholder waits on a person.
+
+	An `_UNSET_OPERATOR_STEP` placeholder stands for a value only a person can
+	supply (a secret, a setting), so the step is recorded and paged. An
+	`_ENABLED` flag is an off switch on code the fix-up finishes and ships on:
+	nobody is paged to turn it on (the old default-off contract held fixes
+	back until someone did, #6710, #6793, #7171).
+	"""
+	# Same suffix as unblock_ledger.OPERATOR_PLACEHOLDER_SUFFIX, which validates it.
+	return placeholder.endswith("_UNSET_OPERATOR_STEP")
+
+
 def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 	lines = [
 		f"<!-- ai:unblock-fixup:v1 item={ctx['item']} round={verdict['round']} -->",
@@ -427,11 +440,20 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 		f"Change: {verdict.get('instructions', '')}",
 	]
 	if verdict.get("placeholder"):
+		if _placeholder_needs_person(verdict["placeholder"]):
+			gate = (
+				f"Keep the new behaviour off until a person finishes the operator step: gate only the new code path behind `{verdict['placeholder']}`"
+				" (a placeholder env var; while it is unset the new code skips safely)."
+			)
+		else:
+			gate = (
+				f"Ship the new behaviour on: gate only the new code path behind `{verdict['placeholder']}` as an off switch."
+				" Unset, empty or `true` (any case) keeps it on; `false` turns it off; any other value also turns it off"
+				" and logs a warning. Nothing waits on a person: this change alone must clear the block."
+			)
 		lines += [
 			"",
-			f"Keep the new behaviour off until a person finishes the operator step: gate only the new code path behind `{verdict['placeholder']}`"
-			" (a feature flag that defaults off, or a placeholder env var that makes the new code skip safely)."
-			" Never put an existing path behind it: with the flag unset, everything that runs today (releases, tagging,"
+			gate + " Never put an existing path behind it: with the flag unset, everything that runs today (releases, tagging,"
 			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
@@ -489,6 +511,8 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops += _fixup_ops(ctx, verdict, "descope")
 	elif name == "operator_step":
 		ops += _fixup_ops(ctx, verdict, "operator step")
+		if not _placeholder_needs_person(verdict["placeholder"]):
+			return ops
 		ops.append(
 			{
 				"op": "operator_step",
