@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2391 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The budget row says `REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS` is ignored unless `REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true`, although the flag also enables bounded installs when unset, empty, `1`, `yes`, or `on`.\n  WHY: Operators may incorrectly conclude that accepted truthy values do not enable the budget.\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is not referenced by a workflow or listed in `UNWIRED_ALLOWLIST`, so the CI test-wiring guard fails.\n  WHY: The guard failure makes the required aggregate `lint` check fail and blocks the PR; qwen_qwen3_7-plus considered this pre-existing and not introduced by the PR, while the other reviewers reported it as a blocker.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_wires_every_test_file.py:60 | severity=critical | confidence=5\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is not referenced by a workflow or listed in `UNWIRED_ALLOWLIST`, so the CI test-wiring guard fails.\n  WHY: The failure makes the required aggregate `lint` check fail and blocks the PR.\n- README.md:2391 | severity=low | confidence=5\n  PROBLEM: The budget row says the budget is ignored unless `REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true`, although the flag accepts other truthy values.\n  WHY: Operators could incorrectly conclude that the budget does not apply for accepted values other than the literal `true`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:2391 | severity=low | confidence=4\n  PROBLEM: The budget row says the shared deadline is ignored unless `REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true`, but the updated normalization also enables it for `1`, `yes`, and `on`.\n  WHY: Operators who set one of those accepted values may incorrectly conclude that `REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS` is not being applied.\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=critical | confidence=5\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` exists but is neither referenced by a workflow nor allowlisted.\n  WHY: The CI test-wiring guard rejects the missing wiring, causing `static-checks` and the aggregate `lint` check to fail and blocking this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:2391 | severity=low | confidence=4\n  PROBLEM: The `REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS` row says the shared budget is ignored unless `REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true`, although the flag also accepts `1`, `yes`, and `on`.\n  WHY: Operators may believe they must set the flag to the literal `true` for the budget to apply.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3_flash ===\n- tests/test_ci_wires_every_test_file.py:60 | severity=critical | confidence=5\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is referenced by no workflow and is not in `UNWIRED_ALLOWLIST`, so the `static-checks` CI test-wiring guard fails.\n  WHY: The failure makes the required `lint` check fail and blocks the PR, even though the drift predates this diff.\n- README.md:2391 | severity=low | confidence=4\n  PROBLEM: The budget row says the budget is ignored unless `REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true`, although the flag also enables bounded installs when unset, empty, `1`, `yes`, or `on`.\n  WHY: Operators may believe the budget requires the literal `=true` value and could expect the budget to apply when setting the flag to `false`.\n=== END FINDINGS FROM z-ai_glm-5_3_flash ===",
+  "fingerprint": "e3c4fe5e85898f0685279109475e7f114aa70aa1da2f6d322ca1683c825b23f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7217,
+    "run_id": "38213722665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38213722665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012071648_96c5dec3b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7217,
+    "run_id": "38213722665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T07:16:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
