@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unblock_judge.py:2413-2436 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The merged-owner failing-check test and named-check test can pass through the unreadable-runs-listing path without evaluating the checks they are intended to cover; the failing-check fixture also lacks a `details_url` binding.\n  WHY: The severity differs (MAJOR from anthropic_claude-sonnet-5_5, minimax_minimax-m3, and qwen_qwen3_7-plus; NIT from openai_gpt-6-luna); using the highest, these tests do not cover the failing-check and named-check behavior, so regressions there would go undetected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_unblock_judge.py | severity=MAJOR | confidence=5\n  PROBLEM: `test_merged_owner_with_failing_checks_reissues_with_the_marker` and `test_merged_owner_without_the_named_ci_check_is_not_superseded` do not set `FAKE_GH_OWNER_RUNS`, so the runs listing is unreadable and the intended checks are never evaluated.\n  WHY: In `_pr_head_ci_runs_pending` (scripts/pr_checks_lib.sh:511-539) the empty body fails the `ids:` match, so `PR_CHECKS_RUNS_READ` stays `\"false\"`; the `case` added in `unblock_resolve_ci_owner` (scripts/unblock_judge.sh, `*) exit 1`) then exits the subshell before `_pr_checks_completed` runs. Both tests therefore pass through a path already covered by `test_unreadable_ci_runs_listing_does_not_supersede`; the failing-check and named-check behavior lack end-to-end coverage.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_unblock_judge.py | severity=MAJOR | confidence=5\n  PROBLEM: `test_merged_owner_with_failing_checks_reissues_with_the_marker` and `test_merged_owner_without_the_named_ci_check_is_not_superseded` do not pass `FAKE_GH_OWNER_RUNS` or `AUTO_MERGE_WAIT_WORKFLOWS`, so the failing-check and named-check paths are not exercised.\n  WHY: The fake `gh` handler `done(os.environ.get(\"FAKE_GH_OWNER_RUNS\", \"\"))` returns an empty body, making `PR_CHECKS_RUNS_READ` enter the `*)` branch and the subshell `exit 1`, leaving `owner_state=\"verified\"` and taking the reissue path. A regression in either check would not be caught because execution exits before `_pr_checks_completed`.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_unblock_judge.py | severity=NIT | confidence=5\n  PROBLEM: `test_merged_owner_with_failing_checks_reissues_with_the_marker`, lines 2419-2422; fake runs response at line 1143, does not provide `FAKE_GH_OWNER_RUNS`, and its red check-run lacks a `details_url` binding it to a workflow run.\n  WHY: The fake runs lookup returns an empty response, so `PR_CHECKS_RUNS_READ` is not `true` and the new logic exits before evaluating the red check-run; even if a runs listing were added, the missing `details_url` would prevent that check-run from matching the listed run ID.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_unblock_judge.py | severity=MAJOR | confidence=5\n  PROBLEM: `test_merged_owner_with_failing_checks_reissues_with_the_marker` (around line 2413 in the full file) does not pass `FAKE_GH_OWNER_RUNS` or `AUTO_MERGE_WAIT_WORKFLOWS`, and the red check-run dict lacks a `details_url`.\n  WHY: The fake `gh` handler returns an empty string for the `actions/runs?head_sha=` endpoint, so the `case` statement in `unblock_resolve_ci_owner` hits `*) exit 1` and the test passes because the runs listing is unreadable; the `\"conclusion\": \"failure\"` is never evaluated, leaving the intended failing-check path untested.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No task was provided \u2014 the message contains only pipeline configuration scaffolding (with an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder). Send the actual task, issue, or file to work on and I'll proceed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ac666c89cdd481a6f4e3fcf537325ad11ef83f48d9c7568eb397dc0959dee35d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7040,
+    "run_id": "38254312262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38254312262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012135348_cfabbf6dab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7040,
+    "run_id": "38254312262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T13:53:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
