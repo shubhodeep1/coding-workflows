@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the #7251 hold stop repeat clarify and plan attempts?\nChoices:\nA: Add the check in three places, all scoped to #7251 and all behind the new flag (RECOMMENDED). First, the poller's standalone-stall sweep, next to the existing security-dependency hold (`STALL_SKIP issue=7251 reason=dependency_wait ...`). Second, an early skip in `clarify.yml` \"Decide clarify route\". Third, a matching early skip in `plan.yml`, active while #6667 is not merged into the default branch.\nB: Poller sweep only. A comment from a person can still start clarify or plan on #7251 while #6667 is open.\nC: Clarify and plan gates only, with no poller change. Restarting after the merge then needs another trigger.\nQ2: Who runs the two plans' Phase 0 preflight after #6667 merges, and how does #7251 restart?\nChoices:\nA: The poller does both (RECOMMENDED). Once #6667 is reported merged into the default branch, it reads `scripts/ai_engine.sh` at the default-branch tip and checks for `_AI_ENGINE_EXIT_REFUSED` and `ai_engine_fallback_class`. If both are present, it posts one `/reclarify` on #7251 with a dedup marker such as `<!-- ai:issue-7251-dependency-released:6667 -->`. If either is missing, it posts one comment naming the missing symbol and sends one Telegram WARNING. It posts no `/reclarify` and rebuilds nothing from #6667.\nB: The poller only posts `/reclarify` after the merge. The plan phase on #7251 runs the preflights itself from its fresh default-branch checkout, as the plans' Constraints sections already require, and reports a failure as `BLOCKED:`.\nC: Both. The poller checks before posting `/reclarify`, and the planner checks again.\nQ3: What should happen if PR #6667 is closed without merging?\nChoices:\nA: Stop waiting. Post one comment and put #7251 back in `ai:blocked`, so the unblock judge picks it up on its next scan with no person needed (RECOMMENDED).\nB: Keep waiting indefinitely. Only a reopened and merged #6667 releases #7251.\nC: Treat it like a merge and run the Phase 0 preflight against the default branch. That fails and reports, as in Q2's failure path. **Note:** if this is combined with Q2:B, nothing runs the preflight until the planner does.",
+  "fingerprint": "3dac06e5974a461d9982783e740a5bb63f01ed55a9fb1e4c995064a6babb5b5c",
+  "lineage": {
+    "issue_number": 7257,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38240258797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38240258797",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012111236_6d28701b9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7257,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38240258797"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7257 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T11:12:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
