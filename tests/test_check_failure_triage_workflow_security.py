@@ -1616,7 +1616,7 @@ def _run_diagnose_stage(
 
 
 class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
-	"""Issue #6726: behind TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED (default off),
+	"""Issue #6726: behind TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED (default on),
 	a triage issue carries one Integration branch line only when the GitHub API
 	reports a same-repository orchestrator/project-<N> head that exists."""
 
@@ -1675,7 +1675,7 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 
 	def test_green_base_still_skips_project_head_with_flag_off(self) -> None:
 		proc, outputs, metadata = _run_collect_stage(
-			head_ref="orchestrator/project-6664", branch_flag=None,
+			head_ref="orchestrator/project-6664", branch_flag="false",
 			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -1684,7 +1684,7 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 		self.assertEqual(metadata, {})
 
 	def test_flag_off_makes_no_lookup(self) -> None:
-		for flag in (None, "false", "FALSE", "yes"):
+		for flag in ("false", "FALSE", "yes"):
 			with self.subTest(flag=flag):
 				calls: list[str] = []
 				proc, outputs, metadata = _run_collect_stage(head_ref="orchestrator/project-6664", branch_flag=flag, gh_calls=calls)
@@ -1693,6 +1693,23 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 				self.assertEqual(metadata.get("integration_branch"), "")
 				self.assertIn("integration_branch outcome=skip reason=disabled", proc.stdout)
 				self.assertEqual(self._ref_calls(calls), [])
+				# Only an unrecognised value warns; `false` is the documented off switch.
+				self.assertEqual(
+					"TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED has an unrecognised value" in proc.stdout, flag == "yes"
+				)
+
+	def test_unset_or_empty_flag_defaults_on(self) -> None:
+		# The switch defaults on (#6710 sat blocked because its triage issue had
+		# no Integration branch line while the default was off).
+		for flag in (None, ""):
+			with self.subTest(flag=flag):
+				calls: list[str] = []
+				proc, outputs, metadata = _run_collect_stage(head_ref="orchestrator/project-6664", branch_flag=flag, gh_calls=calls)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("integration_branch"), "orchestrator/project-6664")
+				self.assertEqual(self._ref_calls(calls), ["api repos/owner/repo/git/ref/heads/orchestrator%2Fproject-6664"])
+				self.assertNotIn("unrecognised value", proc.stdout)
 
 	def test_non_project_heads_and_missing_head_repo_do_not_qualify(self) -> None:
 		cases = [
@@ -1742,7 +1759,6 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 			("orchestrator/project-1\nx", "true"),
 			("orchestrator/project-1`", "true"),
 			(5, "true"),
-			("orchestrator/project-6664", None),
 			("orchestrator/project-6664", "false"),
 		):
 			with self.subTest(value=value, flag=flag):
@@ -1753,7 +1769,7 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 				self.assertFalse(ready)
 
 	def test_flag_off_with_legacy_metadata_adds_no_line(self) -> None:
-		for flag, extra in ((None, {}), ("true", {}), (None, {"integration_branch": ""})):
+		for flag, extra in ((None, {}), ("true", {}), ("false", {}), (None, {"integration_branch": ""}), ("false", {"integration_branch": ""})):
 			with self.subTest(flag=flag, extra=extra):
 				proc, body, ready = _run_diagnose_stage(metadata_extra=extra, branch_flag=flag)
 				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -1761,14 +1777,14 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 				self.assertIsNone(_RESOLVER_INTEGRATION_BRANCH_RE.search(body))
 				self.assertNotIn("Integration branch", body)
 
-	def test_workflow_and_script_default_the_flag_off(self) -> None:
+	def test_workflow_and_script_default_the_flag_on(self) -> None:
 		triage_env = _workflow()["jobs"]["triage"]["env"]
 		self.assertEqual(
 			triage_env["TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED"],
-			"${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'false' }}",
+			"${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'true' }}",
 		)
 		script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
-		self.assertIn('"${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-false}"', script_text)
+		self.assertIn('"${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-true}"', script_text)
 		self.assertIn("INTEGRATION_BRANCH_RE='^orchestrator/project-[1-9][0-9]*$'", script_text)
 
 
