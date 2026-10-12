@@ -353,14 +353,16 @@ gh_rate_limit_breaker_tripped()
 # "≤ 1 alert per cooldown window" is preserved even under
 # transient Telegram failures.
 #
-# Alert level: WARNING. The function honours `ALERT_MSG_LEVEL`
-# (the same global threshold `tg_helpers.sh::tg_send_msg` uses);
-# when ALERT_MSG_LEVEL is ERROR or CRITICAL the alert is skipped.
+# Alert level: DEBUG. gh_retry already sleeps until the reset and
+# retries, so the pipeline handles a rate-limit hit on its own and no
+# human action is needed. The function honours `ALERT_MSG_LEVEL` (the
+# same global threshold `tg_helpers.sh::tg_send_msg` uses); any
+# threshold above DEBUG, including the default WARNING, skips it.
 #
 # Env (all optional, function no-ops when creds are missing):
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID (fallback TG_CHAT_ID)
 #   TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS (default 3600)
-#   ALERT_MSG_LEVEL (default DEBUG; suppresses when > WARNING)
+#   ALERT_MSG_LEVEL (default WARNING; suppresses when > DEBUG)
 #   GITHUB_WORKFLOW, GITHUB_SERVER_URL, GITHUB_REPOSITORY,
 #   GITHUB_RUN_ID — used to build a descriptive message.
 #
@@ -382,17 +384,17 @@ _gh_ratelimit_tg_alert()
 	fi
 
 	# Honour the global ALERT_MSG_LEVEL threshold the same way
-	# tg_helpers.sh::tg_send_msg does. This alert is WARNING level,
-	# so when the operator has configured ALERT_MSG_LEVEL=ERROR,
-	# CRITICAL, or SILENT the rate-limit alert is suppressed (no
-	# send, no pin update, cooldown window is not advanced).
+	# tg_helpers.sh::tg_send_msg does. This alert is DEBUG level,
+	# so any threshold above DEBUG (WARNING, the default, or ERROR,
+	# CRITICAL, SILENT) suppresses the rate-limit alert (no send, no
+	# pin update, cooldown window is not advanced).
 	# SILENT (added with the test-and-mark-stable smoke-gate change)
 	# must be in the suppress list explicitly; the permissive default
 	# below would otherwise let SILENT through and the gate would
 	# still see rate-limit pings.
-	case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
-		DEBUG|WARNING) : ;;
-		ERROR|CRITICAL|SILENT) return 0 ;;
+	case "$(printf '%s' "${ALERT_MSG_LEVEL:-WARNING}" | tr '[:lower:]' '[:upper:]')" in
+		DEBUG) : ;;
+		WARNING|ERROR|CRITICAL|SILENT) return 0 ;;
 		*) : ;;  # unknown value → match tg_helpers.sh permissive default
 	esac
 
@@ -485,7 +487,7 @@ _gh_ratelimit_tg_alert()
 		_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 	fi
 	local _body
-	_body="⚠️ WARNING: GitHub API rate limit hit — workflow=${_workflow} repo=${_repo}"
+	_body="🔍 DEBUG: GitHub API rate limit hit — workflow=${_workflow} repo=${_repo}"
 	if [ -n "${_run_url}" ]; then
 		_body="${_body} run=${_run_url}"
 	fi

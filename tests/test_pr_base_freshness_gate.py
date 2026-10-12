@@ -20,8 +20,13 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LIB = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
@@ -423,7 +428,134 @@ class RequiredChecksWait(unittest.TestCase):
 		self.assertIn("outcome=allow_all", out)
 
 
+THIS_REPO = {"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows"}
+NO_LINT = _runs(("CI", "completed", "success"), ("review / gate", "completed", "success"))
+LINT_RUNNING = _runs(("CI", "completed", "success"), ("lint", "in_progress", ""), ("review / gate", "completed", "success"))
+CI_DONE = [json.dumps({"workflow_runs": [{"name": "CI", "status": "completed", "conclusion": "success", "id": 999}]})]
+LINT_SELF_ONLY = json.dumps([{"check_runs": [
+	{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/999/job/1"},
+	{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/4242/job/7"},
+]}])
+
+
+class RequiredCiCheckWait(unittest.TestCase):
+	"""Issue #6963: the configured CI check must exist on the head and succeed."""
+
+	def test_empty_listing_never_authorizes_when_ci_check_is_required(self) -> None:
+		rc, out = _wait([EMPTY], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_check=lint ci_state=absent", out)
+		self.assertNotIn("outcome=ok", out)
+
+	def test_missing_ci_check_is_waited_for_even_when_other_checks_are_green(self) -> None:
+		rc, out = _wait([NO_LINT, GREEN], env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 0)
+		self.assertIn("required CI check 'lint' is absent", out)
+		self.assertIn("outcome=ok waited_s=1", out)
+
+	def test_old_review_gate_success_alone_does_not_authorize(self) -> None:
+		only_gate = _runs(("review / gate", "completed", "success"))
+		rc, out = _wait([only_gate], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1)
+		self.assertIn("ci_state=absent", out)
+
+	def test_pending_then_success_proceeds(self) -> None:
+		rc, out = _wait([LINT_RUNNING, GREEN], env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=1", out)
+		self.assertIn("ci_check=lint ci_state=success", out)
+
+	def test_unsuccessful_ci_conclusions_refuse(self) -> None:
+		for conclusion in ("failure", "skipped", "neutral", "cancelled"):
+			with self.subTest(conclusion=conclusion):
+				runs = _runs(("CI", "completed", "success"), ("lint", "completed", conclusion))
+				rc, out = _wait([runs], env=THIS_REPO, ci_runs_sequence=CI_DONE)
+				self.assertEqual(rc, 1)
+				self.assertIn("ci_check=lint ci_state=failure", out)
+				self.assertIn("outcome=failed", out)
+
+	def test_a_failing_duplicate_outranks_a_success(self) -> None:
+		runs = _runs(("lint", "completed", "success"), ("lint", "completed", "failure"))
+		rc, out = _wait([runs], env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=failed", out)
+
+	def test_own_run_never_satisfies_the_ci_check(self) -> None:
+		rc, out = _wait([LINT_SELF_ONLY], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1)
+		self.assertIn("ci_state=absent", out)
+
+	def test_allow_all_still_waits_for_the_ci_check(self) -> None:
+		rc, out = _wait([NO_LINT], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=timeout", out)
+
+	def test_none_restores_the_legacy_grace(self) -> None:
+		rc, out = _wait([EMPTY], env={**THIS_REPO, "AUTO_MERGE_REQUIRED_CI_CHECK": "none"})
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=2", out)
+		self.assertIn("ci_check=none ci_state=disabled", out)
+
+	def test_consumer_default_keeps_the_legacy_behaviour(self) -> None:
+		rc, out = _wait([NO_LINT])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=0 pending=0 ci_check=none", out)
+
+	def test_custom_check_name_with_spaces(self) -> None:
+		rc, out = _wait([NO_LINT], env={"AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 0)
+		self.assertIn("ci_state=success", out)
+
+	def test_same_named_check_from_another_workflow_does_not_count(self) -> None:
+		"""lint-pr-body-auto-close.yml's job is also named `lint`; only a CI run's `lint` counts."""
+		other = json.dumps([{"check_runs": [
+			{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/555/job/1"},
+		]}])
+		rc, out = _wait([other], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("ci_state=absent", out)
+		rc, out = _wait([other], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("ci_state=absent", out)
+
+	def test_unreadable_runs_listing_never_trusts_a_success(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=["not json"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_state=unknown", out)
+
+	def test_invalid_name_in_a_consumer_never_authorizes(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", env={"AUTO_MERGE_REQUIRED_CI_CHECK": "lint,test"}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_check=__invalid__ ci_state=unknown", out)
+
+	def test_wait_workflows_none_matches_by_name_only(self) -> None:
+		rc, out = _wait([GREEN], env={**THIS_REPO, "AUTO_MERGE_WAIT_WORKFLOWS": "none"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("ci_state=success", out)
+
+
 class RequiredChecksWiring(unittest.TestCase):
+	def test_required_ci_check_variable_reaches_every_auto_merge_path(self) -> None:
+		line = "AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}"
+		text = WORKFLOW.read_text(encoding="utf-8")
+		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
+		self.assertIn(line, job)
+		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
+		self.assertIn(line, step)
+		judge = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
+		self.assertIn(line, judge)
+
+	def test_deterministic_skip_merge_passes_the_pr_base_to_the_wait(self) -> None:
+		"""The `lint` default is scoped by base ref; an empty base would require it on bases CI never runs on."""
+		text = WORKFLOW.read_text(encoding="utf-8")
+		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
+		self.assertIn("PR_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}", job)
+		self.assertEqual(job.count('_pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"'), 2)
+		self.assertNotIn('_pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""', job)
+
 	def test_review_enable_auto_merge_waits_before_both_tails(self) -> None:
 		text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
 		wait_at = text.index('_pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"')
@@ -434,7 +566,7 @@ class RequiredChecksWiring(unittest.TestCase):
 	def test_deterministic_skip_merge_waits_before_both_auto_merge_calls(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
-		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
+		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
 		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", job)
 
@@ -475,6 +607,136 @@ class RequiredChecksWiring(unittest.TestCase):
 		recheck_at = text.index('[ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ]')
 		self.assertLess(wait_at, recheck_at)
 		self.assertLess(recheck_at, text.index('--squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
+
+
+# --- Update markers and the per-PR update cap (#7084, Q60: A) ----------------
+# #6654 was updated from main four times in two hours: every update restarted
+# the full review cycle, and main moved again before it finished.
+
+SYNC_LOGIN = "workflow-bot"
+
+
+def _sync_marker(sync: int, *, pr: int = 7, author: str = SYNC_LOGIN) -> dict:
+	return {"user": {"login": author}, "body": f"**Branch updated from `main` before merging** (update {sync} of at most 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync} -->"}
+
+
+def _sync_gate(comments: list[dict] | None, *, max_syncs: str | None = None, user_ok: bool = True) -> tuple[int, str, list[str]]:
+	"""Overlap case with the user and comments reads answered from fixtures."""
+	comments_json = json.dumps([comments]) if comments is not None else ""
+	user_json = json.dumps({"login": SYNC_LOGIN}) if user_ok else ""
+	body = f'''
+eval "base_$(declare -f _safe_gh_jq)"
+_safe_gh_jq() {{
+  case "$*" in
+    user) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {user_json!r} ] || return 1; printf '%s' {user_json!r} ;;
+    *"/issues/7/comments?per_page=100"*) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {comments_json!r} ] || return 1; printf '%s' {comments_json!r} ;;
+    *) base__safe_gh_jq "$@" ;;
+  esac
+}}
+_pr_base_fresh_for_merge 7 {HEAD} main; rc=$?; printf "%s\\n" "rc=${{rc}}"
+'''
+	env = {"MERGE_BASE_FRESHNESS_MAX_SYNCS": max_syncs} if max_syncs is not None else None
+	res = _run(body, compare_json=_compare(2, ["agents.md"]), pr_files_json=_pr_files(["agents.md"]), env=env)
+	assert res.returncode == 0, res.stderr
+	rc = int([line for line in res.stdout.splitlines() if line.startswith("rc=")][-1][3:])
+	return rc, res.stdout + res.stderr, res.calls  # type: ignore[attr-defined]
+
+
+class FreshnessSyncCap(unittest.TestCase):
+	def test_first_update_posts_the_marker_for_the_approved_head(self) -> None:
+		rc, out, calls = _sync_gate([])
+		self.assertEqual(rc, 1)
+		self.assertIn("update 1 of at most 2", out)
+		# The comment body spans several log lines; match on the whole log.
+		log = "\n".join(calls)
+		self.assertEqual(len([c for c in calls if c.startswith("-X POST repos/owner/repo/issues/7/comments")]), 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=1 -->", log)
+		self.assertIn("**Branch updated from `main` before merging** (update 1 of at most 2)", log)
+		self.assertIn("MERGE_BASE_SYNC_MARKER pr=7 head_sha=" + HEAD + " sync=1 outcome=posted", out)
+
+	def test_second_update_counts_only_the_workflow_logins_markers_for_this_pr(self) -> None:
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(1, author="someone-else"), _sync_marker(1, pr=8)])
+		self.assertEqual(rc, 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=2 -->", "\n".join(calls))
+
+	def test_after_the_cap_the_merge_proceeds_without_another_update(self) -> None:
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(2)])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=overlap action=proceed reason=max_syncs syncs=2 max=2", out)
+		self.assertFalse(any("/update-branch" in c for c in calls))
+		self.assertFalse(any("-X POST" in c for c in calls))
+
+	def test_the_cap_is_configurable_and_validated(self) -> None:
+		rc, out, _ = _sync_gate([_sync_marker(1)], max_syncs="1")
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=max_syncs syncs=1 max=1", out)
+		rc, _out, _calls = _sync_gate([_sync_marker(1)], max_syncs="nine")
+		self.assertEqual(rc, 1, "an invalid cap falls back to 2")
+
+	def test_cap_zero_never_updates_and_reads_nothing(self) -> None:
+		rc, out, calls = _sync_gate(None, max_syncs="0", user_ok=False)
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=max_syncs syncs=0 max=0", out)
+		self.assertFalse(any(c == "user" or "/comments" in c or "/update-branch" in c for c in calls))
+
+	def test_an_unreadable_count_updates_as_before(self) -> None:
+		rc, out, calls = _sync_gate(None, user_ok=False)
+		self.assertEqual(rc, 1)
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
+		self.assertIn("update 1 of at most 2", out)
+
+	def test_a_failed_update_posts_no_marker(self) -> None:
+		body_calls = _run(
+			f'_pr_base_fresh_for_merge 7 {HEAD} main; echo "rc=$?"',
+			compare_json=_compare(1, ["a.py"]), pr_files_json=_pr_files(["a.py"]), update_rc=1,
+		).calls  # type: ignore[attr-defined]
+		self.assertFalse(any("-X POST" in c for c in body_calls))
+
+	def test_a_short_head_sha_gets_no_marker(self) -> None:
+		res = _run('_pr_base_sync_marker_post 7 abc1234 1 2', env={})
+		self.assertIn("outcome=skipped reason=short_head_sha", res.stdout)
+		self.assertFalse(any("-X POST" in c for c in res.calls))  # type: ignore[attr-defined]
+
+
+class FreshnessSyncWiring(unittest.TestCase):
+	def test_every_merge_path_passes_the_cap(self) -> None:
+		for path in (WORKFLOW, REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"):
+			text = path.read_text(encoding="utf-8")
+			self.assertEqual(
+				text.count("MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}"),
+				text.count("MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}"),
+				path.name,
+			)
+
+	def test_the_gate_routes_a_verified_update_to_deterministic_skip_merge(self) -> None:
+		# The gate body lives in scripts/review_autofix_step_evaluate_gate.sh (#6972).
+		text = expanded_review_autofix_text()
+		self.assertIn('or ($b | contains("<!-- ai:merge-base-sync:v1 "))', text)
+		self.assertIn("MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}", text)
+		block = text.split("gate_freshness_sync_fast_path()", 1)[1].split("# Size check uses", 1)[0]
+		self.assertIn('bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}"', block)
+		self.assertIn('[ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1', block)
+		# The skip job runs no conflict resolver and no single-issue security
+		# pass, so both suppressors apply before any API call.
+		fast_path = block.split("if [ \"${FORCE_REVIEW}\" = \"true\" ]; then", 1)[0]
+		self.assertIn('reason=merge_conflict pr=${PR_NUMBER}', fast_path)
+		self.assertIn('reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync', fast_path)
+		self.assertLess(fast_path.index("reason=single_issue_security_pass"), fast_path.index("gate_fetch_marker_comments"))
+		# The security-pass eligibility rule must match the doc-only /
+		# small-diff skip's copy, or a drift could merge an eligible PR unaudited.
+		skip_block = text.split('SECURITY_PASS_SKIP_SUPPRESSED="false"', 1)[1].split("SECURITY_PASS_SKIP_SUPPRESSED=\"true\"", 1)[0]
+		for cond in ('[ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ]',
+				'&& [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ]',
+				'&& [ "${pr_head_repo}" = "${REPOSITORY}" ]',
+				'&& ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]]',
+				'&& [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]'):
+			self.assertIn(cond, fast_path)
+			self.assertIn(cond, skip_block)
+		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
+		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
+			self.assertIn(line, branch)
+		# force-review still wins over the fast path.
+		self.assertLess(block.index('if [ "${FORCE_REVIEW}" = "true" ]; then'), block.index("elif gate_freshness_sync_fast_path; then"))
 
 
 if __name__ == "__main__":

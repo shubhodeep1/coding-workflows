@@ -16,6 +16,12 @@ through :func:`expanded_review_autofix_text`, which swaps each wrapper back
 for the script body at the original indentation. The result is the workflow
 as it read before the move, so the tests keep checking the exact code that
 runs.
+
+Steps in the ``gate`` job run before support staging, so their wrapper
+cannot use ``SUPPORT_SCRIPTS_DIR`` or ``.codex-workflow-src``. Those scripts
+are listed in :data:`REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS`; their wrapper
+resolves only the SHA-verified ``.codex-head-gate-src`` sparse checkout and
+requires ``HEAD_GATE_HELPER_VERIFIED=true``.
 """
 
 from __future__ import annotations
@@ -49,17 +55,27 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Restore same-head partial resume state": ("review_autofix_step_restore_partial_resume.sh", "error"),
 	"Generate diff context": ("review_autofix_step_generate_diff_context.sh", "error"),
 	"Preflight: Verify required files before reviewer invocation": ("review_autofix_step_preflight_required_files.sh", "error"),
+	"Decide partial-finalize validation/push safety": ("review_autofix_step_partial_finalize_safety.sh", "error"),
 	"Validate editor no-op disposition": ("review_autofix_step_editor_noop_disposition.sh", "error"),
 	"Stage codex logs for upload (failure or empty-editor)": ("review_autofix_step_stage_codex_logs.sh", "warning"),
 	"Initialize runtime workspace": ("review_autofix_step_init_runtime_workspace.sh", "error"),
-	"Post editor summary comment": ("review_autofix_step_editor_summary_comment.sh", "error"),
-	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_exhaustion_review_blocked_comment.sh", "error"),
-	"Mark linked issues review-blocked (autofix exhaustion)": ("review_autofix_step_mark_review_blocked_exhaustion.sh", "error"),
+	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_post_review_blocked_comment.sh", "error"),
+	"Post editor summary comment": ("review_autofix_step_post_editor_summary.sh", "error"),
 	"Mark linked issues ready to merge": ("review_autofix_step_mark_ready_to_merge.sh", "error"),
+	"Detect smoke test and tune LLM settings": ("review_autofix_step_detect_smoke_test.sh", "error"),
+	"Evaluate review gate": ("review_autofix_step_evaluate_gate.sh", "error"),
+}
+
+# Gate-job step scripts -> the verified checkout directory their wrapper reads.
+# The gate job runs before support staging, so these are loaded only from the
+# SHA-pinned head-gate sparse checkout, never from SUPPORT_SCRIPTS_DIR,
+# .codex-workflow-src or a PR-head copy.
+REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS: dict[str, str] = {
+	"review_autofix_step_evaluate_gate.sh": ".codex-head-gate-src",
 }
 
 _WRAPPER_START_RE = re.compile(
-	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="\$\{SUPPORT_SCRIPTS_DIR:-\}/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
+	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
 )
 _WRAPPER_END = 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'
 

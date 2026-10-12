@@ -57,6 +57,7 @@ import re
 import shlex
 import subprocess
 import shutil
+import sys
 import tempfile
 import sys
 import unittest

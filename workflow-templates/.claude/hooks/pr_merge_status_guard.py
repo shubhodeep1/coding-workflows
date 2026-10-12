@@ -249,6 +249,9 @@ class _GuardTarget(NamedTuple):
 	warning: str = ""
 	bulk: str = ""
 	remote: str = ""
+	# Non-empty for a push that deletes remote branches (`--delete`, `-d`, a
+	# `:ref` refspec, `--prune`); names what is deleted. Always asks (#7220).
+	deletes: str = ""
 
 
 class LookupUnavailable(Exception):
@@ -1059,6 +1062,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	remote_value = ""
 	bulk = ""
 	delete = False
+	prune = False
 	tags = False
 	uncertain = False
 	arguments = invocation.arguments
@@ -1072,6 +1076,10 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			delete = True
 		elif word == "--no-delete":
 			delete = False
+		elif word == "--prune":
+			prune = True
+		elif word == "--no-prune":
+			prune = False
 		elif word in ("--tags", "--tag", "--ta"):
 			tags = True
 		elif word == "--no-tags":
@@ -1118,14 +1126,18 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if positionals:
 		remote_value = positionals[0]
 	if delete:
-		# No merged-PR check for deletions, but a foreign destination still asks.
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+		# No merged-PR check for a deletion, but it always asks (#7220, §23.C).
+		named = ", ".join(f"`{ref.removeprefix('+')}`" for ref in positionals[1:]) or "an unnamed ref"
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value,
+			deletes=f"--delete of {named}")]
 	refspecs = positionals[1:]
+	pruned = [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value,
+		deletes="--prune of remote branches without a local counterpart")] if prune else []
 	if not refspecs and tags and not bulk:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+		return pruned + ([_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else [])
 	if not refspecs:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
-	targets: list[_GuardTarget] = []
+		return pruned + [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
+	targets: list[_GuardTarget] = list(pruned)
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
 		if refspec == ":" or "*" in refspec:
@@ -1134,7 +1146,10 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if ":" in refspec:
 			source, destination = refspec.split(":", 1)
 			if not source:
-				continue  # Branch deletion.
+				# A `:ref` refspec deletes the remote ref; it always asks (#7220).
+				targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
+					remote=remote_value, deletes=f"`:{destination}`"))
+				continue
 		else:
 			source = destination = refspec
 			if destination == "HEAD":
@@ -1151,7 +1166,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value))
 	if not targets and remote_value and remote_value != "origin":
-		# Every refspec was a branch deletion; only the remote needs checking.
+		# Every refspec was a tag or other non-branch ref; only the remote needs checking.
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value))
 	return targets
 
@@ -2053,6 +2068,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
+	# #7220 / §23.C: deleting a remote branch and pushing to the default branch
+	# are ask-first. The settings.json ask rules only match `main`/`master`
+	# by wildcard; these use the parsed refspecs and the resolved default branch.
+	deletion_reasons: list[str] = []
+	default_branch_reasons: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
@@ -2093,6 +2113,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.deletes:
+				deletion_reasons.append(target.deletes)
+				continue
 			if target.branch is None:
 				unresolved_push_destinations.append(
 					"could not resolve git push destination; shell expansion may change the pushed branch."
@@ -2144,7 +2167,15 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					continue
 				base = default_branch(target.cwd)
 				if base and branch == base:
+					if target.reaches_remote:
+						default_branch_reasons.append(f"`{branch}` is the default branch")
 					continue
+				if not base and target.reaches_remote and not branch.startswith("claude/"):
+					# AD-2 on #7220: fail closed when neither the local origin/HEAD
+					# nor `git ls-remote --symref` names the default branch.
+					default_branch_reasons.append(
+						f"could not resolve the default branch, so `{branch}` may be it"
+					)
 				slug = repo_slug(target.cwd)
 				if not slug:
 					_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
@@ -2205,6 +2236,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	confirmation_reasons.extend(unresolved_push_sources)
 	confirmation_reasons.extend(unresolved_push_destinations)
 	confirmation_reasons.extend(unknown_destination_reasons)
+	if deletion_reasons:
+		confirmation_reasons.append(
+			"git push deletes remote branches: " + ", ".join(dict.fromkeys(deletion_reasons))
+		)
+	if default_branch_reasons:
+		confirmation_reasons.append(
+			"git push writes to the default branch: " + ", ".join(dict.fromkeys(default_branch_reasons))
+		)
 	if bulk_reasons:
 		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
