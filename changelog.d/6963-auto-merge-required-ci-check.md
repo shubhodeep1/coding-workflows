@@ -5,9 +5,9 @@ The required-checks wait added for #6906 read a head with no check-runs as green
 
 | The numbers that matter | Value |
 | --- | --- |
-| Variable | `AUTO_MERGE_REQUIRED_CI_CHECK`: unset or empty means `lint` in `shubhodeep1/coding-workflows` and off elsewhere; `none` turns it off |
+| Variable | `AUTO_MERGE_REQUIRED_CI_CHECK`: unset or empty means `lint` in `shubhodeep1/coding-workflows` for PRs into `main`, `stable` or `orchestrator/project-*` (the bases `ci.yml` runs on) and off elsewhere; `none` turns it off |
 | Paths covered | codex-agent `Enable auto-merge on PR`, the `deterministic-skip-merge` job, the review-blocked judge's `merge` and terminal `fix` |
-| Extra API calls | none (reads the check-run listing the wait already fetches) |
+| Extra API calls | one `actions/runs?head_sha=` read per poll while the check is required (binds the check to a CI run); none otherwise |
 | Log line | `AUTOFIX_AUTO_MERGE_CHECKS ... ci_check=<name> ci_state=absent\|pending\|success\|failure\|unknown\|disabled` |
 
 What this means for operators: in this repository auto-merge waits for `lint` (about 9 minutes). A consumer repository keeps its current behaviour until it sets `AUTO_MERGE_REQUIRED_CI_CHECK` to the name of its aggregate CI check-run. A consumer that sets it must also name the workflow that runs that check in `AUTO_MERGE_WAIT_WORKFLOWS`. A wrong name makes every auto-merge time out with `ci_state=absent`; set the variable to `none` to turn the requirement off.

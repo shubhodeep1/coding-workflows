@@ -178,7 +178,7 @@ _pr_checks_completed()
 	PR_CHECKS_LAST_REASON="query_failed"
 	PR_CHECKS_LAST_PENDING=0
 	PR_CHECKS_LAST_TOTAL=""
-	PR_CHECKS_LAST_CI_NAME="$(_pr_auto_merge_required_ci_check_name)"
+	PR_CHECKS_LAST_CI_NAME="$(_pr_auto_merge_required_ci_check_name "${3:-}")"
 	PR_CHECKS_LAST_CI_STATE="unknown"
 	if [ "${PR_CHECKS_LAST_CI_NAME}" = "none" ]; then
 		PR_CHECKS_LAST_CI_STATE="disabled"
@@ -401,7 +401,8 @@ _pr_checks_completed()
 #
 # Env: AUTO_MERGE_CHECKS_WAIT_MINUTES (default 45; 0 = one check, no wait),
 # AUTO_MERGE_CHECKS_POLL_SECONDS (default 60). One check-runs listing (plus
-# the branch-protection read) per poll.
+# the branch-protection read) per poll, and, while a named CI check is
+# required, one `actions/runs?head_sha=` read per poll to bind it to a CI run.
 #
 # Named CI check (issue #6963, AUTO_MERGE_REQUIRED_CI_CHECK). An empty
 # check-run list used to count as green after two grace intervals, and a
@@ -426,13 +427,24 @@ _pr_checks_completed()
 # variable cannot hold an empty string and the workflow passes `|| ''`. A
 # value with a comma or control character, or longer than 100 characters,
 # warns and falls back to the repository default.
+# Optional $1: the PR's base ref. ci.yml's pull_request trigger covers only
+# main, stable and orchestrator/project-*, so the `lint` default applies only
+# to those bases (or an unknown base, failing closed); a PR stacked on any
+# other branch (for example a heal PR on an ai/issue-* head) never gets a CI
+# `lint` check-run and would otherwise time out on every review round. An
+# explicitly configured name applies to every base.
 _pr_auto_merge_required_ci_check_name()
 {
 	local raw="${AUTO_MERGE_REQUIRED_CI_CHECK-}"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local ci_check_base_ref="${1:-}"
 	local default_name="none"
 	case "$(printf '%s' "${repo}" | tr '[:upper:]' '[:lower:]')" in
-		shubhodeep1/coding-workflows) default_name="lint" ;;
+		shubhodeep1/coding-workflows)
+			case "${ci_check_base_ref}" in
+				""|main|stable|orchestrator/project-*) default_name="lint" ;;
+			esac
+			;;
 	esac
 	raw="${raw#"${raw%%[![:space:]]*}"}"
 	raw="${raw%"${raw##*[![:space:]]}"}"
@@ -527,7 +539,7 @@ _pr_wait_for_required_checks()
 	local max_minutes="${4:-${AUTO_MERGE_CHECKS_WAIT_MINUTES:-45}}"
 	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
 	local waited=0 rc=0 ci_runs_fresh=0 ci_bind ci_required_name
-	ci_required_name="$(_pr_auto_merge_required_ci_check_name 2>/dev/null)"
+	ci_required_name="$(_pr_auto_merge_required_ci_check_name "${base_ref}" 2>/dev/null)"
 	PR_CHECKS_WAIT_OUTCOME="timeout"
 	PR_CHECKS_WAIT_WAITED_S=0
 	[[ "${max_minutes}" =~ ^[0-9]+$ ]] || max_minutes=45
