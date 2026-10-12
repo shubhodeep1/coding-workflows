@@ -399,6 +399,8 @@ def test_ref_mismatch_block_contradicting_the_workflow_is_retried() -> None:
 	retry_prompt = (runtime_dir / "prompt-2.txt").read_text(encoding="utf-8")
 	assert retry_prompt.count("=== RETRY NOTE ===") == 1
 	assert "Integration branch mismatch: false" in retry_prompt
+	# The note also carries the line above; this pins the original context.
+	assert "DYNAMIC PLANNING CONTEXT" in retry_prompt
 
 
 def test_ref_mismatch_block_is_kept_after_the_last_attempt() -> None:
