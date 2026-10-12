@@ -340,6 +340,11 @@ def test_operator_step_needs_a_dormant_placeholder() -> None:
 	for bad in ("payments_key", "PAYMENTS_KEY", None):
 		with pytest.raises(ledger.UsageError):
 			ledger.validate(dict(base, placeholder=bad), _decision("needs-human"), "o/r")
+	# Only a person's step needs operator instructions; an _ENABLED off switch does not.
+	no_steps = {k: v for k, v in base.items() if k != "operator_instructions"}
+	assert ledger.validate(dict(no_steps, placeholder="PAYMENTS_ENABLED"), _decision("needs-human"), "o/r")["operator_instructions"] == ""
+	with pytest.raises(ledger.UsageError):
+		ledger.validate(dict(no_steps, placeholder="PAYMENTS_API_KEY_UNSET_OPERATOR_STEP"), _decision("needs-human"), "o/r")
 
 
 def test_cli_round_trip(tmp_path: Path) -> None:
@@ -848,15 +853,34 @@ def test_descope_files_a_standalone_fixup_or_asks_the_poller_for_a_project() -> 
 
 
 def test_operator_step_records_the_step_and_warns() -> None:
+	# A placeholder value only a person can supply is recorded and paged.
 	ops = actions.plan(
-		_verdict("operator_step", instructions="gate it", placeholder="NIGHTLY_ENABLED", operator_instructions="set the secret"),
+		_verdict("operator_step", instructions="gate it", placeholder="NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", operator_instructions="set the secret"),
 		_ctx(),
 	)
 	kinds = [op["op"] for op in ops]
 	assert kinds == ["create_issue", "operator_step", "telegram"]
-	assert ops[1]["key"] == "unblock-7" and ops[1]["steps"][0]["dormant_until"] == "NIGHTLY_ENABLED"
-	assert "NIGHTLY_ENABLED" in ops[0]["body"]
+	assert ops[1]["key"] == "unblock-7" and ops[1]["steps"][0]["dormant_until"] == "NIGHTLY_TOKEN_UNSET_OPERATOR_STEP"
+	assert "NIGHTLY_TOKEN_UNSET_OPERATOR_STEP" in ops[0]["body"]
+	assert "while it is unset the new code skips safely" in ops[0]["body"]
 	assert ops[2]["level"] == "WARNING"
+
+
+def test_operator_step_with_enabled_flag_ships_on_and_pages_nobody() -> None:
+	# #6710, #6793, #7171: an _ENABLED flag defaulting off held each fix back
+	# until a person was paged to turn it on. The fix-up now ships the code on
+	# with the flag as an off switch, and nothing is recorded or paged.
+	for ctx in (_ctx(), _ctx(tracking=40)):
+		ops = actions.plan(
+			_verdict("operator_step", instructions="gate it", placeholder="NIGHTLY_ENABLED", operator_instructions="none"),
+			ctx,
+		)
+		assert [op["op"] for op in ops] == (["comment"] if ctx["tracking"] else ["create_issue"])
+		body = ops[0]["body"]
+		assert "Ship the new behaviour on: gate only the new code path behind `NIGHTLY_ENABLED` as an off switch." in body
+		assert "`false` turns it off" in body
+		assert "Nothing waits on a person" in body
+		assert "Keep the new behaviour off" not in body
 
 
 def test_close_labels_and_closes_but_leaves_a_project_to_the_poller() -> None:
@@ -1947,7 +1971,7 @@ def test_failed_review_dispatch_leaves_pr_block_label(tmp_path: Path) -> None:
 
 
 def test_failed_operator_step_does_not_send_success_notification(tmp_path: Path) -> None:
-	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "set the secret"}
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", "operator_instructions": "set the secret"}
 	result, state = _judge(tmp_path, ISSUE, verdict=verdict, FAKE_GH_FAIL_OPERATOR="1")
 	assert "op=operator_step outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
@@ -1955,13 +1979,35 @@ def test_failed_operator_step_does_not_send_success_notification(tmp_path: Path)
 
 
 def test_operator_step_success_writes_tracker_entry(tmp_path: Path) -> None:
-	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "set the secret"}
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", "operator_instructions": "set the secret"}
 	result, state = _judge(tmp_path, ISSUE, verdict=verdict)
 	assert "op=operator_step outcome=failed" not in result.stdout
 	assert "verdict=operator_step round=1 outcome=acted" in result.stdout
 	assert [f for f in state["created"] if f.get("labels[]") == "ai:operator-step"]
 	entries = [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/902/comments"]
 	assert len(entries) == 1 and entries[0]["body"].startswith("<!-- ai:operator-step:entry key=")
+	verdict_comment = next(c["body"] for c in state["comments"] if c["body"].startswith("## Unblock judge"))
+	assert "Stays off behind `NIGHTLY_TOKEN_UNSET_OPERATOR_STEP` until the operator step is done." in verdict_comment
+
+
+def test_operator_step_with_enabled_flag_writes_no_tracker_entry(tmp_path: Path) -> None:
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "none"}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict)
+	assert "verdict=operator_step round=1 outcome=acted" in result.stdout
+	assert not [f for f in state["created"] if f.get("labels[]") == "ai:operator-step"]
+	assert not [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/902/comments"]
+	verdict_comment = next(c["body"] for c in state["comments"] if c["body"].startswith("## Unblock judge"))
+	assert "Ships on by default; `NIGHTLY_ENABLED=false` turns it off." in verdict_comment
+	assert "Stays off" not in verdict_comment
+	assert "Operator step needed" not in result.stdout + result.stderr
+
+
+def test_unblock_prompt_never_defaults_a_fix_off_to_page_a_person() -> None:
+	for prompt in ("prompts/mode-judge-unblock.txt", "prompts/_templates/mode-judge-unblock.txt"):
+		text = (ROOT / prompt).read_text(encoding="utf-8")
+		assert "the new code ships on by default and the flag is only an off switch (`false`), so no person is paged" in text
+		assert "Never default a fix to off and page a person only to switch it on." in text
+		assert "(default off)" not in text
 
 
 def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:
