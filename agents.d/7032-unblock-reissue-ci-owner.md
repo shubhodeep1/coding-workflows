@@ -1,0 +1,20 @@
+<!-- agents: section="Integration-sync verifier + bootstrap contract" -->
+**Unblock judge: CI-failure reissue and its owning PR (#7032).** Before a
+standalone, non-security `reissue`, `scripts/unblock_judge.sh`
+(`unblock_resolve_ci_owner`) looks for the PR that owns a CI-failure issue:
+label `ai:check-triage` / `ai:check-triage-escalated`, or the line-anchored
+`<!-- check-failure-triage:pr=<n> -->` marker, plus the body's
+`**Pull request:**` line into this repository. It trusts that body text only
+when the issue author is the pipeline login, `github-actions[bot]` or an
+OWNER/MEMBER/COLLABORATOR (`op=ci_owner outcome=none reason=untrusted_author`
+otherwise), then reads the same-repository PR once. A PR merged into the
+default branch or the issue's declared integration branch counts as superseding
+the issue only when `_pr_checks_completed` returns `ok` (not `allow_all`) with
+at least one check-run on its head and the named CI check
+(`PR_CHECKS_LAST_CI_STATE`) is `success` or `disabled`. The issue is then closed
+`not_planned` without a replacement
+(`UNBLOCK_JUDGE item=<n> op=reissue outcome=superseded pr=<n> head=<sha>`).
+Otherwise the replacement carries the marker, and, when the PR is open and its
+head ref exists, a standalone `- Integration branch:` line with the PR head
+ref (never the base ref or model text). Unverifiable PR facts keep the
+unchanged reissue.

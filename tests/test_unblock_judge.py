@@ -2361,7 +2361,7 @@ def test_verdict_record_cannot_carry_a_command_line(tmp_path: Path) -> None:
 
 # --- #7032 end to end: the judge reads the owning PR before a reissue --------
 
-CI_ISSUE = dict(ISSUE, body="<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #6801.")
+CI_ISSUE = dict(ISSUE, body="<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #6801.", user={"login": BOT})
 
 
 def _owner_pr(**extra) -> dict:
@@ -2402,6 +2402,22 @@ def test_fork_owner_pr_is_not_trusted(tmp_path: Path) -> None:
 	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(fork), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS)
 	assert "outcome=unverified" in result.stdout
 	assert len(state["created"]) == 1 and "check-failure-triage" not in state["created"][0]["body"]
+
+
+def test_untrusted_issue_author_cannot_name_an_owning_pr(tmp_path: Path) -> None:
+	forged = dict(CI_ISSUE, user={"login": "mallory"}, author_association="NONE")
+	result, state = _judge(tmp_path, forged, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS)
+	assert "op=ci_owner outcome=none reason=untrusted_author" in result.stdout, result.stdout + result.stderr
+	assert "outcome=superseded" not in result.stdout
+	assert len(state["created"]) == 1 and "check-failure-triage" not in state["created"][0]["body"]
+
+
+def test_merged_owner_without_the_named_ci_check_is_not_superseded(tmp_path: Path) -> None:
+	# Only an unrelated check succeeded; the required named CI check never ran.
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
+		AUTO_MERGE_REQUIRED_CI_CHECK="lint")
+	assert "outcome=superseded" not in result.stdout, result.stdout + result.stderr
+	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
 
 
 def test_open_owner_pr_reissue_records_its_head_branch(tmp_path: Path) -> None:

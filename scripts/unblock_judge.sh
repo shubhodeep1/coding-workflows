@@ -578,6 +578,17 @@ unblock_resolve_ci_owner()
 		[ "${owner_reason}" = "not_ci_failure" ] || unblock_log "item=${ITEM} op=ci_owner outcome=none reason=${owner_reason:-unknown}"
 		return 0
 	fi
+	# The marker and `Pull request:` line are issue-body text, so only an issue
+	# written by the pipeline, the triage bot or a repository member names its
+	# owning PR; any other author keeps today's reissue.
+	if ! jq -e --arg login "${UNBLOCK_LOGIN:-}" '
+		(.user.login // "") as $u
+		| ($u != "") and (((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+			or ($login != "" and $u == $login) or $u == "github-actions[bot]")
+	' "${RUNTIME_DIR}/item.json" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=ci_owner outcome=none reason=untrusted_author"
+		return 0
+	fi
 	declared="$(jq -r '.declared_branch // ""' <<< "${owner_json}" 2>/dev/null || true)"
 	if ! pr_json="$(gh api "repos/${REPOSITORY}/pulls/${owner_pr}" 2>/dev/null)" \
 		|| ! jq -e --argjson n "${owner_pr}" --arg repo "${REPOSITORY}" '
@@ -607,8 +618,13 @@ unblock_resolve_ci_owner()
 					export PR_CHECKS_REPOSITORY="${REPOSITORY}"
 					# Three arguments: the shared required-checks filter applies.
 					_pr_checks_completed "${owner_pr}" "${owner_head_sha}" "${owner_base_ref}" >/dev/null 2>&1 || exit 1
-					# A head with no check-runs at all is not evidence of green checks.
-					[ "${PR_CHECKS_LAST_TOTAL:-0}" -gt 0 ] 2>/dev/null
+					# A head with no check-runs at all is not evidence of green checks,
+					# nor is an allow-all required set; the named CI check
+					# (AUTO_MERGE_REQUIRED_CI_CHECK, from the same listing) must have
+					# run and succeeded when one is required.
+					[ "${PR_CHECKS_LAST_TOTAL:-0}" -gt 0 ] 2>/dev/null || exit 1
+					[ "${PR_CHECKS_LAST_REASON:-}" = "ok" ] || exit 1
+					case "${PR_CHECKS_LAST_CI_STATE:-unknown}" in success|disabled) ;; *) exit 1 ;; esac
 				); then
 				owner_state="superseded"
 			fi
