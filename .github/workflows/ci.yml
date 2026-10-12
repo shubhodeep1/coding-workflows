@@ -703,7 +703,7 @@ jobs:
       - name: Session automation retirement guard and retired labels/files tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py tests/test_release_manifest.py tests/test_release_manifest_workflow_contract.py tests/test_verify_release_manifest.py tests/test_update_workflows_manifest_verify.py tests/test_update_workflows_pr_delivery.py tests/test_update_workflows_template_gate.py
 
       - name: Security-pass skip rule tests
         run: |
@@ -1841,7 +1841,11 @@ jobs:
             wait "${shard_pid}" || true
           done
 
+          # Each failed shard's failing tests are repeated after the loop (#6888).
+          # The shard logs above sit in collapsed groups, so in run 37907017153 the
+          # job tail showed only the last shard's "33 passed", not shard 1's failure.
           shard_failures=0
+          shard_failure_lines=()
           # One line per failed shard, printed after the loop (outside every
           # ::group::) so the failing test names reach the log tail and the
           # job annotations (#6889). Only names matching [A-Za-z0-9_] are
@@ -1855,6 +1859,7 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_lines+=("shard ${shard}: no log recorded, its tests did not run")
               shard_failure_summaries+=("orchestrate-poll shard ${shard} exit none failed tests: no log (tests did not run)")
               failed_shard_ids+=("${shard}")
               continue
@@ -1891,9 +1896,25 @@ jobs:
                 done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
               fi
               shard_failures=$((shard_failures + 1))
+              # Prefer the runner's FAIL line (it carries the exception); fall back
+              # to its "complete" fail events; else say no failure was recorded.
+              # Every match is kept so the "... and <k> more" count below is exact.
+              # `-a`: a NUL byte in the log must not turn the matches into grep's
+              # "Binary file ... matches" line.
+              mapfile -t shard_fail_matches < <(grep -a -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                mapfile -t shard_fail_matches < <(grep -a -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -a -F '"status":"fail"' || true)
+              fi
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")
+              else
+                for shard_fail_match in "${shard_fail_matches[@]}"; do
+                  shard_failure_lines+=("shard ${shard}: ${shard_fail_match#"${shard_fail_match%%[![:space:]]*}"}")
+                done
+              fi
               # `|| true`: under pipefail a grep with no match would abort the
               # step before the tally below.
-              shard_failed_names="$(grep -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
+              shard_failed_names="$(grep -a -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
                 | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | awk '!seen[$0]++' || true)"
               if [ -z "${shard_failed_names}" ]; then
                 shard_failed_list="no FAIL lines (process failure)"
@@ -1922,16 +1943,32 @@ jobs:
                 echo "  shard ${failed_shard}: no log; its tests did not run"
                 continue
               fi
-              failed_test_names="$({ grep -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
+              failed_test_names="$({ grep -a -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
                 | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | tr '\n' ' ')"
               if [ -n "${failed_test_names// /}" ]; then
                 echo "::error::orchestrate-poll shard ${failed_shard} failing tests: ${failed_test_names% }"
               fi
               echo "  shard ${failed_shard}: FAIL lines (first 50):"
-              { grep -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
+              { grep -a -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
               echo "  shard ${failed_shard}: last 20 log lines:"
               tail -n 20 "${failed_shard_log}" | sed 's/^/    | /'
             done
+            # At most 20 annotations; CR removed, cut to 400 characters, then "%"
+            # escaped so a test message cannot break the annotation syntax.
+            shard_failure_shown=0
+            for shard_failure_line in "${shard_failure_lines[@]}"; do
+              if [ "${shard_failure_shown}" -ge 20 ]; then
+                break
+              fi
+              shard_failure_line="${shard_failure_line//$'\r'/}"
+              shard_failure_line="${shard_failure_line:0:400}"
+              shard_failure_line="${shard_failure_line//\%/%25}"
+              echo "::error::orchestrate-poll failing test: ${shard_failure_line}"
+              shard_failure_shown=$((shard_failure_shown + 1))
+            done
+            if [ "${#shard_failure_lines[@]}" -gt 20 ]; then
+              echo "::error::orchestrate-poll failing test: ... and $(( ${#shard_failure_lines[@]} - 20 )) more (see the shard groups above)"
+            fi
             for shard_failure_summary in "${shard_failure_summaries[@]}"; do
               echo "::error::${shard_failure_summary}"
             done
