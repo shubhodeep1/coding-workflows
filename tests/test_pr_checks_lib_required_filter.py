@@ -514,7 +514,8 @@ def test_ci_check_name_resolution() -> None:
 		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"}, "review / gate"),
 		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "a,b"}, "lint"),
 		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "li\nnt"}, "lint"),
-		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "x" * 101}, "none"),
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "x" * 101}, "__invalid__"),
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "lint,test"}, "__invalid__"),
 	]
 	for env, expected in cases:
 		res = _run('printf "%s\\n" "$(_pr_auto_merge_required_ci_check_name)"', env=env)
@@ -522,6 +523,13 @@ def test_ci_check_name_resolution() -> None:
 		assert res.stdout.strip() == expected, (env.get("AUTO_MERGE_REQUIRED_CI_CHECK"), res.stdout)
 		if expected != "none" and env.get("AUTO_MERGE_REQUIRED_CI_CHECK", "").strip() not in ("", expected):
 			assert "::warning::AUTO_MERGE_REQUIRED_CI_CHECK" in res.stderr, res.stderr
+
+
+def test_invalid_ci_check_name_in_a_consumer_fails_closed() -> None:
+	"""A malformed explicit value must not silently drop the requirement."""
+	runs = _page([_ci_run("lint,test", "completed", "success")])
+	gate, name, state = _ci_side_channel(runs, {**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "lint,test"})
+	assert (gate, name, state) == ("0:ok", "__invalid__", "unknown"), (gate, name, state)
 
 
 def test_ci_check_default_applies_only_to_bases_ci_runs_on() -> None:

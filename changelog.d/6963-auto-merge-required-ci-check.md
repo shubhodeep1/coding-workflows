@@ -10,7 +10,7 @@ The required-checks wait added for #6906 read a head with no check-runs as green
 | Extra API calls | one `actions/runs?head_sha=` read per poll while the check is required (binds the check to a CI run); none otherwise |
 | Log line | `AUTOFIX_AUTO_MERGE_CHECKS ... ci_check=<name> ci_state=absent\|pending\|success\|failure\|unknown\|disabled` |
 
-What this means for operators: in this repository auto-merge waits for `lint` (about 9 minutes). A consumer repository keeps its current behaviour until it sets `AUTO_MERGE_REQUIRED_CI_CHECK` to the name of its aggregate CI check-run. A consumer that sets it must also name the workflow that runs that check in `AUTO_MERGE_WAIT_WORKFLOWS`. A wrong name makes every auto-merge time out with `ci_state=absent`; set the variable to `none` to turn the requirement off.
+What this means for operators: in this repository auto-merge waits for `lint` (about 9 minutes). A consumer repository keeps its current behaviour until it sets `AUTO_MERGE_REQUIRED_CI_CHECK` to the name of its aggregate CI check-run. A consumer that sets it must also name the workflow that runs that check in `AUTO_MERGE_WAIT_WORKFLOWS`. A wrong name makes every auto-merge time out with `ci_state=absent`; set the variable to `none` to turn the requirement off. A malformed value (a comma, a control character, or over 100 characters) warns and never turns the requirement off: a consumer's auto-merges time out with `ci_check=__invalid__` until it is corrected.
 
 ### For contributors
 

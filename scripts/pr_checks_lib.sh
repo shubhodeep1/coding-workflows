@@ -178,7 +178,9 @@ _pr_checks_completed()
 	PR_CHECKS_LAST_REASON="query_failed"
 	PR_CHECKS_LAST_PENDING=0
 	PR_CHECKS_LAST_TOTAL=""
-	PR_CHECKS_LAST_CI_NAME="$(_pr_auto_merge_required_ci_check_name "${3:-}")"
+	# stderr dropped: _pr_wait_for_required_checks warns once per wait instead
+	# of this call repeating an invalid-name warning on every poll.
+	PR_CHECKS_LAST_CI_NAME="$(_pr_auto_merge_required_ci_check_name "${3:-}" 2>/dev/null)"
 	PR_CHECKS_LAST_CI_STATE="unknown"
 	if [ "${PR_CHECKS_LAST_CI_NAME}" = "none" ]; then
 		PR_CHECKS_LAST_CI_STATE="disabled"
@@ -235,7 +237,10 @@ _pr_checks_completed()
 	# run counts (fail closed): a failed or still-running run with that name
 	# outranks a successful one, and the API failure sentinel '{}' yields
 	# `unknown`, never `success`. The name reaches jq only through --arg.
-	if [ "${PR_CHECKS_LAST_CI_NAME}" != "none" ]; then
+	# `__invalid__` (a malformed explicit value with no repository default)
+	# never matches a check-run: the state stays `unknown` and the wait times
+	# out rather than silently dropping the requirement the operator set.
+	if [ "${PR_CHECKS_LAST_CI_NAME}" != "none" ] && [ "${PR_CHECKS_LAST_CI_NAME}" != "__invalid__" ]; then
 		local ci_state
 		ci_state="$(printf '%s' "${check_runs_json}" | jq -r --arg ci "${PR_CHECKS_LAST_CI_NAME}" --arg self_run "${self_run}" --arg sha "${head_sha}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" '
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
@@ -457,7 +462,11 @@ _pr_auto_merge_required_ci_check_name()
 		return 0
 	fi
 	if [ "${#raw}" -gt 100 ] || [[ "${raw}" == *,* ]] || [[ "${raw}" =~ [[:cntrl:]] ]]; then
-		echo "::warning::AUTO_MERGE_REQUIRED_CI_CHECK is not a valid check-run name (comma, control character or over 100 characters); using the default '${default_name}'." >&2
+		# Fail closed: an operator who set a value meant to require a check, so
+		# an invalid value never turns the requirement off. With no repository
+		# default, the sentinel `__invalid__` keeps it on and unsatisfiable.
+		[ "${default_name}" = "none" ] && default_name="__invalid__"
+		echo "::warning::AUTO_MERGE_REQUIRED_CI_CHECK is not a valid check-run name (comma, control character or over 100 characters); using '${default_name}'." >&2
 		echo "${default_name}"
 		return 0
 	fi
@@ -539,7 +548,7 @@ _pr_wait_for_required_checks()
 	local max_minutes="${4:-${AUTO_MERGE_CHECKS_WAIT_MINUTES:-45}}"
 	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
 	local waited=0 rc=0 ci_runs_fresh=0 ci_bind ci_required_name
-	ci_required_name="$(_pr_auto_merge_required_ci_check_name "${base_ref}" 2>/dev/null)"
+	ci_required_name="$(_pr_auto_merge_required_ci_check_name "${base_ref}")"
 	PR_CHECKS_WAIT_OUTCOME="timeout"
 	PR_CHECKS_WAIT_WAITED_S=0
 	[[ "${max_minutes}" =~ ^[0-9]+$ ]] || max_minutes=45

@@ -520,6 +520,12 @@ class RequiredCiCheckWait(unittest.TestCase):
 		self.assertIn("outcome=timeout", out)
 		self.assertIn("ci_state=unknown", out)
 
+	def test_invalid_name_in_a_consumer_never_authorizes(self) -> None:
+		rc, out = _wait([GREEN], max_minutes="0", env={"AUTO_MERGE_REQUIRED_CI_CHECK": "lint,test"}, ci_runs_sequence=CI_DONE)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_check=__invalid__ ci_state=unknown", out)
+
 	def test_wait_workflows_none_matches_by_name_only(self) -> None:
 		rc, out = _wait([GREEN], env={**THIS_REPO, "AUTO_MERGE_WAIT_WORKFLOWS": "none"})
 		self.assertEqual(rc, 0, out)
