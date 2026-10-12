@@ -1,6 +1,7 @@
 <!-- agents: section="Workflow architecture" -->
 Check-triage already-resolved gate (#7095): clarify's `Decide clarify route`
-step runs `scripts/check_triage_resolution.py gate` for a trusted
+step runs `scripts/check_triage_resolution.py gate` (support-ref copy in
+`CLARIFY_HOST_PYTHON_DIR` with `workflow_failure_heal.py`, `python3 -I -B`) for a trusted
 `ai:check-triage` issue (after the security-dependency hold). It closes the
 issue (evidence comment with `<!-- ai:check-triage-resolved:v1 issue= pr= sha= -->`,
 `ai:closed`, closed as completed; step output `check_triage_resolved=true`,

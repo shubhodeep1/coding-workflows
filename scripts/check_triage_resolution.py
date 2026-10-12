@@ -328,7 +328,9 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			return _fail("run_jobs_unreadable")
 		verdict["failed_jobs"] = _failed_jobs(pr_jobs)
 	else:
-		verdict["failed_jobs"] = [{"id": triage["check_run_id"], "name": triage["check_name"], "conclusion": "failure"}]
+		# A check-run id is an Actions job id only for a github-actions check;
+		# fetch_failing_tracebacks reads the check run to pick the log source.
+		verdict["failed_jobs"] = [{"id": triage["check_run_id"], "name": triage["check_name"], "conclusion": "failure", "source": "check_run"}]
 
 	merge_sha = pr.get("merge_commit_sha")
 	if pr.get("merged") is not True or not isinstance(merge_sha, str) or not SHA_RE.match(merge_sha):
@@ -420,12 +422,29 @@ def _excerpt(filtered: str) -> str:
 	return encoded.decode("utf-8", errors="ignore")
 
 
+def _check_run_log_text(repo: str, check_run_id: int) -> str:
+	"""Log text for a check run: the Actions job log for a github-actions check,
+	else the check run's own output (a non-Actions id is not an Actions job id)."""
+	check_run = _gh_api([f"repos/{repo}/check-runs/{check_run_id}"])
+	if not isinstance(check_run, dict) or check_run.get("id") != check_run_id:
+		raise GhApiError("check_run_unreadable")
+	app = check_run.get("app") if isinstance(check_run.get("app"), dict) else {}
+	if app.get("slug") == "github-actions":
+		return _gh_api([f"repos/{repo}/actions/jobs/{check_run_id}/logs"], raw=True)
+	output = check_run.get("output") if isinstance(check_run.get("output"), dict) else {}
+	parts = [output.get(key) for key in ("title", "summary", "text")]
+	return "\n".join(part for part in parts if isinstance(part, str) and part)
+
+
 def fetch_failing_tracebacks(repo: str, failed_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 	"""Best-effort traceback excerpts for at most three failed jobs; never raises."""
 	results: list[dict[str, Any]] = []
 	for job in failed_jobs[:MAX_TRACEBACK_JOBS]:
 		try:
-			log_text = _gh_api([f"repos/{repo}/actions/jobs/{job['id']}/logs"], raw=True)
+			if job.get("source") == "check_run":
+				log_text = _check_run_log_text(repo, job["id"])
+			else:
+				log_text = _gh_api([f"repos/{repo}/actions/jobs/{job['id']}/logs"], raw=True)
 		except GhApiError:
 			continue
 		if not isinstance(log_text, str) or not log_text:

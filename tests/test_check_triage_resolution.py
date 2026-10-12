@@ -255,6 +255,66 @@ def test_check_run_triage_requires_tip_success_bound_to_tip_sha(tmp_path, monkey
 	assert result["status"] == "unverified" and result["reason"] == "default_check_sha_mismatch"
 
 
+def test_incident_6941_fix_merge_on_main_is_the_evidence(tmp_path, monkeypatch):
+	# PR #6941 merged the test correction after PR #6938 merged; the newest
+	# default-branch CI push run is #6941's merge commit, which contains #6938's.
+	fix_6941_sha = "4" * 40
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {
+			"workflow_runs": [_base_run(head_sha=fix_6941_sha)],
+		},
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{fix_6941_sha}": {"status": "ahead"},
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved"
+	assert result["evidence_sha"] == fix_6941_sha
+	assert result["writes"][0]["payload"]["body"].endswith(
+		f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={fix_6941_sha} -->"
+	)
+
+	# Before #6941 merged, the default branch still failed the same shard.
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/runs/37000000999/jobs\?filter=latest&per_page=100": _jobs(
+			{**BASE_JOBS, "orchestrate-poll (3)": "failure"}, id_base=1,
+		),
+	})
+	routes[rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1"] = {
+		"workflow_runs": [_base_run()],
+	}
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "failed_jobs_not_resolved"
+
+
+def _check_run_triage_routes(check_run):
+	return _routes(**{
+		rf"repos/{REPO}/commits/main": {"sha": EVIDENCE_SHA},
+		rf"repos/{REPO}/commits/{EVIDENCE_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100": {
+			"total_count": 1, "check_runs": [{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "failure"}],
+		},
+		rf"repos/{REPO}/check-runs/{FAILED_JOB_ID}": check_run,
+	})
+
+
+def test_non_actions_check_run_traceback_comes_from_check_output(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {
+		"id": FAILED_JOB_ID, "app": {"slug": "external-ci"},
+		"output": {"title": "1 failed", "summary": "FAILED tests/test_x.py::test_y - AssertionError", "text": ""},
+	}
+	result, _, fake = _gate(tmp_path, monkeypatch, issue=issue, routes=_check_run_triage_routes(check_run))
+	assert result["status"] == "unverified" and result["traceback_posted"] == [FAILED_JOB_ID]
+	assert "test_y" in result["writes"][0]["payload"]["body"]
+	assert not any(call[-1].endswith("/logs") for call in fake.calls)
+
+
+def test_actions_check_run_traceback_uses_job_log(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	result, _, fake = _gate(tmp_path, monkeypatch, issue=issue, routes=_check_run_triage_routes(check_run))
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert any(call[-1] == f"repos/{REPO}/actions/jobs/{FAILED_JOB_ID}/logs" for call in fake.calls)
+
+
 # --- idempotency and marker trust -------------------------------------------
 
 
@@ -461,7 +521,8 @@ def test_clarify_route_wires_the_gate():
 	route = next(step for step in steps if step.get("name") == "Decide clarify route")
 	script = route["run"]
 	assert route["env"]["CHECK_TRIAGE_RESOLVED_GATE_ENABLED"] == "${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}"
-	call = 'python3 scripts/check_triage_resolution.py gate --issue-json "${ISSUE_META_FILE}"'
+	assert "check_triage_resolution.py|workflow_failure_heal.py)" in stage["run"]
+	call = 'PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/check_triage_resolution.py" gate --issue-json "${ISSUE_META_FILE}"'
 	assert call in script
 	assert script.index("scripts/security_dependency.py") < script.index(call)
 	assert script.index(call) < script.index("Only a verified orchestrator fast path")

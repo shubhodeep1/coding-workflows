@@ -272,7 +272,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             case "${f}" in
-              load_workflow_overlay.py|security_dependency.py)
+              load_workflow_overlay.py|security_dependency.py|check_triage_resolution.py|workflow_failure_heal.py)
                 install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}" ;;
             esac
             _fetched_scripts+=("${f}")
@@ -545,7 +545,7 @@ jobs:
           CHECK_TRIAGE_RESOLVED="false"
           if [ "${SKIP_CODEX}" != "true" ] && jq -e '[(.labels // [])[]?.name] | index("ai:check-triage") != null' "${ISSUE_META_FILE}" >/dev/null; then
             triage_rc=0
-            TRIAGE_VERDICT="$(python3 scripts/check_triage_resolution.py gate --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" --default-branch "${DEFAULT_BRANCH:-main}")" || triage_rc=$?
+            TRIAGE_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/check_triage_resolution.py" gate --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" --default-branch "${DEFAULT_BRANCH:-main}")" || triage_rc=$?
             triage_status="$(printf '%s' "${TRIAGE_VERDICT}" | jq -r '.status // ""' 2>/dev/null || true)"
             if [ "${triage_rc}" -eq 3 ]; then
               echo "::error::Verified check-triage issue #${ISSUE_NUMBER} as resolved but could not record or close it"
