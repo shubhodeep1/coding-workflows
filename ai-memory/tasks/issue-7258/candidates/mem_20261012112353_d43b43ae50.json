@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this fix-up reach `ai/issue-7072`, given that its body has no branch line?\nChoices:\nA) A person edits this issue body to add a line `Target branch: \\`ai/issue-7072\\`` and then posts `/reclarify`. Implement then branches from `ai/issue-7072` and opens its PR against that branch. (RECOMMENDED)\nB) Close this fix-up with no code change. Land the allowlist entry directly on PR #7076 (head `ai/issue-7072`), either by hand or through its review/autofix loop.\nC) Implement on `main` anyway. This contradicts \"do not add the exception on main\" and fails the audit test, because the workflow file is missing on `main`.\n**Note:** C is incompatible with every Q2 option, since none of them can pass CI on `main`.\nQ2: How should `ISSUE_7248_TARGET_BRANCH_UNSET_OPERATOR_STEP` apply to the new allowlist entry on `ai/issue-7072`?\nChoices:\nA) No env-var gate on the test entry. Add `pr6576-shard-followup.yml` with its rationale unconditionally on `ai/issue-7072`. The placeholder stays an unread, unset operator-step marker, and `main` is unchanged. This keeps the audit test and CI green. (RECOMMENDED)\nB) Add the entry only when the env var is set. CI on `ai/issue-7072` stays red (`Unclassified checkout@v5 workflows`) until someone sets it, which contradicts \"require the audit test and CI to pass\".\nC) Only record the placeholder in an `agents.d/` fragment, with no test change anywhere. The operator then makes the `ai/issue-7072` edit by hand.",
+  "fingerprint": "abf7caab10d7cd04824f503278e2b96e716ac9dbf90b3166ae1fe76aac24baa6",
+  "lineage": {
+    "issue_number": 7258,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38241857576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38241857576",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012112353_d43b43ae50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7258,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38241857576"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7258 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T11:23:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
