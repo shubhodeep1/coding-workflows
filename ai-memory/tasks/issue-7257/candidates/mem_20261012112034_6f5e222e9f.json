@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The fix-up asks to stop repeat clarify and plan attempts for #7251 only. Only option A covers all three ways #7251 can restart: the poller's standalone-stall sweep, a comment that triggers clarify, and an `/answer` that triggers plan. Each piece has a pattern to copy. The sweep in `scripts/orchestrate_poll_process.sh` (around lines 18708-18755) already holds an issue with `STALL_SKIP ... reason=security_dependency_held` and releases it with a `/reclarify` carrying a dedup marker. `clarify.yml` \"Decide clarify route\" (around line 514) already has an `AI_PHASE_GATE_V1 phase=clarify gate=security_dependency ... outcome=skip` early skip. `plan.yml` has no such gate yet, so option B would leave a gap, and option C would lose the automatic restart. All three checks hold only while PR #6667 is not merged into the default branch: one `GET pulls/6667` read, made only when the issue is #7251. They are off when `ISSUE_7251_DEPENDENCY_WAIT_ENABLED` is `false` or invalid; an invalid value also logs a warning. Each script sets the flag's default itself (\u00a78), so with the flag unset every existing path runs unchanged.\nQ2: Both plans define Phase 0 the same way: `grep -q '_AI_ENGINE_EXIT_REFUSED' scripts/ai_engine.sh` (both plans), plus `grep -q 'ai_engine_fallback_class' scripts/ai_engine.sh` (`docs/plans/claude-capacity-wait-plan.md` lines 179-182). Neither symbol is on `main` today; only the two plan docs mention them. So the poller can run Phase 0 deterministically against the default-branch tip once #6667 is merged, with no extra GitHub API call, and only then post one `/reclarify` with `<!-- ai:issue-7251-dependency-released:6667 -->`. Running the check before the restart is better than option B, because restarting #7251 when Phase 0 fails would just run clarify and plan into the same block. The planner still runs the Constraints-section preflight on its own, so the planner side of option C costs no new code.\nQ3: If #6667 is closed without merging, Phase 0 can never pass, and waiting forever (option B) would strand #7251 with no automatic recovery. Option A posts one comment, with a dedup marker such as `<!-- ai:issue-7251-dependency-closed:6667 -->`, and puts back `ai:blocked`. That hands #7251 to the unblock judge, which has its own round caps, so no person is needed. The clarify and plan holds also release once #6667 is closed, so whatever the judge decides next is not suppressed.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. All three decisions are lettered. Notes for the planner:\n- Q1:\n  - In the poller, run the #7251 check before the security-dependency block. Make sure #7251 is evaluated even when its only pipeline signal is `ai:blocked` or its clarification-questions marker.\n  - Log `STALL_SKIP issue=7251 reason=dependency_wait detail=open|merged|closed_unmerged|unverified action=none|reclarify|reblocked`.\n  - If the PR read fails, treat the result as `unverified`: keep holding and post nothing.\n  - The clarify and plan skips log `AI_PHASE_GATE_V1 phase=<clarify|plan> gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip issue=7251`. They do not apply failure labels.\n- Q2:\n  - Read `scripts/ai_engine.sh` from the fetched default-branch tip, for example with `git show origin/<default>:scripts/ai_engine.sh`. If the read fails, keep holding and retry on the next tick.\n  - If either Phase 0 check fails, post one comment marked `<!-- ai:issue-7251-preflight-failed:6667 -->` naming the missing symbol, send one Telegram WARNING, and post no `/reclarify`. The poller must not rebuild any of #6667's plumbing.\n  - Leave the capacity-wait off switch (`CLAUDE_POOL_CAPACITY_WAIT_ENABLED`) exactly as it is.\n- Q3:\n  - Only the closed-and-unmerged state re-applies `ai:blocked`.\n  - A second check on the same tick finds the dedup marker and does nothing.\n- Tests: add contract tests for each of the following:\n  - the flag parse: unset, empty or `true` (any case) means on; `false` means off; any other value means off with a warning;\n  - the three gates;\n  - the merged release, both when Phase 0 passes and when it fails;\n  - the closed-unmerged path;\n  - dedup across ticks.\n- Wiring: forward `ISSUE_7251_DEPENDENCY_WAIT_ENABLED` with a `true` fallback in `orchestrate_poll.yml`, `clarify.yml` and `plan.yml`.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "bfb8d7ab725bfea8544850a7ac3ca782b180df6d54d736a60f0c757c1d47deac",
+  "lineage": {
+    "issue_number": 7257,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38241027606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38241027606",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7257"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012112034_6f5e222e9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7257,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38241027606"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7257",
+  "timestamps": {
+    "created_at": "2026-10-12T11:20:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
