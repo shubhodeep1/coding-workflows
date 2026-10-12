@@ -2266,6 +2266,9 @@ jobs:
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # PR base ref from the gate's /pulls/{n} read (no extra call). The
+      # required-checks wait scopes its default CI check by base (#6963).
+      PR_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator
       # decision Q35: A), read from the same verified support commit the
       # gate resolved.
@@ -2275,6 +2278,7 @@ jobs:
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+      AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
     steps:
       - name: Checkout merge-base freshness helper
@@ -2478,7 +2482,7 @@ jobs:
               if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
                 auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
-              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
                 auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
               elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
@@ -2505,7 +2509,7 @@ jobs:
             if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
               auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
-            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
               auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
             elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
@@ -4866,55 +4870,13 @@ jobs:
       - name: Decide partial-finalize validation/push safety
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
-          set -euo pipefail
-
-          validation_tail_can_complete="true"
-          edits_withheld_for_safety="false"
-          withheld_reason="none"
-
-          if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then
-            workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"
-            if [ ! -f "${workflow_timeout_source_path}" ]; then
-              workflow_timeout_source_path=".github/workflows/review_autofix.yml"
-            fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
-              job_timeout_minutes="240"
-              resolver_timeout_minutes="170"
-            fi
-            # Requiring a full resolver window plus 10 minutes of
-            # smoke/detect/push slack keeps the partial-publish path inside the
-            # workflow's existing validation envelope instead of publishing
-            # edits that the current run cannot fully re-validate before the
-            # hard timeout.
-            job_timeout_total_secs=$(( job_timeout_minutes * 60 ))
-            partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))
-            now_epoch="$(date +%s)"
-            budget_start_epoch="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
-            hard_timeout_remaining_secs=0
-
-            if [[ "${budget_start_epoch}" =~ ^[0-9]+$ ]] && [ "${budget_start_epoch}" -gt 0 ] && [ "${now_epoch}" -ge "${budget_start_epoch}" ]; then
-              job_deadline_epoch=$(( budget_start_epoch + job_timeout_total_secs ))
-              hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))
-              if [ "${hard_timeout_remaining_secs}" -lt 0 ]; then
-                hard_timeout_remaining_secs=0
-              fi
-            fi
-
-            if [ "${hard_timeout_remaining_secs}" -lt "${partial_finalize_validation_minimum_secs}" ]; then
-              validation_tail_can_complete="false"
-              edits_withheld_for_safety="true"
-              withheld_reason="insufficient_budget_for_validation_tail"
-              echo "Partial finalize publish-safety gate: findings-only fallback (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
-            else
-              echo "Partial finalize publish-safety gate: validated tail remains available (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize_safety.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize_safety.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_partial_finalize_safety.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Decide partial-finalize validation/push safety'."
+            exit 1
           fi
-
-          {
-            echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"
-            echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"
-            echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
-          } >> "$GITHUB_ENV"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -5669,6 +5631,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
@@ -5846,6 +5809,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}

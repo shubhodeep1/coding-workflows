@@ -6,8 +6,8 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
@@ -31,7 +31,8 @@ OPENCODE_REVIEWER_EVENTS_FIXTURE = (
 
 
 def _read(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
+	# Moved review_autofix.yml step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text() if path == WORKFLOW else path.read_text(encoding="utf-8")
 
 
 def _stage_helper_text() -> str:
