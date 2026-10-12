@@ -15429,7 +15429,10 @@ _plan_auto_approval_gate()
   if [ ! -f "${guard_py}" ]; then
     gate_reason="plan_gate_helper_unavailable"
   else
-    gate_login="$(unblock_trusted_login)"
+    # Call in the main shell so the tick-wide login cache and the one-shot
+    # identity alert state persist (a command substitution would drop them).
+    unblock_trusted_login >/dev/null 2>&1 || true
+    gate_login="${UNBLOCK_TRUSTED_LOGIN:-}"
     if [ -z "${gate_login}" ]; then
       gate_reason="identity_unavailable"
     else
@@ -15484,7 +15487,66 @@ _plan_auto_approval_gate()
   gate_paths="$(printf '%s' "${gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
+  _plan_auto_approval_hold_notify "${issue_num}" "${comments_json}" "${gate_reason:-plan_gate_error}" "${gate_paths:-none}" "${gate_login}" || true
   return 1
+}
+
+# Issue #6769: a poller hold reaches a human once. Posts one
+# ai:automation-path-plan-hold:v1 comment (source=poller) and one WARNING,
+# unless a trusted hold marker for this issue and reason is already in the
+# caller's comment snapshot. Failures only warn; the hold stands either way.
+# Args: <issue_num> <comments_json> <reason (sanitized)> <paths (sanitized, comma-joined)> <login>
+_plan_auto_approval_hold_notify()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local reason="$3"
+  local paths_csv="$4"
+  local login="$5"
+  local paths_json="[]" paths_b64="" duplicate="false" hold_body=""
+
+  if [ -n "${paths_csv}" ] && [ "${paths_csv}" != "none" ]; then
+    paths_json="$(printf '%s' "${paths_csv}" | jq -R -c 'split(",") | map(select(length > 0))' 2>/dev/null)" || paths_json="[]"
+  fi
+  [ -n "${paths_json}" ] || paths_json="[]"
+  paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
+  duplicate="$(printf '%s' "${comments_json:-[]}" | jq -r --arg issue "${issue_num}" --arg reason "${reason}" --arg login "${login}" '
+    [ .[]?
+      | select(type == "object")
+      | select(((.user.login // "") == $login and $login != "")
+          or ((.user.login // "") | test("\\[bot\\]$"))
+          or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      | (.body // "")
+      | select(contains("<!-- ai:automation-path-plan-hold:v1 issue=" + $issue + " reason=" + $reason + " "))
+    ] | length > 0' 2>/dev/null)" || duplicate="false"
+  if [ "${duplicate}" = "true" ]; then
+    return 0
+  fi
+  if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${issue_num}" --arg reason "${reason}" --arg b64 "${paths_b64}" '
+      [
+        (if $reason == "automation_path_plan_auto_approval_disabled"
+          then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
+          elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable"))
+          then "**Automatic approval withheld: the automation-path grant check could not run.**"
+          else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
+        "",
+        "Reason: `\($reason)`",
+        "",
+        (if ($paths | length) > 0 then ($paths | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
+        "",
+        "Stall recovery did not post `/approved`. To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way.",
+        "",
+        "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=poller paths=\($b64) -->"
+      ] | join("\n")' 2>/dev/null)"; then
+    echo "::warning::Could not render the automation-path hold comment for issue #${issue_num}."
+    return 0
+  fi
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    echo "::warning::Could not post the automation-path hold comment for issue #${issue_num}."
+    return 0
+  fi
+  tg_notify_issue "${issue_num}" "Stall recovery: plan auto-approval held (${reason}); a maintainer must reply /approved." "WARNING" || true
+  return 0
 }
 
 execute_stall_recovery_action() {

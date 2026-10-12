@@ -522,13 +522,11 @@ PLAN_DECISION_HOLD = "hold"
 PLAN_LOG_PATHS_MAX_ENTRIES = 20
 PLAN_LOG_PATH_MAX_CHARS = 200
 _PLAN_FILES_LEADIN_RE = re.compile(
-	r"^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchange\b", re.IGNORECASE)
-_PLAN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
-_PLAN_NEG_LEADIN_RE = re.compile(r"^\s*(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
-_PLAN_NEG_WORD_RE = re.compile(r"(?:chang|modif|edit|touch|affect|updat)", re.IGNORECASE)
-_PLAN_NEG_RESET_RE = re.compile(r"^\s*(?:\*\*|__)?\s*Files\b[^\n]*\bchang(?:e|ed|es|ing)\b", re.IGNORECASE)
-_PLAN_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s)")
-_PLAN_CONTINUATION_RE = re.compile(r"^\s{2,}\S")
+	r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchange\b", re.IGNORECASE)
+_PLAN_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+\S")
+# A lead-in that is not itself a heading has no known level; only a top-level
+# (`#` or `##`) heading ends its section, so nested headings never truncate it.
+_PLAN_PLAIN_LEADIN_LEVEL = 2
 # A protected path token: optional "./" or "/" prefix, an automation prefix in
 # any letter case, a slash, then everything up to whitespace, a backtick, a
 # quote or `<>|` (globs kept so they hold). The token is never cut at an
@@ -543,38 +541,30 @@ _PLAN_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]")
 
 
 def _plan_files_section(plan_text: str) -> str | None:
-	"""Port of plan.yml's Files-section filter; None when no section exists.
+	"""Text of a plan's "Files ... change" section; None when no section exists.
 
-	A heading or numbered lead-in naming "Files ... change" opens the section,
-	the next markdown heading ends it, and a non-bulleted negated lead-in
-	("No changes to:") suppresses the list that follows it. A bullet-prefixed
-	negative is scanned normally so it cannot hide positive sibling bullets.
+	A heading or numbered lead-in naming "Files ... change" opens the section.
+	Only a heading at the lead-in's level or shallower ends it (a plain lead-in
+	ends at a `#`/`##` heading), so a nested sub-heading cannot cut the list
+	short. Negated wording ("No changes to:") does not suppress any line: every
+	protected path in the section counts, so the gate fails closed (#6769).
 	"""
 	found = False
 	inside = False
-	negated = False
+	level = 0
 	kept: list[str] = []
 	for line in plan_text.splitlines():
 		if _PLAN_FILES_LEADIN_RE.match(line):
 			found = True
 			inside = True
-			negated = False
+			heading = _PLAN_HEADING_RE.match(line)
+			level = len(heading.group(1)) if heading else _PLAN_PLAIN_LEADIN_LEVEL
 			continue
-		if inside and _PLAN_HEADING_RE.match(line):
+		heading = _PLAN_HEADING_RE.match(line)
+		if inside and heading and len(heading.group(1)) <= level:
 			inside = False
-			negated = False
-		if not inside:
-			continue
-		if _PLAN_NEG_LEADIN_RE.match(line) and _PLAN_NEG_WORD_RE.search(line):
-			negated = True
-			continue
-		if negated and _PLAN_NEG_RESET_RE.match(line):
-			negated = False
-		if negated:
-			if not line.strip() or _PLAN_LIST_ITEM_RE.match(line) or _PLAN_CONTINUATION_RE.match(line):
-				continue
-			negated = False
-		kept.append(line)
+		if inside:
+			kept.append(line)
 	return "\n".join(kept) if found else None
 
 

@@ -855,9 +855,6 @@ def _run_poller(
 	# A coding-workflows origin skips the consumer artifact cleanup.
 	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
-	# Copy files_touched_scope_guard.py into the sandbox's verified support
-	# checkout (.codex-workflow-src/scripts/), where the poller resolves it.
-	support_guard_copy: bool = False,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -942,10 +939,6 @@ def _run_poller(
 			_make_poller_sandbox(sandbox, sandbox_origin_url)
 		else:
 			_make_poller_sandbox(sandbox)
-		if support_guard_copy:
-			support_scripts = sandbox / ".codex-workflow-src" / "scripts"
-			support_scripts.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(REPO_ROOT / "scripts" / "files_touched_scope_guard.py", support_scripts / "files_touched_scope_guard.py")
 		if mock_local_integration_content_conflict:
 			# The GitHub-side 409 alone does not make the local git merge conflict.
 			# Both branches must add different content at an admitted source path.
@@ -24436,6 +24429,11 @@ def test_managed_auto_approve_holds_protected_plan_with_flag_off() -> None:
 		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in log
 	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
 	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	# The poller hold reaches a human: one hold comment naming the paths.
+	holds = [c.get("body", "") for c in result["issues"]["10"]["comments"]
+		if "<!-- ai:automation-path-plan-hold:v1 issue=10 reason=automation_path_plan_auto_approval_disabled source=poller " in c.get("body", "")]
+	assert len(holds) == 1, log
+	assert "- `scripts/security_audit.sh`" in holds[0]
 
 
 def test_managed_auto_approve_posts_for_ordinary_plan() -> None:

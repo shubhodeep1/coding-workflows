@@ -733,8 +733,11 @@ Mention `scripts/outside_section.sh` in prose.
 
 
 def test_plan_extractor_reads_files_section() -> None:
+	# Negated wording never hides a listed path (fail closed); the next
+	# same-level heading ends the section.
 	assert guard.extract_plan_automation_paths(_PROTECTED_PLAN) == [
-		"scripts/security_audit.sh", ".GitHub/workflows/plan.yml", "prompts/", "scripts/**/*.py"]
+		"scripts/security_audit.sh", ".GitHub/workflows/plan.yml", "prompts/", "scripts/**/*.py",
+		"scripts/hidden_negated.sh"]
 
 
 def test_plan_extractor_heading_lead_in_and_bullet_negatives() -> None:
@@ -742,6 +745,28 @@ def test_plan_extractor_heading_lead_in_and_bullet_negatives() -> None:
 		"## Other\n- `scripts/c.sh`\n")
 	# A bullet-prefixed negative is scanned normally (it cannot hide siblings).
 	assert guard.extract_plan_automation_paths(plan) == ["scripts/a.sh", "scripts/b.sh"]
+
+
+def test_plan_extractor_nested_heading_does_not_end_section() -> None:
+	# Regression: a nested heading ended the section, the extraction came back
+	# empty, and the plan was auto-approved.
+	plan = ("### 1. Files likely to change\n#### Existing files\n- `scripts/security_audit.sh`\n"
+		"### 2. Functions\n- `scripts/outside.sh`\n")
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/security_audit.sh"]
+	plain = "1. Files likely to change\n#### Scripts\n- `scripts/a.sh`\n## Decisions\n- `scripts/b.sh`\n"
+	assert guard.extract_plan_automation_paths(plain) == ["scripts/a.sh"]
+	bold = "**1. Files likely to change**\n- `scripts/a.sh`\n## Decisions\n- `scripts/b.sh`\n"
+	assert guard.extract_plan_automation_paths(bold) == ["scripts/a.sh"]
+
+
+def test_plan_extractor_negated_lead_in_cannot_hide_paths() -> None:
+	# Regression: a positive lead-in containing negation words suppressed the
+	# protected bullets below it.
+	plan = ("### 1. Files likely to change\nNot a new module; these existing files are modified:\n"
+		"- `scripts/security_audit.sh`\n")
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/security_audit.sh"]
+	assert guard.evaluate_plan_auto_approval(guard.extract_plan_automation_paths(plan), None,
+		flag_enabled=False, allow_workflow_edits="true", issue_number="42")[0] == "hold"
 
 
 def test_plan_extractor_falls_back_to_whole_text() -> None:

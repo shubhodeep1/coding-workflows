@@ -9,12 +9,13 @@ exact trusted `files_touched` grant; the open pipeline-author grant does not
 count. `files_touched_scope_guard.py --plan-auto-approval-gate` decides (exit 0
 approves, 30 holds, every error holds). Plan paths are taken whole up to
 whitespace, a backtick or a quote, so an unusual filename is never cut to a
-grantable prefix. The poller reads only the newest
+grantable prefix. Only a heading at the Files lead-in's level or shallower
+ends the section, and negated wording hides no path (fail closed). The poller reads only the newest
 `<!-- ai:plan-proposal:v1 -->` comment by the `GH_PAT` login (none found holds
 with `plan_comment_unavailable`), and the batched issue GraphQL now carries
 `author_login` / `author_association`. A `plan.yml` hold posts one deduplicated
-`<!-- ai:automation-path-plan-hold:v1 ... -->` comment and a WARNING; the
-poller only logs `AI_PHASE_GATE_V1 phase=stall_recovery ... outcome=defer` and
-`STALL_SKIP ... reason=automation_path_plan_hold` without counting a recovery
-attempt. The implement-time guard and the staged-support latch release are
+`<!-- ai:automation-path-plan-hold:v1 ... -->` comment and a WARNING; a
+poller hold logs `AI_PHASE_GATE_V1 phase=stall_recovery ... outcome=defer` and
+`STALL_SKIP ... reason=automation_path_plan_hold`, posts the same comment with
+`source=poller` once per reason, and does not count a recovery attempt. The implement-time guard and the staged-support latch release are
 unchanged.
