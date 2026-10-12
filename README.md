@@ -3538,8 +3538,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
   An `operator_step` fix-up gates only the new code path behind its
-  placeholder flag; existing paths (releases, tagging, dispatches, merges)
-  keep running while the flag is unset.
+  placeholder; existing paths (releases, tagging, dispatches, merges)
+  keep running while it is unset. A placeholder ending in `_ENABLED` is an
+  off switch on code that ships on by default (`false` turns it off), and
+  nobody is paged. Only a placeholder ending in `_UNSET_OPERATOR_STEP`, a
+  value a person must supply, keeps the new code skipping until it is set.
 - **Before a verdict.** Two deterministic exits run before the judge is asked.
   (1) A scope-blocked issue whose newest trusted rejection comes from the
   automation-path grant guard is re-checked with today's
@@ -3585,8 +3588,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   Telegram. A fork PR targeting a project is never bound to project state;
   its non-issue-creating, non-close verdicts are skipped. If the explanation write fails,
   closure still proceeds and a failed close sends a failure WARNING.
-  `operator_step` also writes the `ai:operator-step` issue and sends a
-  Telegram WARNING. New operator steps are appended as keyed comments, never
+  An `operator_step` with an `_UNSET_OPERATOR_STEP` placeholder also writes
+  the `ai:operator-step` issue and sends a Telegram WARNING; one with an
+  `_ENABLED` flag does neither. New operator steps are appended as keyed comments, never
   written back into the shared issue body. The newest trusted comment for a
   key is authoritative; older comments and legacy body entries remain as
   history. A missing or stale tracker listing fails closed after bounded

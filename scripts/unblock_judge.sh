@@ -919,7 +919,9 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		+ (if (.override // "") == "bulk_delete" then "Approved deletions: " + (.paths | tojson) + "\n\n" else "" end)
 		+ (if (.override // "") == "bulk_delete" then "Rejected run: " + (.rejected_run | tostring) + "\n\n" else "" end)
 		+ (if (.rejection_run // "") != "" then "Bound to guard rejection from run " + .rejection_run + ".\n\n" else "" end)
-		+ (if (.placeholder // "") != "" then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n" else "" end)
+		+ (if (.placeholder // "") == "" then ""
+			elif (.placeholder | endswith("_UNSET_OPERATOR_STEP")) then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n"
+			else "Ships on by default; `" + .placeholder + "=false` turns it off.\n\n" end)
 		+ $marker
 	' "${RUNTIME_DIR}/verdict.json")"
 	# The ledger record goes first, so a failed operation below can never
