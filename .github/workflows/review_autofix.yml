@@ -1060,6 +1060,7 @@ jobs:
           sparse-checkout: |
             scripts/pr_checks_lib.sh
             scripts/gh_helpers.sh
+            scripts/review_freshness_ci_failed.sh
           sparse-checkout-cone-mode: false
 
       - name: Record GH_PAT budget at deterministic-skip-merge start
@@ -1080,6 +1081,11 @@ jobs:
         env:
           FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
           REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
+          # Q103: a freshness-update head whose CI failed goes back to review
+          # (scripts/review_freshness_ci_failed.sh). `false` turns it off.
+          FRESHNESS_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FRESHNESS_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+          REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits }}
         run: |
           set -euo pipefail
 
@@ -1141,6 +1147,7 @@ jobs:
             echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
             return 1
           }
+          freshness_helper_verified=false
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
             && [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
@@ -1148,6 +1155,7 @@ jobs:
             _safe_gh_jq() { gh api "$@"; }
             # shellcheck disable=SC1091
             source .codex-freshness-src/scripts/pr_checks_lib.sh
+            freshness_helper_verified=true
           else
             echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
           fi
@@ -1288,6 +1296,17 @@ jobs:
             else
               auto_merge_summary="FAILED to enable (see warnings above)"
               echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
+            fi
+          fi
+
+          # A freshness-update head skipped the reviewers (#7084). When its CI
+          # failed, nothing else re-runs review/autofix on it (PR #7153), so
+          # mark the head and send the PR back to a normal review (Q103).
+          if [ "${DET_SKIP_REASON:-}" = "freshness_sync" ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ]; then
+            if [ "${freshness_helper_verified}" = "true" ] && [ -f .codex-freshness-src/scripts/review_freshness_ci_failed.sh ]; then
+              bash .codex-freshness-src/scripts/review_freshness_ci_failed.sh || true
+            else
+              echo "::warning::review_freshness_ci_failed.sh unavailable or unverified; PR #${PR_NUMBER} keeps its failed CI until the next push."
             fi
           fi
 
