@@ -2951,6 +2951,9 @@ def test_followup_handoff_ops_are_retryable_and_validated(tmp_path: Path) -> Non
 	assert "Fix-up #50 merged" in ops[1]["body"] and not COMMAND_LINE.search(ops[1]["body"])
 	assert ops[2]["level"] == "WARNING" and ops[2]["handoff_retry"] is True
 	assert "dormant_until" not in ops[0]["steps"][0]
+	# A key of its own, so the original operator_step entry is not superseded.
+	assert ops[0]["key"] == "unblock-handoff-7"
+	assert actions.plan(_verdict("descope", instructions="x"), _ctx(protected_rejection=PROTECTED))[0]["key"] == "unblock-7"
 	with pytest.raises(actions.UsageError):
 		actions.followup_handoff_ops(_ctx(stop="scope-blocked"), 50, "descope")
 	with pytest.raises(actions.UsageError):
@@ -3033,3 +3036,15 @@ def test_judge_failed_followup_handoff_keeps_the_wait_open(tmp_path: Path) -> No
 	assert not any("fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
 	sent = alerts.read_text(encoding="utf-8").splitlines()
 	assert len(sent) == 1 and sent[0].startswith("WARNING|") and "next judge run retries it" in sent[0]
+
+
+def test_judge_merged_fixup_regrants_when_the_guard_now_grants(tmp_path: Path) -> None:
+	comments = [PLAN_COMMENT, _rejection_comment()] + _followup_comments()[1:]
+	result, state = _judge(tmp_path, _scope_blocked_issue(), comments, issues=MERGED_FIXUP,
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true", ALLOW_WORKFLOW_EDITS="true")
+	assert "op=regrant run=555 paths=2 outcome=regranted" in result.stdout, result.stdout
+	assert "fixup=50 outcome=followup_regrant run=555" in result.stdout, result.stdout
+	assert not any("reason=operator_handoff" in comment["body"] for comment in state["comments"])
+	assert state["comments"][-1]["body"] == "/approved"
+	waits = [fields["body"] for endpoint, fields in state["patched"] if endpoint == "repos/o/r/issues/comments/4"]
+	assert waits and waits[-1].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")

@@ -606,7 +606,12 @@ def followup_handoff_ops(ctx: dict, fixup: int, verdict_name: str) -> list[dict]
 		),
 		"instructions": "Grant the listed paths in the issue's files_touched block or make the change by hand, then clear ai:scope-blocked.",
 	}
-	return _protected_handoff_ops(ctx, synthetic, retryable=True)
+	ops = _protected_handoff_ops(ctx, synthetic, retryable=True)
+	# Its own key: the newest comment for a key supersedes earlier ones, so
+	# reusing `unblock-<item>` would replace the original operator_step entry
+	# (its instructions and dormant_until placeholder) with this generic one.
+	ops[0]["key"] = f"unblock-handoff-{ctx['item']}"
+	return ops
 
 
 def plan(verdict: dict, ctx: dict) -> list[dict]:

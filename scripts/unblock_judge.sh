@@ -880,6 +880,15 @@ unblock_main()
 					local followup_run followup_verdict
 					followup_run="$(jq -r '.run' "${RUNTIME_DIR}/protected_rejection.json")"
 					followup_verdict="$(jq -r '.prior_handoff_verdict // ""' "${RUNTIME_DIR}/protected_rejection.json")"
+					# A grant the current guard already accepts resumes the item
+					# (as the deterministic exit below would) instead of a handoff.
+					if unblock_try_regrant; then
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge re-checked the automation-path grant instead of posting a resume command.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=followup_regrant run=${followup_run}"
+						return 0
+					fi
 					if jq -e '.handoff_pending == true' "${RUNTIME_DIR}/protected_rejection.json" >/dev/null 2>&1; then
 						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; this item is waiting for an operator (protected-path handoff), so no resume command was posted.
 
