@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:894-899 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `git add` command expands `${AGENTS_FILE}` without a default, unlike sibling uses of `${AGENTS_FILE:-}`, creating a defensive-coding inconsistency under `set -u`.\n  WHY: Reviewers describe this as low-risk and not currently triggered because the assembled flag and file path are set together; the disagreement is only about whether the inconsistency warrants flagging.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml:894 | severity=low | confidence=3\n  PROBLEM: Defensive-coding inconsistency. The `git add` command uses `\"${AGENTS_FILE}\"` without the `:-` default, whereas surrounding control flow and other uses of variables in this script employ the `${VAR:-}` pattern.\n  WHY: With `set -u` enabled, if `AGENTS_FILE` were ever unset or empty, `\"${AGENTS_FILE}\"` would resolve correctly as an empty string (as it is quoted), but if it were truly unset (not just empty), `set -u` might cause an abort depending on shell behavior for quoted unset variables, though `\"${VAR:-}\"` is the standard safe pattern here. Given the context (the `if` block above it checks if assembled is \"true\"), it is likely defined, making this a low-risk inconsistency.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/update_workflows.yml:899, 965 | severity=low | confidence=3\n  PROBLEM: The two sibling blocks inside the same `if [ \"${AGENTS_ASSEMBLED:-}\" = \"true\" ]; then` guard use different defensive patterns for the same shell variable. Line 899 uses `${AGENTS_FILE}` (which under `set -u` aborts on an unset value) while line 965 uses `${AGENTS_FILE:-}` (substitutes empty string).\n  WHY: Today it does not \u2014 the `assemble_agents.py` `_write_outputs` call (`scripts/assemble_agents.py:432-437`) sets `agents_assembled`, `agents_file`, and `agents_fragment_count` together, so when `AGENTS_ASSEMBLED` is `\"true\"`, `AGENTS_FILE` is also set. However, the asymmetry is defensible to flag because: (1) `set -euo pipefail` is active on line 845, so any future bug in `assemble_agents.py` that emits `agents_assembled=true` without `agents_file` would crash on line 899 before reaching line 965 (which would silently produce \"agents.d fragments assembled into  (0 fragment(s)).\"); (2) the new `test_consumer_sync_folds_agents_fragments_and_reports_them` assertion locks in the `${AGENTS_FILE}` form, propagating the inconsistency into the test contract. Aligning line 899 to `\"${AGENTS_FILE:-}\"` would close the divergence with a one-token edit. Note: this is purely a defensive-coding alignment, not a triggered bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2e9353d9c4bfb8f2c596f815b84b42482ed57d106976b7ce278087855cb07d71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7255,
+    "run_id": "38237442977",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38237442977",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012105411_44809451d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7255,
+    "run_id": "38237442977"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T10:54:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
