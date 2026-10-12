@@ -566,3 +566,88 @@ def test_claude_options_are_refused_for_codex_and_prepare(sandbox, claude_engine
 	write_fake_codex(sandbox)
 	proc = run_helper(sandbox, "run", "--mode", "read-only", "--claude-home", str(sandbox["runner_temp"] / "h"), *CODEX_ARGS)
 	assert proc.returncode == 1 and "--claude-home needs --engine claude" in proc.stderr
+
+
+# --- bounded image-build retries (issue #7196) ---------------------------------------
+
+def builds_of(sandbox):
+	return [entry for entry in read_docker_log(sandbox["docker_log"]) if entry["argv"][:1] == ["build"]]
+
+
+RETRY_ENV = {"CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS": "3", "CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS": "0"}
+
+
+def test_image_build_retry_recovers_a_run(sandbox):
+	write_fake_codex(sandbox)
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL_TIMES": "2"})
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra=RETRY_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert len(builds_of(sandbox)) == 3
+	assert proc.stderr.count("CODEX_ISOLATION image_build attempt=") == 3
+	assert "attempt=1/3 outcome=retry" in proc.stderr and "attempt=2/3 outcome=retry" in proc.stderr
+	assert "attempt=3/3 outcome=ok" in proc.stderr
+	assert proc.stdout.strip() == "FAKE_CODEX_OUTPUT"
+
+
+def test_image_build_retry_recovers_prepare_deps(sandbox):
+	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL_TIMES": "2"})
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps", env_extra=RETRY_ENV)
+	assert prep.returncode == 0, prep.stderr
+	assert len(builds_of(sandbox)) == 3
+	assert "attempt=3/3 outcome=ok" in prep.stderr
+	assert docker_runs(sandbox["docker_log"]), "the dependency container runs after the retried build"
+	assert run_helper(sandbox, "cleanup", "--root", prep.stdout.strip()).returncode == 0
+
+
+def test_image_build_retry_exhausted_fails_closed_and_removes_the_root(sandbox):
+	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps", env_extra=RETRY_ENV)
+	assert prep.returncode == 1
+	assert len(builds_of(sandbox)) == 3
+	assert "sandbox image build failed" in prep.stderr
+	assert "attempt=3/3 outcome=fail" in prep.stderr
+	assert prep.stdout.strip() == ""
+	assert not list(sandbox["runner_temp"].glob("codex-isolated-*"))
+	assert not docker_runs(sandbox["docker_log"])
+
+
+def test_image_build_is_attempted_once_by_default(sandbox):
+	write_fake_codex(sandbox)
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS)
+	assert proc.returncode == 1
+	assert len(builds_of(sandbox)) == 1
+	assert "image_build attempt=" not in proc.stderr
+	assert codex_records(sandbox) == []
+
+
+@pytest.mark.parametrize("value, expected_builds, warned", [("abc", 1, True), ("0", 1, True), ("9", 5, False)])
+def test_image_build_attempts_are_validated_and_capped(sandbox, value, expected_builds, warned):
+	write_fake_codex(sandbox)
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	env = {"CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS": value, "CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS": "0"}
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra=env)
+	assert proc.returncode == 1
+	assert len(builds_of(sandbox)) == expected_builds
+	assert ("image_build invalid_attempts" in proc.stderr) is warned
+
+
+def test_non_build_isolation_failures_are_not_retried(sandbox):
+	write_fake_codex(sandbox)
+	unsafe = sandbox["repo"] / "comma,path"
+	unsafe.mkdir()
+	proc = run_helper(sandbox, "run", "--mode", "read-only", "--workdir", str(unsafe), *CODEX_ARGS, env_extra=RETRY_ENV)
+	assert proc.returncode == 1 and "workdir path rejected" in proc.stderr
+	assert builds_of(sandbox) == []
+	assert "image_build attempt=" not in proc.stderr
+
+
+def test_claude_engine_build_failure_stays_single_attempt(sandbox, claude_engine):
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	proc = run_helper(sandbox, *claude_engine["args"], *CLAUDE_ARGS)
+	assert proc.returncode == 75, proc.stderr
+	assert "CODEX_ISOLATION unavailable engine=claude reason=image_build_failed" in proc.stderr
+	assert len(builds_of(sandbox)) == 1
+	assert claude_records(claude_engine) == []

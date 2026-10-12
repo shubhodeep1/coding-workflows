@@ -14,11 +14,11 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 SCRIPT = ROOT / "scripts" / "retarget_merged_base.sh"
 IMPLEMENT = ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW = ROOT / ".github" / "workflows" / "review_autofix.yml"
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40

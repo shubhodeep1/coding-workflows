@@ -87,7 +87,25 @@ chmod 0444 "${scope_file}"
 # The support checkout is separate from the editor's writable source copy.
 support="${GITHUB_WORKSPACE:?}/.codex-workflow-src"
 [ -d "${support}/scripts" ] || refuse unavailable support_missing
-support_head="$(git -C "${support}" rev-parse HEAD 2>/dev/null)" || refuse unavailable support_head_unreadable
+# Read the support checkout itself (#7193). implement.yml's "Activate
+# workspace shell context" step exports GIT_DIR / GIT_WORK_TREE for the
+# primary workspace, and an exported GIT_DIR overrides `git -C` discovery, so
+# every read below would otherwise see the workspace branch, not
+# .codex-workflow-src. Same variable set tests/conftest.py strips.
+support_git()
+{
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
+		-u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+		-u GIT_CEILING_DIRECTORIES git -C "${support}" "$@"
+}
+# A support directory without its own .git would let discovery walk up to the
+# workspace repository; require the support checkout to be its own top level.
+support_top="$(support_git rev-parse --show-toplevel 2>/dev/null)" || refuse unavailable support_not_repository
+support_real="$(cd "${support}" && pwd -P)" || refuse unavailable support_not_repository
+if [ -z "${support_top}" ] || [ "${support_top}" != "${support_real}" ]; then
+	refuse unavailable support_not_repository
+fi
+support_head="$(support_git rev-parse HEAD 2>/dev/null)" || refuse unavailable support_head_unreadable
 expected_ref="${SCRIPT_REF:-main}"
 # Only a charset-checked ref is ever logged; anything else shows as `invalid`.
 if [[ "${expected_ref}" =~ ^[A-Za-z0-9._/-]{1,100}$ ]]; then
@@ -104,7 +122,7 @@ fi
 # when implement.yml's "Checkout workflow support source fallback" step ran.
 # Report that fallback; it is still refused unless the SHAs really match.
 support_fallback=false
-if [ "${expected_ref}" != main ] && git -C "${support}" rev-parse --verify -q "refs/heads/main^{commit}" >/dev/null 2>&1; then
+if [ "${expected_ref}" != main ] && support_git rev-parse --verify -q "refs/heads/main^{commit}" >/dev/null 2>&1; then
 	support_fallback=true
 fi
 set_support_context()
@@ -131,7 +149,7 @@ case "${expected_ref}" in
 	# actions/checkout fetches both; a bare `stable` resolves to the tag
 	# (refs/tags precedes refs/heads), which lags the checked-out branch tip.
 	# Resolve the local branch actions/checkout created, unambiguously.
-	main|stable) expected_head="$(git -C "${support}" rev-parse --verify -q "refs/heads/${expected_ref}^{commit}" 2>/dev/null)" || refuse_support_ref support_ref_unresolved ;;
+	main|stable) expected_head="$(support_git rev-parse --verify -q "refs/heads/${expected_ref}^{commit}" 2>/dev/null)" || refuse_support_ref support_ref_unresolved ;;
 	*)
 		if [[ ! "${expected_ref}" =~ ^[0-9a-f]{40}$ ]]; then
 			echo "::error::Heal support ref check failed detail=support_ref_invalid ${refuse_context}" >&2

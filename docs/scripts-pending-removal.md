@@ -103,6 +103,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
+### `scripts/propagate_consumer_secrets.sh` + `.github/workflows/propagate-consumer-secrets.yml`
+
+- **Introduced in:** #6709 (2026-10-08); weekly only-missing schedule added in #6712 (2026-10-08)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view propagate-consumer-secrets.yml -R shubhodeep1/coding-workflows` shows the push trigger on `.github/ai/consumer_repos.json` and the weekly schedule.
+  - For each entry in `.github/ai/consumer_repos.json`, `gh secret list -R <consumer> --json name` lists `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY` and `TG_BOT_SECRET`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_propagate_consumer_secrets.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_retro.py`
 
 - **Introduced in:** #3532 (2026-06-26)
@@ -237,4 +248,15 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
+
+### `.github/workflows/pr6576-shard-followup.yml` + `scripts/pr6576_shard_followup.py` + `tests/test_pr6576_shard_followup.py`
+
+- **Introduced in:** issue #7072 (2026-10-10); PR number assigned when the implementation PR opens.
+- **Type:** single-use
+- **Removal trigger:** the marker comment `<!-- ai:pr6576-shard-followup:v1 -->` is posted on #7072 by the GH_PAT account, and any defect issue it filed is closed.
+- **Removal preflight checks:**
+  - `gh api --paginate repos/shubhodeep1/coding-workflows/issues/7072/comments --jq '.[] | select(.body | contains("ai:pr6576-shard-followup:v1")) | .user.login'` prints the pipeline (GH_PAT) login.
+  - `gh issue list -R shubhodeep1/coding-workflows --state open --search "ai:pr6576-shard-followup-defect in:body"` returns no issues.
+  - `gh api 'repos/shubhodeep1/coding-workflows/actions/workflows/pr6576-shard-followup.yml/runs?status=in_progress&per_page=1' --jq .total_count` returns `0`.
 - **Owner:** @shubhodeep1
