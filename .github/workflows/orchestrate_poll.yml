@@ -1112,9 +1112,13 @@ jobs:
       # a chain from polling faster than the cron's nominal */5 cadence.
       - name: Queue a follow-up poll after progress
         if: success() && steps.find_tracking.outputs.has_work == 'true'
+        # Best effort: the tick's work is already persisted, and cron remains the fallback.
+        continue-on-error: true
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Honour the memory kill switch inside the force-tick helper's cooldown ledger.
+          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
           POLL_FOLLOW_UP_ON_PROGRESS_ENABLED: ${{ vars.POLL_FOLLOW_UP_ON_PROGRESS_ENABLED || 'true' }}
           POLL_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           FORCE_TICK_COOLDOWN_SECONDS: '300'

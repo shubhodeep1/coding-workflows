@@ -21174,14 +21174,16 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
-  # Progress baseline for the follow-up poll (record_poll_progress_if_advanced).
-  POLL_PROGRESS_BASELINE_FP="$(poll_progress_fingerprint "${STATE_FILE}")"
-  POLL_PROGRESS_BASELINE_TRACKING_NUM="${TRACKING_NUM}"
   SECURITY_PASS_STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
   ensure_security_pass_state_fields || {
     echo "::warning::Unable to normalize security-pass state for tracking issue #${TRACKING_NUM}; skipping this cycle."
     continue
   }
+  # Progress baseline for the follow-up poll (record_poll_progress_if_advanced).
+  # Taken after ensure_security_pass_state_fields so that filling in missing
+  # security_pass_status / security_pass_cycle defaults is not counted as progress.
+  POLL_PROGRESS_BASELINE_FP="$(poll_progress_fingerprint "${STATE_FILE}")"
+  POLL_PROGRESS_BASELINE_TRACKING_NUM="${TRACKING_NUM}"
   SECURITY_PASS_STATE_HASH_AFTER="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
   if [ "${ENABLE_SECURITY_PASS}" = "true" ] \
     && [ "${SECURITY_PASS_STATE_HASH_BEFORE}" != "${SECURITY_PASS_STATE_HASH_AFTER}" ]; then

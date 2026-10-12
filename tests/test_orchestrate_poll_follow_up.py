@@ -184,8 +184,12 @@ def test_poller_sets_the_baseline_and_records_after_each_persist() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	post = _function_source("post_state_comment")
 	assert post.rstrip().endswith("record_poll_progress_if_advanced || true\n  return 0\n}".rstrip())
-	load = text.index('  echo "${STATE_JSON}" > "${STATE_FILE}"\n  # Progress baseline')
-	block = text[load : load + 400]
+	load = text.index('  echo "${STATE_JSON}" > "${STATE_FILE}"\n  SECURITY_PASS_STATE_HASH_BEFORE=')
+	normalize = text.index("  ensure_security_pass_state_fields || {", load)
+	baseline = text.index("  # Progress baseline", load)
+	# The baseline is taken after normalization, so filling in security-pass defaults is not progress.
+	assert normalize < baseline < text.index("  SECURITY_PASS_STATE_HASH_AFTER=", load)
+	block = text[baseline : baseline + 400]
 	assert 'POLL_PROGRESS_BASELINE_FP="$(poll_progress_fingerprint "${STATE_FILE}")"' in block
 	assert 'POLL_PROGRESS_BASELINE_TRACKING_NUM="${TRACKING_NUM}"' in block
 
