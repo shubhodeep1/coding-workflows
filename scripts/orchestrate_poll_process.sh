@@ -1624,7 +1624,7 @@ _summarize_final_merge_blockers()
 
 	if [ "${required_names_csv}" = "*" ]; then
 		printf '%s' "${check_runs_json}" | jq -r '
-			def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
+			def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
 			(
 				if (type == "array") then
 					[.[]? | (.check_runs // [])[]]
@@ -1634,8 +1634,8 @@ _summarize_final_merge_blockers()
 					[]
 				end
 			)
-			| _newest_per_name
-			| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")))
+			| _mark_superseded
+			| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)))))
 			| map("\(.name) (\(.conclusion // .status))")
 			| unique
 			| join(", ")
@@ -1644,7 +1644,7 @@ _summarize_final_merge_blockers()
 	fi
 
 	printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" '
-		def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
+		def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 		(
 			if (type == "array") then
@@ -1655,11 +1655,11 @@ _summarize_final_merge_blockers()
 				[]
 			end
 		)
-		| _newest_per_name
+		| _mark_superseded
 		| map(select(
 			(.status != "completed")
 			or (
-				(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")
+				(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)))
 				and (.name as $n | $required | index($n))
 			)
 		))
@@ -27474,10 +27474,11 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #          produced work is not eligible for force-merge).
 #       D) Gate D delegates to `_pr_checks_completed` (shared gate in
 #          scripts/pr_checks_lib.sh, required-set filter): any pending
-#          check-run blocks (advisory ones too), and a required check-run
-#          whose newest run is not success / neutral / skipped (failure /
-#          cancelled / timed_out / action_required) blocks; a completed
-#          advisory check's conclusion does not.
+#          check-run blocks (advisory ones too; Gate D re-checks it next
+#          sweep without paging), a required check-run that ended failure /
+#          timed_out / action_required blocks, and a cancelled one blocks
+#          unless a newer run of the same name exists; a completed advisory
+#          check's conclusion does not.
 #     If every gate passes: `gh pr merge --squash --auto`, a Telegram
 #     DEBUG notice, and one audit-trail comment posted to the PR so the
 #     decision is visible on the thread (not only in Telegram).
@@ -27912,8 +27913,9 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	[ "${N_BASE_REF}" != "null" ] || N_BASE_REF=""
 
 	# Shared gate missing (pr_checks_lib.sh not sourced): fail closed.
+	# Paged once per PR head through _noop_gate_failure_alert, like gates A-C.
 	if ! command -v _pr_checks_completed >/dev/null 2>&1; then
-		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required-checks gate unavailable (reason=helper_unavailable). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		_noop_gate_failure_alert "D_helper" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required-checks gate unavailable (reason=helper_unavailable). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
@@ -27926,7 +27928,14 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# returns protection data. Runs only on the noop retry-cap path.
 	# Three arguments always opt into the required-set filter.
 	if ! _pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}"; then
-		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required check-runs on ${N_HEAD_SHA} are not all passing (reason=${PR_CHECKS_LAST_REASON:-unknown}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		# A check-run still running is not a failure: skip without paging and
+		# re-check on the next sweep, so the once-per-head marker is kept for
+		# a settled failure. Otherwise page once per head (gate D_check).
+		if [ "${PR_CHECKS_LAST_REASON:-}" = "blocking" ] && [[ "${PR_CHECKS_LAST_PENDING:-0}" =~ ^[1-9][0-9]*$ ]]; then
+			echo "  PR #${N_PR}: gate D waiting for ${PR_CHECKS_LAST_PENDING} running check-run(s) on ${N_HEAD_SHA}; re-checking next sweep."
+		else
+			_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required check-runs on ${N_HEAD_SHA} are not all passing (reason=${PR_CHECKS_LAST_REASON:-unknown}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		fi
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi

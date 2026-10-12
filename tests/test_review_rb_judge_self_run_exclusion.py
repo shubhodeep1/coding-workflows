@@ -507,8 +507,8 @@ def test_workflow_merge_conflict_comment_is_branch_agnostic() -> None:
 # sync with scripts/pr_checks_lib.sh when the live filter changes.
 JQ_FILTER = '''
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
-def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped");
+def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
+def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
 (
   if (type == "array") then
     [.[]? | (.check_runs // [])[]]
@@ -520,7 +520,7 @@ def _is_pending: .status != "completed" or (.conclusion != "success" and .conclu
 ) as $runs |
 if ($runs == null) then empty
 else
-  [$runs | _newest_per_name | .[] | select(_is_pending and (_is_self_check_run | not))] | length
+  [$runs | _mark_superseded | .[] | select(_is_pending and (_is_self_check_run | not))] | length
 end
 '''
 

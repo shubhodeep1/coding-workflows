@@ -240,6 +240,39 @@ def test_newer_cancelled_run_after_success_blocks() -> None:
 		assert rc == 1 and reason == "blocking", (order, rc, reason)
 
 
+def test_failed_run_is_not_hidden_by_newer_same_name_success() -> None:
+	"""Check-runs carry no workflow identity, and this repo has several jobs
+	named `lint`. A newer same-name success (possibly another workflow's)
+	supersedes only a cancellation, never a failure."""
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "failure"},
+		{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_running_run_is_not_hidden_by_newer_same_name_success() -> None:
+	"""A still-running run blocks and counts as pending even when a newer
+	same-name run already succeeded, so the wait keeps polling."""
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "in_progress", "conclusion": None},
+		{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	res = _run(
+		'_pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_PENDING}"',
+		runs_json=runs,
+		env=CI_REQUIRED_ENV,
+	)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout.strip() == "1", res.stdout
+
+
 def test_cancelled_check_blocks_in_star_mode() -> None:
 	runs = _page([
 		{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
@@ -598,6 +631,24 @@ def test_ci_side_channel_aggregates_every_matching_run() -> None:
 	for runs, expected in cases:
 		_, _, state = _ci_side_channel(_page(runs), {**THIS_REPO_ENV, "PR_CHECKS_SELF_RUN_ID": "4242"})
 		assert state == expected, (runs, state, expected)
+
+
+def test_ci_side_channel_rerun_supersedes_cancelled_only_when_bound() -> None:
+	"""Bound to CI run ids, a successful re-run supersedes a cancelled run so
+	the auto-merge wait agrees with the gate. Name-only matching keeps every
+	run (fail closed), and a failure is never superseded."""
+	cancelled = {**_ci_run("lint", "completed", "cancelled", run_id="555"), "id": 1}
+	rerun = {**_ci_run("lint", "completed", "success", run_id="556"), "id": 2}
+	failed = {**_ci_run("lint", "completed", "failure", run_id="555"), "id": 1}
+	bound = {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "555,556"}
+	gate, _, state = _ci_side_channel(_page([cancelled, rerun]), bound)
+	assert gate == "0:ok" and state == "success", (gate, state)
+	_, _, state = _ci_side_channel(_page([rerun, cancelled]), bound)
+	assert state == "success", state
+	_, _, state = _ci_side_channel(_page([cancelled, rerun]), THIS_REPO_ENV)
+	assert state == "failure", state
+	_, _, state = _ci_side_channel(_page([failed, rerun]), bound)
+	assert state == "failure", state
 
 
 def test_ci_side_channel_counts_only_bound_runs_when_ids_are_given() -> None:

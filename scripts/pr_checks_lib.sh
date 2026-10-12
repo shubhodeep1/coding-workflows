@@ -158,12 +158,19 @@ _pr_required_check_names_for_base()
 # startup_failure block). Returns 0 when nothing is blocking, 1 otherwise
 # (including API errors). Sets PR_CHECKS_LAST_REASON on every return.
 #
-# Only the newest check-run per name (highest id, then latest started_at)
-# is evaluated: re-running a job creates a new check-run with the same
-# name on the same SHA, so a cancelled run that a newer run superseded
-# does not block. Dedupe happens before the self-run exclusion, so an
-# older attempt of the caller's own job never resurfaces. A cancelled
-# required check with nothing newer is a settled failure (pending=0).
+# A cancelled check-run blocks only while it is the newest check-run of
+# its name (highest id, then latest started_at): re-running a job creates
+# a new check-run with the same name on the same SHA, so a cancelled run
+# that a newer run superseded does not block. Every other check-run is
+# evaluated on its own: a failed, timed-out or still-running run blocks
+# even when a newer run of the same name exists. A check-run carries no
+# workflow identity, so a newer same-name run from another workflow (this
+# repo has three jobs named `lint`) must not hide a failure or an
+# in-progress run; at worst it supersedes a cancellation, which before
+# #7127 never blocked at all. Newest is decided before the self-run
+# exclusion, so an older cancelled attempt of the caller's own job never
+# resurfaces. A cancelled required check with nothing newer is a settled
+# failure (pending=0).
 #
 # The gate's "required" set is resolved per call as:
 #   1. Branch protection's `required_status_checks.contexts` on the
@@ -244,7 +251,12 @@ _pr_checks_completed()
 	# it is populated on every path that read the check-runs. Every matching
 	# run counts (fail closed): a failed or still-running run with that name
 	# outranks a successful one, and the API failure sentinel '{}' yields
-	# `unknown`, never `success`. The name reaches jq only through --arg.
+	# `unknown`, never `success`. One exception, only when the runs are bound
+	# to the CI workflow (PR_CHECKS_CI_RUN_IDS): a cancelled run superseded by
+	# a newer bound run of the same name is dropped, as in the gate below, so
+	# a re-run of a cancelled CI check unblocks the wait. Unbound (name-only)
+	# matching keeps every run, since another workflow's same-name run could
+	# otherwise hide the cancellation. The name reaches jq only through --arg.
 	# `__invalid__` (a malformed explicit value with no repository default)
 	# never matches a check-run: the state stays `unknown` and the wait times
 	# out rather than silently dropping the requirement the operator set.
@@ -261,7 +273,11 @@ _pr_checks_completed()
 			) as $runs |
 			if ($runs == null) then "unknown"
 			else
-				[$runs[] | select(type == "object" and .name == $ci and ((.head_sha // $sha) | tostring | startswith($sha)) and (_is_self_check_run | not) and _is_bound_run)] as $m |
+				[$runs[] | select(type == "object" and .name == $ci and ((.head_sha // $sha) | tostring | startswith($sha)) and (_is_self_check_run | not) and _is_bound_run)] as $all |
+				(if ($bound == "__unbound__") or (($all | length) == 0) then $all
+				else ($all | max_by([(.id // 0), (.started_at // "")])) as $newest
+					| [$all[] | select(.conclusion != "cancelled" or . == $newest)]
+				end) as $m |
 				if ([$m[] | select(.status == "completed" and .conclusion != "success")] | length) > 0 then "failure"
 				elif ([$m[] | select(.status != "completed")] | length) > 0 then "pending"
 				elif ([$m[] | select(.conclusion == "success")] | length) > 0 then "success"
@@ -293,8 +309,8 @@ _pr_checks_completed()
 		# Legacy fail-closed-on-any-failure behaviour (with self-run exclusion).
 		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
-			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped");
+			def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
+			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
 			(
 				if (type == "array") then
 					[.[]? | (.check_runs // [])[]]
@@ -306,7 +322,7 @@ _pr_checks_completed()
 			) as $runs |
 			if ($runs == null) then empty
 			else
-				[$runs | _newest_per_name | .[] | select(_is_pending and (_is_self_check_run | not))] | length
+				[$runs | _mark_superseded | .[] | select(_is_pending and (_is_self_check_run | not))] | length
 			end
 		' 2>/dev/null | tail -n1)"
 	else
@@ -320,7 +336,7 @@ _pr_checks_completed()
 		# can format the env var with spaces after commas.
 		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg self_run "${self_run}" '
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
+			def _mark_superseded: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})) | add // [];
 			($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 			(
 				if (type == "array") then
@@ -333,11 +349,11 @@ _pr_checks_completed()
 			) as $runs |
 			if ($runs == null) then empty
 			else
-				[$runs | _newest_per_name | .[] | select(
+				[$runs | _mark_superseded | .[] | select(
 					(
 						(.status != "completed")
 						or (
-							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")
+							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)))
 							and (.name as $n | $required | index($n))
 						)
 					)
@@ -354,16 +370,15 @@ _pr_checks_completed()
 	# Side channel for callers that wait: how many of the blocking runs are
 	# still running (status != completed, self-run excluded). A blocking
 	# result with zero pending runs is a settled failure, not a wait.
-	# Counted over the same newest-per-name set as the blocking count, so a
-	# superseded in-progress run does not count and a newer re-run does.
+	# Every running check-run counts, as in the blocking count above, so a
+	# blocking result with pending=0 is always a settled failure.
 	PR_CHECKS_LAST_PENDING="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
 		def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-		def _newest_per_name: group_by(.name // "") | map(max_by([(.id // 0), (.started_at // "")]));
 		(
 			if (type == "array") then [.[]? | (.check_runs // [])[]]
 			elif (type == "object" and (.check_runs | type == "array")) then .check_runs
 			else [] end
-		) | _newest_per_name | [.[] | select(.status != "completed" and (_is_self_check_run | not))] | length
+		) | [.[] | select(.status != "completed" and (_is_self_check_run | not))] | length
 	' 2>/dev/null | tail -n1)"
 	[[ "${PR_CHECKS_LAST_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_LAST_PENDING=0
 	# Total non-self check-runs on the head: 0 on a fresh push means CI has

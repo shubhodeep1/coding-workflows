@@ -50,6 +50,8 @@ guard_block_ensure_label()
 		fi
 		return 0
 	fi
+	# Keep the unexpected first-attempt error in the job log before retrying.
+	echo "::warning::implement_handle_guard_block: gh label create ${label_name} failed (rc=${create_rc}); retrying. stderr: $(head -c 500 "${create_err}" 2>/dev/null | tr '\n' ' ')" >&2
 	rm -f "${create_err}"
 	if gh_retry gh label create "${label_name}" --repo "${GITHUB_REPOSITORY}" \
 		--color "${label_color}" --description "${label_description}" >/dev/null; then
