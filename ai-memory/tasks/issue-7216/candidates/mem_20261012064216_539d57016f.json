@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which issues should the merged-PR check cover?\nChoices:\nA) Only check-failure triage issues (label `ai:check-triage`, PR taken from the `- **Pull request:**` body line written by `scripts/check_failure_triage.sh`) (RECOMMENDED)\nB) A, plus workflow-heal issues (`ai:workflow-heal`) whose fix targets a PR head branch (self-repo `autofix_failure` / `pr-self-inflicted` lineage)\nC) Any issue whose body names a pull request URL or `#N` PR reference, whatever its label\nQ2: Where should the check run?\nChoices:\nA) In code on the host, in `plan.yml` before the planning model runs. It makes one PR read, and when the check matches, the model is skipped and the issue is marked superseded. Planning goes ahead as usual when the read fails or the result is unclear (RECOMMENDED)\nB) In the prompt only: add a rule to `prompts/mode-plan.txt` (and its `_templates/` copy) plus a host-provided \"PR state\" fact line, and let the planner emit a superseded result\nC) Both A and B: code decides when the facts are clear, and the prompt rule covers anything the code cannot classify\nQ3: What does \"mark superseded\" do to the issue?\nChoices:\nA) Post one comment with a fixed marker (for example `<!-- ai:plan-superseded:v1 pr=<N> head=<sha> -->`) naming the merged PR and its passing check, add the existing `ai:closed` label, and close the issue as \"not planned\". No new label (RECOMMENDED)\nB) Same as A, but with a new `ai:superseded` label added to `.github/ai/label_contract.v1.json` and the label sync, instead of `ai:closed`\nC) Leave the issue open, post the marker comment and apply `ai:blocked`, so a person confirms before closing\n**Note:** if you pick C, the issue will sit in `ai:blocked`, where the unblock judge may pick it up again. That is the loop the #7185 follow-up is meant to avoid.\nQ4: What counts as \"merged with passing checks\", and what happens when the PR merged but the check still fails?\nChoices:\nA) The PR is merged, and the failing check named in the triage issue has a successful run on the PR's final head SHA. If the check did not pass there, the issue stays open: it is planned against the PR's base branch (the default or integration branch), never the old head branch (RECOMMENDED)\nB) The PR is merged, and every check-run on its final head SHA succeeded. Otherwise planning runs unchanged\nC) The PR is merged, whatever the check results. A merged PR always supersedes the issue",
+  "fingerprint": "3a28e577ecc8888c16a12020e788d0c4ac7a47653e2ee068ed873f1189704e03",
+  "lineage": {
+    "issue_number": 7216,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38213010489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38213010489",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012064216_539d57016f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7216,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38213010489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7216 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T06:42:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
