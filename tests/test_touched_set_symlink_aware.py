@@ -25,10 +25,6 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
@@ -46,13 +42,6 @@ SNAPSHOT_RE = re.compile(
 	r"(?P<block>[ \t]*while IFS= read -r -d '' snap_path; do\n.*?[ \t]*done < <\(git ls-files -z \| sort -zu\)\n)",
 	re.DOTALL,
 )
-
-
-def _workflow_or_script_text(path: Path) -> str:
-	# review_autofix.yml sources some step bodies from scripts/; read it with them inlined.
-	if path == AUTOFIX:
-		return expanded_review_autofix_text()
-	return path.read_text(encoding="utf-8")
 
 
 def _snapshot_block(path: Path, state_var: str) -> str:
