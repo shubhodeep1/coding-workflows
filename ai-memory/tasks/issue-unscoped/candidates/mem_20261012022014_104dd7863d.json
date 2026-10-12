@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/run_plan_codex.sh:300-307 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The retry check recognizes only a `BLOCKED:` reason exactly equal to `integration branch mismatch` after normalization, so explanations or other suffixes prevent the retry.\n  WHY: A model answer with an embellished reason can pass to `plan.yml` and block planning for a human, reproducing the failure mode the change targets; severity disagrees, with Qwen rating it MAJOR and Claude and GPT rating it NIT.\n- prompts/mode-plan.txt (lines 135-140; 130-133); prompts/_templates/mode-plan.txt (lines 128-133; 130-133); scripts/run_plan_codex.sh (lines 177-182; 179-182) | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The prompt describes the planner workspace as a Git snapshot on branch `isolated`, but the `HEAL_ROUTE` snapshot has no `.git` directory.\n  WHY: Git inspection on that route reports \u201cnot a git repository\u201d rather than branch `isolated`, making the prompt\u2019s explanation inaccurate even though the operational rule and retry still work.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/run_plan_codex.sh | severity=low | confidence=[2]\n  PROBLEM: File: scripts/run_plan_codex.sh\n  Line or code reference: `plan_output_contradicts_ref_context`, lines 305-307 (`blocked_reason=\"${blocked_reason,,}\"; blocked_reason=\"${blocked_reason%.}\"; [ \"${blocked_reason}\" = \"integration branch mismatch\" ]`)\n  PROBLEM: The retry safety net fires only when the whole `BLOCKED:` reason equals \"integration branch mismatch\" once lowercased and stripped of one trailing period.\n  WHY: The runner accepts an embellished answer as a normal plan on attempt 1, and `plan.yml` blocks for a human, so it is not retried.\n- prompts/mode-plan.txt (lines 135-140), prompts/_templates/mode-plan.txt (lines 128-133), scripts/run_plan_codex.sh (lines 177-182, and the RETRY NOTE text at line 354) | severity=low | confidence=[3]\n  PROBLEM: The prompt says the workspace's own git is a filtered read-only snapshot on a local branch named `isolated`, but this is not true on the `HEAL_ROUTE` path.\n  WHY: The `HEAL_ROUTE=true` attempt uses a snapshot that reportedly excludes `.git`, so `git branch` would fail rather than print `isolated`; this was unverified by this reviewer, and the operational instruction and retry still work.\n- scripts/run_plan_codex.sh, line 304 | HARDENING_SUGGESTION: The second perl exits at the first `BLOCKED:` match; if the fence-stripped output were larger than the pipe buffer (about 64 KB), the first perl would get SIGPIPE and `pipefail` would make the substitution fail, silently skipping the retry. Plan outputs are normally far smaller than that. Suggested minimal fix: Drop the early `exit` and print only the first match (for example `print $1 and last` once, or a seen flag), so the pipe is always drained. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/run_plan_codex.sh:300-307 | severity=low | confidence=[3]\n  PROBLEM: The retry check only recognizes a `BLOCKED:` reason that equals `integration branch mismatch` after lowercasing and removing one trailing period; a reason with an explanation or other suffix does not match.\n  WHY: When `PLANNING_REF_MISMATCH=false`, the helper does not retry an embellished `BLOCKED:` reason, and `plan.yml` accepts it and blocks planning.\n- prompts/mode-plan.txt:130-133; prompts/_templates/mode-plan.txt:130-133; scripts/run_plan_codex.sh:179-182 | severity=low | confidence=[3]\n  PROBLEM: The prompt says the planner workspace is a Git snapshot on branch `isolated`, but that is not true on the `HEAL_ROUTE` path.\n  WHY: `HEAL_ROUTE` runs through `scripts/clarify_isolated_run.sh`, whose snapshot copies tracked files without creating a `.git` directory, so Git inspection reports \u201cnot a git repository,\u201d not branch `isolated`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/run_plan_codex.sh:305-307 | severity=high | confidence=[4]\n  PROBLEM: The safety net only fires when the extracted `BLOCKED` reason exactly equals \"integration branch mismatch\" after lowercasing and removing one trailing period; added explanation or context prevents the retry.\n  WHY: The runner treats the answer as normal plan output and passes it to `plan.yml`, which blocks for a human, reproducing the failure mode from issue #7172 that this PR aims to fix.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "505d619bf6f477f85b959b6aba9e8fccb0cb8f3dc327f6db183bddda21e1ad6f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7199,
+    "run_id": "38193847775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38193847775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012022014_104dd7863d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7199,
+    "run_id": "38193847775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T02:20:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
