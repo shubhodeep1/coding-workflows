@@ -17361,9 +17361,10 @@ _pr_json_closes_issue() {
       false
     else
       (.body // "") as $body
-      # Keep this conservative REST fallback aligned with
-      # scripts/lint_pr_body_auto_close.py: no colon forms, no keyword
-      # substrings inside larger words, and support short + URL refs.
+      # Conservative REST fallback: no colon forms, no keyword substrings
+      # inside larger words, and support short + URL refs. The §19 lint
+      # (scripts/lint_pr_body_auto_close.py) also flags colon forms such
+      # as "Resolved: #N", which GitHub closes on; this check does not.
       | ($body | test(
           "(?i)(^|[^[:alnum:]_-])"
           + "(close[sd]?|fix(es|ed)?|resolve[sd]?)"
