@@ -47,6 +47,7 @@ case "$*" in
       echo "stub gh: forced check-runs failure" >&2
       exit 1
     fi
+    # Zero-based poll index: poll N (1-based) reads checks.<N-1>.json, else checks.json.
     n=0
     if [ -f "${fx}/counter" ]; then n="$(cat "${fx}/counter")"; fi
     echo "$((n + 1))" > "${fx}/counter"
