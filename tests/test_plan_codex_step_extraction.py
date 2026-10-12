@@ -18,10 +18,10 @@ PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"e485baf382cf22d27a9d0e14778cfad7a9a39470871b3fde550b79c237aa6d68"
+	"8e900f915b542400a201615631a715955b7315fba4ddca51bb83ad8b24618bb5"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 13_451
-PRE_EXTRACTION_PROMPT_LINES = 213
+PRE_EXTRACTION_PROMPT_BYTES = 13_819
+PRE_EXTRACTION_PROMPT_LINES = 218
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -108,6 +108,7 @@ def _run_runner(
 	scenario: str,
 	engine: str = "",
 	claude_scenario: str = "",
+	planning_ref_mismatch: str | None = None,
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -186,6 +187,29 @@ case "${MOCK_CODEX_SCENARIO}" in
   exhaust)
     exit 9
     ;;
+  ref_mismatch_then_plan)
+    if [ "${attempt}" -eq 1 ]; then
+      printf 'Checked git: branch isolated.\nBLOCKED: integration branch mismatch\n'
+    else
+      printf 'plan after retry\n'
+    fi
+    ;;
+  ref_mismatch_always)
+    printf 'BLOCKED: Integration branch mismatch.\n'
+    ;;
+  ref_mismatch_embellished_then_plan)
+    if [ "${attempt}" -eq 1 ]; then
+      printf 'BLOCKED: integration branch mismatch (workspace is on isolated, expected orchestrator/project-7126)\n'
+    else
+      printf 'plan after retry\n'
+    fi
+    ;;
+  ref_mismatch_other_reason)
+    printf 'BLOCKED: integration branch mismatches are not the issue here\n'
+    ;;
+  ref_mismatch_fenced)
+    printf '```text\nBLOCKED: integration branch mismatch\n```\nfenced example plan\n'
+    ;;
   *)
     exit 64
     ;;
@@ -250,6 +274,9 @@ esac
 		}
 	)
 	environment.pop("PLAN_ENGINE", None)
+	environment.pop("PLANNING_REF_MISMATCH", None)
+	if planning_ref_mismatch is not None:
+		environment["PLANNING_REF_MISMATCH"] = planning_ref_mismatch
 	if engine:
 		environment["PLAN_ENGINE"] = engine
 	for key in ("BASH_ENV", "ENV"):
@@ -351,6 +378,90 @@ def test_retry_exhaustion_preserves_failure_exit() -> None:
 	assert _read_lines(runtime_dir / "sleep.log") == ["10", "20"]
 	assert len(_read_lines(runtime_dir / "codex-args.log")) == 3
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == ""
+
+
+def test_ref_mismatch_block_contradicting_the_workflow_is_retried() -> None:
+	# Issue #7172: the planner checked git inside its sandbox (a snapshot on
+	# branch `isolated`) and answered BLOCKED although the workflow computed
+	# PLANNING_REF_MISMATCH=false. The runner retries with a note instead of
+	# handing a false block to plan.yml.
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_then_plan", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY attempt=1 outcome=retry planning_ref_mismatch=false" in result.stdout
+	assert "Codex planning succeeded on attempt 2 (1 lines of output)." in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "plan after retry\n"
+	assert _read_lines(runtime_dir / "sleep.log") == ["10"]
+	assert "=== RETRY NOTE ===" not in (runtime_dir / "prompt-1.txt").read_text(encoding="utf-8")
+	retry_prompt = (runtime_dir / "prompt-2.txt").read_text(encoding="utf-8")
+	assert retry_prompt.count("=== RETRY NOTE ===") == 1
+	assert "Integration branch mismatch: false" in retry_prompt
+	# The note also carries the line above; this pins the original context.
+	assert "DYNAMIC PLANNING CONTEXT" in retry_prompt
+
+
+def test_ref_mismatch_block_is_kept_after_the_last_attempt() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_always", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "outcome=retry" in result.stdout
+	assert "PLAN_REF_MISMATCH_RETRY attempt=3 outcome=kept planning_ref_mismatch=false" in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == (
+		"BLOCKED: Integration branch mismatch.\n"
+	)
+	assert len(_read_lines(runtime_dir / "codex-args.log")) == 3
+	# The note is added once, not once per retry.
+	assert (runtime_dir / "prompt-3.txt").read_text(encoding="utf-8").count("=== RETRY NOTE ===") == 1
+
+
+def test_ref_mismatch_block_stands_when_the_workflow_found_a_mismatch() -> None:
+	for value in ("true", "unknown", None):
+		result, root, _temporary_directory = _run_runner(
+			"ref_mismatch_then_plan", planning_ref_mismatch=value
+		)
+		runtime_dir = root / "runtime"
+
+		assert result.returncode == 0, (value, result.stderr)
+		assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout, value
+		assert "Codex planning succeeded on attempt 1" in result.stdout, value
+		assert "BLOCKED: integration branch mismatch" in (runtime_dir / "codex_output.txt").read_text(encoding="utf-8")
+
+
+def test_embellished_ref_mismatch_block_is_retried() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_embellished_then_plan", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY attempt=1 outcome=retry planning_ref_mismatch=false" in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "plan after retry\n"
+
+
+def test_longer_word_after_the_phrase_is_not_retried() -> None:
+	result, _root, _temporary_directory = _run_runner(
+		"ref_mismatch_other_reason", planning_ref_mismatch="false"
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout
+	assert "Codex planning succeeded on attempt 1" in result.stdout
+
+
+def test_fenced_ref_mismatch_example_is_not_retried() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_fenced", planning_ref_mismatch="false"
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout
+	assert "Codex planning succeeded on attempt 1" in result.stdout
 
 
 CODEX_ARGS = (

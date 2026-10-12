@@ -43,9 +43,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -423,6 +427,7 @@ def _run_close_and_reissue(
 	pr_view_head_ref_oid: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
+	issue_create_should_fail: bool = False,
 	extra_env: dict[str, str] | None = None,
 	api_responses: dict[str, object] | None = None,
 	path_prefix: str | None = None,
@@ -449,6 +454,8 @@ def _run_close_and_reissue(
 		gh_state_file = runtime_dir / "gh_state.json"
 		_install_mock_gh(bin_dir, gh_state_file)
 		mock_state: dict[str, object] = {}
+		if issue_create_should_fail:
+			mock_state["issue_create_should_fail"] = True
 		run_cwd = tmp_path
 		repo_head_before = ""
 		repo_branch_before = ""
@@ -607,6 +614,16 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
 	)
+
+
+def test_close_and_reissue_create_failure_reports_missing_replacement() -> None:
+	state = _run_close_and_reissue([], issue_create_should_fail=True)
+	assert len(state.get("pr_close_args", [])) == 1
+	assert len(state.get("issue_create_args", [])) == 1
+	assert "Failed to create replacement issue for closed PR #42" in state["_stdout"]
+	assert state["_github_output"].splitlines() == [
+		"judge_handled=true", "judge_action=close_and_reissue", "judge_reissue_created=false",
+	]
 
 
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
@@ -1316,7 +1333,7 @@ def test_close_and_reissue_redo_ignores_new_output_paths() -> None:
 
 
 def test_reissue_new_outputs_log_prefix_is_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	assert "- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`" in agents_text
 	assert "LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS" in agents_text
 

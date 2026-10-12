@@ -42,7 +42,13 @@ MAX_JOB_TIMEOUT_MINUTES = 20
 # wait for the worker jobs so they can read their durations, and must never
 # gate merges. Their own predicate and `lint.needs` exclusion are pinned in
 # `tests/test_ci_budget_watch.py`. Adding a job here is a reviewed decision.
+# They are skipped on pull requests, and a skipped needed job would fail the
+# aggregate. `budget-watch` reads this run's job durations, so it has to
+# wait for the worker jobs (#7012).
 ADVISORY_JOB_IDS = frozenset({"budget-watch"})
+# Alias kept for the advisory-job wiring test below.
+POST_AGGREGATE_ADVISORY_JOBS = ADVISORY_JOB_IDS
+ADVISORY_JOB_IF = "always() && github.event_name == 'push' && github.ref == 'refs/heads/main'"
 
 
 def _ci_jobs() -> dict:
@@ -112,6 +118,15 @@ class AggregateJobWiringTest(unittest.TestCase):
 		for job_id in _worker_job_ids(jobs):
 			with self.subTest(job=job_id):
 				self.assertNotIn("needs", jobs[job_id])
+
+	def test_advisory_jobs_stay_outside_the_aggregate_and_main_only(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in POST_AGGREGATE_ADVISORY_JOBS:
+			with self.subTest(job=job_id):
+				self.assertIn(job_id, jobs)
+				self.assertNotIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
+				self.assertEqual(jobs[job_id]["if"], ADVISORY_JOB_IF)
+				self.assertEqual(jobs[job_id]["steps"][0].get("name"), "Checkout repository")
 
 
 class AggregateJobBehaviourTest(unittest.TestCase):

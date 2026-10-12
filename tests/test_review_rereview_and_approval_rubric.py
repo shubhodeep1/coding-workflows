@@ -15,6 +15,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "review_pipeline"
 CONSOLIDATE_SCRIPT = REPO_ROOT / "scripts" / "review_consolidate.sh"
 POST_REVIEW_COMMENT_SCRIPT = REPO_ROOT / "scripts" / "post_review_comment.sh"
@@ -249,7 +251,7 @@ def _extract_shell_block(script_text: str, start_marker: str, end_marker: str) -
 
 
 def _extract_break_glass_python_snippet() -> str:
-	lines = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8").splitlines()
+	lines = expanded_review_autofix_text().splitlines()
 	step_start = None
 	for idx, line in enumerate(lines):
 		if line.strip() == "- name: Detect review-blocked break-glass override":
@@ -313,7 +315,7 @@ def _install_mock_gh(mock_bin_dir: Path, state_file: Path) -> None:
 def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 	consolidator_prompt = REVIEW_CONSOLIDATOR_PROMPT.read_text(encoding="utf-8")
 	judge_prompt = REVIEW_BLOCKED_PROMPT.read_text(encoding="utf-8")
-	workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	workflow = expanded_review_autofix_text()
 
 	assert "RE_REVIEW_SKIP:" in consolidator_prompt
 	assert "Files absent from the bundle are intentionally invisible here" in consolidator_prompt
