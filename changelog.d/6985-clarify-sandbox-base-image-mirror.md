@@ -1,9 +1,23 @@
 <!-- changelog: fixed -->
-- **Clarify no longer fails when Docker Hub rate-limits its sandbox image build.** Clarify runs 37990077414, 37990177613, 37990757342, 37990879005 and 37992097499 (heal issue #6985) failed on all three attempts: the build of `scripts/clarify_sandbox/Dockerfile` pulled `node:22.16.0-bookworm-slim` anonymously from Docker Hub, and Docker Hub answered `429 Too Many Requests` every time, so retrying never helped. `.github/workflows/clarify.yml` now has a "Pre-seed clarify sandbox base image" step right before "Run Codex". It reads the Dockerfile's `FROM` image, loads the same tag from a Docker Official Images mirror, and tags it locally under its Docker Hub name. The unchanged `docker build` (no `--pull`) then uses the local image and sends no request to Docker Hub.
+- **Clarify no longer fails when Docker Hub rate-limits its sandbox image build.** The clarify sandbox's base image now comes from a Docker Official Images mirror instead of an anonymous Docker Hub pull.
 
-  | Setting | Default | Meaning |
-  | --- | --- | --- |
-  | `CLARIFY_BASE_IMAGE_MIRRORS` (repo var) | `public.ecr.aws/docker/library mirror.gcr.io/library` | Mirrors tried in order. Entries that are not a plain `host/path` are skipped. |
-  | `CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS` (repo var) | `300` | Time limit for each mirror pull. Values outside 30-1800 fall back to `300`. |
+Clarify runs 37990077414, 37990177613, 37990757342, 37990879005 and 37992097499 (heal issue #6985) failed on all three attempts. Each time, the build of `scripts/clarify_sandbox/Dockerfile` pulled `node:22.16.0-bookworm-slim` from Docker Hub and got `429 Too Many Requests`, so retrying never helped. `.github/workflows/clarify.yml` now runs a "Pre-seed clarify sandbox base image" step right before "Run Codex". The step reads the Dockerfile's `FROM` image, pulls the same tag from a mirror, and tags it locally under its Docker Hub name. The unchanged `docker build` (no `--pull`) then uses that local image and sends no request to Docker Hub.
 
-  The step uses no credentials and always exits 0. Each run logs one `CLARIFY_BASE_IMAGE_PRESEED image=<ref> outcome=seeded|present|skip|mirror_failed|unavailable` line. If every mirror fails, it emits a warning and the build falls back to Docker Hub as before. A `FROM` that is not a `name:tag` official image is skipped with `reason=unsupported_ref`. The step runs with `continue-on-error: true`, and a failed mirror pull moves on to the next mirror under the runner's `bash -e`. Other callers of the same `scripts/clarify_isolated_run.sh` build are not covered and still pull the base image from Docker Hub: plan (`scripts/run_plan_codex.sh`), clarify-respond (`orchestrate_clarify_respond.yml`), the unblock judge (`scripts/unblock_judge.sh`), check-failure triage (`scripts/check_failure_triage.sh`) and `claude-engine-smoke.yml`. The same applies to the implement and review sandboxes (`scripts/codex_isolated_exec.sh`, `scripts/review_sandbox/Dockerfile`). Regression test: `tests/test_clarify_sandbox_base_image_preseed.py`.
+| The numbers that matter | Value |
+| --- | --- |
+| `CLARIFY_BASE_IMAGE_MIRRORS` (repo var) | default `public.ecr.aws/docker/library mirror.gcr.io/library`, tried in order; entries that are not a plain `host/path` are skipped |
+| `CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS` (repo var) | default `300` per mirror pull; values outside 30-1800 fall back to `300` |
+| Log line | `CLARIFY_BASE_IMAGE_PRESEED image=<ref> outcome=seeded\|present\|skip\|mirror_failed\|unavailable` |
+
+What this means for operators: clarify keeps running while Docker Hub throttles anonymous pulls, and nothing needs configuring. The step uses no credentials and never fails the run. If every mirror fails, it logs a warning and the build falls back to Docker Hub as before. A `FROM` that is not a `name:tag` official image is skipped with `reason=unsupported_ref`.
+
+### For contributors
+
+The step has `continue-on-error: true` and records a failed pull with `|| preseed_pull_rc=$?`, so the next mirror is still tried under the runner's `bash -e`. Only `clarify.yml` is covered. These other callers of the same `scripts/clarify_isolated_run.sh` build still pull the base image from Docker Hub:
+- plan (`scripts/run_plan_codex.sh`)
+- clarify-respond (`orchestrate_clarify_respond.yml`)
+- the unblock judge (`scripts/unblock_judge.sh`)
+- check-failure triage (`scripts/check_failure_triage.sh`)
+- `claude-engine-smoke.yml`
+
+The implement and review sandboxes (`scripts/codex_isolated_exec.sh`, `scripts/review_sandbox/Dockerfile`) also still pull from Docker Hub. The regression test `tests/test_clarify_sandbox_base_image_preseed.py` is not yet run by any `ci.yml` step.
