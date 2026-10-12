@@ -3000,7 +3000,9 @@ jobs:
               echo "::error::CODEX_ISOLATION trusted support copy missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); Codex is never run on the host."
               exit 1
             fi
-            if ! CODEX_ISOLATED_ROOT="$(bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
+            # Only the sandbox image build is retried (bounded, #7196); every
+            # other isolation failure still fails the step on its first try.
+            if ! CODEX_ISOLATED_ROOT="$(CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
               echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."
               exit 1
             fi
@@ -4143,7 +4145,9 @@ jobs:
           fi
           CODEX_ISOLATED_ROOT="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}"
           if [ -z "${CODEX_ISOLATED_ROOT}" ] || [ ! -d "${CODEX_ISOLATED_ROOT}" ]; then
-            if ! CODEX_ISOLATED_ROOT="$(bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
+            # Only the sandbox image build is retried (bounded, #7196); every
+            # other isolation failure still fails the step on its first try.
+            if ! CODEX_ISOLATED_ROOT="$(CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
               echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."
               exit 1
             fi
