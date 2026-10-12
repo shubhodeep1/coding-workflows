@@ -340,6 +340,11 @@ def test_operator_step_needs_a_dormant_placeholder() -> None:
 	for bad in ("payments_key", "PAYMENTS_KEY", None):
 		with pytest.raises(ledger.UsageError):
 			ledger.validate(dict(base, placeholder=bad), _decision("needs-human"), "o/r")
+	# Only a person's step needs operator instructions; an _ENABLED off switch does not.
+	no_steps = {k: v for k, v in base.items() if k != "operator_instructions"}
+	assert ledger.validate(dict(no_steps, placeholder="PAYMENTS_ENABLED"), _decision("needs-human"), "o/r")["operator_instructions"] == ""
+	with pytest.raises(ledger.UsageError):
+		ledger.validate(dict(no_steps, placeholder="PAYMENTS_API_KEY_UNSET_OPERATOR_STEP"), _decision("needs-human"), "o/r")
 
 
 def test_cli_round_trip(tmp_path: Path) -> None:
