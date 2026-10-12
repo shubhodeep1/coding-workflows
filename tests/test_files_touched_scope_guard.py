@@ -750,6 +750,17 @@ def test_plan_extractor_falls_back_to_whole_text() -> None:
 	assert guard.extract_plan_automation_paths("### Files to change\n- `src/app.py`\n") == []
 
 
+def test_plan_extractor_never_truncates_unusual_filenames() -> None:
+	# Regression: `scripts/a+b.py` was cut to `scripts/a`, so a grant for the
+	# prefix approved a plan that lists a different, ungranted path.
+	plan = "### Files likely to change\n- scripts/a+b.py\n- **scripts/c.sh**\n- (scripts/d(1).sh:3).\n"
+	paths = guard.extract_plan_automation_paths(plan)
+	assert paths == ["scripts/a+b.py", "scripts/c.sh", "scripts/d(1).sh"]
+	prefix_grant = guard.build_automation_grant(_owner_meta("scripts/a"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(["scripts/a+b.py"], prefix_grant, flag_enabled=True,
+		allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
 def _owner_meta(*entries: str, number: int = 42) -> dict:
 	return {"number": number, "user": {"login": "maintainer"}, "author_association": "OWNER",
 		"body": _body(*entries) if entries else "no block"}

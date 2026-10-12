@@ -9,7 +9,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import textwrap
 
 import yaml
 
@@ -80,8 +79,12 @@ def _auto_approve_script() -> str:
 
 
 def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: bool = False,
-	gate_flag: str | None = None, login: str = "pipeline-bot") -> tuple[bool, str, str]:
-	"""Run the shipped step against a fake gh; returns (posted, stdout, output file)."""
+	gate_flag: str | None = None, login: str = "pipeline-bot", comments: list | None = None,
+	posts_out: list | None = None) -> tuple[bool, str, str]:
+	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
+
+	Every other API write (the hold comment) is appended to ``posts_out``.
+	"""
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp_path = Path(workdir)
 		(tmp_path / "scripts").mkdir()
@@ -95,8 +98,10 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			'    printf "%s" "${ISSUE_RESPONSE}"\n'
 			'  elif [ "$2" = "user" ]; then\n'
 			'    printf "%s\\n" "${PIPELINE_LOGIN}"\n'
+			'  elif [ "$2" = "--paginate" ]; then\n'
+			'    printf "%s" "${COMMENTS_RESPONSE}"\n'
 			'  else\n'
-			'    printf "%s\\n" "$*" >> "${POST_LOG}"\n'
+			'    printf "%s\\n<<END>>\\n" "$*" >> "${POST_LOG}"\n'
 			'  fi\n'
 			'}\n'
 			'sleep() { :; }\n',
@@ -116,6 +121,7 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			"ISSUE_RESPONSE": issue if isinstance(issue, str) else json.dumps(issue),
 			"FETCH_FAIL": str(fetch_fails).lower(),
 			"POST_LOG": str(post_log),
+			"COMMENTS_RESPONSE": json.dumps(comments or []),
 			"PIPELINE_LOGIN": login,
 			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
 			"CODEX_OUTPUT_FILE": str(plan_file),
@@ -125,8 +131,17 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = gate_flag
 		result = subprocess.run(["bash", "-c", _auto_approve_script()], cwd=tmp_path, env=env, text=True,
 			capture_output=True, check=True)
-		posted = post_log.exists() and "/approved [auto-approved-by-plan]" in post_log.read_text(encoding="utf-8")
-		assert post_log.exists() == posted, post_log.read_text(encoding="utf-8")
+		posts = [entry for entry in (post_log.read_text(encoding="utf-8") if post_log.exists() else "").split("\n<<END>>\n")
+			if entry.strip()]
+		approvals = [entry for entry in posts if "/approved [auto-approved-by-plan]" in entry]
+		posted = bool(approvals)
+		others = [entry for entry in posts if entry not in approvals]
+		# The only other write the step may make is the hold comment, and
+		# never alongside an approval.
+		assert all("<!-- ai:automation-path-plan-hold:v1 " in entry for entry in others), others
+		assert not (posted and others), posts
+		if posts_out is not None:
+			posts_out.extend(others)
 		return posted, result.stdout, output_path.read_text(encoding="utf-8")
 
 
@@ -209,259 +224,56 @@ def test_plan_gate_wiring_defaults_off() -> None:
 	assert "ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}" in block
 
 
-POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
-GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
-EXTRACTOR_BEGIN = "# BEGIN automation-path-plan-extractor v1"
-EXTRACTOR_END = "# END automation-path-plan-extractor v1"
-
-
-def _extractor_block(text: str) -> str:
-	start = text.index(EXTRACTOR_BEGIN)
-	end = text.index(EXTRACTOR_END, start) + len(EXTRACTOR_END)
-	# Include the indentation before the BEGIN marker so dedent sees it.
-	line_start = text.rfind("\n", 0, start) + 1
-	return textwrap.dedent(text[line_start:end])
-
-
-def _auto_approve_run_script() -> str:
-	"""Return the step's run body without needing a YAML parser."""
-	lines = _workflow_text().splitlines(keepends=True)
-	start = next(i for i, line in enumerate(lines) if line.startswith("      - name: Auto-approve clear plan"))
-	run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
-	body = []
-	for line in lines[run + 1:]:
-		if line.startswith("      - name:"):
-			break
-		body.append(line[10:] if line.strip() else "\n")
-	return "".join(body).replace("${{ github.repository }}", "owner/repo")
-
-
-GATE_PLAN = """Implementation Plan
-
-1. Files likely to change
-- `.github/workflows/plan.yml` (granted). Gate at `scripts/orchestrate_poll_process.sh:14709`.
-- `tests/test_plan_auto_approve_safe_state_fetch.py`
-- Not changed: `scripts/files_touched_scope_guard.py`, `.github/workflows/ci.yml`.
-
-2. Functions / modules
-- mentions `scripts/elsewhere.sh` outside the Files section
-"""
-
-GATE_PLAN_NEGATIVE_ONLY = """Implementation Plan
-
-1. Files likely to change
-- `tests/test_x.py`
-No changes are expected to:
-- `scripts/foo.sh`
-
-2. Functions / modules
-"""
-
-GATE_PLAN_NO_AUTOMATION = """Implementation Plan
-
-Files likely to change:
-- `tests/test_x.py`
-- `README.md`
-"""
-
-_GATE_GH_STUB = (
-	'gh_retry() { "$@"; }\n'
-	'_safe_gh_jq() { gh api "$@"; }\n'
-	'gh() {\n'
-	'  if [ "$2" = "repos/owner/repo/issues/123" ]; then\n'
-	'    printf "%s" "${ISSUE_RESPONSE}"\n'
-	'  elif [ "$2" = "user" ]; then\n'
-	'    printf "user\\n" >> "${CALL_LOG}"\n'
-	'    printf "pipeline-bot\\n"\n'
-	'  elif [ "$2" = "--paginate" ]; then\n'
-	'    printf "comments\\n" >> "${CALL_LOG}"\n'
-	'    printf "%s" "${COMMENTS_RESPONSE}"\n'
-	'  else\n'
-	'    printf "%s\\n<<END>>\\n" "$*" >> "${POST_LOG}"\n'
-	'  fi\n'
-	'}\n'
-	'sleep() { :; }\n'
-)
-
-
-def _issue_with_grant(paths: list[str], association: str = "OWNER") -> dict:
-	body = "Do the thing.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in paths)
-	return {
-		"number": 123, "state": "open", "body": body,
-		"user": {"type": "User", "login": "maintainer"}, "author_association": association,
-	}
-
-
-def _run_gate_case(
-	*, plan: str | None, issue: dict, flag: str | None, guard: bool = True, comments: list | None = None,
-) -> dict:
-	script = _auto_approve_run_script()
-	with tempfile.TemporaryDirectory() as workdir:
-		tmp_path = Path(workdir)
-		(tmp_path / "scripts").mkdir()
-		(tmp_path / "scripts" / "gh_helpers.sh").write_text(_GATE_GH_STUB, encoding="utf-8")
-		if guard:
-			support = tmp_path / ".codex-workflow-src" / "scripts"
-			support.mkdir(parents=True)
-			shutil.copy2(GUARD_SCRIPT, support / GUARD_SCRIPT.name)
-		plan_file = tmp_path / "codex_output.txt"
-		if plan is not None:
-			plan_file.write_text(plan, encoding="utf-8")
-		output_path = tmp_path / "output"
-		post_log = tmp_path / "posts"
-		call_log = tmp_path / "calls"
-		env = os.environ.copy()
-		for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", "ALLOW_WORKFLOW_EDITS"):
-			env.pop(name, None)
-		env.update({
-			"GITHUB_OUTPUT": str(output_path),
-			"ISSUE_NUMBER": "123",
-			"ISSUE_RESPONSE": json.dumps(issue),
-			"COMMENTS_RESPONSE": json.dumps(comments or []),
-			"POST_LOG": str(post_log),
-			"CALL_LOG": str(call_log),
-			"CODEX_OUTPUT_FILE": str(plan_file),
-			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
-			"RUNNER_TEMP": str(tmp_path),
-		})
-		if flag is not None:
-			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = flag
-		result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, text=True, capture_output=True, check=True)
-		posts = post_log.read_text(encoding="utf-8") if post_log.exists() else ""
-		return {
-			"stdout": result.stdout,
-			"stderr": result.stderr,
-			"output": output_path.read_text(encoding="utf-8"),
-			"posts": [entry for entry in posts.split("\n<<END>>\n") if entry.strip()],
-			"calls": call_log.read_text(encoding="utf-8").split() if call_log.exists() else [],
-		}
-
-
-def _approved(result: dict) -> bool:
-	return "auto_approved=true" in result["output"] and any("/approved [auto-approved-by-plan]" in post for post in result["posts"])
-
-
-def test_automation_path_gate_is_off_by_default() -> None:
-	issue = _issue_with_grant([])
-	for flag in (None, "false", ""):
-		result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag=flag)
-		assert _approved(result), result
-		assert result["calls"] == []
-		assert "automation_path_hold" not in result["output"]
-	block = _step_block(_workflow_text(), "Auto-approve clear plan")
-	assert "ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}" in block
-	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}" in _workflow_text()
-
-
-def test_automation_path_gate_flag_is_forwarded_to_poller() -> None:
-	poller_workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8"))
-	step = next(step for step in poller_workflow["jobs"]["poll"]["steps"] if step.get("name") == "Process each tracking issue")
-	assert step["env"]["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] == "${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}"
-
-
-def test_automation_path_gate_approves_fully_granted_plan() -> None:
-	issue = _issue_with_grant([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
-	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true")
-	assert _approved(result), result
-	assert "user" in result["calls"]
-
-
-def test_automation_path_gate_withholds_ungranted_plan() -> None:
-	issue = _issue_with_grant([".github/workflows/plan.yml"])
-	result = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true")
-	assert not _approved(result)
-	assert "auto_approved=false" in result["output"]
-	assert "automation_path_hold=true" in result["output"]
-	assert "reason=automation_path_ungranted outcome=defer issue=123 paths=1 detail=path_not_granted" in result["stdout"]
-	assert len(result["posts"]) == 1
-	post = result["posts"][0]
-	assert "<!-- ai:automation-path-plan-hold:v1 issue=123 reason=automation_path_ungranted source=plan paths=" in post
-	assert "`scripts/orchestrate_poll_process.sh`" in post
-	assert "scripts/files_touched_scope_guard.py" not in post
-	assert "scripts/elsewhere.sh" not in post
-	assert "/approved [auto-approved-by-plan]" not in post
-	assert "cannot be granted through `files_touched`" not in post
-
-
-def test_automation_path_gate_hold_notes_ungrantable_directory_and_glob_entries() -> None:
-	# The grant builder drops entries ending in `/` or containing `*`, `?`, `[`,
-	# so the hold comment must point at `/approved` for them.
-	plan = "Implementation Plan\n\nFiles likely to change:\n- a `scripts/` helper\n- `workflow-templates/*.yml`\n"
-	result = _run_gate_case(plan=plan, issue=_issue_with_grant(["workflow-templates/*.yml"]), flag="true")
-	assert not _approved(result)
-	assert "reason=automation_path_ungranted outcome=defer issue=123 paths=2" in result["stdout"]
-	assert len(result["posts"]) == 1
-	post = result["posts"][0]
-	assert "`scripts/`" in post and "`workflow-templates/*.yml`" in post
-	assert "A directory entry ending in `/` or a glob entry" in post
-
-
-def test_automation_path_gate_skips_plans_without_automation_paths() -> None:
-	issue = _issue_with_grant([])
-	for plan in (GATE_PLAN_NO_AUTOMATION, GATE_PLAN_NEGATIVE_ONLY):
-		result = _run_gate_case(plan=plan, issue=issue, flag="true")
-		assert _approved(result), result
-		assert result["calls"] == []
-
-
-def test_automation_path_gate_fails_closed_when_check_unavailable() -> None:
-	issue = _issue_with_grant([".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"])
-	for kwargs in (
-		{"plan": GATE_PLAN, "guard": False},
-		{"plan": "Implementation Plan\n\nNo file list here.\n"},
-		{"plan": None},
-	):
-		result = _run_gate_case(issue=issue, flag="true", **kwargs)
-		assert not _approved(result), (kwargs, result)
-		assert "reason=automation_path_check_unavailable outcome=defer" in result["stdout"]
-		assert len(result["posts"]) == 1
-		assert "reason=automation_path_check_unavailable source=plan" in result["posts"][0]
-
-
-def test_automation_path_gate_deduplicates_hold_comment() -> None:
-	issue = _issue_with_grant([".github/workflows/plan.yml"])
-	first = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true")
-	marker = first["posts"][0].split("-f body=", 1)[1]
+def test_hold_posts_one_deduplicated_comment_naming_missing_paths() -> None:
+	posts: list[str] = []
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, posts_out=posts)
+	assert not posted
+	assert "automation_path_hold=true" in output
+	assert len(posts) == 1
+	hold = posts[0]
+	assert "automatic approval of such plans is off" in hold
+	assert "- `scripts/security_audit.sh`" in hold
+	assert ("<!-- ai:automation-path-plan-hold:v1 issue=123 "
+		"reason=automation_path_plan_auto_approval_disabled source=plan paths=") in hold
+	marker = hold.split("-f body=", 1)[1]
 	comments = [
-		{"id": 1, "created_at": "2026-10-09T00:00:00Z", "body": "Implementation Plan\n...", "author_association": "OWNER", "user": {"login": "maintainer"}},
-		{"id": 2, "created_at": "2026-10-09T00:01:00Z", "body": marker, "author_association": "OWNER", "user": {"login": "maintainer"}},
+		{"id": 1, "created_at": "2026-10-09T00:00:00Z", "body": "Implementation Plan\n...",
+			"author_association": "OWNER", "user": {"login": "maintainer"}},
+		{"id": 2, "created_at": "2026-10-09T00:01:00Z", "body": marker,
+			"author_association": "OWNER", "user": {"login": "maintainer"}},
 	]
-	again = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true", comments=comments)
-	assert not _approved(again)
-	assert again["posts"] == []
+	again: list[str] = []
+	posted, _, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=comments, posts_out=again)
+	assert not posted and again == []
 	untrusted = [comments[0], {**comments[1], "author_association": "NONE", "user": {"login": "stranger"}}]
-	third = _run_gate_case(plan=GATE_PLAN, issue=issue, flag="true", comments=untrusted)
-	assert len(third["posts"]) == 1
+	third: list[str] = []
+	_run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=untrusted, posts_out=third)
+	assert len(third) == 1
 
 
-def test_automation_path_plan_extractor_is_identical_in_plan_and_poller() -> None:
-	plan_block = _extractor_block(_workflow_text())
-	poller_block = _extractor_block(POLLER_SCRIPT.read_text(encoding="utf-8"))
-	assert plan_block == poller_block
-	cases = {
-		"# Files to change\n- `.github/x.yml`\n## Testing\n- `scripts/t.sh`\n": [".github/x.yml"],
-		"1. Files likely to change\n- ./scripts/a.sh:12, `prompts/b.txt`.\n- `workflow-templates/*.yml`\n2. Functions\n": [
-			"prompts/b.txt", "scripts/a.sh", "workflow-templates/*.yml",
-		],
-		"**Files changed**\nNothing else is modified:\n- `scripts/no.sh`\nDone with `scripts/yes.sh`\n": ["scripts/yes.sh"],
-		"Files likely to change:\n- `tests/a.py`\n- a `scripts/` helper\n": ["scripts/"],
-		"1. Files likely to change\n1. `tests/a.py`\n2. `scripts/b.sh`\n2. Functions\n- `scripts/c.sh`\n": ["scripts/b.sh"],
-		"Files likely to change:\n- `tests/a.py`\n7. `Implementation-time estimate: 30 minutes`\n- `scripts/d.sh`\n": [],
-		"**1. Files likely to change**\n- `scripts/e.sh`\n**2. Functions**\n- `scripts/f.sh`\n": ["scripts/e.sh"],
-	}
-	with tempfile.TemporaryDirectory() as workdir:
-		tmp_path = Path(workdir)
-		plan_file = tmp_path / "plan.md"
-		out_file = tmp_path / "out.txt"
-		for plan, expected in cases.items():
-			plan_file.write_text(plan, encoding="utf-8")
-			out_file.unlink(missing_ok=True)
-			result = subprocess.run(["python3", "-I", "-B", "-", str(plan_file), str(out_file)], input=plan_block, text=True, capture_output=True)
-			assert result.returncode == 0, (plan, result.stderr)
-			assert out_file.read_text(encoding="utf-8").split() == expected, plan
-		plan_file.write_text("No files section at all mentions scripts/x.sh\n", encoding="utf-8")
-		result = subprocess.run(["python3", "-I", "-B", "-", str(plan_file), str(out_file)], input=plan_block, text=True, capture_output=True)
-		assert result.returncode == 3
+def test_hold_comment_for_partial_grant_and_unavailable_check() -> None:
+	issue = dict(_GRANTED_ISSUE, body="files_touched:\n  - scripts/security_audit.sh\n")
+	posts: list[str] = []
+	_run_auto_approve(issue, plan_text=GRANTED_PLAN, gate_flag="true", posts_out=posts)
+	assert len(posts) == 1
+	assert "without a trusted exact grant" in posts[0]
+	assert "- `.github/workflows/security-audit.yml`" in posts[0]
+	assert "- `scripts/security_audit.sh`" not in posts[0]
+	posts = []
+	_run_auto_approve(_PIPELINE_ISSUE, plan_text="", posts_out=posts)
+	assert len(posts) == 1
+	assert "could not run" in posts[0]
+	assert "reason=plan_gate_error source=plan" in posts[0]
+
+
+def test_old_gate_helpers_are_gone() -> None:
+	# Issue #6769 replaced the #6838 gate; its extractor must not linger.
+	text = _workflow_text()
+	assert "automation_path_plan_gate()" not in text
+	assert "automation-path-plan-extractor" not in text
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert "_automation_path_plan_auto_approval_gate" not in poller
+	assert "automation-path-plan-extractor" not in poller
 
 
 def main() -> int:

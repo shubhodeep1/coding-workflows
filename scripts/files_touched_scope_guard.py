@@ -530,10 +530,15 @@ _PLAN_NEG_RESET_RE = re.compile(r"^\s*(?:\*\*|__)?\s*Files\b[^\n]*\bchang(?:e|ed
 _PLAN_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s)")
 _PLAN_CONTINUATION_RE = re.compile(r"^\s{2,}\S")
 # A protected path token: optional "./" or "/" prefix, an automation prefix in
-# any letter case, a slash, then path characters (globs kept so they hold).
+# any letter case, a slash, then everything up to whitespace, a backtick, a
+# quote or `<>|` (globs kept so they hold). The token is never cut at an
+# unusual filename character: `scripts/a+b.py` must stay whole, or a grant for
+# `scripts/a` would approve it.
 _PLAN_PATH_TOKEN_RE = re.compile(
-	r"(?:^|[^A-Za-z0-9_./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[A-Za-z0-9_.\-/*?\[\]]*)",
+	r"(?:^|[^A-Za-z0-9_./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`'\"<>|]*)",
 	re.IGNORECASE)
+_PLAN_PATH_TRAILING_PUNCT = ".,;:!)]}"
+_PLAN_PATH_LINE_SUFFIX_RE = re.compile(r":\d+(?::\d+)?$")
 _PLAN_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]")
 
 
@@ -573,6 +578,18 @@ def _plan_files_section(plan_text: str) -> str | None:
 	return "\n".join(kept) if found else None
 
 
+def _plan_path_token(raw: str) -> str:
+	"""Strip prose punctuation, a `:line[:col]` suffix and markdown bold from a token."""
+	token = raw
+	while True:
+		previous = token
+		token = _PLAN_PATH_LINE_SUFFIX_RE.sub("", token.rstrip(_PLAN_PATH_TRAILING_PUNCT))
+		if token.endswith("**") and not token.endswith("/**"):
+			token = token.rstrip("*")
+		if token == previous:
+			return token
+
+
 def extract_plan_automation_paths(plan_text: str) -> list[str]:
 	"""Protected paths a plan lists, scanning its Files section.
 
@@ -586,7 +603,7 @@ def extract_plan_automation_paths(plan_text: str) -> list[str]:
 	paths: list[str] = []
 	for line in text.splitlines():
 		for match in _PLAN_PATH_TOKEN_RE.finditer(line):
-			path = normalize_path(match.group(1).rstrip(".,"))
+			path = normalize_path(_plan_path_token(match.group(1)))
 			if not path or not is_automation_path(path) or path in seen:
 				continue
 			seen.add(path)

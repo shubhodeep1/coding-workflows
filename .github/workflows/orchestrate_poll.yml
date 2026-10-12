@@ -1071,9 +1071,6 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-          # Issue #6769: automatic /approved for plans listing automation
-          # paths stays off until an operator enables this variable.
-          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
