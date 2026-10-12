@@ -162,6 +162,15 @@ triage_verify_pr_head_route()
 	return 0
 }
 
+# Every exit that skips an unverified route (early closed/fork exits and
+# base-gate skips included) reports it, so the operator always gets the
+# routing_unverified log and WARNING. Callers set routing_result first.
+triage_report_routing_unverified()
+{
+	log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: PR-head routing could not be verified (detail: ${routing_result}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+}
+
 # --- Helpers (fail open if unavailable) ------------------------------------
 
 source scripts/gh_helpers.sh 2>/dev/null || true
@@ -385,10 +394,18 @@ if ! PR_URL_DISPLAY="$(triage_single_line_metadata "${PR_URL}")"; then
 fi
 if [ -n "${PR_STATE}" ] && [ "${PR_STATE}" != "open" ]; then
 	log "skip reason=pr_not_open pr=${PR_NUMBER} state=${PR_STATE}"
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+		routing_result="pr_not_open"
+		triage_report_routing_unverified
+	fi
 	exit 0
 fi
 if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
 	log "skip reason=fork_pr pr=${PR_NUMBER} head_repo=${HEAD_REPO_FULL_NAME}"
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+		routing_result="not_same_repo"
+		triage_report_routing_unverified
+	fi
 	exit 0
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
@@ -535,13 +552,6 @@ if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
 		ROUTING_REF="${routing_result}"
 	fi
 fi
-# Every exit that skips an unverified route (base-gate skips included) reports
-# it, so the operator always gets the routing_unverified log and WARNING.
-triage_report_routing_unverified()
-{
-	log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
-	tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: PR-head routing could not be verified (detail: ${routing_result}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
-}
 
 # --- Base-branch gate (#7020) ----------------------------------------------
 # The issue this script files is implemented as a new PR off the default

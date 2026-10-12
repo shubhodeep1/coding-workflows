@@ -2067,6 +2067,10 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 			("check_sha_missing", base, {"CHECK_TRIAGE_HEAD_SHA": ""}),
 			("pr_sha_missing", no_sha, {}),
 			("pr_not_open", no_state, {}),
+			# Explicit closed / fork payloads take the early exits, which must
+			# also report the unverified route.
+			("pr_not_open", {**base, "state": "closed"}, {}),
+			("not_same_repo", with_head(repo={"full_name": "fork/repo"}), {}),
 			("invalid_head_ref", with_head(ref="-bad"), {}),
 			("invalid_head_ref", with_head(ref="a..b"), {}),
 			("invalid_head_ref", with_head(ref="x`y"), {}),
