@@ -19,6 +19,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
@@ -35,6 +40,9 @@ REMOVAL_REGISTRY = REPO_ROOT / "docs" / "scripts-pending-removal.md"
 
 
 def _read(path: Path) -> str:
+	# review_autofix.yml step bodies moved to scripts/ are read inlined again.
+	if path == REVIEW_AUTOFIX:
+		return expanded_review_autofix_text()
 	return path.read_text(encoding="utf-8")
 
 

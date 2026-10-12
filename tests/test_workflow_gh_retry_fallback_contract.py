@@ -6,8 +6,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -423,6 +428,9 @@ def _gh_api_retry_step(text: str, name: str) -> str:
 
 
 def _gh_api_retry_workflow(name: str) -> str:
+	# review_autofix.yml step bodies moved to scripts/ are read inlined again (#6972).
+	if name == "review_autofix.yml":
+		return expanded_review_autofix_text()
 	return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
