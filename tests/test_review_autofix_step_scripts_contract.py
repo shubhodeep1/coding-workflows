@@ -134,6 +134,7 @@ def test_every_wrapper_is_registered_and_expands() -> None:
 
 
 def test_gate_job_step_scripts_come_only_from_verified_head_gate_checkout() -> None:
+	assert REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS, "gate-job step registry must not be empty"
 	raw = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
 	workflow = yaml.safe_load(raw)
 	gate_steps = workflow["jobs"]["gate"]["steps"]

@@ -62,16 +62,16 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_post_review_blocked_comment.sh", "error"),
 	"Post editor summary comment": ("review_autofix_step_post_editor_summary.sh", "error"),
 	"Detect smoke test and tune LLM settings": ("review_autofix_step_detect_smoke_test.sh", "error"),
+	"Evaluate review gate": ("review_autofix_step_evaluate_gate.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.
 # The gate job runs before support staging, so these are loaded only from the
 # SHA-pinned head-gate sparse checkout, never from SUPPORT_SCRIPTS_DIR,
 # .codex-workflow-src or a PR-head copy.
-# Merge resolution: the "Evaluate review gate" body is inline in
-# review_autofix.yml again (it carries origin/main's gate changes), so no
-# gate-job step is currently wrapped.
-REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS: dict[str, str] = {}
+REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS: dict[str, str] = {
+	"review_autofix_step_evaluate_gate.sh": ".codex-head-gate-src",
+}
 
 _WRAPPER_START_RE = re.compile(
 	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'

@@ -75,9 +75,28 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   # mergeable/mergeable_state (deterministic-skip conflict
   # suppression below), and changed_files (to verify the paginated
   # path list before either skip branch can run).
-  if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
-    2>/dev/null)"; then
+  source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+  type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+  # Classified retry (issue #6634): a 404 keeps the pr_state_unknown
+  # skip below; an exhausted transient error or a rate limit fails the
+  # gate loudly instead of silently skipping the review. A permanent
+  # error other than 404 (exit 2, e.g. a non-limit 403) fails too; the
+  # helper's GH_API_RETRY stderr line carries the status.
+  _pr_gate_rc=0
+  _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
+  _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
+  cat "${_pr_gate_err}" >&2 2>/dev/null || true
+  _pr_gate_not_found=false
+  if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
+  rm -f "${_pr_gate_err}"
+  if [ "${_pr_gate_rc}" -eq 75 ] \
+    || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; } \
+    || { [ "${_pr_gate_rc}" -eq 2 ] && declare -F _gh_api_classify >/dev/null && [ "${_pr_gate_not_found}" != "true" ]; }; then
+    echo "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}"
+    exit 1
+  fi
+  if [ "${_pr_gate_rc}" -eq 0 ]; then
     pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
     pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
     pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
@@ -323,7 +342,7 @@ gate_fetch_marker_comments()
   # shellcheck disable=SC2016
   if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f per_page=100 \
-    --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:"))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+    --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
     2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
     && [ -s "${gate_marker_comments_file}" ]; then
     gate_marker_fetch_state="ok"
@@ -541,7 +560,9 @@ fi
 # failure to workflow failure heal. A push (new head) resets the
 # count by construction. A reason the helper reports as
 # non_retryable=true (NON_RETRYABLE_FAILURE_REASONS) trips the cap on
-# its first marker (PR #6438: ~28 identical resolver runs).
+# its first marker (PR #6438: ~28 identical resolver runs). It is
+# re-armed once per verified support SHA not yet recorded as support=
+# on a trusted marker for the head (#6911, rearm=true from the helper).
 #
 # Scope and fail-open rules:
 #   * Every event (pull_request and workflow_dispatch) of a PR with
@@ -563,14 +584,18 @@ FINGERPRINT_CAP_COUNT="0"
 FINGERPRINT_CAP_ALREADY_APPLIED="false"
 FINGERPRINT_CAP_NON_RETRYABLE="false"
 FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
+FORCE_RB_JUDGE_CONFLICT_SKIP="false"
 case "${FINGERPRINT_CAP_MAX}" in
   ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
 esac
 if [ "${SHOULD_RUN}" = "true" ] \
   && [ "${pr_base_retargeted}" != "true" ] \
-  && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+  && { [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] || [ "${FORCE_RB_JUDGE:-false}" = "true" ]; } \
   && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
   && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+  # force_rb_judge runs enter even with the cap disabled: they never
+  # evaluate the cap, only the host-only conflict skip below (#6743),
+  # which has its own kill switch.
   fingerprint_cap_helper=""
   for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
     if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
@@ -580,6 +605,50 @@ if [ "${SHOULD_RUN}" = "true" ] \
   done
   if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
     echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
+    # Issue #6743 (#6733): the newest trusted same-head marker with
+    # reason conflict_resolver_sandbox_path_host_only means the
+    # resolver will refuse again; skip it so the judge can run.
+    # Anything unverifiable keeps the conflict steps.
+    frj_skip_reason=""
+    frj_marker_reason="none"
+    if [ "${REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED:-true}" = "false" ]; then
+      frj_skip_reason="disabled"
+    elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+      frj_skip_reason="head_sha_unavailable"
+    elif [ -z "${fingerprint_cap_helper}" ]; then
+      frj_skip_reason="helper_missing"
+    else
+      gate_fetch_marker_comments
+      if [ "${gate_marker_fetch_state}" != "ok" ]; then
+        frj_skip_reason="${gate_marker_fetch_state}"
+      else
+        frj_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
+          --comments-json "${gate_marker_comments_file}" \
+          --head-sha "${pr_head_sha_gate}" \
+          --author-login "${gate_marker_author_login}" \
+          --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)" || frj_decision=""
+        frj_count="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
+        frj_marker_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+        frj_newest_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "newest_reason" { print $2 }' | tail -n 1)"
+        [ -n "${frj_marker_reason}" ] || frj_marker_reason="none"
+        if ! [[ "${frj_count}" =~ ^[0-9]+$ ]]; then
+          frj_skip_reason="parse_error"
+        elif [ "${frj_count}" -eq 0 ]; then
+          frj_skip_reason="no_trusted_marker"
+        elif [ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+          frj_skip_reason="reason_mismatch"
+        elif [ "${frj_newest_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+          # A newer trusted marker (e.g. provider_unavailable, which
+          # the counter passes over) has another reason.
+          frj_skip_reason="newest_reason_mismatch"
+          frj_marker_reason="${frj_newest_reason:-none}"
+        else
+          frj_skip_reason="host_only_marker"
+          FORCE_RB_JUDGE_CONFLICT_SKIP="true"
+        fi
+      fi
+    fi
+    echo "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} outcome=$([ "${FORCE_RB_JUDGE_CONFLICT_SKIP}" = "true" ] && echo skip || echo run) reason=${frj_skip_reason} marker_reason=${frj_marker_reason}"
   elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
     echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
   elif [ -z "${fingerprint_cap_helper}" ]; then
@@ -590,11 +659,15 @@ if [ "${SHOULD_RUN}" = "true" ] \
       echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=${gate_marker_fetch_state}"
     else
       fingerprint_cap_decision=""
+      fingerprint_cap_extra_args=()
+      if grep -q 'current-support-sha' "${fingerprint_cap_helper}"; then
+        fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")
+      fi
       if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
         --comments-json "${gate_marker_comments_file}" \
         --head-sha "${pr_head_sha_gate}" \
         --author-login "${gate_marker_author_login}" \
-        --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)"; then
+        --support-sha "${REVIEW_SUPPORT_SHA:-}" "${fingerprint_cap_extra_args[@]}" 2>/dev/null)"; then
         fingerprint_cap_decision=""
       fi
       fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
@@ -611,7 +684,12 @@ if [ "${SHOULD_RUN}" = "true" ] \
         if [ "${FINGERPRINT_CAP_COUNT}" -ge 1 ] && [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "non_retryable" { print $2 }' | tail -n 1)" = "true" ]; then
           FINGERPRINT_CAP_NON_RETRYABLE="true"
         fi
-        if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
+        fingerprint_cap_rearm="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "rearm" { print $2 }' | tail -n 1)"
+        fingerprint_cap_prior_support="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "prior_support" { print $2 }' | tail -n 1)"
+        if [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ] && [ "${fingerprint_cap_rearm}" = "true" ] \
+          && [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}"
+        elif [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
           FINGERPRINT_CAP="true"
           SHOULD_RUN="false"
           SKIP_REASON="fingerprint_cap"
@@ -649,8 +727,43 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   fi
   FORCE_FULL_REVIEW_TIER="${FORCE_REVIEW}"
 
+  # Freshness-update fast path (#7084, Q60): see
+  # scripts/review_head_gate.sh freshness-sync. Reuses the marker
+  # comments read above; a missing helper or comments read keeps
+  # the normal review.
+  gate_freshness_sync_fast_path()
+  {
+    [ "${MERGE_BASE_SYNC_FAST_PATH_ENABLED:-true}" != "false" ] || return 1
+    [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
+    [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
+    # Same suppressors as the doc-only / small-diff skip: the skip
+    # job runs no conflict resolver and no single-issue security
+    # pass, and the updated head has no audit of its own.
+    if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
+      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
+      return 1
+    fi
+    if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+      && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
+      && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
+      && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
+      && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
+      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
+      return 1
+    fi
+    gate_fetch_marker_comments
+    [ "${gate_marker_fetch_state}" = "ok" ] || return 1
+    bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
+      "${pr_head_sha_gate}" "${pr_base_ref_gate:-${pr_base_ref:-}}" "${gate_marker_author_login}" "${gate_marker_comments_file}"
+  }
   if [ "${FORCE_REVIEW}" = "true" ]; then
     echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
+  elif gate_freshness_sync_fast_path; then
+    DETERMINISTIC_SKIP="true"
+    DET_SKIP_REASON="freshness_sync"
+    SHOULD_RUN="false"
+    SKIP_REASON="deterministic_skip_freshness_sync"
+    echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
   else
     # Size check uses the .additions/.deletions totals already
     # returned by the PR-state fetch above (no extra API call).
@@ -944,7 +1057,10 @@ for path in paths:
         materiality = "medium"
 
 print(json.dumps({
-    "agents_md_changed": "agents.md" in seen,
+    # CLAUDE.md §30: an agents.d/*.md fragment documents agents.md.
+    "agents_md_changed": "agents.md" in seen or any(
+        gate_fragment.startswith("agents.d/") and gate_fragment.endswith(".md") and gate_fragment.count("/") == 1 for gate_fragment in seen
+    ),
     "materiality": materiality,
 }))
 PY
@@ -1131,3 +1247,4 @@ echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
 echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
 echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
 echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"

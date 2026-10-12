@@ -5,8 +5,8 @@ The "Evaluate review gate" step body moved verbatim to `scripts/review_autofix_s
 
 | The numbers that matter | Value |
 | --- | --- |
-| `review_autofix.yml` size | 410,961 bytes (was: 481,287) |
-| Headroom below the guard | 69,039 bytes |
+| `review_autofix.yml` size | 350,009 bytes (was: 429,287 before this change, 481,287 in the failing run) |
+| Headroom below the guard | 129,991 bytes |
 | New GitHub API calls | 0 |
 
 What this means for operators: when the head-gate helper checkout fails or cannot be verified, the review gate now fails on every event. It used to fail only on `synchronize` and otherwise evaluate without the helper. The next push, the review sweep or the poller re-runs the gate.
