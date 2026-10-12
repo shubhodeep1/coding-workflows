@@ -2933,7 +2933,7 @@ and shipped:
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
-- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
+- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `true`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
 - `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `true`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
 - `UPDATER_PR_VERIFY` (`update_workflows.yml` job `verify`, runs only after the PR path opened or refreshed a pull request: `outcome=passed reason=ok pr= head= auto_merge=enabled|failed|skipped_unverified`, `outcome=rejected reason= stage=`)
 - `VALIDATE_CHANGED_FILES_SYNTAX`

@@ -3,7 +3,8 @@
 
 The "Verify attested release manifest" step of update_workflows.yml must sit
 between the upstream fetch and the first step that writes the consumer
-checkout, stay off unless UPDATER_VERIFY_RELEASE_MANIFEST is "true", check the
+checkout, run unless UPDATER_VERIFY_RELEASE_MANIFEST is set to a value other
+than "true" (unset or empty counts as "true"), check the
 attestation before running any code from the release tree, and fail the job
 on any rejection. The behavioural tests run the step body with bash against a
 throwaway git release repository and a fake `gh` under tmp_path.

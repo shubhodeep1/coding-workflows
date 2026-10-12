@@ -1586,8 +1586,9 @@ jobs:
   # a permission its caller did not grant fails the whole run at startup with
   # zero jobs, which would also stop this updater from refreshing an older
   # caller wrapper. The job inherits the caller's grant; the consumer template
-  # grants `statuses: write`, and without it the status post fails and the job
-  # fails closed. The attestation and bootstrap-hash logic stays inline for
+  # grants `statuses: write`. With an older wrapper that lacks it, each status
+  # post retries once with GH_PAT, and the job fails closed only when both are
+  # refused. The attestation and bootstrap-hash logic stays inline for
   # the same reason as in "Verify attested release manifest".
   verify:
     needs: update-wrappers
@@ -1608,6 +1609,7 @@ jobs:
         id: verify_inputs
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1629,12 +1631,22 @@ jobs:
           echo "sha_ok=true" >> "${VERIFY_OUT}"
 
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
-          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
-            -f state=pending \
-            -f "context=${VERIFY_STATUS_CONTEXT}" \
-            -f "description=Verifying updater PR tree against the attested release manifest" \
-            -f "target_url=${RUN_URL}" >/dev/null; then
-            reject status status_post_failed
+          post_pending_status() {
+            GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+              -f state=pending \
+              -f "context=${VERIFY_STATUS_CONTEXT}" \
+              -f "description=Verifying updater PR tree against the attested release manifest" \
+              -f "target_url=${RUN_URL}" >/dev/null
+          }
+          # Same GH_PAT fallback as "Publish verify result and enable
+          # auto-merge": a caller wrapper rendered before it granted
+          # `statuses: write` must still reach that step.
+          if ! post_pending_status "${GH_TOKEN:-}"; then
+            if [ -n "${MERGE_TOKEN:-}" ] && post_pending_status "${MERGE_TOKEN}"; then
+              echo "::warning::UPDATER_PR_VERIFY posted the status with GH_PAT because github.token was refused; the caller wrapper should grant statuses: write."
+            else
+              reject status status_post_failed
+            fi
           fi
 
       - name: Check out updater pull request head (data only)
@@ -2005,6 +2017,7 @@ jobs:
         if: ${{ always() && steps.verify_inputs.outputs.sha_ok == 'true' && steps.verify_publish.outcome != 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.GH_PAT }}
           JOB_STATUS: ${{ job.status }}
         run: |
           set -uo pipefail
@@ -2014,12 +2027,18 @@ jobs:
             VERIFY_STATE="error"
           fi
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
-          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
-            -f "state=${VERIFY_STATE}" \
-            -f "context=${VERIFY_STATUS_CONTEXT}" \
-            -f "description=Updater PR tree did not pass verification; auto-merge stays off" \
-            -f "target_url=${RUN_URL}" >/dev/null; then
-            echo "::warning::UPDATER_PR_VERIFY could not post the ${VERIFY_STATE} status."
+          post_failure_status() {
+            GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+              -f "state=${VERIFY_STATE}" \
+              -f "context=${VERIFY_STATUS_CONTEXT}" \
+              -f "description=Updater PR tree did not pass verification; auto-merge stays off" \
+              -f "target_url=${RUN_URL}" >/dev/null
+          }
+          # Same GH_PAT fallback as the other status posts in this job.
+          if ! post_failure_status "${GH_TOKEN:-}"; then
+            if [ -z "${MERGE_TOKEN:-}" ] || ! post_failure_status "${MERGE_TOKEN}"; then
+              echo "::warning::UPDATER_PR_VERIFY could not post the ${VERIFY_STATE} status."
+            fi
           fi
           echo "UPDATER_PR_VERIFY outcome=rejected reason=verify_failed stage=final pr=${PR_NUMBER} head=${PUSHED_SHA} auto_merge=none"
 
