@@ -442,6 +442,14 @@ if [ "$1" = "issue" ] && [ "$2" = "close" ]; then
   printf 'close %s\n' "$3" >> "${CALLS_LOG}"
   exit 0
 fi
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+  printf 'api_user\n' >> "${CALLS_LOG}"
+  if [ "${FAKE_GH_USER_FAIL:-0}" = "1" ]; then
+    exit 1
+  fi
+  printf '%s\n' "${FAKE_GH_LOGIN:-}"
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
   case "${args}" in
     *closingIssuesReferences*) printf '%s' "${FAKE_CLOSING_JSON}"; exit 0 ;;
@@ -501,6 +509,10 @@ def _run_status_sync(
 	title: str = "Change",
 	closing_nodes: list[dict] | None = None,
 	classify_nodes: list[dict] | None = None,
+	head_repo: str = "o/r",
+	author_login: str = "pipeline-bot",
+	gh_login: str = "pipeline-bot",
+	gh_user_fail: bool = False,
 ) -> dict:
 	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-"))
 	try:
@@ -542,6 +554,10 @@ def _run_status_sync(
 			"PR_TITLE": title,
 			"PR_BODY": body,
 			"FINAL_LABEL": "ai:merged" if merged else "ai:closed",
+			"PR_HEAD_REPO": head_repo,
+			"PR_AUTHOR_LOGIN": author_login,
+			"FAKE_GH_LOGIN": gh_login,
+			"FAKE_GH_USER_FAIL": "1" if gh_user_fail else "0",
 		}
 		update = subprocess.run(
 			["bash", "-c", _step_script("Update linked issue labels when PR closes")],
@@ -755,10 +771,13 @@ def test_default_branch_merge_with_fixes_labels_closes_and_finalizes() -> None:
 def test_unmerged_close_keeps_closed_label_close_and_lineage() -> None:
 	if _jq_missing("test_unmerged_close_keeps_closed_label_close_and_lineage"):
 		return
+	# Issue #7160: the bound pipeline PR (same repo, ai/issue-78 head,
+	# authored by the GH_PAT account) still closes its own issue.
 	result = _run_status_sync(
 		merged=False,
 		base_ref="feature-x",
 		default_branch="main",
+		head_ref="ai/issue-78",
 		closing_nodes=[_issue_node(78)],
 		classify_nodes=[_issue_node(78)],
 	)
@@ -766,6 +785,173 @@ def test_unmerged_close_keeps_closed_label_close_and_lineage() -> None:
 	assert _close_calls(result) == ["close 78"], result
 	finalize = _finalize_calls(result)
 	assert len(finalize) == 1 and "--final-state closed" in finalize[0], finalize
+	assert _user_calls(result) == ["api_user"], result
+
+
+def _user_calls(result: dict) -> list[str]:
+	return [c for c in result["calls"] if c == "api_user"]
+
+
+def _assert_untouched_unmerged(result: dict, issue: int, reason: str) -> None:
+	assert not any(c.startswith(f"label {issue} ") for c in result["calls"]), result
+	assert f"close {issue}" not in result["calls"], result
+	assert not any(f"--issue-number {issue} " in c or c.endswith(f"--issue-number {issue}") for c in _finalize_calls(result)), result
+	finalize_list = result["env"].get("LINEAGE_FINALIZE_ISSUE_NUMBERS", "").split()
+	assert str(issue) not in finalize_list, result
+	assert (
+		f"Unmerged close of PR #5649 left issue #{issue} unchanged (reason={reason})."
+	) in result["update_out"], result["update_out"]
+
+
+def test_unmerged_close_skips_unrelated_referenced_issue() -> None:
+	if _jq_missing("test_unmerged_close_skips_unrelated_referenced_issue"):
+		return
+	result = _run_status_sync(
+		merged=False,
+		base_ref="main",
+		default_branch="main",
+		head_ref="ai/issue-78",
+		closing_nodes=[_issue_node(78), _issue_node(79)],
+		classify_nodes=[_issue_node(78), _issue_node(79)],
+	)
+	assert _label_calls(result) == ["label 78 ai:closed"], result
+	assert _close_calls(result) == ["close 78"], result
+	finalize = _finalize_calls(result)
+	assert len(finalize) == 1 and "--issue-number 78" in finalize[0], finalize
+	_assert_untouched_unmerged(result, 79, "unbound_issue")
+
+
+def test_unmerged_close_body_fallback_on_non_pipeline_branch_writes_nothing() -> None:
+	if _jq_missing("test_unmerged_close_body_fallback_on_non_pipeline_branch_writes_nothing"):
+		return
+	result = _run_status_sync(
+		merged=False,
+		base_ref="main",
+		default_branch="main",
+		head_ref="feature/x",
+		body="Fixes #80",
+		classify_nodes=[_issue_node(80)],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert _user_calls(result) == [], result
+	assert result["env"].get("LINEAGE_FINALIZE_ISSUE_NUMBERS", "") == "", result
+	_assert_untouched_unmerged(result, 80, "unbound_issue")
+	assert '"reason":"non_completion_merge"' in result["lineage_out"], result["lineage_out"]
+
+
+def test_unmerged_close_rejects_foreign_head() -> None:
+	if _jq_missing("test_unmerged_close_rejects_foreign_head"):
+		return
+	for head_repo in ("evil/r", ""):
+		result = _run_status_sync(
+			merged=False,
+			base_ref="main",
+			default_branch="main",
+			head_ref="ai/issue-78",
+			head_repo=head_repo,
+			closing_nodes=[_issue_node(78)],
+			classify_nodes=[_issue_node(78)],
+		)
+		assert _label_calls(result) == [], (head_repo, result)
+		assert _close_calls(result) == [], (head_repo, result)
+		assert _finalize_calls(result) == [], (head_repo, result)
+		assert _user_calls(result) == [], (head_repo, result)
+		_assert_untouched_unmerged(result, 78, "foreign_head")
+
+
+def test_unmerged_close_rejects_non_pipeline_author() -> None:
+	if _jq_missing("test_unmerged_close_rejects_non_pipeline_author"):
+		return
+	result = _run_status_sync(
+		merged=False,
+		base_ref="main",
+		default_branch="main",
+		head_ref="ai/issue-78",
+		author_login="someone",
+		closing_nodes=[_issue_node(78)],
+		classify_nodes=[_issue_node(78)],
+	)
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	_assert_untouched_unmerged(result, 78, "author_mismatch")
+
+
+def test_unmerged_close_rejects_when_identity_unavailable() -> None:
+	if _jq_missing("test_unmerged_close_rejects_when_identity_unavailable"):
+		return
+	for kwargs in ({"gh_user_fail": True}, {"gh_login": ""}):
+		result = _run_status_sync(
+			merged=False,
+			base_ref="main",
+			default_branch="main",
+			head_ref="ai/issue-78",
+			closing_nodes=[_issue_node(78)],
+			classify_nodes=[_issue_node(78)],
+			**kwargs,
+		)
+		assert _label_calls(result) == [], (kwargs, result)
+		assert _close_calls(result) == [], (kwargs, result)
+		assert _finalize_calls(result) == [], (kwargs, result)
+		_assert_untouched_unmerged(result, 78, "identity_unavailable")
+
+
+def test_unmerged_close_reads_identity_at_most_once() -> None:
+	if _jq_missing("test_unmerged_close_reads_identity_at_most_once"):
+		return
+	# Branch suffix forms still bind to the issue; duplicates of the same
+	# candidate reach the identity check without a second /user read.
+	result = _run_status_sync(
+		merged=False,
+		base_ref="main",
+		default_branch="main",
+		head_ref="ai/issue-78-retry",
+		author_login="someone",
+		closing_nodes=[_issue_node(78), _issue_node(79)],
+		classify_nodes=[_issue_node(78), _issue_node(79)],
+	)
+	assert len(_user_calls(result)) <= 1, result
+	_assert_untouched_unmerged(result, 78, "author_mismatch")
+	_assert_untouched_unmerged(result, 79, "unbound_issue")
+
+
+def test_merged_default_branch_pr_by_non_pipeline_author_still_completes() -> None:
+	if _jq_missing("test_merged_default_branch_pr_by_non_pipeline_author_still_completes"):
+		return
+	result = _run_status_sync(
+		merged=True,
+		base_ref="main",
+		default_branch="main",
+		author_login="someone",
+		head_repo="evil/r",
+		closing_nodes=[_issue_node(81)],
+		classify_nodes=[_issue_node(81)],
+	)
+	assert _label_calls(result) == ["label 81 ai:merged"], result
+	assert _close_calls(result) == ["close 81"], result
+	assert len(_finalize_calls(result)) == 1, result
+	assert _user_calls(result) == [], result
+
+
+def test_unmerged_close_binding_inputs_come_from_payload_env() -> None:
+	text = _workflow_text()
+	update_step = _step_script("Update linked issue labels when PR closes")
+	assert "PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}" in text
+	assert "PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login || '' }}" in text
+	assert "${{" not in update_step
+	for token in ("foreign_head", "unbound_issue", "identity_unavailable", "author_mismatch"):
+		assert f'unmerged_skip_reason="{token}"' in update_step, token
+	assert "gh_retry gh api user --jq '.login // \"\"'" in update_step
+	# Order: cheap payload checks first, then the identity read.
+	assert (
+		update_step.find('unmerged_skip_reason="foreign_head"')
+		< update_step.find('unmerged_skip_reason="unbound_issue"')
+		< update_step.find('unmerged_skip_reason="identity_unavailable"')
+		< update_step.find('unmerged_skip_reason="author_mismatch"')
+		< update_step.find('target_merge_reason="closed_unmerged"')
+	)
 
 
 def test_tracking_issue_never_labelled_closed_or_lineage_finalized() -> None:
@@ -858,6 +1044,14 @@ if __name__ == "__main__":
 	test_managed_child_declared_custom_integration_merge_completes()
 	test_default_branch_merge_with_fixes_labels_closes_and_finalizes()
 	test_unmerged_close_keeps_closed_label_close_and_lineage()
+	test_unmerged_close_skips_unrelated_referenced_issue()
+	test_unmerged_close_body_fallback_on_non_pipeline_branch_writes_nothing()
+	test_unmerged_close_rejects_foreign_head()
+	test_unmerged_close_rejects_non_pipeline_author()
+	test_unmerged_close_rejects_when_identity_unavailable()
+	test_unmerged_close_reads_identity_at_most_once()
+	test_merged_default_branch_pr_by_non_pipeline_author_still_completes()
+	test_unmerged_close_binding_inputs_come_from_payload_env()
 	test_tracking_issue_never_labelled_closed_or_lineage_finalized()
 	test_extract_helper_ignores_fragment_urls_but_keeps_issue_links()
 	test_completion_gate_uses_event_default_branch_without_run_interpolation()

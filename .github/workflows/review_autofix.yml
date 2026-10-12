@@ -321,6 +321,7 @@ jobs:
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
       fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
+      force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}
     steps:
       - name: Bootstrap GitHub API retry helper
         continue-on-error: true
@@ -438,7 +439,9 @@ jobs:
       # autofix-identical-failure-count subcommand.
       - name: Checkout fingerprint cap helper
         id: checkout_fingerprint_cap
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -451,7 +454,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify fingerprint cap support identity
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         env:
           WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
           WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
@@ -470,6 +475,7 @@ jobs:
             exit 1
           fi
           echo "FINGERPRINT_CAP_SUPPORT_VERIFIED=true" >> "$GITHUB_ENV"
+          echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       # Port P6 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
       # Phase 8d): "Evaluate review gate" retargets a stacked PR whose base
@@ -528,6 +534,7 @@ jobs:
             scripts/review_workflow_sync_skip.sh
             scripts/build_sync_manifest.py
             workflow-templates/
+            scripts/review_autofix_step_evaluate_gate.sh
           sparse-checkout-cone-mode: false
 
       - name: Verify head-gate helper identity
@@ -541,7 +548,7 @@ jobs:
           CHECKOUT_OUTCOME: ${{ steps.checkout_head_gate_helper.outcome }}
         run: |
           set -euo pipefail
-          if [ "${CHECKOUT_OUTCOME}" != "success" ] || [ ! -f .codex-head-gate-src/scripts/review_head_gate.sh ] || [ ! -f .codex-head-gate-src/scripts/gh_helpers.sh ]; then
+          if [ "${CHECKOUT_OUTCOME}" != "success" ] || [ ! -f .codex-head-gate-src/scripts/review_head_gate.sh ] || [ ! -f .codex-head-gate-src/scripts/gh_helpers.sh ] || [ ! -f .codex-head-gate-src/scripts/review_autofix_step_evaluate_gate.sh ]; then
             if [ "${EVENT_NAME}" = "pull_request" ] && [ "${EVENT_ACTION}" = "synchronize" ] && [ "${REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED}" != "false" ]; then
               echo "::error::Required head-gate helper unavailable on synchronize."
               exit 1
@@ -590,6 +597,7 @@ jobs:
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).
           FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
+          REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
           # Skip the reviewer panel + editor cycle when:
           #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
@@ -641,1217 +649,12 @@ jobs:
           # #6625: markers from other support versions are not counted.
           REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
-          set -euo pipefail
-
-          SHOULD_RUN="true"
-          POST_MERGE_DISPATCH="false"
-          SKIP_REASON=""
-          GATE_SKIP_RECORDED="false"
-          # The skip-AI marker counts only when intentional (issue #4985): in
-          # the PR title, or on a body line that holds nothing but the marker
-          # (up to 3 leading spaces) outside a ``` / ~~~ fenced block. A
-          # quoted, backticked or mid-sentence mention is reviewed. A fence
-          # opens on any line starting with 3+ backticks or tildes and closes
-          # only on a line of up to 3 spaces, then a run of the same
-          # character at least as long as the opener, then only blanks, so
-          # a ``` line inside a ```` fence stays inside it (issue #5377); an
-          # unclosed fence runs to the end of the body. Keep this
-          # program identical to review_autofix_sweep.yml's copy
-          # (tests/test_skip_ai_marker_rule.py runs both). It reads its
-          # whole input, so pipefail never sees a SIGPIPE from printf.
-          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
-          POST_MERGE_PR_TEXT_JSON='{"title":"","body":""}'
-          POST_MERGE_LINKED_ISSUES_JSON='[]'
-          POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY="false"
-          FORCE_FULL_REVIEW_TIER="false"
-
-          pr_state=""
-          pr_merged="false"
-          pr_head_ref=""
-          pr_base_ref=""
-          pr_head_repo=""
-          pr_auto_merge_enabled=""
-          pr_labels=""
-          pr_additions=""
-          pr_deletions=""
-          pr_changed_files=""
-          pr_mergeable=""
-          pr_mergeable_state=""
-          pr_head_sha_gate=""
-          pr_head_repo_gate=""
-          review_checkout_sha=""
-          pr_base_ref_gate=""
-          pr_base_retargeted="false"
-          pr_updated_at_gate=""
-          pr_title_cached="${PR_TITLE:-}"
-          pr_body_cached="${PR_BODY:-}"
-          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-            : # fall through to existing PR-API fetch below
-          elif [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] && [ -n "${HEAD_REF_OVERRIDE:-}" ]; then
-            # No-PR claude-branch review path: caller (push to claude/** with
-            # no open PR — see internal-review.yml resolve job) supplied the
-            # head ref directly. Treat as an open synthetic PR for gating
-            # purposes and leave PR-shaped fields empty; downstream editor /
-            # commit / auto-merge steps still require a real PR number and are
-            # skipped by the no-PR review-only mode below.
-            pr_head_ref="${HEAD_REF_OVERRIDE}"
-            pr_state="open"
-            echo "AUTOFIX_GATE_NO_PR_FALLBACK head_ref=${pr_head_ref} reason=force_claude_branch_review_push"
-          else
-            SHOULD_RUN="false"
-            SKIP_REASON="invalid_pr_number"
-            echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-head-gate-src/scripts/review_autofix_step_evaluate_gate.sh"
+          if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" != "true" ] || [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::Verified head-gate checkout does not provide scripts/review_autofix_step_evaluate_gate.sh; refusing to evaluate the review gate."
+            exit 1
           fi
-          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-            # CLAUDE.md §15: extend the existing PR fetch to also return
-            # labels (force-review override check below), per-PR
-            # additions/deletions totals (deterministic-skip size check), and
-            # mergeable/mergeable_state (deterministic-skip conflict
-            # suppression below), and changed_files (to verify the paginated
-            # path list before either skip branch can run).
-            source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
-            type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
-            # Classified retry (issue #6634): a 404 keeps the pr_state_unknown
-            # skip below; an exhausted transient error or a rate limit fails the
-            # gate loudly instead of silently skipping the review. A permanent
-            # error other than 404 (exit 2, e.g. a non-limit 403) fails too; the
-            # helper's GH_API_RETRY stderr line carries the status.
-            _pr_gate_rc=0
-            _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
-            _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
-            cat "${_pr_gate_err}" >&2 2>/dev/null || true
-            _pr_gate_not_found=false
-            if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
-            rm -f "${_pr_gate_err}"
-            if [ "${_pr_gate_rc}" -eq 75 ] \
-              || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; } \
-              || { [ "${_pr_gate_rc}" -eq 2 ] && declare -F _gh_api_classify >/dev/null && [ "${_pr_gate_not_found}" != "true" ]; }; then
-              echo "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}"
-              exit 1
-            fi
-            if [ "${_pr_gate_rc}" -eq 0 ]; then
-              pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
-              pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
-              pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
-              pr_base_ref="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
-              pr_head_repo="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
-              pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
-              pr_auto_merge_enabled="$(printf '%s' "${_pr_gate}" | jq -r 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' 2>/dev/null || echo "")"
-              pr_head_repo_gate="${pr_head_repo}"
-              pr_base_ref_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
-              pr_updated_at_gate="$(printf '%s' "${_pr_gate}" | jq -r '.updated_at // ""' 2>/dev/null || echo "")"
-              pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
-              pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
-              pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
-              pr_changed_files="$(printf '%s' "${_pr_gate}" | jq -r '.changed_files | if type == "number" and . == floor then tostring else "" end' 2>/dev/null || echo "")"
-              pr_mergeable="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
-              pr_mergeable_state="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
-              if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
-                pr_title_cached="$(printf '%s' "${_pr_gate}" | jq -r '.title // ""' 2>/dev/null || echo "")"
-              fi
-              if [ -z "$(printf '%s' "${pr_body_cached}" | tr -d '[:space:]')" ]; then
-                pr_body_cached="$(printf '%s' "${_pr_gate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
-              fi
-              # Withdraw an enrolled head before the rest of gate evaluation,
-              # reusing this PR read rather than fetching the PR a second time.
-              if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] && [ "${EVENT_NAME}" = "pull_request" ] \
-                && { [ "${EVENT_ACTION}" = "opened" ] || [ "${EVENT_ACTION}" = "synchronize" ]; }; then
-                PR_EVENT_HEAD_SHA="${PR_HEAD_SHA:-}" GATE_HEAD_SHA="${pr_head_sha_gate}" \
-                  GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}" DETERMINISTIC_SKIP=false \
-                  bash .codex-head-gate-src/scripts/review_head_gate.sh gate
-                echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"
-              fi
-            fi
-          fi
-
-          # Port P6: retarget an open stacked PR whose base already merged
-          # (scripts/retarget_merged_base.sh; no API call when the base is the
-          # default branch, fail-open otherwise).
-          if [ "${RETARGET_HELPER_VERIFIED:-false}" = "true" ] && [ "${pr_state}" = "open" ] \
-            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${pr_base_ref_gate}" ] && [ -n "${RETARGET_DEFAULT_BRANCH:-}" ]; then
-            retargeted_base="$(bash .codex-retarget-src/scripts/retarget_merged_base.sh pr "${REPOSITORY}" "${PR_NUMBER}" "${pr_base_ref_gate}" "${RETARGET_DEFAULT_BRANCH}")" || retargeted_base=""
-            if [ -n "${retargeted_base}" ] && [ "${retargeted_base}" != "${pr_base_ref_gate}" ]; then
-              pr_base_ref_gate="${retargeted_base}"
-              pr_base_retargeted="true"
-              # The head is unchanged, but the old-base mergeability and diff
-              # no longer authorize any same-head or deterministic skip.
-              pr_mergeable=""
-              pr_mergeable_state=""
-            fi
-          fi
-
-          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
-            SHOULD_RUN="false"
-            SKIP_REASON="pr_state_unknown"
-            echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
-          elif [ "${pr_state}" = "closed" ]; then
-            SHOULD_RUN="false"
-            SKIP_REASON="pr_closed"
-            if [ "${pr_merged}" = "true" ]; then
-              POST_MERGE_DISPATCH="true"
-            fi
-          elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
-            SHOULD_RUN="false"
-            SKIP_REASON="draft_or_skip_ai"
-          elif [[ "${PR_TITLE}" == *"[skip ai]"* ]] \
-            || printf '%s\n' "${PR_BODY}" | awk "${SKIP_AI_BODY_AWK}"; then
-            SHOULD_RUN="false"
-            SKIP_REASON="skip_ai_marker"
-          fi
-
-          # A PR checkout must never fall back to the dispatching commit. The
-          # authenticated PR response is also the only source of the SHA for
-          # workflow_dispatch / workflow_call; fork heads are not safe to run
-          # beside review-job credentials, including in deterministic skip.
-          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ "${pr_state}" = "open" ]; then
-            if [ "${pr_head_repo_gate}" = "${REPOSITORY}" ] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
-              review_checkout_sha="${pr_head_sha_gate}"
-            else
-              SHOULD_RUN="false"
-              SKIP_REASON="review_checkout_unverified"
-              echo "::warning::PR #${PR_NUMBER} head repo or SHA is unverified; skipping review and deterministic merge."
-            fi
-          fi
-
-          # post-merge-validate-dispatch runs in a separate job and cannot
-          # read the codex-agent runtime files. Hand off compact caches via
-          # gate outputs so the merged-PR path can reuse the already fetched
-          # PR text and linked-issue labels before any live fallback.
-          if [ "${POST_MERGE_DISPATCH}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-            post_merge_linked_issues_cache_known="false"
-            POST_MERGE_PR_TEXT_JSON="$(jq -cn --arg title "${pr_title_cached}" --arg body "${pr_body_cached}" '{title: $title, body: $body}')"
-            if _post_merge_linked="$(gh api graphql \
-              -f owner="${REPOSITORY%/*}" \
-              -f name="${REPOSITORY#*/}" \
-              -F number="${PR_NUMBER}" \
-              -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
-              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' \
-              2>/dev/null)"; then
-              POST_MERGE_LINKED_ISSUES_JSON="$(printf '%s' "${_post_merge_linked}" | jq -c '.' 2>/dev/null || echo '[]')"
-              post_merge_linked_issues_cache_known="true"
-            else
-              echo "::warning::Failed to cache linked issue labels for merged PR #${PR_NUMBER}; post-merge validation will fall back to live lookups."
-            fi
-            if [ "${post_merge_linked_issues_cache_known}" = "true" ] \
-              && [ "${POST_MERGE_LINKED_ISSUES_JSON}" = "[]" ] \
-              && [ -z "$(printf '%s%s' "${pr_title_cached}" "${pr_body_cached}" | tr -d '[:space:]')" ]; then
-              POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY="true"
-            fi
-          fi
-
-          # No-PR claude-branch reviewer-comment mode:
-          # Pushes to claude/** with no open PR have no PR thread to update
-          # and no PR number for the editor / commit / auto-merge loop. Keep
-          # that synthetic no-PR route as reviewer-comment-only, but do NOT
-          # special-case PR-backed claude/** branches here. Once a claude/**
-          # branch has a PR, it takes the normal PR review path.
-          CLAUDE_BRANCH_REVIEW="false"
-          if [ "${SHOULD_RUN}" = "true" ] \
-            && [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] \
-            && [ -z "${PR_NUMBER:-}" ] \
-            && [ -n "${pr_head_ref}" ]; then
-            case "${pr_head_ref}" in
-              claude/*)
-                CLAUDE_BRANCH_REVIEW="true"
-                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW_NO_PR pr=${PR_NUMBER:-none} head_ref=${pr_head_ref} — running reviewer panel + commit-comment path because no PR exists."
-                ;;
-            esac
-          fi
-
-          # Self-triggered autofix skip:
-          # When a pull_request.synchronize event was fired by the autofix's
-          # own [ai-autofix] commit push (GitHub-attributed .author.login or
-          # .committer.login equals AUTOFIX_BOT_LOGIN, default "codex"), the
-          # follow-up "verification" run re-executes the full reviewer panel + editor
-          # pass on the tree that was just committed. In the common case
-          # every reviewer finding has already been applied or classified in
-          # the preceding fix run, so this pass returns Change status:
-          # not-edited and contributes no new work — it is pure cost
-          # (~7 LLM calls per follow-up run). Skipping it cuts ~50% of
-          # autofix LLM spend per fix cycle.
-          #
-          # Safety boundary:
-          #   * Only synchronize events are eligible. workflow_dispatch (the
-          #     post-commit fallback, EDITOR_CHANGES_LOST re-dispatch,
-          #     orchestrator conflict-dispatch in _dispatch_review_for_conflicts,
-          #     and manual re-runs) always runs.
-          #   * pull_request.opened / reopened / ready_for_review always run.
-          #   * Only the [ai-autofix] prefix is skipped; [ai-merge-resolve]
-          #     commits still run the verification pass so post-resolution
-          #     reviewer coverage is preserved (conflict-resolved code is
-          #     higher-risk than a vanilla autofix edit).
-          #   * Identity guard is based on GitHub-attributed identity:
-          #     .author.login or .committer.login on the commit API response
-          #     must equal AUTOFIX_BOT_LOGIN (default "codex"). These fields
-          #     are resolved server-side by GitHub from the push credentials
-          #     and are NOT user-controlled — unlike .commit.author.email,
-          #     which is spoofable. If both logins are empty (e.g. an
-          #     unauthenticated mirror push or a commit whose author email
-          #     is not linked to any GitHub account), the gate fails open
-          #     and runs review normally.
-          #
-          # Safety net:
-          #   If a [ai-autofix] commit is incomplete or regresses the tree,
-          #   the orchestrator stall cron (internal-orchestrate-poll.yml
-          #   every 30 min) re-kicks autofix via workflow_dispatch, which
-          #   bypasses this skip. Worst-case window: ~30 min.
-          #
-          # Opt-IN to the synchronize-self-skip: set repository variable
-          # AUTOFIX_SKIP_SELF_TRIGGERED=true. Default is now `false` so that
-          # autofix runs continuously on every push (including its own
-          # [ai-autofix] verification reruns), matching the new
-          # `internal-review-autofix-sweep` cron behaviour. Flip the var to
-          # `true` to restore the prior LLM-cost-saving skip.
-          # Override bot login: set repository variable AUTOFIX_BOT_LOGIN.
-          if [ "${SHOULD_RUN}" = "true" ] \
-            && [ "${EVENT_NAME}" = "pull_request" ] \
-            && [ "${EVENT_ACTION}" = "synchronize" ] \
-            && [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ] \
-            && [ -n "${PR_HEAD_SHA}" ]; then
-            head_meta=""
-            if ! head_meta="$(gh api "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}" \
-              --jq '[(.commit.message // "" | split("\n")[0]), (.author.login // ""), (.committer.login // "")] | @tsv' \
-              2>/dev/null)"; then
-              # Fail open — API error falls through to normal run so the
-              # cycle is never silently broken.
-              echo "AUTOFIX_GATE_SKIP_QUERY_FAILED pr=${PR_NUMBER:-?} head_sha=${PR_HEAD_SHA} reason=api_error"
-              head_meta=""
-            fi
-            if [ -n "${head_meta}" ]; then
-              head_msg_line="$(printf '%s' "${head_meta}" | cut -f1)"
-              head_author_login="$(printf '%s' "${head_meta}" | cut -f2)"
-              head_committer_login="$(printf '%s' "${head_meta}" | cut -f3)"
-              bot_login="${AUTOFIX_BOT_LOGIN:-codex}"
-              case "${head_msg_line}" in
-                "[ai-autofix]"*)
-                  if [ -n "${bot_login}" ] \
-                    && { [ "${head_author_login,,}" = "${bot_login,,}" ] \
-                      || [ "${head_committer_login,,}" = "${bot_login,,}" ]; }; then
-                    SHOULD_RUN="false"
-                    SKIP_REASON="self_triggered_autofix"
-                    GATE_SKIP_RECORDED="true"
-                    echo "AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
-                  else
-                    echo "AUTOFIX_GATE_NO_SKIP_IDENTITY pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
-                  fi
-                  ;;
-              esac
-            fi
-          fi
-
-          # ----- PR comments shared by the terminal same-head skip and the
-          # identical-failure fingerprint cap (CLAUDE.md §15) -----
-          # Both checks authenticate workflow-owned PR-comment markers against
-          # the login GH_PAT posts as, and both read the PR's issue comments.
-          # gate_fetch_marker_comments issues the `gh api user` lookup and the
-          # paginated comments call at most once per gate evaluation, on first
-          # use, so enabling both checks still costs one comments call. The
-          # file keeps only the comments either parser reads: the
-          # REVIEW_AUTOFIX_PARTIAL_V1 markers (verbatim), and the failure /
-          # cap markers, failure comment texts and editor summaries the cap
-          # scan reads (other bodies clipped to their first and last 2000
-          # characters; both markers sit at the ends of their comments).
-          # gate_marker_fetch_state: pending | ok | marker_author_unavailable
-          # | api_error.
-          gate_marker_fetch_state="pending"
-          gate_marker_author_login=""
-          gate_marker_comments_file="${RUNNER_TEMP:-/tmp}/review_gate_marker_comments.json"
-          gate_fetch_marker_comments()
-          {
-            if [ "${gate_marker_fetch_state}" != "pending" ]; then
-              return 0
-            fi
-            # The existing PR and comments calls do not expose the identity
-            # authenticated by GH_PAT, so this lookup cannot be merged into
-            # either response. Resolve it once for this gate evaluation.
-            if ! gate_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
-              gate_marker_author_login=""
-            fi
-            if [ -z "${gate_marker_author_login}" ]; then
-              gate_marker_fetch_state="marker_author_unavailable"
-              return 0
-            fi
-            # $b is a jq variable, not a shell expansion.
-            # shellcheck disable=SC2016
-            if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              -f per_page=100 \
-              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
-              2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
-              && [ -s "${gate_marker_comments_file}" ]; then
-              gate_marker_fetch_state="ok"
-            else
-              gate_marker_fetch_state="api_error"
-            fi
-          }
-
-          # ----- Terminal same-head skip (workflow_dispatch only) -----
-          # The partial-finalize path caps same-head resume rounds at
-          # REVIEW_MAX_RESUME_ROUNDS and marks the cycle terminal
-          # (`resume_state=no_progress` or `round_budget_exhausted`,
-          # `resume_should_continue=false`) in the machine-readable block of
-          # its `<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->` PR comment, keyed on
-          # `head_sha=`. Nothing else in the run can make progress on that
-          # head, yet the review_autofix_sweep cron re-dispatches every open
-          # PR every 30 minutes: after PR #4077 went terminal on 0d30bc69
-          # (2026-09-12T15:55Z) the sweep dispatched ~25 more same-head runs
-          # over the next 12.5 hours, each restoring the cached terminal
-          # state and exiting neutral after ~6 minutes of runner setup.
-          # Skip those dispatches here, before the codex-agent job starts.
-          #
-          # Scope and fail-open rules:
-          #   * workflow_dispatch only. pull_request events either carry a
-          #     new head (the marker no longer matches) or are the
-          #     opened/reopened/ready_for_review events that are never
-          #     skipped; leaving them untouched keeps this guard narrow. A
-          #     reusable workflow retains its caller's `github` context, so
-          #     the sweep's internal-review.yml dispatch reaches this block
-          #     with EVENT_NAME=workflow_dispatch.
-          #   * force_rb_judge dispatches (stall poller) bypass the skip.
-          #   * `[force-review]` in the title or the `force-review` label
-          #     bypasses the skip, mirroring the deterministic-skip override.
-          #   * Only a PR GitHub reports as mergeable=true is skipped: a
-          #     conflicted (or not-yet-computed) PR stays on codex-agent so
-          #     the "Detect merge conflicts" step + resolver can still run
-          #     on the same head.
-          #   * A comments API failure or an unparseable marker logs
-          #     AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED and runs normally.
-          #   * vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD=false disables the check.
-          # Cost (CLAUDE.md §15): head_sha rides on the existing /pulls fetch
-          # above. The authenticated marker author cannot be derived from that
-          # response or the comments response, so eligible dispatches issue one
-          # GET /user plus one paginated GET /issues/{n}/comments, shared with
-          # the fingerprint cap below through gate_fetch_marker_comments.
-          if [ "${SHOULD_RUN}" = "true" ] \
-            && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
-            && [ "${pr_base_retargeted}" != "true" ] \
-            && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
-            && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
-            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-            terminal_force_review="false"
-            if printf '%s' "${pr_title_cached}" | grep -Fq "[force-review]"; then
-              terminal_force_review="true"
-            fi
-            case ",${pr_labels}," in
-              *,force-review,*) terminal_force_review="true" ;;
-            esac
-            if [ "${terminal_force_review}" = "true" ]; then
-              echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} reason=force_review_marker"
-            elif [ "${pr_mergeable}" != "true" ]; then
-              echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} reason=mergeable_not_true mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown}"
-            elif [ -z "${pr_head_sha_gate}" ]; then
-              echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=unknown reason=head_sha_unavailable"
-            else
-              gate_fetch_marker_comments
-              terminal_marker_author_login="${gate_marker_author_login}"
-              if [ -z "${terminal_marker_author_login}" ]; then
-                echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=marker_author_unavailable"
-              else
-                # Keep only the partial-finalize marker comments (id, author,
-                # created_at, body) so the parser below can authenticate the
-                # workflow-owned state.
-                partial_marker_comments_json=""
-                if [ "${gate_marker_fetch_state}" = "ok" ]; then
-                  if ! partial_marker_comments_json="$(jq -c '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->"))]' "${gate_marker_comments_file}" 2>/dev/null)"; then
-                    partial_marker_comments_json=""
-                  fi
-                fi
-                if [ -z "${partial_marker_comments_json}" ]; then
-                  echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
-                else
-                  terminal_decision=""
-                  if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BASE_REF="${pr_base_ref_gate}" GATE_BASE_UPDATED_AT="${pr_updated_at_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
-          import json
-          import os
-          import re
-
-          # Decide whether the newest REVIEW_AUTOFIX_PARTIAL_V1 marker for the
-          # current head SHA says the same-head resume cycle is terminal.
-          # Output is KEY=VALUE lines consumed by the shell below; every value
-          # is reduced to [A-Za-z0-9_.-] so it is safe inside a log line.
-          head_sha = (os.environ.get("GATE_HEAD_SHA") or "").strip().lower()
-          base_ref = (os.environ.get("GATE_BASE_REF") or "").strip()
-          base_updated_at = (os.environ.get("GATE_BASE_UPDATED_AT") or "").strip()
-          bot_login = (os.environ.get("GATE_BOT_LOGIN") or "").strip().lower()
-          marker_author_login = (os.environ.get("GATE_MARKER_AUTHOR_LOGIN") or "").strip().lower()
-          try:
-              comments = json.loads(os.environ.get("PARTIAL_MARKER_COMMENTS_JSON") or "[]")
-          except (TypeError, ValueError):
-              raise SystemExit(2)
-          if not isinstance(comments, list):
-              raise SystemExit(2)
-
-          field_re = re.compile(r"^\s*([a-z_]+)=(.*?)\s*$")
-
-          def marker_fields(body: object) -> dict[str, str]:
-              fields: dict[str, str] = {}
-              in_block = False
-              for line in str(body or "").splitlines():
-                  if line.strip().startswith("```"):
-                      in_block = not in_block
-                      continue
-                  if not in_block:
-                      continue
-                  match = field_re.match(line)
-                  if match:
-                      fields.setdefault(match.group(1), match.group(2).strip())
-              return fields
-
-          def clean(value: object) -> str:
-              return re.sub(r"[^A-Za-z0-9_.-]", "", str(value or "")) or "unknown"
-
-          latest_key = None
-          latest_fields: dict[str, str] = {}
-          latest_id = ""
-          matching = 0
-          untrusted_markers = 0
-          commit_bot_markers = 0
-          for comment in comments:
-              if not isinstance(comment, dict):
-                  continue
-              fields = marker_fields(comment.get("body"))
-              if fields.get("partial_finalize") != "true":
-                  continue
-              if not head_sha or fields.get("head_sha", "").strip().lower() != head_sha:
-                  continue
-              marker_base = fields.get("base_ref", "")
-              if marker_base and marker_base != base_ref:
-                  continue
-              # A legacy marker has no base identity; a PR update timestamp
-              # cannot prove whether it was posted before a base change.
-              if not marker_base:
-                  continue
-              author_login = str(comment.get("author_login") or "").strip().lower()
-              if not marker_author_login or author_login != marker_author_login:
-                  untrusted_markers += 1
-                  if bot_login and author_login == bot_login:
-                      commit_bot_markers += 1
-                  continue
-              matching += 1
-              try:
-                  comment_id = int(comment.get("id") or 0)
-              except (TypeError, ValueError):
-                  comment_id = 0
-              key = (str(comment.get("created_at") or ""), comment_id)
-              if latest_key is None or key > latest_key:
-                  latest_key = key
-                  latest_fields = fields
-                  latest_id = str(comment_id)
-
-          terminal = "false"
-          if matching and latest_fields.get("resume_should_continue", "").strip().lower() == "false":
-              terminal = "true"
-          print(f"terminal={terminal}")
-          print(f"matching_markers={matching}")
-          print(f"untrusted_markers={untrusted_markers}")
-          print(f"commit_bot_markers={commit_bot_markers}")
-          print(f"resume_state={clean(latest_fields.get('resume_state'))}")
-          print(f"resume_round={clean(latest_fields.get('resume_round'))}")
-          print(f"resume_round_limit={clean(latest_fields.get('resume_round_limit'))}")
-          print(f"marker_comment_id={clean(latest_id)}")
-          PY
-                  )"; then
-                    terminal_decision=""
-                  fi
-                  if [ -z "${terminal_decision}" ]; then
-                    echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=parse_error"
-                  else
-                    terminal_same_head="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "terminal" { print $2 }' | tail -n 1)"
-                    terminal_matching_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "matching_markers" { print $2 }' | tail -n 1)"
-                    terminal_untrusted_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "untrusted_markers" { print $2 }' | tail -n 1)"
-                    terminal_commit_bot_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "commit_bot_markers" { print $2 }' | tail -n 1)"
-                    terminal_resume_state="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_state" { print $2 }' | tail -n 1)"
-                    terminal_resume_round="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round" { print $2 }' | tail -n 1)"
-                    terminal_resume_round_limit="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round_limit" { print $2 }' | tail -n 1)"
-                    terminal_marker_comment_id="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "marker_comment_id" { print $2 }' | tail -n 1)"
-                    if [ "${terminal_same_head}" = "true" ]; then
-                      SHOULD_RUN="false"
-                      SKIP_REASON="terminal_same_head"
-                      GATE_SKIP_RECORDED="true"
-                      echo "AUTOFIX_GATE_SKIP reason=terminal_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} marker_comment_id=${terminal_marker_comment_id} mergeable=${pr_mergeable}"
-                    elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
-                      echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
-                    fi
-                  fi
-                fi
-              fi
-            fi
-          fi
-
-          # ----- Identical-failure fingerprint cap -----
-          # Every failure comment the codex-agent job posts ends with a
-          # `<!-- review-autofix-failure:v1 head=<sha> reason=<r> fp=<sha256>
-          # degraded=<0|1> run=<id> -->` marker (fp = the failure reason plus
-          # the normalised error signature of the failing stage's stderr).
-          # When the trailing markers for the current head written by the
-          # GH_PAT identity share one fingerprint REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL
-          # (default 3) times, the failure is deterministic: another run on
-          # this head spends reviewer and editor models to fail the same way
-          # (PR #4259: seven identical editor failures on one head, about 75
-          # minutes each). Stop here instead and hand the PR to the sibling
-          # fingerprint-cap-block job, which labels the linked issues (or the
-          # PR) ai:review-blocked, posts one cap comment and reports the
-          # failure to workflow failure heal. A push (new head) resets the
-          # count by construction. A reason the helper reports as
-          # non_retryable=true (NON_RETRYABLE_FAILURE_REASONS) trips the cap on
-          # its first marker (PR #6438: ~28 identical resolver runs).
-          #
-          # Scope and fail-open rules:
-          #   * Every event (pull_request and workflow_dispatch) of a PR with
-          #     a known head SHA, once every earlier gate passed.
-          #   * force_rb_judge dispatches (stall poller) bypass the cap: the
-          #     review-blocked judge is the cap's intended consumer.
-          #   * A missing helper, a comments / identity lookup failure, or a
-          #     parse failure logs AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED and
-          #     keeps the normal gate result.
-          #   * vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false disables it.
-          # Cost (CLAUDE.md §15): the comments are the ones
-          # gate_fetch_marker_comments already fetched for the terminal
-          # same-head skip, or one GET /user plus one paginated GET
-          # /issues/{n}/comments when that skip did not run.
-          FINGERPRINT_CAP="false"
-          FINGERPRINT_CAP_FP=""
-          FINGERPRINT_CAP_REASON=""
-          FINGERPRINT_CAP_COUNT="0"
-          FINGERPRINT_CAP_ALREADY_APPLIED="false"
-          FINGERPRINT_CAP_NON_RETRYABLE="false"
-          FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
-          case "${FINGERPRINT_CAP_MAX}" in
-            ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
-          esac
-          if [ "${SHOULD_RUN}" = "true" ] \
-            && [ "${pr_base_retargeted}" != "true" ] \
-            && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
-            && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
-            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-            fingerprint_cap_helper=""
-            for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
-              if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
-                fingerprint_cap_helper="${fingerprint_cap_candidate}"
-                break
-              fi
-            done
-            if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
-              echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
-            elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
-            elif [ -z "${fingerprint_cap_helper}" ]; then
-              echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=helper_missing"
-            else
-              gate_fetch_marker_comments
-              if [ "${gate_marker_fetch_state}" != "ok" ]; then
-                echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=${gate_marker_fetch_state}"
-              else
-                fingerprint_cap_decision=""
-                if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
-                  --comments-json "${gate_marker_comments_file}" \
-                  --head-sha "${pr_head_sha_gate}" \
-                  --author-login "${gate_marker_author_login}" \
-                  --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)"; then
-                  fingerprint_cap_decision=""
-                fi
-                fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
-                if ! [[ "${fingerprint_cap_count}" =~ ^[0-9]+$ ]]; then
-                  echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=parse_error"
-                else
-                  FINGERPRINT_CAP_COUNT="${fingerprint_cap_count}"
-                  FINGERPRINT_CAP_FP="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "fp" { print $2 }' | tail -n 1)"
-                  FINGERPRINT_CAP_REASON="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
-                  if [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "cap_applied" { print $2 }' | tail -n 1)" = "true" ]; then
-                    FINGERPRINT_CAP_ALREADY_APPLIED="true"
-                    echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
-                  fi
-                  if [ "${FINGERPRINT_CAP_COUNT}" -ge 1 ] && [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "non_retryable" { print $2 }' | tail -n 1)" = "true" ]; then
-                    FINGERPRINT_CAP_NON_RETRYABLE="true"
-                  fi
-                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
-                    FINGERPRINT_CAP="true"
-                    SHOULD_RUN="false"
-                    SKIP_REASON="fingerprint_cap"
-                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE} support=${REVIEW_SUPPORT_SHA:-none}"
-                  else
-                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} support=${REVIEW_SUPPORT_SHA:-none}"
-                  fi
-                fi
-              fi
-            fi
-          fi
-
-          # Consumer sync PRs (#7128): an ai-sync/stable PR whose changed paths
-          # (rename sources too) all match the signed sync allowlist skips the
-          # panel. DETERMINISTIC_SKIP stays false: nothing here labels,
-          # comments, posts a status or merges. Complete file list required.
-          if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
-            && [ "${pr_head_ref}" = "ai-sync/stable" ] && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
-            && [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] \
-            && [ -f .codex-head-gate-src/scripts/review_workflow_sync_skip.sh ]; then
-            sync_skip_reason="unmanaged_or_unverified"
-            if printf '%s' "${PR_TITLE}" | grep -Fq "[force-review]" || [[ ",${pr_labels}," == *,force-review,* ]]; then
-              sync_skip_reason="force_review"
-            else
-              sync_paths_file="$(mktemp)"
-              if [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]] \
-                && gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename, previous_filename}]' 2>/dev/null \
-                  | jq -s 'add // []' 2>/dev/null \
-                  | jq -er --argjson n "${pr_changed_files}" 'select(type == "array" and length == $n and length < 3000) | .[] | .filename, (.previous_filename // empty)' > "${sync_paths_file}" 2>/dev/null \
-                && bash .codex-head-gate-src/scripts/review_workflow_sync_skip.sh check "${pr_head_ref}" "${sync_paths_file}" .codex-head-gate-src >/dev/null; then
-                SHOULD_RUN="false"
-                SKIP_REASON="workflow_sync_managed"
-                GATE_SKIP_RECORDED="true"
-                echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=skipped files=${pr_changed_files}"
-              fi
-              rm -f "${sync_paths_file}"
-            fi
-            if [ "${SHOULD_RUN}" = "true" ]; then
-              echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=review reason=${sync_skip_reason}"
-            fi
-          fi
-
-          # Deterministic pre-review skip (last gate check):
-          # If all earlier gates have passed (SHOULD_RUN still true) and the
-          # PR qualifies as doc-only or under the size threshold, flip
-          # SHOULD_RUN to false and route the PR to the
-          # `deterministic-skip-merge` sibling job, which preserves the
-          # ai:ready-to-merge + auto-merge tail of the normal review path.
-          # See header env-block comment for full semantics.
-          DETERMINISTIC_SKIP="false"
-          DET_SKIP_REASON=""
-          if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-            FORCE_REVIEW="false"
-            if [ "${pr_base_retargeted}" = "true" ]; then
-              FORCE_REVIEW="true"
-              echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=base_retargeted"
-            fi
-            if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
-              FORCE_REVIEW="true"
-            fi
-            if [ -n "${pr_labels}" ]; then
-              case ",${pr_labels}," in
-                *,force-review,*) FORCE_REVIEW="true" ;;
-              esac
-            fi
-            FORCE_FULL_REVIEW_TIER="${FORCE_REVIEW}"
-
-            # Freshness-update fast path (#7084, Q60): see
-            # scripts/review_head_gate.sh freshness-sync. Reuses the marker
-            # comments read above; a missing helper or comments read keeps
-            # the normal review.
-            gate_freshness_sync_fast_path()
-            {
-              [ "${MERGE_BASE_SYNC_FAST_PATH_ENABLED:-true}" != "false" ] || return 1
-              [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
-              [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
-              # Same suppressors as the doc-only / small-diff skip: the skip
-              # job runs no conflict resolver and no single-issue security
-              # pass, and the updated head has no audit of its own.
-              if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
-                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
-                return 1
-              fi
-              if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
-                && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
-                && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
-                && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
-                && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
-                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
-                return 1
-              fi
-              gate_fetch_marker_comments
-              [ "${gate_marker_fetch_state}" = "ok" ] || return 1
-              bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
-                "${pr_head_sha_gate}" "${pr_base_ref_gate:-${pr_base_ref:-}}" "${gate_marker_author_login}" "${gate_marker_comments_file}"
-            }
-            if [ "${FORCE_REVIEW}" = "true" ]; then
-              echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
-            elif gate_freshness_sync_fast_path; then
-              DETERMINISTIC_SKIP="true"
-              DET_SKIP_REASON="freshness_sync"
-              SHOULD_RUN="false"
-              SKIP_REASON="deterministic_skip_freshness_sync"
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
-            else
-              # Size check uses the .additions/.deletions totals already
-              # returned by the PR-state fetch above (no extra API call).
-              # Bash arithmetic test fails open ("not small") if either
-              # value is non-numeric.
-              SMALL_DIFF="false"
-              max_add="${AUTOFIX_SKIP_MAX_ADDITIONS:-10}"
-              max_del="${AUTOFIX_SKIP_MAX_DELETIONS:-10}"
-              if [ -n "${pr_additions}" ] && [ -n "${pr_deletions}" ] \
-                && [ "${pr_additions}" -le "${max_add}" ] 2>/dev/null \
-                && [ "${pr_deletions}" -le "${max_del}" ] 2>/dev/null; then
-                SMALL_DIFF="true"
-              fi
-
-              # Even a size-qualified PR needs path evidence: a two-line
-              # instruction change must never bypass review. Fetch once for
-              # both branches and reuse the same list for materiality.
-              DOC_ONLY="false"
-              file_count=""
-              pr_files_json=""
-              FILES_SKIP_SUPPRESSED="false"
-              PROTECTED_SKIP_SUPPRESSED="false"
-              if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
-                # `gh api --paginate --jq '[…]'` emits one JSON array per
-                # page. Without `jq -s 'add // []'` the concatenated output
-                # is not one document. pipefail propagates fetch failures;
-                # the length check rejects partial pagination results.
-                if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename, status: .status}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
-                  pr_files_json=""
-                fi
-                # Missing, malformed, partial, or capped API evidence never
-                # authorizes a skip. Validate rename sources and destinations.
-                if [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]] \
-                  && [ -n "${pr_files_json}" ] \
-                  && printf '%s' "${pr_files_json}" | jq -e --argjson expected "${pr_changed_files}" '
-                    def valid_path:
-                      type == "string" and length > 0 and
-                      (startswith("/") | not) and (contains("\\") | not) and
-                      (test("[[:cntrl:]]") | not) and
-                      (split("/") | all(. != "" and . != "." and . != ".."));
-                    type == "array" and length > 0 and length < 3000 and
-                    length == $expected and length == ([.[].filename] | unique | length) and
-                    all(.[]; type == "object" and (.filename | valid_path) and
-                      (.previous_filename == null or (.previous_filename | valid_path)) and
-                      (.status | type == "string" and length > 0) and
-                      (.status != "renamed" or (.previous_filename | valid_path)))
-                  ' >/dev/null 2>&1; then
-                  file_count="${pr_changed_files}"
-                  if [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
-                    DOC_ONLY="true"
-                    while IFS= read -r fname; do
-                      base="${fname##*/}"
-                      lc_fname="${fname,,}"
-                      lc_base="${base,,}"
-                      case "${lc_fname}" in
-                        docs/*) continue ;;
-                      esac
-                      case "${lc_base}" in
-                        *.md|*.txt|*.rst) continue ;;
-                      esac
-                      # LICENSE / CHANGELOG: case-insensitive prefix on
-                      # basename — matches GitHub's own license/changelog
-                      # detection (recognises license.txt, Changelog.md,
-                      # LICENCE, etc.).
-                      case "${lc_base}" in
-                        license*|changelog*) continue ;;
-                      esac
-                      DOC_ONLY="false"
-                      break
-                    done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
-                  fi
-                  while IFS= read -r fname; do
-                    lc_fname="${fname,,}"
-                    lc_base="${lc_fname##*/}"
-                    case "${lc_base}" in
-                      agents.md|claude.md|unattended_system_instructions.md)
-                        PROTECTED_SKIP_SUPPRESSED="true" ;;
-                    esac
-                    case "${lc_fname}" in
-                      .github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*)
-                        PROTECTED_SKIP_SUPPRESSED="true" ;;
-                    esac
-                    # Filenames are PR-controlled: executable build/test
-                    # entry points and configuration must not take either
-                    # deterministic skip route, even under docs/ or after
-                    # a rename away from a protected name.
-                    case "${lc_base}" in
-                      dockerfile|dockerfile.*|dockerfile-*|*.dockerfile|*.dockerfile.*|*.dockerfile-*|containerfile|containerfile.*|containerfile-*|*.containerfile|*.containerfile.*|*.containerfile-*|.dockerignore|.containerignore|compose.yml|compose.yaml|compose.*.yml|compose.*.yaml|compose-*.yml|compose-*.yaml|docker-compose.yml|docker-compose.yaml|docker-compose.*.yml|docker-compose.*.yaml|docker-compose-*.yml|docker-compose-*.yaml|makefile|makefile.*|gnumakefile|gnumakefile.*|justfile|justfile.*|taskfile|taskfile.*|rakefile|rakefile.*|jenkinsfile|jenkinsfile.*|cmakelists.txt|meson.build|meson_options.txt|pom.xml|build.xml|build.gradle*|settings.gradle*|gradlew|gradlew.bat|gulpfile.*|gruntfile.*|package.json|build|build.bazel|workspace|workspace.bazel|module.bazel|*.bazel|*.bzl|*.mk|*.cmake|*.gradle|*.gradle.kts|requirements*.txt|constraints*.txt|go.mod|go.sum|pipfile|pipfile.lock|*.lock|*.lockb|config|*.config|*.config.*|*.conf|*.ini|*.toml|*.yaml|*.yml|*.json|*.jsonc|*.properties|*.xml|*.tf|*.hcl|.*rc|.*rc.*|.env|.env.*|*.sh|*.bash|*.zsh|*.ps1|*.cmd|*.bat)
-                        PROTECTED_SKIP_SUPPRESSED="true" ;;
-                    esac
-                    # Root build, dependency and lint configuration already
-                    # recognized by the materiality classifier.
-                    if [ "${lc_fname}" = "${lc_base}" ]; then
-                      case "${lc_base}" in
-                        package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc)
-                          PROTECTED_SKIP_SUPPRESSED="true" ;;
-                      esac
-                    fi
-                  done < <(printf '%s' "${pr_files_json}" | jq -r '.[] | .filename, (.previous_filename // empty)' 2>/dev/null)
-                else
-                  FILES_SKIP_SUPPRESSED="true"
-                  echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — /files missing, invalid, truncated, or inconsistent with changed_files; running review."
-                fi
-              fi
-
-              candidate_skip="false"
-              candidate_skip_reason=""
-              if [ "${DOC_ONLY}" = "true" ]; then
-                candidate_skip="true"
-                candidate_skip_reason="docs_only"
-              elif [ "${SMALL_DIFF}" = "true" ]; then
-                candidate_skip="true"
-                candidate_skip_reason="small_diff"
-              fi
-
-              if [ "${candidate_skip}" = "true" ] && [ "${PROTECTED_SKIP_SUPPRESSED}" = "true" ]; then
-                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=protected_path pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
-              fi
-
-              MATERIALITY_SKIP_SUPPRESSED="false"
-              case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
-                1|true|yes|on)
-                  # Keep medium/high material PRs on the codex-agent path so
-                  # the advisory comment is still reachable when the diff
-                  # would otherwise short-circuit through deterministic skip.
-                  # This lightweight gate only has /pulls/{n}/files path data,
-                  # so it suppresses skip on the path-glob signals that are
-                  # visible here and fails open for helper-only signals such as
-                  # repo-verified new top-level directories.
-                  if [ "${candidate_skip}" = "true" ]; then
-                    if [ "${FILES_SKIP_SUPPRESSED}" != "true" ]; then
-                      # Mirror the helper's visible path rules here so the gate
-                      # only suppresses deterministic skip when the helper would
-                      # later classify the diff medium/high from PR file paths
-                      # alone. Repo-verified signals such as new top-level
-                      # directories remain helper-only and intentionally fail
-                      # open on the gate path.
-                      if gate_materiality_json="$(PR_FILES_JSON="${pr_files_json}" python3 - <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import PurePosixPath
-
-
-          ROOT_HIGH_PATHS = {"package.json", "pyproject.toml", "Cargo.toml", "go.mod"}
-          HIGH_BUILD_TEST_BASENAMES = {
-              "pytest.ini",
-              "tox.ini",
-              "noxfile.py",
-              "jest.config.js",
-              "jest.config.cjs",
-              "jest.config.mjs",
-              "jest.config.ts",
-              "vitest.config.js",
-              "vitest.config.cjs",
-              "vitest.config.mjs",
-              "vitest.config.ts",
-              "playwright.config.js",
-              "playwright.config.cjs",
-              "playwright.config.mjs",
-              "playwright.config.ts",
-              "cypress.config.js",
-              "cypress.config.cjs",
-              "cypress.config.mjs",
-              "cypress.config.ts",
-              "webpack.config.js",
-              "webpack.config.cjs",
-              "webpack.config.mjs",
-              "webpack.config.ts",
-              "vite.config.js",
-              "vite.config.cjs",
-              "vite.config.mjs",
-              "vite.config.ts",
-              "turbo.json",
-              "go.work",
-          }
-          MEDIUM_DEPENDENCY_BASENAMES = {
-              "package-lock.json",
-              "bun.lock",
-              "bun.lockb",
-              "yarn.lock",
-              "pnpm-lock.yaml",
-              "Cargo.lock",
-              "poetry.lock",
-              "uv.lock",
-              "go.sum",
-              "Pipfile",
-              "Pipfile.lock",
-          }
-          MEDIUM_LINT_BASENAMES = {
-              ".eslintrc",
-              ".eslintrc.json",
-              ".eslintrc.js",
-              ".eslintrc.cjs",
-              ".eslintrc.yaml",
-              ".eslintrc.yml",
-              "eslint.config.js",
-              "eslint.config.cjs",
-              "eslint.config.mjs",
-              "eslint.config.ts",
-              ".prettierrc",
-              ".prettierrc.json",
-              ".prettierrc.js",
-              ".prettierrc.cjs",
-              ".stylelintrc",
-              ".stylelintrc.json",
-              ".stylelintrc.js",
-              "stylelint.config.js",
-              "stylelint.config.cjs",
-              "stylelint.config.mjs",
-              "stylelint.config.ts",
-              "ruff.toml",
-              ".ruff.toml",
-              ".flake8",
-              "pylintrc",
-              "biome.json",
-              "biome.jsonc",
-          }
-          CLIENT_WRAPPER_BASENAMES = {
-              "client.py",
-              "client.ts",
-              "client.js",
-              "client.tsx",
-              "client.jsx",
-              "client.go",
-              "client.rb",
-              "client.java",
-          }
-          CLIENT_WRAPPER_TOKENS = (
-              "api_client",
-              "api-client",
-              "http_client",
-              "http-client",
-              "github_client",
-              "github-client",
-              "rest_client",
-              "rest-client",
-              "sdk_client",
-              "sdk-client",
-          )
-
-
-          def looks_like_client_wrapper(path: str) -> bool:
-              pure = PurePosixPath(path)
-              basename = pure.name.lower()
-              if basename in CLIENT_WRAPPER_BASENAMES:
-                  parent_parts = [part.lower() for part in pure.parts[:-1]]
-                  if any(part in {"api", "apis", "client", "clients", "http", "sdk"} for part in parent_parts):
-                      return True
-              if any(token in basename for token in CLIENT_WRAPPER_TOKENS):
-                  return True
-              return False
-
-
-          def classify_path(path: str) -> str:
-              pure = PurePosixPath(path)
-              basename = pure.name
-              if path in ROOT_HIGH_PATHS:
-                  return "high"
-              if path.startswith(".github/workflows/"):
-                  return "high"
-              if "/" not in path and basename in HIGH_BUILD_TEST_BASENAMES:
-                  return "high"
-              if basename in MEDIUM_DEPENDENCY_BASENAMES or (basename.startswith("requirements") and basename.endswith(".txt")) or (basename.startswith("constraints") and basename.endswith(".txt")):
-                  return "medium"
-              if basename in MEDIUM_LINT_BASENAMES:
-                  return "medium"
-              if looks_like_client_wrapper(path):
-                  return "medium"
-              return "low"
-
-
-          payload = os.environ.get("PR_FILES_JSON", "")
-          entries = json.loads(payload) if payload else json.load(sys.stdin)
-          paths = []
-          seen = set()
-          for entry in entries:
-              path = str((entry or {}).get("filename") or "").strip()
-              if not path or path in seen:
-                  continue
-              seen.add(path)
-              paths.append(path)
-
-          materiality = "low"
-          for path in paths:
-              severity = classify_path(path)
-              if severity == "high":
-                  materiality = "high"
-                  break
-              if severity == "medium":
-                  materiality = "medium"
-
-          print(json.dumps({
-              # CLAUDE.md §30: an agents.d/*.md fragment documents agents.md.
-              "agents_md_changed": "agents.md" in seen or any(
-                  gate_fragment.startswith("agents.d/") and gate_fragment.endswith(".md") and gate_fragment.count("/") == 1 for gate_fragment in seen
-              ),
-              "materiality": materiality,
-          }))
-          PY
-                      )"; then
-                        gate_materiality="$(printf '%s' "${gate_materiality_json}" | jq -r '.materiality // "low"' 2>/dev/null || echo low)"
-                        gate_agents_changed="$(printf '%s' "${gate_materiality_json}" | jq -r 'if (.agents_md_changed // false) then "true" else "false" end' 2>/dev/null || echo false)"
-                        if [ "${gate_agents_changed}" != "true" ] && { [ "${gate_materiality}" = "high" ] || [ "${gate_materiality}" = "medium" ]; }; then
-                          MATERIALITY_SKIP_SUPPRESSED="true"
-                          echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality pr=${PR_NUMBER} materiality=${gate_materiality} candidate=${candidate_skip_reason}"
-                        fi
-                      else
-                        echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — classifier unavailable, keeping deterministic skip fail-open."
-                      fi
-                    else
-                      echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — /files fetch failed or empty, keeping deterministic skip fail-open."
-                    fi
-                  fi
-                  ;;
-              esac
-
-              # Conflict suppression. The skip path runs no merge-conflict
-              # resolution — the codex-agent job's "Detect merge conflicts"
-              # step and the resolver behind it are the only entry point, and
-              # deterministic skip bypasses that job entirely. So the cheapest
-              # PRs, whose only conflict is typically a shared doc, used to
-              # stall until the orchestrator stall-recovery cron re-dispatched
-              # them with a force-review override. Keeping a conflicted PR on
-              # the codex-agent path resolves it in the same run instead.
-              #
-              # Reviewer spend stays at its floor: review_run_reviewers.sh
-              # already drops doc-only and <=lite-LOC diffs to the lite tier,
-              # which is every PR that could have qualified for this skip.
-              #
-              # Fails open in both directions that matter: `mergeable` is
-              # computed asynchronously by GitHub and is null on a freshly
-              # pushed PR, and an API failure leaves both fields empty — in
-              # either case the skip stands, which is exactly today's
-              # behaviour. Only an explicit `mergeable=false` (or the
-              # unambiguous `mergeable_state=dirty`) suppresses it.
-              CONFLICT_SKIP_SUPPRESSED="false"
-              if [ "${candidate_skip}" = "true" ] \
-                && [ "${AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT:-true}" != "false" ]; then
-                if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
-                  CONFLICT_SKIP_SUPPRESSED="true"
-                  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=${candidate_skip_reason}"
-                fi
-              fi
-
-              # The sibling skip job enables auto-merge without running the
-              # single-issue pass. Keep eligible default-branch PRs on the
-              # codex-agent path, including tiny and documentation-only diffs.
-              SECURITY_PASS_SKIP_SUPPRESSED="false"
-              if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
-                && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
-                && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
-                && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
-                && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
-                SECURITY_PASS_SKIP_SUPPRESSED="true"
-                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
-              fi
-
-              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
-                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
-                && [ "${SECURITY_PASS_SKIP_SUPPRESSED}" != "true" ] \
-                && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
-                && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]; then
-                DETERMINISTIC_SKIP="true"
-                DET_SKIP_REASON="${candidate_skip_reason}"
-                SHOULD_RUN="false"
-                SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
-              fi
-
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED}"
-            fi
-          fi
-
-          # The no-PR claude-branch reviewer-comment route and the deterministic
-          # doc-only / small-diff skip path are mutually exclusive: without a
-          # PR, there is nowhere to apply deterministic skip labeling /
-          # auto-merge. PR-backed claude/** branches are not in this mode and
-          # follow the same deterministic-skip behavior as other PRs.
-          if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
-            echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
-            DETERMINISTIC_SKIP="false"
-            DET_SKIP_REASON=""
-          fi
-
-          # Say why (issue #4985, CLAUDE.md §8): exactly one searchable line
-          # per skip, retaining earlier more detailed lines unchanged.
-          if [ "${SHOULD_RUN}" != "true" ] && [ "${GATE_SKIP_RECORDED}" != "true" ]; then
-            echo "AUTOFIX_GATE_SKIP reason=${SKIP_REASON:-unknown} pr=${PR_NUMBER:-none} head_sha=${pr_head_sha_gate:-${PR_HEAD_SHA:-unknown}}"
-          fi
-          # A PR-backed claude/* head skipped on purpose gets one PR comment
-          # per head, so whoever waits on that PR sees the skip instead of
-          # waiting for a review that never comes. Only
-          # skip_ai_marker, and draft_or_skip_ai when the PR is not a draft
-          # (pr_skip_ai=true): GitHub already shows a draft, and
-          # ready_for_review starts its review. No label: ai:review-skipped
-          # means the deterministic doc-only / size skip
-          # (.github/ai/label_contract.v1.json). Deduped against the workflow
-          # account's own marker through gate_fetch_marker_comments (shared
-          # with the marker checks above, CLAUDE.md §15), plus one POST.
-          # Every failure only warns; the gate outcome never changes.
-          if [ "${SHOULD_RUN}" != "true" ] && [ "${pr_state}" = "open" ] \
-            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] \
-            && [[ "${pr_head_ref}" == claude/* ]] \
-            && { [ "${SKIP_REASON}" = "skip_ai_marker" ] \
-              || { [ "${SKIP_REASON}" = "draft_or_skip_ai" ] && [ "${PR_IS_DRAFT}" != "true" ]; }; }; then
-            gate_fetch_marker_comments
-            if [ "${gate_marker_fetch_state}" != "ok" ]; then
-              echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=comments_${gate_marker_fetch_state}"
-            elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                any(.[]; .author_login == $author and
-                  ((.body // "") | split("\n") | map(select(length > 0)) |
-                    (.[-1] // "") as $last |
-                    ($last | test("^<!-- ai:claude-fixer-review-skipped:v1 reason=(skip_ai_marker|draft_or_skip_ai) head=" + $head + " -->$")) and
-                    (.[0] == ("## Review skipped: `" + ($last | sub("^.* reason="; "") | sub(" head=.*$"; "")) + "`"))))
-              ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
-              echo "AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=already_posted"
-            else
-              skip_notice_body_file="${RUNNER_TEMP:-/tmp}/review_gate_skip_notice.md"
-              skip_notice_payload_file="${RUNNER_TEMP:-/tmp}/review_gate_skip_notice.json"
-              {
-                echo "## Review skipped: \`${SKIP_REASON}\`"
-                echo
-                echo "The review gate skipped head \`${pr_head_sha_gate}\`, so the reviewer panel did not run and no hand-off or auto-merge follows for this head ([workflow run](${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}))."
-                echo
-                if [ "${SKIP_REASON}" = "skip_ai_marker" ]; then
-                  echo "Why: the PR title contains the skip-AI marker \`[skip ai]\`, or a line of the description holds only that marker. A mention in backticks, in a code block, or mid-sentence does not count."
-                else
-                  echo "Why: the calling workflow passed \`pr_skip_ai=true\`."
-                fi
-                echo
-                echo "To review this head anyway: remove the marker (or the \`pr_skip_ai\` input) and push a new commit, or dispatch the review workflow for this PR (\`internal-review.yml\` here, \`ai-review.yml\` in a consumer repo, with \`pr_number=${PR_NUMBER}\`). A dispatched run does not read the PR text."
-                echo
-                echo "<!-- ai:claude-fixer-review-skipped:v1 reason=${SKIP_REASON} head=${pr_head_sha_gate} -->"
-              } > "${skip_notice_body_file}"
-              # The earlier PR fetch established this head for the gate, not
-              # for the comment POST: a push may have moved it in between.
-              # This read cannot reuse the earlier snapshot; on failure or
-              # a moved head, do not publish stale review-skip evidence.
-              if ! skip_notice_live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then .head.sha // "" else "" end' 2>/dev/null)" \
-                || [ "${skip_notice_live_head}" != "${pr_head_sha_gate}" ]; then
-                echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=head_moved_or_unavailable"
-              elif jq -n --rawfile body "${skip_notice_body_file}" '{body: $body}' > "${skip_notice_payload_file}" 2>/dev/null \
-                && gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" --input "${skip_notice_payload_file}" >/dev/null 2>&1; then
-                echo "AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=true"
-              else
-                echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=post_failed"
-              fi
-            fi
-          fi
-
-          echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
-          echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
-          echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
-          echo "deterministic_skip=${DETERMINISTIC_SKIP}" >> "${GITHUB_OUTPUT}"
-          echo "det_skip_reason=${DET_SKIP_REASON}" >> "${GITHUB_OUTPUT}"
-          echo "claude_branch_review=${CLAUDE_BRANCH_REVIEW}" >> "${GITHUB_OUTPUT}"
-          echo "force_full_review_tier=${FORCE_FULL_REVIEW_TIER}" >> "${GITHUB_OUTPUT}"
-          # Propagate head ref so downstream jobs (deterministic-skip-merge)
-          # can apply the same head-ref-keyed auto-merge suppressors without
-          # repeating the /pulls/{n} fetch above (§15 API hygiene). May be
-          # empty on the invalid-PR-number branch; deterministic-skip-merge
-          # refuses merge authorization when the head ref is unavailable.
-          echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
-          # Bind downstream deterministic-skip merge authorization to the
-          # exact head evaluated by this gate. Consumers fail closed when the
-          # authenticated PR metadata did not provide a head SHA.
-          echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"
-          echo "auto_merge_enabled=${pr_auto_merge_enabled}" >> "${GITHUB_OUTPUT}"
-          echo "review_checkout_sha=${review_checkout_sha}" >> "${GITHUB_OUTPUT}"
-          echo "retargeted_base_ref=${pr_base_ref_gate}" >> "${GITHUB_OUTPUT}"
-          echo "retargeted_base_updated_at=${pr_updated_at_gate}" >> "${GITHUB_OUTPUT}"
-          echo "base_retargeted=${pr_base_retargeted}" >> "${GITHUB_OUTPUT}"
-          printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
-          printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
-          echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap=${FINGERPRINT_CAP}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_fp=${FINGERPRINT_CAP_FP}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_reason=${FINGERPRINT_CAP_REASON}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_count=${FINGERPRINT_CAP_COUNT}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Withdraw stale auto-merge and publish head-gate status
         id: head_gate
@@ -2232,6 +1035,9 @@ jobs:
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # PR base ref from the gate's /pulls/{n} read (no extra call). The
+      # required-checks wait scopes its default CI check by base (#6963).
+      PR_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator
       # decision Q35: A), read from the same verified support commit the
       # gate resolved.
@@ -2241,6 +1047,7 @@ jobs:
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+      AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
     steps:
       - name: Checkout merge-base freshness helper
@@ -2413,6 +1220,10 @@ jobs:
             auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
             echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
+          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+            # Consumer-updater PRs (#7004): only update_workflows.yml's verify job enables auto-merge.
+            auto_merge_summary="SUPPRESSED (consumer-updater PR head ref '${PR_HEAD_REF}'; the update_workflows.yml verify job owns the merge)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=updater_pr_verify_job_owns_merge"
           elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             if deterministic_skip_head_is_current; then
               auto_merge_ready_labels_allowed="true"
@@ -2440,7 +1251,7 @@ jobs:
               if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
                 auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
-              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
                 auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
               elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
@@ -2467,7 +1278,7 @@ jobs:
             if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
               auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
-            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
               auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
             elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
@@ -2831,7 +1642,10 @@ jobs:
             MSG+="PR: ${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/pull/${PR_NUMBER}"
             MSG+=$'\n'
             MSG+="Run: ${REPORT_RUN_URL}"
-            tg_send_msg "${MSG}" "WARNING" >/dev/null || true
+            # DEBUG: the ai:review-blocked label hands the PR to the
+            # review-blocked judge, whose outcome alert pages when a human
+            # is needed.
+            tg_send_msg "${MSG}" "DEBUG" >/dev/null || true
           fi
 
           # Heal report: the cap is the streak, so the reporter sends it on
@@ -2953,6 +1767,10 @@ jobs:
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
       AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Verified support commit, recorded as support= on that marker (#6911).
+      AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
+      # Issue #6743: skip conflict detection + resolver on force_rb_judge runs.
+      AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}
       REVIEW_CHECKOUT_SHA: ${{ needs.gate.outputs.review_checkout_sha }}
       RETARGETED_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       RETARGETED_BASE_UPDATED_AT: ${{ needs.gate.outputs.retargeted_base_updated_at }}
@@ -3414,7 +2232,7 @@ jobs:
           CLAUDE_POOL_STEP_REASON: ${{ steps.claude_pool.outputs.reason }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_pool_capacity.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_pool_capacity.sh"
@@ -3864,135 +2682,15 @@ jobs:
       - name: Detect smoke test and tune LLM settings
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
-          PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
-
-          # PR_TITLE is retained deliberately. Free-text fixture-tag
-          # matching on the PR title/body was removed (see below), so
-          # nothing in this step reads it any more, but it is an existing
-          # identifier and CLAUDE.md §6 forbids removing one without the
-          # ask flow. PR_BODY is still used by the linked-issue lookup.
-
-          IS_SMOKE=false
-
-          # Primary signal: the `e2e-smoke-test` label.
-          #
-          # This replaces a free-text scan of the PR title and body for a
-          # `[E2E <variant>]` fixture tag. That scan misclassified any real
-          # PR that merely *discussed* the fixture tags -- documentation
-          # changes, and changes to this detection logic itself. The
-          # consequences were not cosmetic: a misclassified PR had its
-          # reviewer/editor reasoning pinned, its review alerts silenced,
-          # and IS_SMOKE_TEST exported, which makes
-          # scripts/review_apply_fixes.sh append a "must call apply_patch
-          # on tests/e2e_smoke_canary.txt" directive to the editor prompt
-          # -- i.e. it could push the autofix editor to touch the canary
-          # file on an unrelated PR.
-          #
-          # The label is a reliable primary because implement.yml applies
-          # it atomically at `gh pr create` (see its "Atomically apply
-          # force-review + e2e-smoke-test labels at PR creation time"
-          # comment), specifically so it is already in the
-          # `pull_request: opened` payload this gate snapshots -- a label
-          # added post-creation cannot rewind the gate decision. Confirmed
-          # on release run 35672590166: PR #4252 (from the
-          # `[E2E Smoke Test]` canary fixture) and PR #4253 (from the
-          # `[E2E Smoke Test alt-model]` fixture) both carried
-          # `force-review` + `e2e-smoke-test`.
-          if jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' "${PR_PAYLOAD_FILE}" >/dev/null 2>&1; then
-            IS_SMOKE=true
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_detect_smoke_test.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_smoke_test.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_detect_smoke_test.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect smoke test and tune LLM settings'."
+            exit 1
           fi
-
-          # Fallback: the linked issue's title. Kept as a second signal so
-          # a smoke PR whose label somehow did not land is still detected,
-          # and safe to keep because it is anchored and resolves a real
-          # issue rather than scanning prose -- a documentation PR's linked
-          # issue title does not begin with the fixture tag.
-          #
-          # Only honour GitHub's closing-keyword
-          # pattern (Closes/Fixes/Resolves + #N or issue URL, case-insensitive)
-          # to avoid false-matching loose "issue #N" mentions inside log
-          # citations or backticked fragments quoted in the PR body — which
-          # would otherwise trigger phantom `gh api issues/<N>` 404s. The
-          # implement and orchestrator workflows both emit closing keywords
-          # when they create PRs, so this still resolves the linked issue
-          # for every auto-generated smoke-test PR.
-          # The URL alternative is restricted to the current repository so a
-          # cross-repo "Closes <other-repo>/issues/N" reference cannot route
-          # an unrelated number into this repo's issues lookup.
-          if [ "$IS_SMOKE" = "false" ]; then
-            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
-            if [ -n "${ISSUE_NUM:-}" ]; then
-              ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
-              # Anchored, matching the `^\[E2E ` convention used by
-              # clarify.yml, plan.yml and implement.yml: real AI issue
-              # titles never begin with the fixture tag, so this cannot
-              # fire on a production issue that merely quotes one.
-              if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
-                IS_SMOKE=true
-              fi
-            fi
-          fi
-
-          if [ "$IS_SMOKE" = "true" ]; then
-            # Reasoning overrides for smoke runs.
-            # Reviewers are pinned to low; editor is pinned to medium.
-            #
-            # History of reasoning levels on smoke runs (editor). The runs
-            # cited below predate the gpt-5.4 cutover and were observed on
-            # the legacy editor default; the rationale (medium beats
-            # extremes for execution-heavy editing tasks) still stands per
-            # the gpt-5.4 prompt guide:
-            #   low  → run 25254574828: OSCILLATION GUARD activated because the
-            #           bait commit appeared in LAST_RUN_DIFF (since fixed at
-            #           L2249-2260 to only walk [ai-autofix] commits — bait
-            #           commits never match, so the guard no longer fires).
-            #   xhigh → run 25249170035 / PR #1982: budget burns on tool calls +
-            #           reasoning summaries, editor exits rc=0 with 0 file changes
-            #           (6 attempts, all empty, ~81k tokens on attempt 1).
-            #   none  → run 25305535590: the legacy editor default at reasoning=none runs one
-            #           read tool call, exits cleanly rc=0 with empty stdout, and
-            #           the in-step retry loop bails after MAX_ATTEMPTS with no
-            #           edits (same failure mode as the conflict resolver at none,
-            #           documented at the "Resolve merge conflicts" step below).
-            #           Reviewer manifest validation then fails because the editor
-            #           lists aggregate files instead of individual reviewer files.
-            #   low   → run 25308327160 (gate run 25308071039): the legacy editor default at
-            #           reasoning=low also exits rc=0 with empty stdout on all
-            #           3 attempts per round (same failure mode as none — pattern
-            #           extends across both none and low for this model+task).
-            #           "low is sufficient" assumption was wrong.
-            # medium is the only untried level; reviewers stay at low (all 6
-            # succeeded on attempt 1 at low in run 25308327160). LAST_RUN_DIFF
-            # already excludes bait commits so the oscillation guard cannot
-            # fire regardless of editor reasoning level.
-            # Non-smoke PRs continue to use the workflow defaults
-            # (THINKING_LEVEL_REVIEWER / THINKING_LEVEL_EDITOR).
-            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            echo "EDITOR_REASONING_EFFORT=medium" >> "$GITHUB_ENV"
-            echo "🔬 Smoke test PR detected — reviewer reasoning=low, editor reasoning=medium (Phase 4b fix)"
-            # Suppress per-phase Telegram alerts; the test-and-mark-stable
-            # gate emits a single combined pass/fail notification at the
-            # end via raw curl. SILENT > CRITICAL so all levels filter.
-            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
-            # Surface the smoke-test signal to scripts/review_apply_fixes.sh
-            # so the editor prompt can append a short, explicit
-            # "must call apply_patch on tests/e2e_smoke_canary.txt"
-            # directive. The repeated empty-output failures (runs
-            # 25305535590 / 25308327160 / 25310399716) all share the
-            # signature: codex reads the file, decides the change is
-            # trivial, and exits with 0-byte stdout because nothing in
-            # the production prompt forces an apply_patch invocation
-            # on a single-line removal. Only the smoke fixture sets this
-            # env var; real PR autofixes never see the smoke override
-            # and continue under the production prompt unchanged.
-            echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
-          else
-            echo "Standard PR — using default LLM settings"
-          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Use lightweight reviewer profile for no-PR claude-branch-review
         if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''
@@ -4528,6 +3226,7 @@ jobs:
             ${{ env.PREVIOUS_REVIEWS_DIR }}/status_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/review_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/rejected_*.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -4718,6 +3417,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
+          REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'true' }}
+          REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS: ${{ vars.REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS || '600' }}
           DEPENDENCY_INSTALL_TIMEOUT_SECONDS: ${{ vars.DEPENDENCY_INSTALL_TIMEOUT_SECONDS || '600' }}
           REVIEW_SANDBOX_BUILD_ATTEMPTS: ${{ vars.REVIEW_SANDBOX_BUILD_ATTEMPTS || '3' }}
           REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 || '10' }}
@@ -4818,55 +3519,13 @@ jobs:
       - name: Decide partial-finalize validation/push safety
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
-          set -euo pipefail
-
-          validation_tail_can_complete="true"
-          edits_withheld_for_safety="false"
-          withheld_reason="none"
-
-          if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then
-            workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"
-            if [ ! -f "${workflow_timeout_source_path}" ]; then
-              workflow_timeout_source_path=".github/workflows/review_autofix.yml"
-            fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
-              job_timeout_minutes="240"
-              resolver_timeout_minutes="170"
-            fi
-            # Requiring a full resolver window plus 10 minutes of
-            # smoke/detect/push slack keeps the partial-publish path inside the
-            # workflow's existing validation envelope instead of publishing
-            # edits that the current run cannot fully re-validate before the
-            # hard timeout.
-            job_timeout_total_secs=$(( job_timeout_minutes * 60 ))
-            partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))
-            now_epoch="$(date +%s)"
-            budget_start_epoch="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
-            hard_timeout_remaining_secs=0
-
-            if [[ "${budget_start_epoch}" =~ ^[0-9]+$ ]] && [ "${budget_start_epoch}" -gt 0 ] && [ "${now_epoch}" -ge "${budget_start_epoch}" ]; then
-              job_deadline_epoch=$(( budget_start_epoch + job_timeout_total_secs ))
-              hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))
-              if [ "${hard_timeout_remaining_secs}" -lt 0 ]; then
-                hard_timeout_remaining_secs=0
-              fi
-            fi
-
-            if [ "${hard_timeout_remaining_secs}" -lt "${partial_finalize_validation_minimum_secs}" ]; then
-              validation_tail_can_complete="false"
-              edits_withheld_for_safety="true"
-              withheld_reason="insufficient_budget_for_validation_tail"
-              echo "Partial finalize publish-safety gate: findings-only fallback (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
-            else
-              echo "Partial finalize publish-safety gate: validated tail remains available (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize_safety.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize_safety.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_partial_finalize_safety.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Decide partial-finalize validation/push safety'."
+            exit 1
           fi
-
-          {
-            echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"
-            echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"
-            echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
-          } >> "$GITHUB_ENV"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -4970,187 +3629,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
           SANDBOX_PREPARE_STEP_OUTCOME: ${{ steps.deps_prepare.outcome }}
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-
-          # Empty-editor-output short-circuit.
-          #
-          # If the editor produced no structured summary AND no file
-          # changes were committed, this run has nothing meaningful to
-          # report — the synthetic fallback summary (below) would be a
-          # false positive that masks a codex crash/timeout/empty-prompt.
-          # Post a distinct, retry-friendly comment, signal the
-          # failure handlers to NOT apply ai:review-blocked for this
-          # specific cause, and fail the step so the stall poller can
-          # retry the review later instead of poisoning the linked
-          # issue with an unrecoverable label.
-          if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
-            echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
-            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            # A failed reviewer step skips the editor, so its empty output is
-            # only the symptom (PR #4323: every reviewer slot and the
-            # summariser exited 226 and the run was reported as
-            # editor_empty_noop). Name the earliest failing phase and keep the
-            # slot / summariser exit codes as evidence; the retry handling
-            # below is unchanged.
-            autofix_empty_failure_reason="editor_empty_noop"
-            noop_explanation="The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR."
-            if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then
-              autofix_empty_failure_reason="reviewers_failed"
-              noop_explanation="The reviewer stage failed, so the editor never ran and no file changes were committed. The reviewer and summariser exit codes are in the workflow run log."
-              echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
-              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
-                reviewers_failure_log_args=()
-                for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
-                  [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
-                done
-                PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
-                  > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
-                echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
-              fi
-            elif [ "${SANDBOX_PREPARE_STEP_OUTCOME:-}" = "failure" ]; then
-              # The review sandbox could not be prepared (PR #6645: Docker
-              # Hub answered 500/504 on the base image), so the editor never
-              # ran. Name that phase and keep its last error line as evidence.
-              autofix_empty_failure_reason="sandbox_prepare_failed"
-              echo "AUTOFIX_SANDBOX_PREPARE_FAILED=true" >> "$GITHUB_ENV"
-              if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
-                sandbox_prepare_last_error="$(grep -E '^(#[0-9]+ )?(::error::|ERROR:? )' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 | sed -E 's/^#[0-9]+ //; s/^::error:://; s/^ERROR:? //' | tr -d '\r' | cut -c1-300 || true)"
-                {
-                  echo "sandbox_prepare_failed=true"
-                  grep -E '^REVIEW_SANDBOX_BUILD .*outcome=fail' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 || true
-                  if [ -n "${sandbox_prepare_last_error}" ]; then
-                    printf '::error::Review sandbox prepare failed: %s\n' "${sandbox_prepare_last_error}"
-                  else
-                    echo "::error::Review sandbox prepare failed"
-                  fi
-                } > "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt"
-              fi
-              sandbox_prepare_headline=""
-              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-                sandbox_prepare_headline="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
-                  --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
-              fi
-              noop_explanation="The review sandbox could not be prepared (step \"Install project dependencies\"), so the editor never ran and no file changes were committed. ${sandbox_prepare_headline:-The prepare error is in the workflow run log.}"
-              echo "AUTOFIX_SANDBOX_PREPARE_FAILED reason=sandbox_prepare_failed error_present=$([ -n "${sandbox_prepare_headline}" ] && echo 1 || echo 0)"
-            fi
-            # Model-provider outage (issue #6633): a live probe confirms the
-            # log evidence, so the reason is provider_unavailable (no cap
-            # count, no label, one repo-wide tracker). Fail-open.
-            if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py" ]; then
-              provider_outage_log_args=()
-              for provider_outage_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log "${RUNTIME_DIR}/reviewers_failure_evidence.txt" "${RUNTIME_DIR}/editor_stage_stderr.txt" "${RUNTIME_DIR}/collect_metadata_stderr.txt" "${RUNTIME_DIR}/resolver_stage_stderr.txt"; do
-                [ -f "${provider_outage_log}" ] && provider_outage_log_args+=(--log-file "${provider_outage_log}")
-              done
-              if [ "${#provider_outage_log_args[@]}" -gt 0 ]; then
-                provider_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR}/provider_outage_probe.json" "${provider_outage_log_args[@]}" 2>/dev/null | head -n 1 || true)"
-                if [[ "${provider_outage_class}" == reason=provider_unavailable* ]]; then
-                  provider_outage_status="$(printf '%s\n' "${provider_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
-                  autofix_empty_failure_reason="provider_unavailable"
-                  noop_explanation="The model provider failed (status ${provider_outage_status:-unknown}, confirmed by a live probe). This is a repo-wide outage tracked on the ai:provider-outage issue, not a defect in this PR, and it does not count toward the identical-failure cap; review resumes automatically when the provider recovers."
-                  { echo "AUTOFIX_FAILURE_REASON=provider_unavailable"; echo "AUTOFIX_PROVIDER_STATUS=${provider_outage_status:-unknown}"; } >> "$GITHUB_ENV"
-                fi
-              fi
-            fi
-            # review-autofix-failure:v1 marker for the gate's identical-failure
-            # fingerprint cap. Same evidence files and reason precedence as
-            # "Assemble failure evidence", so every failure comment of one run
-            # carries one fingerprint. Empty when the helper is unavailable.
-            AUTOFIX_FAILURE_MARKER_SUFFIX=""
-            if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-              autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
-                --failure-reason "${autofix_empty_failure_reason}" \
-                --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-                --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
-                --support-sha "${REVIEW_SUPPORT_SHA:-}" \
-                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
-              if [ -n "${autofix_failure_marker_line}" ]; then
-                AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
-              fi
-            fi
-            NOOP_BODY="$(cat <<EOF
-          **AI review/autofix produced no output — will retry**
-
-          ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
-
-          [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
-          EOF
-          )"
-            if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then
-              NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"
-            fi
-            NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
-            echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_post_editor_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post editor summary comment'."
             exit 1
           fi
-
-          if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
-            cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
-          Changes made:
-          - none (no editor summary output was generated)
-
-          Already satisfied (suggested but already present):
-          - none (no editor summary output was generated)
-
-          Ignored suggestions (with short reason):
-          - no summary available from editor stage
-
-          Reviewer files processed:
-          - none (no editor summary output was generated)
-
-          Review file issue audit:
-          - none (no editor summary output was generated)
-
-          Regression fingerprint:
-          - unavailable (editor fallback)
-
-          Runtime failure path:
-          - unavailable (editor fallback)
-          __EDITOR_SUMMARY__
-          fi
-
-          {
-            echo "AI autofix editor summary"
-            echo
-            cat "${EDITOR_SUMMARY_FILE}"
-            echo
-            echo "Files changed / commit status:"
-            if [ -s "${COMMITTED_FILES_FILE}" ]; then
-              cat "${COMMITTED_FILES_FILE}"
-            else
-              echo "- none"
-            fi
-            echo
-          } > "${PR_EDITOR_COMMENT_FILE}"
-
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-
-          if gh_retry gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
-            echo "Posted editor summary comment."
-            # Signal to the failure-comment step (line ~3269) that the
-            # editor summary already landed on the PR thread. The generic
-            # "AI review/autofix failed" body speculates about editor /
-            # dependency / infra failure modes and would contradict the
-            # success-looking summary above when the editor in fact ran
-            # to completion and a later step (push, conflict resolver,
-            # auto-merge config, telemetry) is what actually failed.
-            # Set only on a successful post; on retry exhaustion the
-            # editor summary is not visible to the reader, so the
-            # generic body is the right thing to post. See PR #1476
-            # follow-up for the contradictory-comment regression this
-            # signal resolves.
-            echo "EDITOR_SUMMARY_POSTED=true" >> "$GITHUB_ENV"
-          else
-            echo "::warning::Unable to post editor summary comment after retries."
-          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Clear Serena after editor
         if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -5187,7 +3676,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.AUTOFIX_UPDATER_COMMIT_WITHHELD != 'true'"
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_uncommitted_changes.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_uncommitted_changes.sh"
@@ -5253,6 +3742,8 @@ jobs:
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Detect merge conflicts
+        # Skipped on force_rb_judge runs after a trusted same-head host-only
+        # resolver refusal (#6743, #6733): the resolver would refuse again.
         # The pre-review gate above only short-circuits deterministic stale/
         # structurally-unmergeable cases before reviewer spend. This late step
         # remains the authoritative MERGE_CONFLICT + resolver entry point for
@@ -5283,7 +3774,7 @@ jobs:
         # conflict sweep re-dispatched a no-op run every tick. The editor and
         # "Commit changes" still skip on terminal resume, so the only commit a
         # terminal run can push is a resolved merge.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -5316,7 +3807,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # Kill switch for deterministic resolution of conflicts on the generated
@@ -5325,6 +3816,13 @@ jobs:
           # Default true; set the repo var to 'false' to route manifest
           # conflicts back through the Codex resolver.
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
+          # Kill switch for host-side resolution of host-only conflicted paths
+          # (issue #6748, scripts/review_conflict_prepare.sh). Default true;
+          # 'false' keeps the pre-#6748 manual-merge failure.
+          HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED: ${{ vars.HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED || 'true' }}
+          # Keep the PR's copy of a changelog.d / agents.d fragment that the
+          # base branch folded and deleted (modify/delete, #7130).
+          CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED: ${{ vars.CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
@@ -5356,7 +3854,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -5527,8 +4025,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # CONFLICT_RESOLVED_ALERT_LEVEL is a step-scoped override for this
           # one ping (same pattern as PR_PROCESSED_ALERT_LEVEL); it falls back
-          # to the global ALERT_MSG_LEVEL, then DEBUG.
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          # to the global ALERT_MSG_LEVEL, then WARNING (which filters this
+          # DEBUG ping by default).
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -5611,6 +4110,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
@@ -5788,6 +4288,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
@@ -5857,6 +4358,7 @@ jobs:
             fi
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
+        id: mark_review_blocked_exhaustion
         if: "(success() || steps.rb_judge.outputs.rb_judge_status == 'failed') && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5891,9 +4393,13 @@ jobs:
                 local target_label="$2"
                 local repo="$3"
                 ensure_label_exists "${target_label}" "${repo}" || true
-                GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                  -f "labels[]=${target_label}" >/dev/null 2>&1 \
-                  || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
+                if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                  -f "labels[]=${target_label}" >/dev/null 2>&1; then
+                  SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+                else
+                  SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
+                  echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
+                fi
               }
             fi
           fi
@@ -5903,9 +4409,13 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                -f "labels[]=${target_label}" >/dev/null 2>&1 \
-                || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
+              if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1; then
+                SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+              else
+                SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
+                echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
+              fi
             }
           fi
 
@@ -5928,17 +4438,33 @@ jobs:
             fi
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
+              { echo "labelled_issue_numbers="; echo "labelled_issue_numbers_resolved=true"; } >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
+          # Issue #7099: record the issues actually labelled so the outage
+          # marker step marks exactly that set (including PR-text fallbacks).
+          labelled=()
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
+            [[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
+            SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=""
             set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
+            case "${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-}" in
+              applied) labelled+=("${issue_number}") ;;
+              "")
+                # Helper copy without the outcome signal: keep the old "attempted" behaviour.
+                echo "::notice::Label outcome unknown for #${issue_number}; treating it as labelled."
+                labelled+=("${issue_number}")
+                ;;
+            esac
           done <<< "${ISSUE_NUMBERS}"
+          labelled_csv="$(IFS=,; printf '%s' "${labelled[*]:-}")"
+          { echo "labelled_issue_numbers=${labelled_csv}"; echo "labelled_issue_numbers_resolved=true"; } >> "$GITHUB_OUTPUT"
 
       - name: Mark outage-caused review-blocked labels (autofix exhaustion)
         # Issue #6633: the judge failed because the model provider is down.
@@ -5951,17 +4477,25 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           RB_JUDGE_PROVIDER_STATUS: ${{ steps.rb_judge.outputs.rb_judge_provider_status }}
+          REVIEW_BLOCKED_LABELLED_ISSUES: ${{ steps.mark_review_blocked_exhaustion.outputs.labelled_issue_numbers }}
+          REVIEW_BLOCKED_LABELLED_RESOLVED: ${{ steps.mark_review_blocked_exhaustion.outputs.labelled_issue_numbers_resolved }}
         run: |
           set -uo pipefail
           helper="${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py"
           [ -f "${helper}" ] || { echo "PROVIDER_OUTAGE op=mark_label outcome=skip reason=helper_missing"; exit 0; }
           outage_status="${RB_JUDGE_PROVIDER_STATUS:-unknown}"
           [[ "${outage_status}" =~ ^[a-z0-9_]{1,20}$ ]] || outage_status="unknown"
-          items="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-          [ -n "${items}" ] || items="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
-          [ -n "${items}" ] || items="${PR_NUMBER}"
+          if [ "${REVIEW_BLOCKED_LABELLED_RESOLVED:-}" = "true" ]; then
+            # Issue #7099: mark exactly the issues the label step labelled.
+            items="$(printf '%s' "${REVIEW_BLOCKED_LABELLED_ISSUES:-}" | tr ',' '\n')"
+          else
+            echo "PROVIDER_OUTAGE op=mark_label outcome=fallback reason=labelled_set_unavailable"
+            items="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
+            [ -n "${items}" ] || items="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+            [ -n "${items}" ] || items="${PR_NUMBER}"
+          fi
           while IFS= read -r item; do
             [[ "${item}" =~ ^[0-9]+$ ]] || continue
             PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" mark-label --repo "${REPOSITORY}" --item "${item}" --pr "${PR_NUMBER}" --head "${AUTOFIX_FAILURE_HEAD_SHA:-}" --run "${GITHUB_RUN_ID:-}" || true
@@ -6008,103 +4542,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          # Reason-specific body. The generic "max autofix iterations"
-          # body posted unconditionally (pre-fix) confused operators
-          # when the actual refusal was a transient gate — e.g. the
-          # merge_with_followup self-deadlock observed on tele-funtoken-
-          # msg-scoring PR #2989, where the judge approved the merge but
-          # the check-runs gate refused it because the rb_judge's own
-          # host job (review / codex-agent) was still in_progress.
-          # judge_skip_reason now carries the proximate cause from
-          # scripts/review_rb_judge.sh so the comment can explain what
-          # actually happened. Empty reason = legacy / pre-fix script,
-          # falls through to the original body.
-          case "${JUDGE_SKIP_REASON:-}" in
-            isolation_unavailable)
-              BODY_HEADING="AI review/autofix — judge deferred: isolation unavailable"
-              BODY_DETAIL="The judge could not prepare its credential-free sandbox (for example, the PR snapshot exceeded the isolation size limit or support files are missing). It refused to run a host writer on PR content. Linked issues remain labelled \`ai:review-blocked\`; stall recovery will retry the judge. If this repeats on the same head, a human must review."
-              ;;
-            missing_followup_details)
-              BODY_HEADING="AI review/autofix — judge omitted follow-up issue details"
-              BODY_DETAIL="The review-blocked judge chose \`merge_with_followup\` but returned an empty \`followup_issue.title\` and/or \`.body\`, so the workflow refused the action rather than merge code without durable tracking for the deferred gap. Stall recovery will re-fire the judge; if this repeats, inspect the judge output in the workflow log."
-              ;;
-            blocking_check_runs)
-              BODY_HEADING="AI review/autofix — merge gated by in-flight check-runs"
-              BODY_DETAIL="The review-blocked judge approved this PR but other CI check-runs on the head commit had not yet completed when the merge was attempted. Stall recovery will re-fire the judge after the remaining check-runs settle; no action is required unless the blocking checks themselves are stuck. Linked issues remain labelled \`ai:review-blocked\` so the recovery ladder will retry."
-              ;;
-            check_runs_query_failed)
-              BODY_HEADING="AI review/autofix — judge could not query check-runs"
-              BODY_DETAIL="The review-blocked judge could not fetch the check-runs API for the PR head commit and refused the merge rather than land code against unvalidated CI state. This is usually transient; stall recovery will re-fire the judge. If it persists, check the workflow run log for the GitHub API error."
-              ;;
-            unresolved_head_sha)
-              BODY_HEADING="AI review/autofix — judge could not resolve PR head SHA"
-              BODY_DETAIL="The review-blocked judge could not resolve the PR head SHA from the GitHub PR JSON and refused the merge to avoid landing unjudged code. Stall recovery will re-fire the judge. If this recurs, the GitHub PR API may be returning a partial payload — check the workflow run log."
-              ;;
-            sync_merge_failed)
-              BODY_HEADING="AI review/autofix — judge approved merge but \`gh pr merge\` failed"
-              BODY_DETAIL="The review-blocked judge approved this PR and all check-runs had settled, but the synchronous \`gh pr merge --squash\` call failed. Typical causes: branch-protection rules, a merge queue requirement, missing permissions on the GH token, GitHub returning 422, or a concurrent push that changed HEAD. Stall recovery will re-fire the judge; the operator may need to merge manually if the underlying cause is permission/policy."
-              ;;
-            auto_merge_disabled)
-              BODY_HEADING="AI review/autofix — judge approved merge but auto-merge is disabled"
-              BODY_DETAIL="The review-blocked judge approved this PR but \`ENABLE_AUTO_MERGE\` is false in repo configuration, so the judge cannot land the merge itself. Please merge this PR manually; the follow-up tracking issue will be created on the next judge run after the merge lands."
-              ;;
-            merge_conflict)
-              BODY_HEADING="AI review/autofix — PR has merge conflicts"
-              BODY_DETAIL="The review-blocked judge could not act because the PR has merge conflicts against its base branch (mergeable=false). Please resolve the conflicts (rebase or merge the base branch) and push; the autofix loop will re-run."
-              ;;
-            mergeability_pending)
-              BODY_HEADING="AI review/autofix — mergeability still computing"
-              BODY_DETAIL="The review-blocked judge could not act because GitHub was still computing the PR's mergeability state when the gate ran. Stall recovery will re-fire the judge shortly; no action is required unless the state remains unknown for an extended period."
-              ;;
-            followup_issue_create_failed)
-              BODY_HEADING="AI review/autofix — merge landed but follow-up issue creation failed"
-              BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\` and the PR merge succeeded, but GitHub failed while creating the follow-up issue. The deferred gap is not yet tracked; please create the follow-up manually if needed, or let stall recovery / a subsequent judge run retry issue creation."
-              ;;
-            *)
-              BODY_HEADING="AI review/autofix blocked — needs human intervention"
-              BODY_DETAIL="This PR has reached the maximum number of autofix iterations (${MAX_AUTOFIX_ITERATIONS}) without resolving all review issues. The remaining problems could not be auto-fixed and require manual attention."
-              ;;
-          esac
-
-          BODY="$(cat <<EOF
-          **${BODY_HEADING}**
-
-          ${BODY_DETAIL}
-
-          **What to do:**
-          - Review the editor summary comments above for details on what was fixed and what was not
-          - Address the remaining issues manually if needed
-          - Push a new commit to re-trigger the review workflow if you have made changes
-
-          Linked issues have been labeled \`ai:review-blocked\`.
-
-          Run: ${RUN_URL}
-          EOF
-          )"
-
-          if ! gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null; then
-            echo "::warning::Failed to post review-blocked comment on PR #${PR_NUMBER}."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_review_blocked_comment.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_review_blocked_comment.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_post_review_blocked_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post review-blocked comment on PR (autofix exhaustion)'."
+            exit 1
           fi
-
-          # Hand-over (replace-claude-sessions plan Phase 7, Q13): when the
-          # judge itself gave up (no usable output, an unsafe action it may
-          # not take, or a follow-up it could not describe), the PR gets
-          # ai:needs-human so the unblock scan picks it up. Transient gates
-          # keep retrying through stall recovery without a label.
-          case "${JUDGE_SKIP_REASON:-}" in
-            llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)
-              if ! gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:needs-human" >/dev/null; then
-                echo "::warning::Failed to add ai:needs-human to PR #${PR_NUMBER} for the unblock judge."
-              fi
-              echo "UNBLOCK_HANDOVER pr=${PR_NUMBER} stop=rb_judge reason=${JUDGE_SKIP_REASON} outcome=labelled"
-              ;;
-          esac
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Push all pending commits
         # Deferred push: autofix commits and/or conflict resolution commits
@@ -6123,6 +4571,16 @@ jobs:
         run: |
           set -euo pipefail
           export LANG=C
+
+          # Consumer-updater PRs (#7004): only update_workflows.yml writes these
+          # branches and only its verify job may merge them. A review push
+          # (editor, [ai-merge-resolve]) would land an unverified head.
+          if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+            echo "AUTOFIX_PUSH_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+            echo "DID_COMMIT=false" >> "$GITHUB_ENV"
+            echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
           # Pre-push stale-base gate.  Soft-exit 0 if the remote tip
           # advanced past INITIAL_HEAD_SHA with a non-autofix commit
@@ -6478,7 +4936,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
           elif [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; then
             echo "Editor changes lost re-dispatch skipped; peer run already in flight."
           else
@@ -6523,7 +4981,7 @@ jobs:
               MSG+="PR: ${PR_URL}"
               MSG+=$'\n'
               MSG+="Run: ${RUN_URL}"
-              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
             fi
           fi
 
@@ -6589,7 +5047,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor model returned a safety-policy refusal (safety filter), so no fix was applied this pass."
             BODY+=$'\n\n'
@@ -6640,7 +5098,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
             BODY+=$'\n\n'
@@ -6654,12 +5112,15 @@ jobs:
             MSG+=$'\n'
             MSG+="Editor claimed no changes needed but disposition could not be verified."
             MSG+=$'\n'
-            MSG+="Auto-merge blocked. Manual review or re-run required."
+            MSG+="Auto-merge blocked. The no-op recovery sweep re-dispatches the review automatically."
             MSG+=$'\n'
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            # DEBUG for all three no-op branches: the orchestrator's no-op
+            # recovery sweep (or, for orchestrator sub-issue PRs, the stall
+            # ladder) re-dispatches; its force-merge gate failures page once.
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
             BODY+=$'\n\n'
@@ -6679,8 +5140,10 @@ jobs:
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
+          JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6692,6 +5155,10 @@ jobs:
           if [ -n "${ISSUE_NUM}" ]; then
             ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
           fi
+          # CRITICAL pages a human. Outcomes the pipeline finishes or retries
+          # on its own (judge merged/fixed/re-issued, stall recovery retries,
+          # conflict resolver re-dispatch) are DEBUG.
+          JUDGE_ALERT_LEVEL="CRITICAL"
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               approval_pending)
@@ -6719,11 +5186,47 @@ jobs:
                 HOLD_REASON="${JUDGE_SKIP_REASON#security_hold_}"
                 MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")" ;;
               merge)
-                MSG="Review-blocked judge merged PR as-is" ;;
+                # judge_merge_status (scripts/review_rb_judge.sh) says whether
+                # the merge went through. Only finished or self-retrying
+                # outcomes are DEBUG; a failed merge, failing required checks,
+                # ENABLE_AUTO_MERGE=false or an unknown status still pages.
+                MSG="$(printf 'Review-blocked judge approved PR as-is, but the merge did not go through (status: %s)\nNeeds merge investigation' "${JUDGE_MERGE_STATUS:-unknown}")"
+                if [ "${JUDGE_MERGE_STATUS}" = "merge_requested" ] || [ "${JUDGE_MERGE_STATUS}" = "already_merged" ]; then
+                  MSG="Review-blocked judge merged PR as-is (or enabled auto-merge)"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "ready_to_merge" ]; then
+                  MSG="Review-blocked judge approved PR as-is; linked issues moved to ai:ready-to-merge"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "deferred_base_moved" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; base moved under its files, branch update requested\nThe synchronize run re-validates automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "checks_not_ready" ] || [ "${JUDGE_MERGE_STATUS}" = "mergeability_pending" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; merge waits for checks or mergeability (%s)\nStall recovery will retry automatically' "${JUDGE_MERGE_STATUS}")"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "merge_conflict" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but it has merge conflicts\nThe conflict resolver is re-dispatched automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "checks_failed" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nNeeds a CI fix before the merge')"
+                elif [ "${JUDGE_MERGE_STATUS}" = "manual_merge_required" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; ENABLE_AUTO_MERGE=false\nManual merge required')"
+                fi ;;
               fix)
-                MSG="Review-blocked judge pushed fix commit" ;;
+                MSG="Review-blocked judge pushed fix commit"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               close_and_reissue)
-                MSG="Review-blocked judge closed PR and created replacement issue" ;;
+                # A closed PR without a replacement issue leaves the work
+                # untracked: that pages.
+                MSG="$(printf 'Review-blocked judge closed PR but could not create the replacement issue\nNeeds a replacement issue for the remaining work')"
+                if [ "${JUDGE_REISSUE_CREATED}" = "true" ]; then
+                  MSG="Review-blocked judge closed PR and created replacement issue"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                fi ;;
+              merge_with_followup)
+                # Merged, and the follow-up issue was created for the
+                # pipeline to implement: nothing left for a person.
+                MSG="Review-blocked judge merged PR and created a follow-up issue"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               *)
                 MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
             esac
@@ -6736,19 +5239,32 @@ jobs:
               missing_followup_details)
                 MSG="$(printf 'PR review blocked — judge selected merge_with_followup but omitted follow-up details\nNeeds judge retry or manual follow-up issue creation')" ;;
               unresolved_head_sha)
-                MSG="$(printf 'PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               check_runs_query_failed)
-                MSG="$(printf 'PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               blocking_check_runs)
-                MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              base_moved_overlap)
+                # review_rb_judge.sh requested a branch update; its
+                # synchronize run re-validates the PR without a person.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               sync_merge_failed)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;
               auto_merge_disabled)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but ENABLE_AUTO_MERGE=false\nManual merge required before follow-up creation')" ;;
               merge_conflict)
-                MSG="$(printf 'PR review blocked — PR has merge conflicts\nNeeds rebase or conflict resolution')" ;;
+                MSG="$(printf 'PR review blocked — PR has merge conflicts\nThe conflict resolver is re-dispatched automatically')"
+                # The orchestrator's review-blocked loop and the standalone
+                # conflict sweep re-dispatch the resolver; the sweep pages once
+                # when a head stays conflicted (STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS).
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               mergeability_pending)
-                MSG="$(printf 'PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               followup_issue_create_failed)
                 MSG="$(printf 'PR review blocked — PR merged but follow-up issue creation failed\nNeeds follow-up issue creation or retry')" ;;
               llm_failed_critical_issues|json_parse_failed_critical_issues)
@@ -6763,7 +5279,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
 
       - name: Check PR state before failure alerts
         if: failure() && env.PR_CLOSED != 'true'
@@ -6816,7 +5332,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_provider_outage_record.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_provider_outage_record.sh"
@@ -6891,7 +5407,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6914,7 +5430,11 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_phase_failure review_autofix "${MSG}" "ERROR" "${PR_NUMBER}"
+          # DEBUG: the failure steps above label linked issues
+          # ai:review-blocked, poke the orchestrator and file a heal report;
+          # the review-blocked judge, the stall ladder and workflow heal page
+          # when a person is needed.
+          tg_send_phase_failure review_autofix "${MSG}" "DEBUG" "${PR_NUMBER}"
 
       - name: Record review run completion in memory (fail-open)
         if: success()
