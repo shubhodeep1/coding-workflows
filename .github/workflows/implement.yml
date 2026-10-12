@@ -1161,7 +1161,10 @@ jobs:
           # The guard rejection handler runs after implement_commit_changes.sh,
           # whose fetched-manifest cleanup can remove repository support files.
           # Preserve a runtime copy outside that cleanup set for the late step.
+          # The handler sources the gh_helpers.sh copy beside it for gh_retry
+          # (fail-open: without it the handler keeps its raw gh calls).
           install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"
+          install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"
 
           # Optional: files_touched scope-enforcement guard helper. Fail-open —
           # if it is unavailable on ${SCRIPT_REF} (e.g. ref skew during a
