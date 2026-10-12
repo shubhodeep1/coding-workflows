@@ -91,6 +91,24 @@ def test_flag_defaults_off_in_workflow_and_shell() -> None:
 	assert '"${UPDATER_PR_DELIVERY_ENABLED:-false}"' in step["run"]
 
 
+def test_assembly_outputs_reach_the_body_through_env() -> None:
+	# The run: body must carry no ${{ }} expression: assembler outputs travel
+	# through env: so they are data, not script source (#7219).
+	step = _step()
+	env = step["env"]
+	expected = {
+		"CHANGELOG_ASSEMBLED": "${{ steps.changelog_assemble.outputs.changelog_assembled }}",
+		"CHANGELOG_FRAGMENT_COUNT": "${{ steps.changelog_assemble.outputs.changelog_fragment_count }}",
+		"CHANGELOG_LAYOUT": "${{ steps.changelog_assemble.outputs.changelog_layout }}",
+		"AGENTS_ASSEMBLED": "${{ steps.agents_assemble.outputs.agents_assembled }}",
+		"AGENTS_FRAGMENT_COUNT": "${{ steps.agents_assemble.outputs.agents_fragment_count }}",
+		"AGENTS_FILE": "${{ steps.agents_assemble.outputs.agents_file }}",
+	}
+	for key, value in expected.items():
+		assert env[key] == value, key
+	assert "${{" not in step["run"]
+
+
 def test_branch_pattern_never_matches_merge_train_or_forward_merge() -> None:
 	run = _run_text()
 	assert 'BRANCH="auto/update-workflows-${UPSTREAM_SHA:0:12}"' in run
