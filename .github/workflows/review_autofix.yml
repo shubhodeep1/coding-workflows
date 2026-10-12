@@ -3913,135 +3913,15 @@ jobs:
       - name: Detect smoke test and tune LLM settings
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
-          PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
-
-          # PR_TITLE is retained deliberately. Free-text fixture-tag
-          # matching on the PR title/body was removed (see below), so
-          # nothing in this step reads it any more, but it is an existing
-          # identifier and CLAUDE.md §6 forbids removing one without the
-          # ask flow. PR_BODY is still used by the linked-issue lookup.
-
-          IS_SMOKE=false
-
-          # Primary signal: the `e2e-smoke-test` label.
-          #
-          # This replaces a free-text scan of the PR title and body for a
-          # `[E2E <variant>]` fixture tag. That scan misclassified any real
-          # PR that merely *discussed* the fixture tags -- documentation
-          # changes, and changes to this detection logic itself. The
-          # consequences were not cosmetic: a misclassified PR had its
-          # reviewer/editor reasoning pinned, its review alerts silenced,
-          # and IS_SMOKE_TEST exported, which makes
-          # scripts/review_apply_fixes.sh append a "must call apply_patch
-          # on tests/e2e_smoke_canary.txt" directive to the editor prompt
-          # -- i.e. it could push the autofix editor to touch the canary
-          # file on an unrelated PR.
-          #
-          # The label is a reliable primary because implement.yml applies
-          # it atomically at `gh pr create` (see its "Atomically apply
-          # force-review + e2e-smoke-test labels at PR creation time"
-          # comment), specifically so it is already in the
-          # `pull_request: opened` payload this gate snapshots -- a label
-          # added post-creation cannot rewind the gate decision. Confirmed
-          # on release run 35672590166: PR #4252 (from the
-          # `[E2E Smoke Test]` canary fixture) and PR #4253 (from the
-          # `[E2E Smoke Test alt-model]` fixture) both carried
-          # `force-review` + `e2e-smoke-test`.
-          if jq -e '[.labels[]?.name] | index("e2e-smoke-test") != null' "${PR_PAYLOAD_FILE}" >/dev/null 2>&1; then
-            IS_SMOKE=true
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_detect_smoke_test.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_smoke_test.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_detect_smoke_test.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect smoke test and tune LLM settings'."
+            exit 1
           fi
-
-          # Fallback: the linked issue's title. Kept as a second signal so
-          # a smoke PR whose label somehow did not land is still detected,
-          # and safe to keep because it is anchored and resolves a real
-          # issue rather than scanning prose -- a documentation PR's linked
-          # issue title does not begin with the fixture tag.
-          #
-          # Only honour GitHub's closing-keyword
-          # pattern (Closes/Fixes/Resolves + #N or issue URL, case-insensitive)
-          # to avoid false-matching loose "issue #N" mentions inside log
-          # citations or backticked fragments quoted in the PR body — which
-          # would otherwise trigger phantom `gh api issues/<N>` 404s. The
-          # implement and orchestrator workflows both emit closing keywords
-          # when they create PRs, so this still resolves the linked issue
-          # for every auto-generated smoke-test PR.
-          # The URL alternative is restricted to the current repository so a
-          # cross-repo "Closes <other-repo>/issues/N" reference cannot route
-          # an unrelated number into this repo's issues lookup.
-          if [ "$IS_SMOKE" = "false" ]; then
-            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
-            if [ -n "${ISSUE_NUM:-}" ]; then
-              ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
-              # Anchored, matching the `^\[E2E ` convention used by
-              # clarify.yml, plan.yml and implement.yml: real AI issue
-              # titles never begin with the fixture tag, so this cannot
-              # fire on a production issue that merely quotes one.
-              if echo "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
-                IS_SMOKE=true
-              fi
-            fi
-          fi
-
-          if [ "$IS_SMOKE" = "true" ]; then
-            # Reasoning overrides for smoke runs.
-            # Reviewers are pinned to low; editor is pinned to medium.
-            #
-            # History of reasoning levels on smoke runs (editor). The runs
-            # cited below predate the gpt-5.4 cutover and were observed on
-            # the legacy editor default; the rationale (medium beats
-            # extremes for execution-heavy editing tasks) still stands per
-            # the gpt-5.4 prompt guide:
-            #   low  → run 25254574828: OSCILLATION GUARD activated because the
-            #           bait commit appeared in LAST_RUN_DIFF (since fixed at
-            #           L2249-2260 to only walk [ai-autofix] commits — bait
-            #           commits never match, so the guard no longer fires).
-            #   xhigh → run 25249170035 / PR #1982: budget burns on tool calls +
-            #           reasoning summaries, editor exits rc=0 with 0 file changes
-            #           (6 attempts, all empty, ~81k tokens on attempt 1).
-            #   none  → run 25305535590: the legacy editor default at reasoning=none runs one
-            #           read tool call, exits cleanly rc=0 with empty stdout, and
-            #           the in-step retry loop bails after MAX_ATTEMPTS with no
-            #           edits (same failure mode as the conflict resolver at none,
-            #           documented at the "Resolve merge conflicts" step below).
-            #           Reviewer manifest validation then fails because the editor
-            #           lists aggregate files instead of individual reviewer files.
-            #   low   → run 25308327160 (gate run 25308071039): the legacy editor default at
-            #           reasoning=low also exits rc=0 with empty stdout on all
-            #           3 attempts per round (same failure mode as none — pattern
-            #           extends across both none and low for this model+task).
-            #           "low is sufficient" assumption was wrong.
-            # medium is the only untried level; reviewers stay at low (all 6
-            # succeeded on attempt 1 at low in run 25308327160). LAST_RUN_DIFF
-            # already excludes bait commits so the oscillation guard cannot
-            # fire regardless of editor reasoning level.
-            # Non-smoke PRs continue to use the workflow defaults
-            # (THINKING_LEVEL_REVIEWER / THINKING_LEVEL_EDITOR).
-            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            echo "EDITOR_REASONING_EFFORT=medium" >> "$GITHUB_ENV"
-            echo "🔬 Smoke test PR detected — reviewer reasoning=low, editor reasoning=medium (Phase 4b fix)"
-            # Suppress per-phase Telegram alerts; the test-and-mark-stable
-            # gate emits a single combined pass/fail notification at the
-            # end via raw curl. SILENT > CRITICAL so all levels filter.
-            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
-            # Surface the smoke-test signal to scripts/review_apply_fixes.sh
-            # so the editor prompt can append a short, explicit
-            # "must call apply_patch on tests/e2e_smoke_canary.txt"
-            # directive. The repeated empty-output failures (runs
-            # 25305535590 / 25308327160 / 25310399716) all share the
-            # signature: codex reads the file, decides the change is
-            # trivial, and exits with 0-byte stdout because nothing in
-            # the production prompt forces an apply_patch invocation
-            # on a single-line removal. Only the smoke fixture sets this
-            # env var; real PR autofixes never see the smoke override
-            # and continue under the production prompt unchanged.
-            echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
-          else
-            echo "Standard PR — using default LLM settings"
-          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Use lightweight reviewer profile for no-PR claude-branch-review
         if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''
@@ -4980,187 +4860,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
           SANDBOX_PREPARE_STEP_OUTCOME: ${{ steps.deps_prepare.outcome }}
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-
-          # Empty-editor-output short-circuit.
-          #
-          # If the editor produced no structured summary AND no file
-          # changes were committed, this run has nothing meaningful to
-          # report — the synthetic fallback summary (below) would be a
-          # false positive that masks a codex crash/timeout/empty-prompt.
-          # Post a distinct, retry-friendly comment, signal the
-          # failure handlers to NOT apply ai:review-blocked for this
-          # specific cause, and fail the step so the stall poller can
-          # retry the review later instead of poisoning the linked
-          # issue with an unrecoverable label.
-          if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
-            echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
-            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            # A failed reviewer step skips the editor, so its empty output is
-            # only the symptom (PR #4323: every reviewer slot and the
-            # summariser exited 226 and the run was reported as
-            # editor_empty_noop). Name the earliest failing phase and keep the
-            # slot / summariser exit codes as evidence; the retry handling
-            # below is unchanged.
-            autofix_empty_failure_reason="editor_empty_noop"
-            noop_explanation="The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR."
-            if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then
-              autofix_empty_failure_reason="reviewers_failed"
-              noop_explanation="The reviewer stage failed, so the editor never ran and no file changes were committed. The reviewer and summariser exit codes are in the workflow run log."
-              echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
-              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
-                reviewers_failure_log_args=()
-                for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
-                  [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
-                done
-                PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
-                  > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
-                echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
-              fi
-            elif [ "${SANDBOX_PREPARE_STEP_OUTCOME:-}" = "failure" ]; then
-              # The review sandbox could not be prepared (PR #6645: Docker
-              # Hub answered 500/504 on the base image), so the editor never
-              # ran. Name that phase and keep its last error line as evidence.
-              autofix_empty_failure_reason="sandbox_prepare_failed"
-              echo "AUTOFIX_SANDBOX_PREPARE_FAILED=true" >> "$GITHUB_ENV"
-              if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
-                sandbox_prepare_last_error="$(grep -E '^(#[0-9]+ )?(::error::|ERROR:? )' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 | sed -E 's/^#[0-9]+ //; s/^::error:://; s/^ERROR:? //' | tr -d '\r' | cut -c1-300 || true)"
-                {
-                  echo "sandbox_prepare_failed=true"
-                  grep -E '^REVIEW_SANDBOX_BUILD .*outcome=fail' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 || true
-                  if [ -n "${sandbox_prepare_last_error}" ]; then
-                    printf '::error::Review sandbox prepare failed: %s\n' "${sandbox_prepare_last_error}"
-                  else
-                    echo "::error::Review sandbox prepare failed"
-                  fi
-                } > "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt"
-              fi
-              sandbox_prepare_headline=""
-              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-                sandbox_prepare_headline="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
-                  --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
-              fi
-              noop_explanation="The review sandbox could not be prepared (step \"Install project dependencies\"), so the editor never ran and no file changes were committed. ${sandbox_prepare_headline:-The prepare error is in the workflow run log.}"
-              echo "AUTOFIX_SANDBOX_PREPARE_FAILED reason=sandbox_prepare_failed error_present=$([ -n "${sandbox_prepare_headline}" ] && echo 1 || echo 0)"
-            fi
-            # Model-provider outage (issue #6633): a live probe confirms the
-            # log evidence, so the reason is provider_unavailable (no cap
-            # count, no label, one repo-wide tracker). Fail-open.
-            if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py" ]; then
-              provider_outage_log_args=()
-              for provider_outage_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log "${RUNTIME_DIR}/reviewers_failure_evidence.txt" "${RUNTIME_DIR}/editor_stage_stderr.txt" "${RUNTIME_DIR}/collect_metadata_stderr.txt" "${RUNTIME_DIR}/resolver_stage_stderr.txt"; do
-                [ -f "${provider_outage_log}" ] && provider_outage_log_args+=(--log-file "${provider_outage_log}")
-              done
-              if [ "${#provider_outage_log_args[@]}" -gt 0 ]; then
-                provider_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR}/provider_outage_probe.json" "${provider_outage_log_args[@]}" 2>/dev/null | head -n 1 || true)"
-                if [[ "${provider_outage_class}" == reason=provider_unavailable* ]]; then
-                  provider_outage_status="$(printf '%s\n' "${provider_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
-                  autofix_empty_failure_reason="provider_unavailable"
-                  noop_explanation="The model provider failed (status ${provider_outage_status:-unknown}, confirmed by a live probe). This is a repo-wide outage tracked on the ai:provider-outage issue, not a defect in this PR, and it does not count toward the identical-failure cap; review resumes automatically when the provider recovers."
-                  { echo "AUTOFIX_FAILURE_REASON=provider_unavailable"; echo "AUTOFIX_PROVIDER_STATUS=${provider_outage_status:-unknown}"; } >> "$GITHUB_ENV"
-                fi
-              fi
-            fi
-            # review-autofix-failure:v1 marker for the gate's identical-failure
-            # fingerprint cap. Same evidence files and reason precedence as
-            # "Assemble failure evidence", so every failure comment of one run
-            # carries one fingerprint. Empty when the helper is unavailable.
-            AUTOFIX_FAILURE_MARKER_SUFFIX=""
-            if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-              autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
-                --failure-reason "${autofix_empty_failure_reason}" \
-                --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
-                --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-                --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
-                --support-sha "${REVIEW_SUPPORT_SHA:-}" \
-                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
-              if [ -n "${autofix_failure_marker_line}" ]; then
-                AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
-              fi
-            fi
-            NOOP_BODY="$(cat <<EOF
-          **AI review/autofix produced no output — will retry**
-
-          ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
-
-          [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
-          EOF
-          )"
-            if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then
-              NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"
-            fi
-            NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
-            echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_post_editor_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post editor summary comment'."
             exit 1
           fi
-
-          if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
-            cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
-          Changes made:
-          - none (no editor summary output was generated)
-
-          Already satisfied (suggested but already present):
-          - none (no editor summary output was generated)
-
-          Ignored suggestions (with short reason):
-          - no summary available from editor stage
-
-          Reviewer files processed:
-          - none (no editor summary output was generated)
-
-          Review file issue audit:
-          - none (no editor summary output was generated)
-
-          Regression fingerprint:
-          - unavailable (editor fallback)
-
-          Runtime failure path:
-          - unavailable (editor fallback)
-          __EDITOR_SUMMARY__
-          fi
-
-          {
-            echo "AI autofix editor summary"
-            echo
-            cat "${EDITOR_SUMMARY_FILE}"
-            echo
-            echo "Files changed / commit status:"
-            if [ -s "${COMMITTED_FILES_FILE}" ]; then
-              cat "${COMMITTED_FILES_FILE}"
-            else
-              echo "- none"
-            fi
-            echo
-          } > "${PR_EDITOR_COMMENT_FILE}"
-
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-
-          if gh_retry gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
-            echo "Posted editor summary comment."
-            # Signal to the failure-comment step (line ~3269) that the
-            # editor summary already landed on the PR thread. The generic
-            # "AI review/autofix failed" body speculates about editor /
-            # dependency / infra failure modes and would contradict the
-            # success-looking summary above when the editor in fact ran
-            # to completion and a later step (push, conflict resolver,
-            # auto-merge config, telemetry) is what actually failed.
-            # Set only on a successful post; on retry exhaustion the
-            # editor summary is not visible to the reader, so the
-            # generic body is the right thing to post. See PR #1476
-            # follow-up for the contradictory-comment regression this
-            # signal resolves.
-            echo "EDITOR_SUMMARY_POSTED=true" >> "$GITHUB_ENV"
-          else
-            echo "::warning::Unable to post editor summary comment after retries."
-          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Clear Serena after editor
         if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -6030,103 +5740,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          # Reason-specific body. The generic "max autofix iterations"
-          # body posted unconditionally (pre-fix) confused operators
-          # when the actual refusal was a transient gate — e.g. the
-          # merge_with_followup self-deadlock observed on tele-funtoken-
-          # msg-scoring PR #2989, where the judge approved the merge but
-          # the check-runs gate refused it because the rb_judge's own
-          # host job (review / codex-agent) was still in_progress.
-          # judge_skip_reason now carries the proximate cause from
-          # scripts/review_rb_judge.sh so the comment can explain what
-          # actually happened. Empty reason = legacy / pre-fix script,
-          # falls through to the original body.
-          case "${JUDGE_SKIP_REASON:-}" in
-            isolation_unavailable)
-              BODY_HEADING="AI review/autofix — judge deferred: isolation unavailable"
-              BODY_DETAIL="The judge could not prepare its credential-free sandbox (for example, the PR snapshot exceeded the isolation size limit or support files are missing). It refused to run a host writer on PR content. Linked issues remain labelled \`ai:review-blocked\`; stall recovery will retry the judge. If this repeats on the same head, a human must review."
-              ;;
-            missing_followup_details)
-              BODY_HEADING="AI review/autofix — judge omitted follow-up issue details"
-              BODY_DETAIL="The review-blocked judge chose \`merge_with_followup\` but returned an empty \`followup_issue.title\` and/or \`.body\`, so the workflow refused the action rather than merge code without durable tracking for the deferred gap. Stall recovery will re-fire the judge; if this repeats, inspect the judge output in the workflow log."
-              ;;
-            blocking_check_runs)
-              BODY_HEADING="AI review/autofix — merge gated by in-flight check-runs"
-              BODY_DETAIL="The review-blocked judge approved this PR but other CI check-runs on the head commit had not yet completed when the merge was attempted. Stall recovery will re-fire the judge after the remaining check-runs settle; no action is required unless the blocking checks themselves are stuck. Linked issues remain labelled \`ai:review-blocked\` so the recovery ladder will retry."
-              ;;
-            check_runs_query_failed)
-              BODY_HEADING="AI review/autofix — judge could not query check-runs"
-              BODY_DETAIL="The review-blocked judge could not fetch the check-runs API for the PR head commit and refused the merge rather than land code against unvalidated CI state. This is usually transient; stall recovery will re-fire the judge. If it persists, check the workflow run log for the GitHub API error."
-              ;;
-            unresolved_head_sha)
-              BODY_HEADING="AI review/autofix — judge could not resolve PR head SHA"
-              BODY_DETAIL="The review-blocked judge could not resolve the PR head SHA from the GitHub PR JSON and refused the merge to avoid landing unjudged code. Stall recovery will re-fire the judge. If this recurs, the GitHub PR API may be returning a partial payload — check the workflow run log."
-              ;;
-            sync_merge_failed)
-              BODY_HEADING="AI review/autofix — judge approved merge but \`gh pr merge\` failed"
-              BODY_DETAIL="The review-blocked judge approved this PR and all check-runs had settled, but the synchronous \`gh pr merge --squash\` call failed. Typical causes: branch-protection rules, a merge queue requirement, missing permissions on the GH token, GitHub returning 422, or a concurrent push that changed HEAD. Stall recovery will re-fire the judge; the operator may need to merge manually if the underlying cause is permission/policy."
-              ;;
-            auto_merge_disabled)
-              BODY_HEADING="AI review/autofix — judge approved merge but auto-merge is disabled"
-              BODY_DETAIL="The review-blocked judge approved this PR but \`ENABLE_AUTO_MERGE\` is false in repo configuration, so the judge cannot land the merge itself. Please merge this PR manually; the follow-up tracking issue will be created on the next judge run after the merge lands."
-              ;;
-            merge_conflict)
-              BODY_HEADING="AI review/autofix — PR has merge conflicts"
-              BODY_DETAIL="The review-blocked judge could not act because the PR has merge conflicts against its base branch (mergeable=false). Please resolve the conflicts (rebase or merge the base branch) and push; the autofix loop will re-run."
-              ;;
-            mergeability_pending)
-              BODY_HEADING="AI review/autofix — mergeability still computing"
-              BODY_DETAIL="The review-blocked judge could not act because GitHub was still computing the PR's mergeability state when the gate ran. Stall recovery will re-fire the judge shortly; no action is required unless the state remains unknown for an extended period."
-              ;;
-            followup_issue_create_failed)
-              BODY_HEADING="AI review/autofix — merge landed but follow-up issue creation failed"
-              BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\` and the PR merge succeeded, but GitHub failed while creating the follow-up issue. The deferred gap is not yet tracked; please create the follow-up manually if needed, or let stall recovery / a subsequent judge run retry issue creation."
-              ;;
-            *)
-              BODY_HEADING="AI review/autofix blocked — needs human intervention"
-              BODY_DETAIL="This PR has reached the maximum number of autofix iterations (${MAX_AUTOFIX_ITERATIONS}) without resolving all review issues. The remaining problems could not be auto-fixed and require manual attention."
-              ;;
-          esac
-
-          BODY="$(cat <<EOF
-          **${BODY_HEADING}**
-
-          ${BODY_DETAIL}
-
-          **What to do:**
-          - Review the editor summary comments above for details on what was fixed and what was not
-          - Address the remaining issues manually if needed
-          - Push a new commit to re-trigger the review workflow if you have made changes
-
-          Linked issues have been labeled \`ai:review-blocked\`.
-
-          Run: ${RUN_URL}
-          EOF
-          )"
-
-          if ! gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null; then
-            echo "::warning::Failed to post review-blocked comment on PR #${PR_NUMBER}."
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_review_blocked_comment.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_review_blocked_comment.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_post_review_blocked_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post review-blocked comment on PR (autofix exhaustion)'."
+            exit 1
           fi
-
-          # Hand-over (replace-claude-sessions plan Phase 7, Q13): when the
-          # judge itself gave up (no usable output, an unsafe action it may
-          # not take, or a follow-up it could not describe), the PR gets
-          # ai:needs-human so the unblock scan picks it up. Transient gates
-          # keep retrying through stall recovery without a label.
-          case "${JUDGE_SKIP_REASON:-}" in
-            llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)
-              if ! gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:needs-human" >/dev/null; then
-                echo "::warning::Failed to add ai:needs-human to PR #${PR_NUMBER} for the unblock judge."
-              fi
-              echo "UNBLOCK_HANDOVER pr=${PR_NUMBER} stop=rb_judge reason=${JUDGE_SKIP_REASON} outcome=labelled"
-              ;;
-          esac
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Push all pending commits
         # Deferred push: autofix commits and/or conflict resolution commits

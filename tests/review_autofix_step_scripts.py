@@ -53,6 +53,9 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Validate editor no-op disposition": ("review_autofix_step_editor_noop_disposition.sh", "error"),
 	"Stage codex logs for upload (failure or empty-editor)": ("review_autofix_step_stage_codex_logs.sh", "warning"),
 	"Initialize runtime workspace": ("review_autofix_step_init_runtime_workspace.sh", "error"),
+	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_post_review_blocked_comment.sh", "error"),
+	"Post editor summary comment": ("review_autofix_step_post_editor_summary.sh", "error"),
+	"Detect smoke test and tune LLM settings": ("review_autofix_step_detect_smoke_test.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(
