@@ -1156,7 +1156,7 @@ bypass it. Log prefix: `IMPLEMENT_AUTOMATION_PATH_GUARD`.
   (log prefix `LABEL_SYNC_DELETED`; `LABEL_SYNC_RETIRED_ABSENT` when already
   gone; the output gains a `deleted` list). Nothing creates or applies them.
 
-`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default `false`, #6838) moves
+`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default `true`, #6838) moves
 the same grant check in front of the automatic `/approved`. When on,
 `plan.yml`'s "Auto-approve clear plan" step and both poller stall-recovery
 `auto_approve` branches extract the automation paths from the plan's

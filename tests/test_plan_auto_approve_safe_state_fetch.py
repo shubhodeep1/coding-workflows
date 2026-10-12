@@ -179,8 +179,8 @@ _GRANTED_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "logi
 def test_ungranted_security_finding_plan_is_held() -> None:
 	# Issue #6769 regression: a pipeline-authored security finding without
 	# files_touched gets the open implement-time grant, but its plan must not
-	# be auto-approved with the flag off (the default) or on.
-	for flag, reason in ((None, "automation_path_plan_auto_approval_disabled"),
+	# be auto-approved with the flag off or on (unset is on, the default).
+	for flag, reason in ((None, "open_grant_not_exact"), ("", "open_grant_not_exact"),
 		("false", "automation_path_plan_auto_approval_disabled"), ("true", "open_grant_not_exact")):
 		posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag=flag)
 		assert not posted, (flag, stdout)
@@ -216,7 +216,7 @@ def test_ordinary_plan_unchanged_and_missing_plan_holds() -> None:
 
 def test_plan_gate_wiring_defaults_off() -> None:
 	text = _workflow_text()
-	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}" in text
+	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}" in text
 	assert "clarify_isolated_run.sh files_touched_scope_guard.py; do" in text
 	block = _step_block(text, "Auto-approve clear plan")
 	assert "--plan-auto-approval-gate" in block
@@ -226,7 +226,7 @@ def test_plan_gate_wiring_defaults_off() -> None:
 
 def test_hold_posts_one_deduplicated_comment_naming_missing_paths() -> None:
 	posts: list[str] = []
-	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, posts_out=posts)
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag="false", posts_out=posts)
 	assert not posted
 	assert "automation_path_hold=true" in output
 	assert len(posts) == 1
@@ -243,11 +243,11 @@ def test_hold_posts_one_deduplicated_comment_naming_missing_paths() -> None:
 			"author_association": "OWNER", "user": {"login": "maintainer"}},
 	]
 	again: list[str] = []
-	posted, _, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=comments, posts_out=again)
+	posted, _, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=comments, gate_flag="false", posts_out=again)
 	assert not posted and again == []
 	untrusted = [comments[0], {**comments[1], "author_association": "NONE", "user": {"login": "stranger"}}]
 	third: list[str] = []
-	_run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=untrusted, posts_out=third)
+	_run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=untrusted, gate_flag="false", posts_out=third)
 	assert len(third) == 1
 
 

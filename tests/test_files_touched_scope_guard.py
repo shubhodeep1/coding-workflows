@@ -900,6 +900,17 @@ def test_plan_gate_cli_granted_and_ordinary_plans() -> None:
 		"denied_paths": [], "log_paths": "none"}
 
 
+def test_plan_gate_flag_defaults_on() -> None:
+	# An empty value is on, like the `|| 'true'` workflow defaults; only an
+	# explicit off value holds every automation-path plan.
+	plan = "## Files likely to change\n- `scripts/a.sh`\n\n## Functions or modules to implement\n- `scripts/b.sh`\n"
+	meta = _owner_meta("scripts/a.sh")
+	code, record = _run_plan_gate_cli(plan, "", meta)
+	assert code == 0 and record["reason"] == "granted" and record["protected_paths"] == ["scripts/a.sh"]
+	for off in ("false", "FALSE", "0", "no", "maybe"):
+		assert _run_plan_gate_cli(plan, off, meta)[1]["reason"] == "automation_path_plan_auto_approval_disabled", off
+
+
 def test_plan_gate_cli_fails_closed() -> None:
 	plan = "### Files likely to change\n- `scripts/a.sh`\n"
 	assert _run_plan_gate_cli(None, "false", None)[1]["reason"] == "plan_gate_error"
