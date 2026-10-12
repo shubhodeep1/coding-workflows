@@ -958,11 +958,14 @@ the same plain command.
 `ask` rules cover pushes that delete a branch with `--delete`, `-d` or
 `--prune`, or that name `main` or `master` as a destination. They do not cover
 every refspec the trailing `*` of a `claude/*` allow rule also matches:
-`claude/x:release`, a colon deletion such as `claude/x :release`, and
+`claude/x:release`, a colon deletion such as `claude/x :release`, a
+force-prefixed refspec such as `claude/x +main` or `claude/x +master` (which
+force-pushes the local default branch), and
 `--force-with-lease=claude/a:<sha> origin claude/b` (which leases a different
 branch from the one it overwrites) still pass without a prompt. So push exactly
 one plain branch name, give `--force-with-lease=` the same branch as the
-destination, and never add a second refspec or a `src:dst` refspec to a push.
+destination, and never add a second refspec, a `+` refspec or a `src:dst`
+refspec to a push.
 A consumer repo whose default branch has another name gets no ask rule for it.
 
 The same rule of one plain command applies to cleanup. Delete files with
