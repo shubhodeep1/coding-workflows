@@ -57,7 +57,8 @@
 #                                            when the failing PR's head is an existing
 #                                            orchestrator/project-<N> branch of this
 #                                            repository, verified via the GitHub API
-#                                            (default false; issue #6726)
+#                                            (default true; "false" turns it off;
+#                                            issue #6726)
 
 set -euo pipefail
 
@@ -214,8 +215,13 @@ case "${PR_HEAD_ROUTING_ENABLED,,}" in
 esac
 ROUTING_REF=""
 ROUTING_LINE=""
-# Issue #6726: off by default until the operator step for #6710 is done.
-PR_HEAD_BRANCH_METADATA_ENABLED="${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-false}"
+# Issue #6726: on by default. `false` (any case) turns it off; any other value
+# also turns it off and warns, so a typo never routes a fix to a branch.
+PR_HEAD_BRANCH_METADATA_ENABLED="${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-true}"
+case "${PR_HEAD_BRANCH_METADATA_ENABLED,,}" in
+	true | false) ;;
+	*) echo "::warning::TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED has an unrecognised value; the Integration branch line stays off. Use true or false." ;;
+esac
 # The only branch shape this script will route a fix to. Digits only, so the
 # value cannot carry markdown, backticks, path segments or newlines.
 INTEGRATION_BRANCH_RE='^orchestrator/project-[1-9][0-9]*$'

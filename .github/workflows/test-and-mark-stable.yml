@@ -6395,7 +6395,7 @@ jobs:
     outputs:
       release_enabled: ${{ steps.release_switch.outputs.enabled }}
     env:
-      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'false' }}
+      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
       STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}
     # Serialise the mutating tag pushes across every dispatcher of this
     # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
@@ -6427,22 +6427,29 @@ jobs:
           fi
           echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
-      # Publishing switch (issue #6532 / #6809). Off unless the repository
-      # variable STABLE_RELEASE_ENABLED is exactly `true` (any case). While
-      # off the gate still runs every validation job and the CI lint check
-      # below, but the changelog push, tags, GitHub release, consumer
+      # Publishing switch (issue #6532 / #6809). On by default: an unset or
+      # empty repository variable STABLE_RELEASE_ENABLED, or `true` (any
+      # case), publishes. `false` turns publishing off; any other value also
+      # turns it off and warns, so a typo never publishes. The default was
+      # off until the off switch held every release since v1.31.0 back
+      # (#7029: stable tagging was never meant to sit behind an off switch).
+      # While off the gate still runs every validation job and the CI lint
+      # check below, but the changelog push, tags, GitHub release, consumer
       # dispatch and sync-to-main are skipped. The value reaches the script
       # only through env.
       - name: Resolve stable release switch
         id: release_switch
         run: |
           set -euo pipefail
-          release_switch_value="${STABLE_RELEASE_ENABLED:-false}"
+          release_switch_value="${STABLE_RELEASE_ENABLED:-true}"
           release_switch_value="${release_switch_value,,}"
           if [ "${release_switch_value}" = "true" ]; then
             release_switch_enabled=true
           else
             release_switch_enabled=false
+            if [ "${release_switch_value}" != "false" ]; then
+              echo "::warning::STABLE_RELEASE_ENABLED has an unrecognised value; publishing stays off. Use true or false."
+            fi
           fi
           echo "STABLE_RELEASE_SWITCH enabled=${release_switch_enabled}"
           printf 'enabled=%s\n' "${release_switch_enabled}" >> "$GITHUB_OUTPUT"

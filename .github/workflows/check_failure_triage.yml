@@ -199,7 +199,7 @@ jobs:
       # triage issue only after an operator enables it.
       CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED || 'false' }}
       # Issue #6726: add a verified Integration branch line for orchestrator/project-<N> PR heads.
-      TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'false' }}
+      TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
