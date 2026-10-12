@@ -31,7 +31,10 @@ RESOLVER = "Resolve release tagging switch"
 ASSEMBLE = "Assemble changelog fragments"
 WRITE_STEPS = (
 	"Tag version and update stable pointer",
+	"Build release manifest",
+	"Attest release manifest",
 	"Create GitHub Release",
+	"Upload release manifest asset",
 	"Notify consumer repos via repository_dispatch",
 )
 EXPR_OPEN = "$" + "{" + "{"
@@ -96,6 +99,8 @@ def test_release_jobs_carry_default_on_tagging_switch() -> None:
 			cond = str(_step(job, name).get("if") or "")
 			assert "steps.release_tagging.outputs.enabled == 'true'" in cond, f"{wf}: {name} must be gated on the switch"
 			assert "!inputs.dry_run" in cond, f"{wf}: {name} must keep the dry-run guard"
+		output = str((job.get("outputs") or {}).get("release_enabled") or "")
+		assert "steps.release_tagging.outputs.enabled == 'true'" in output, f"{wf}: release_enabled must include the switch"
 		assemble = _step(job, ASSEMBLE)
 		run = assemble.get("run") or ""
 		assert "RELEASE_TAGGING" in (assemble.get("env") or {})

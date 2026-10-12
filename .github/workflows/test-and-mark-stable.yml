@@ -6404,7 +6404,10 @@ jobs:
       checks: read
       actions: read
     outputs:
-      release_enabled: ${{ steps.release_switch.outputs.enabled }}
+      # true only when both STABLE_RELEASE_ENABLED and RELEASE_TAGGING_ENABLED
+      # let this run publish, so sync-to-main and the notify summary never
+      # treat an untagged run as a release.
+      release_enabled: ${{ steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' && 'true' || 'false' }}
     env:
       STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
       STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}
@@ -6882,7 +6885,7 @@ jobs:
       # scripts/release_manifest_publish.sh (log prefix RELEASE_MANIFEST).
       - name: Build release manifest
         id: release_manifest
-        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
           RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release-manifest
@@ -6896,7 +6899,7 @@ jobs:
             --output-dir "${RELEASE_MANIFEST_DIR}"
 
       - name: Attest release manifest
-        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
@@ -6964,7 +6967,7 @@ jobs:
           exit "${RELEASE_CREATE_RC}"
 
       - name: Upload release manifest asset
-        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -7370,7 +7373,7 @@ jobs:
               MSG="Release gate ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="⊘"
             elif [ "${RELEASE_ENABLED:-}" != "true" ]; then
-              MSG="Release gate ${{ needs.resolve-version.outputs.version }} PASSED — publishing disabled (STABLE_RELEASE_ENABLED off); nothing tagged"
+              MSG="Release gate ${{ needs.resolve-version.outputs.version }} PASSED — publishing disabled (STABLE_RELEASE_ENABLED or RELEASE_TAGGING_ENABLED off); nothing tagged"
               RELEASE_ICON="⊘"
             else
               MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
