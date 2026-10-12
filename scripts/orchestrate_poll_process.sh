@@ -12271,7 +12271,9 @@ finalize_integration_merge_if_needed() {
       # One PR read; both fields are parsed locally. `jq -r` prints a null
       # or missing field as the literal `null`, as the former per-field
       # `--jq` reads did. A failed read leaves both values empty, as before.
-      existing_pr_fallback_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" || echo "")"
+      # `--jq '.'` makes gh parse the body, so a malformed 2xx response
+      # fails inside gh_retry and is retried, as the per-field reads were.
+      existing_pr_fallback_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.' || echo "")"
       if [ -n "${existing_pr_fallback_json}" ]; then
         existing_pr_state="$(printf '%s' "${existing_pr_fallback_json}" | jq -r '.state' 2>/dev/null || echo "")"
         existing_pr_merged="$(printf '%s' "${existing_pr_fallback_json}" | jq -r '.merged_at != null' 2>/dev/null || echo "")"
@@ -25594,7 +25596,9 @@ ${RB_FIX_DESC}
     # One issue read; title and body are parsed locally. `jq -r` prints a
     # null or missing field as the literal `null`, as the former per-field
     # `--jq` reads did. A failed read leaves both values empty, as before.
-    IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" || echo "")"
+    # `--jq '.'` makes gh parse the body, so a malformed 2xx response fails
+    # inside gh_retry and is retried, as the per-field reads were.
+    IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.' || echo "")"
     if [ -n "${IF_ISSUE_JSON}" ]; then
       IF_TITLE="$(printf '%s' "${IF_ISSUE_JSON}" | jq -r '.title' 2>/dev/null || echo "")"
       IF_BODY="$(printf '%s' "${IF_ISSUE_JSON}" | jq -r '.body' 2>/dev/null || echo "")"

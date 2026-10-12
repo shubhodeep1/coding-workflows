@@ -24421,7 +24421,7 @@ def test_finalize_fallback_reads_final_pr_once():
 	body = _extract_bash_function(script, "finalize_integration_merge_if_needed() {")
 	assert "pulls/${final_pr}\" --jq '.state'" not in body
 	assert "pulls/${final_pr}\" --jq '.merged_at != null'" not in body
-	fetch = '_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" || echo ""'
+	fetch = '_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq \'.\' || echo ""'
 	assert body.count(fetch) == 1, body.count(fetch)
 	assert "jq -r '.state' 2>/dev/null" in body
 	assert "jq -r '.merged_at != null'" in body
@@ -24433,7 +24433,7 @@ def test_implementation_failed_sweep_reads_issue_once():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "issues/${if_issue}\" --jq '.title'" not in script
 	assert "issues/${if_issue}\" --jq '.body'" not in script
-	fetch = 'IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" || echo "")"'
+	fetch = 'IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq \'.\' || echo "")"'
 	assert script.count(fetch) == 1, script.count(fetch)
 	assert "jq -r '.title' 2>/dev/null" in script
 	assert "jq -r '.body' 2>/dev/null" in script
