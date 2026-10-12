@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7191,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7191\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7194\",\"pr_number\":7194,\"branch\":\"ai/issue-7191\",\"run_id\":\"38185644735\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38185644735\",\"changed_files\":[\".github/workflows/workflow-failure-heal-intake.yml\",\"README.md\",\"agents.d/7191-heal-scope-recovery.md\",\"changelog.d/7191-heal-scope-recovery.md\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "e69edb78d7671a3c37bfe2de2003f4c1a817eb0dd7e54851d471d4c8ce528a8d",
+  "lineage": {
+    "issue_number": 7191,
+    "parent_ids": [],
+    "pr_number": 7194,
+    "run_id": "38185644735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38185644735",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7194"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261012001605_c2df2ed9f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7191,
+    "level": "run",
+    "pr_number": 7194,
+    "run_id": "38185644735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7191: https://github.com/shubhodeep1/coding-workflows/pull/7194",
+  "timestamps": {
+    "created_at": "2026-10-12T00:16:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
