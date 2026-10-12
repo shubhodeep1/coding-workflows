@@ -15542,8 +15542,9 @@ _plan_auto_approval_hold_notify()
     return 0
   fi
   if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    # The WARNING below still goes out, so a failed write never leaves the
+    # hold unseen (matches plan.yml's automation_path_plan_hold).
     echo "::warning::Could not post the automation-path hold comment for issue #${issue_num}."
-    return 0
   fi
   tg_notify_issue "${issue_num}" "Stall recovery: plan auto-approval held (${reason}); a maintainer must reply /approved." "WARNING" || true
   return 0
@@ -19267,8 +19268,12 @@ STALL_EOF
         # Issue #6769: a held plan logs STALL_SKIP and takes no action, so
         # took_action and STALL_RECOVERY_SHOULD_INCREMENT stay false, like
         # the staged-support skip.
-        local _std_plan_gate_comments='[]'
-        _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
+        # In ai:awaiting-approval, comments_json already holds the complete
+        # history (_staged_support_comments_for_guard above); reuse it.
+        local _std_plan_gate_comments="${comments_json:-[]}"
+        if [ "${phase}" != "ai:awaiting-approval" ]; then
+          _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
+        fi
         if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
           "${_std_plan_gate_comments}" "${phase}"; then
           local _std_auto_approve_rc=0
@@ -19291,8 +19296,8 @@ STALL_EOF
         # /approved as auto_approve, so it passes the same plan gate.
         local _std_rti_gate_ok="true"
         if [ "${phase}" = "ai:awaiting-approval" ]; then
-          local _std_rti_gate_comments='[]'
-          _std_rti_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
+          # comments_json is the complete history in this phase (see auto_approve).
+          local _std_rti_gate_comments="${comments_json:-[]}"
           if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
             "${_std_rti_gate_comments}" "${phase}"; then
             _std_rti_gate_ok="false"

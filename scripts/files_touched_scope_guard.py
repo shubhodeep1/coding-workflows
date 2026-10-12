@@ -531,9 +531,10 @@ _PLAN_PLAIN_LEADIN_LEVEL = 2
 # any letter case, a slash, then everything up to whitespace, a backtick, a
 # quote or `<>|` (globs kept so they hold). The token is never cut at an
 # unusual filename character: `scripts/a+b.py` must stay whole, or a grant for
-# `scripts/a` would approve it.
+# `scripts/a` would approve it. `_` is not a boundary character, so
+# `_scripts/x.sh_` or `my_scripts/x.sh` still holds (fail closed).
 _PLAN_PATH_TOKEN_RE = re.compile(
-	r"(?:^|[^A-Za-z0-9_./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`'\"<>|]*)",
+	r"(?:^|[^A-Za-z0-9./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`'\"<>|]*)",
 	re.IGNORECASE)
 _PLAN_PATH_TRAILING_PUNCT = ".,;:!)]}"
 _PLAN_PATH_LINE_SUFFIX_RE = re.compile(r":\d+(?::\d+)?$")
@@ -559,6 +560,8 @@ def _plan_files_section(plan_text: str) -> str | None:
 			inside = True
 			heading = _PLAN_HEADING_RE.match(line)
 			level = len(heading.group(1)) if heading else _PLAN_PLAIN_LEADIN_LEVEL
+			# Paths on the lead-in line itself ("Files to change: `scripts/x.sh`") count.
+			kept.append(line)
 			continue
 		heading = _PLAN_HEADING_RE.match(line)
 		if inside and heading and len(heading.group(1)) <= level:

@@ -769,6 +769,27 @@ def test_plan_extractor_negated_lead_in_cannot_hide_paths() -> None:
 		flag_enabled=False, allow_workflow_edits="true", issue_number="42")[0] == "hold"
 
 
+def test_plan_extractor_reads_lead_in_line_paths() -> None:
+	# Regression: a path on the lead-in line was dropped, so the plan was
+	# auto-approved even with the flag off.
+	for plan in ("### Files to change: `scripts/security_audit.sh`\n### Functions\n",
+		"Files likely to change: `scripts/security_audit.sh`\n"):
+		paths = guard.extract_plan_automation_paths(plan)
+		assert paths == ["scripts/security_audit.sh"], plan
+		assert guard.evaluate_plan_auto_approval(paths, None, flag_enabled=False,
+			allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def test_plan_extractor_underscore_does_not_hide_paths() -> None:
+	# Regression: `_` counted as a boundary character, so underscore emphasis
+	# hid a protected path.
+	plan = "### Files likely to change\n- _scripts/security_audit.sh_\n- my_scripts/x.sh\n"
+	paths = guard.extract_plan_automation_paths(plan)
+	assert paths == ["scripts/security_audit.sh_", "scripts/x.sh"]
+	assert guard.evaluate_plan_auto_approval(paths, None, flag_enabled=False,
+		allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
 def test_plan_extractor_falls_back_to_whole_text() -> None:
 	plan = "Edit /scripts/x.sh, keep src/scripts/y.sh, and update scripts/z.py:12.\nAlso README.md."
 	assert guard.extract_plan_automation_paths(plan) == ["scripts/x.sh", "scripts/z.py"]
