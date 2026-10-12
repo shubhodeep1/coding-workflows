@@ -864,6 +864,7 @@ jobs:
       # mirror fails the build behaves exactly as before.
       - name: Pre-seed clarify sandbox base image
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        continue-on-error: true
         env:
           CLARIFY_BASE_IMAGE_MIRRORS: ${{ vars.CLARIFY_BASE_IMAGE_MIRRORS || 'public.ecr.aws/docker/library mirror.gcr.io/library' }}
           CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS: ${{ vars.CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS || '300' }}
@@ -908,8 +909,11 @@ jobs:
             fi
             preseed_attempted=$((preseed_attempted + 1))
             preseed_source="${preseed_mirror}/${preseed_ref}"
-            preseed_pull_out="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout "${preseed_timeout}" docker pull --quiet "${preseed_source}" 2>&1)"
-            preseed_pull_rc=$?
+            # Actions runs this body under `bash -e`; a failed assignment from a
+            # command substitution would exit before the next mirror, so the
+            # status is captured with `||` instead of a separate `$?` read.
+            preseed_pull_rc=0
+            preseed_pull_out="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout "${preseed_timeout}" docker pull --quiet "${preseed_source}" 2>&1)" || preseed_pull_rc=$?
             if [ "${preseed_pull_rc}" -eq 0 ] \
               && preseed_docker tag "${preseed_source}" "${preseed_ref}" >/dev/null 2>&1 \
               && preseed_docker image inspect "${preseed_ref}" >/dev/null 2>&1; then

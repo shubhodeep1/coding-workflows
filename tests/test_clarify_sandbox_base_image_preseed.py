@@ -198,8 +198,11 @@ class Sandbox:
 	def run_step(self, good_mirrors: str, mirrors: str = DEFAULT_MIRRORS) -> subprocess.CompletedProcess:
 		body = self.root / "step.sh"
 		body.write_text(_step(STEP_NAME)["run"], encoding="utf-8")
+		# GitHub Actions runs a `run:` body without `shell:` as `bash -e {0}`;
+		# use the same errexit so a failed mirror pull cannot pass here and
+		# abort the step in CI.
 		return subprocess.run(
-			["bash", str(body)],
+			["bash", "--noprofile", "--norc", "-e", str(body)],
 			cwd=self.root,
 			env=self.env(good_mirrors, mirrors),
 			capture_output=True,
@@ -265,6 +268,10 @@ def test_step_env_has_no_secrets_and_defaults_to_mirrors() -> None:
 	assert "${{" not in body, "expressions must reach the body through env:"
 	assert "exit 1" not in body, "the step must fail open"
 	assert "docker login" not in body
+	assert step.get("continue-on-error") in (True, "true"), "the best-effort step must not block Run Codex"
+	assert not re.search(r"^\s*preseed_pull_rc=\$\?\s*$", body, re.M), (
+		"a standalone `$?` read after the pull is unreachable under bash -e"
+	)
 
 
 def test_real_dockerfile_base_is_a_supported_official_image() -> None:
