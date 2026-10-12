@@ -1236,7 +1236,7 @@ esac
 									**state,
 									**{
 										pointer_key: _resolve_sandbox_sha_alias(str(state[pointer_key]))
-										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha")
+										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha", "integration_conflict_episode_base_sha")
 										if isinstance(state.get(pointer_key), str)
 									},
 								}
@@ -2493,6 +2493,7 @@ if args[0] == 'api':
 				'body': pr.get('body', ''),
 				'base': {
 					'ref': pr.get('baseRefName', ''),
+					'repo': {'default_branch': store.get('default_branch', 'main')},
 				},
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
@@ -24843,6 +24844,281 @@ def test_integration_judge_invalid_answer_retries_end_at_lifetime_cap():
 	assert "INTEGRATION_JUDGE_INVALID" not in second_output
 	assert "INTEGRATION_JUDGE_RETRY" not in second_output
 	assert "lifetime dispatch cap (10) reached" in json.dumps(second["latest_state"])
+
+
+def _integration_cap_state(total: int, episode_base_sha: str) -> dict:
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_total_dispatches"] = total
+	state["integration_conflict_episode_base_sha"] = episode_base_sha
+	state["final_merge_pr"] = 300
+	return state
+
+
+_INTEGRATION_CAP_PRS = [{
+	"number": 300, "state": "open", "draft": True, "mergeable": False, "mergeable_state": "dirty",
+	"baseRefName": "main", "headRefName": "orchestrator/project-192",
+	"headSha": "0000000000000000000000000000000000000300",
+}]
+
+
+def test_integration_conflict_counter_restarts_once_the_last_dispatch_landed():
+	"""Q84 (#6664, 2026-10-11): ten separate conflicts, each resolved, used up
+	the lifetime cap. The commit the last dispatch was asked to merge is now
+	in the integration branch, so that conflict counts as resolved and the
+	counter starts again instead of failing the project."""
+	result = _run_poller(
+		state=_integration_cap_state(10, "__integration_head__"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True, mock_local_integration_content_conflict=True, prs=_INTEGRATION_CAP_PRS,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "d", "resolution_guidance": "g"},
+	)
+	output = result["stdout"] + result["stderr"]
+	latest = result["latest_state"]
+	assert "INTEGRATION_CONFLICT_EPISODE_RESOLVED tracking_issue=192 base_sha=" in output and "previous_total=10" in output, output[-2000:]
+	assert latest["status"] != "failed", output[-2000:]
+	assert "lifetime dispatch cap" not in json.dumps(latest)
+	assert latest["integration_conflict_total_dispatches"] == 1
+	assert re.fullmatch(r"[0-9a-f]{40}", latest["integration_conflict_episode_base_sha"])
+
+
+def test_integration_conflict_counter_keeps_counting_while_the_last_dispatch_is_unresolved():
+	"""A conflict whose dispatched main commit never reached the integration
+	branch keeps its count, so the lifetime cap still ends it."""
+	result = _run_poller(
+		state=_integration_cap_state(10, "__default_head__"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True, mock_local_integration_content_conflict=True, prs=_INTEGRATION_CAP_PRS,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "d", "resolution_guidance": "g"},
+	)
+	output = result["stdout"] + result["stderr"]
+	latest = result["latest_state"]
+	assert "INTEGRATION_CONFLICT_EPISODE_RESOLVED" not in output
+	assert latest["status"] == "failed"
+	assert "lifetime dispatch cap (10) reached" in json.dumps(latest)
+	# The status the project failed from is kept for recovery.
+	assert latest["integration_failed_from_status"] == "in_progress"
+
+
+def _integration_failed_state(**extra) -> dict:
+	state = _base_state(status="failed")
+	state.update({
+		"integration_branch": "orchestrator/project-192",
+		"final_merge_pr": 300,
+		"final_merge_status": "failed",
+		"integration_sync_status": "failed",
+		"integration_sync_last_error": "lifetime dispatch cap (10) reached",
+		"integration_conflict_total_dispatches": 10,
+		"integration_conflict_unresolved_ticks": 4,
+	})
+	state.update(extra)
+	return state
+
+
+def _mergeable_final_pr(**extra) -> list[dict]:
+	return [{
+		"number": 300, "state": "open", "draft": True, "mergeable": True, "mergeable_state": "clean",
+		"baseRefName": "main", "headRefName": "orchestrator/project-192",
+		"headSha": "0000000000000000000000000000000000000300", **extra,
+	}]
+
+
+def test_failed_integration_project_recovers_once_the_final_pr_is_mergeable():
+	"""Q84 (#6902, #6664): a project ended by integration self-healing comes
+	back to the status it failed from once its final PR is mergeable, with
+	fresh conflict counters."""
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="security-pass-fixing"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(),
+	)
+	output = result["stdout"] + result["stderr"]
+	latest = result["latest_state"]
+	assert "INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=recovered reason=final_pr_mergeable restored_status=security-pass-fixing" in output, output[-2000:]
+	assert latest["status"] == "security-pass-fixing"
+	assert latest["integration_sync_status"] == "clean"
+	assert latest["final_merge_status"] == "pending"
+	assert latest["integration_conflict_total_dispatches"] == 0
+	assert latest["integration_conflict_unresolved_ticks"] == 0
+	assert "integration_failed_from_status" not in latest
+	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any(body.startswith("## 🔁 Integration recovered") for body in comments)
+
+
+def test_failed_integration_project_without_saved_status_uses_the_last_trusted_snapshot():
+	"""A project that failed before integration_failed_from_status existed
+	takes the status of its newest trusted state snapshot that is not
+	"failed" (#6902 was "validating" before it failed)."""
+	earlier = _integration_failed_state(status="validating", final_merge_status="pending", integration_sync_status="healing")
+	failed = _integration_failed_state()
+	forged = _integration_failed_state(status="in_progress", final_merge_status="pending", integration_sync_status="healing")
+
+	def chain(state: dict, login: str) -> list[dict]:
+		payload = json.dumps(state)
+		return [
+			{**comment, "user": {"login": login}}
+			for comment in _build_v2_state_comment_chain(payload, chunk_size=len(base64.b64encode(payload.encode("utf-8"))) + 1)
+		]
+
+	result = _run_poller(
+		state=failed, enable_validation="false", max_validate_cycles="3",
+		tracking_comments=[*chain(earlier, "github-actions[bot]"), *chain(forged, "mallory"), *chain(failed, "github-actions[bot]")],
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=recovered reason=final_pr_mergeable restored_status=validating" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "validating"
+
+
+def test_failed_integration_project_stays_failed_until_the_final_pr_is_mergeable():
+	cases = (
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(mergeable=False), "not_mergeable"),
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(mergeable=None), "not_mergeable"),
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(state="closed"), "final_pr_not_open"),
+		(_integration_failed_state(integration_failed_from_status="complete"), _mergeable_final_pr(), "prior_status_unknown"),
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(baseRefName="release"), "final_pr_wrong_base"),
+		(_integration_failed_state(integration_failed_from_status="in_progress"), _mergeable_final_pr(state="closed", merged=True, baseRefName="release"), "final_pr_wrong_base"),
+		(_integration_failed_state(), _mergeable_final_pr(), "prior_status_unknown"),
+	)
+	for state, prs, reason in cases:
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			prs=prs,
+		)
+		output = result["stdout"] + result["stderr"]
+		assert f"INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=skip reason={reason} restored_status=none" in output, (reason, output[-2000:])
+		assert result["latest_state"]["status"] == "failed", reason
+
+
+def test_failed_integration_project_recovers_when_the_final_pr_was_merged_elsewhere():
+	"""#6905 was merged while project #6902 sat failed; the restored status
+	lets finalize record the merged PR and complete the project."""
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="validating"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		prs=_mergeable_final_pr(state="closed", merged=True, mergeable=None),
+	)
+	output = result["stdout"] + result["stderr"]
+	# A merged final PR always comes back as in_progress: only that status
+	# reaches the external-finalize path that records the merged PR; the
+	# validating arm would try to validate an already-merged branch.
+	assert "INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=recovered reason=final_pr_merged restored_status=in_progress" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "in_progress"
+	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("has been merged" in body for body in comments if body.startswith("## 🔁 Integration recovered"))
+
+
+def test_failed_integration_project_recovers_a_merged_final_pr_without_prior_status():
+	"""A merged final PR always restores in_progress, so an older failure with
+	no saved status and no trusted snapshot still reaches finalize."""
+	result = _run_poller(
+		state=_integration_failed_state(),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(state="closed", merged=True, mergeable=None),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=recovered reason=final_pr_merged restored_status=in_progress" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_failed_integration_project_stays_failed_when_the_fetch_fails():
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="in_progress"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(),
+		mock_git_fetch_fail_after={"refs/heads/orchestrator/project-192:refs/remotes/origin/orchestrator/project-192": 0},
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=skip reason=fetch_failed" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "failed"
+
+
+def test_failed_integration_project_stays_failed_when_main_conflicts_locally():
+	"""GitHub's mergeable flag can lag; the recovery also needs a clean local
+	merge of the default branch into the integration branch."""
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="in_progress"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"], prs=_mergeable_final_pr(),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=skip reason=merge_not_clean" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "failed"
+
+
+def test_failed_integration_project_recovers_from_merge_conflict():
+	"""finalize_integration_merge_if_needed (run from the merge_conflict arm)
+	also calls heal_integration_branch_conflict, so merge_conflict is a status
+	a project can fail from and must be restorable."""
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="merge_conflict"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=recovered reason=final_pr_mergeable restored_status=merge_conflict" in output, output[-2000:]
+
+
+def test_other_failed_projects_are_not_recovered():
+	"""Only a failure from integration self-healing is recovered."""
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	state["final_merge_pr"] = 300
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, prs=_mergeable_final_pr(),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "INTEGRATION_FAILED_RECOVERY" not in output
+	assert result["latest_state"]["status"] == "failed"
+
+
+def test_v2_extract_skip_status_returns_the_newest_other_state():
+	older = _base_state(status="validating")
+	newer = _base_state(status="failed")
+	comments = []
+	for state in (older, newer):
+		payload = json.dumps(state)
+		comments += _build_v2_state_comment_chain(payload, chunk_size=len(base64.b64encode(payload.encode("utf-8"))) + 1)
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		script = str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py")
+		skipped = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed"], capture_output=True, text=True, timeout=30)
+		plain = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json)], capture_output=True, text=True, timeout=30)
+		none_left = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed", "--skip-status", "validating"], capture_output=True, text=True, timeout=30)
+		combined = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed", "--require-latest"], capture_output=True, text=True, timeout=30)
+	assert skipped.returncode == 0 and json.loads(skipped.stdout)["status"] == "validating"
+	assert plain.returncode == 0 and json.loads(plain.stdout)["status"] == "failed"
+	assert none_left.returncode == 1
+	assert combined.returncode == 2
+
+
+def test_v2_extract_skip_status_skips_non_string_status():
+	"""An unhashable status (list/dict) is skipped, not a TypeError crash."""
+	older = _base_state(status="validating")
+	odd = {**_base_state(status="failed"), "status": ["failed"]}
+	comments = []
+	for state in (older, odd):
+		payload = json.dumps(state)
+		comments += _build_v2_state_comment_chain(payload, chunk_size=len(base64.b64encode(payload.encode("utf-8"))) + 1)
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		script = str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py")
+		skipped = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed"], capture_output=True, text=True, timeout=30)
+	assert skipped.returncode == 0, skipped.stderr
+	assert json.loads(skipped.stdout)["status"] == "validating"
 
 
 if __name__ == "__main__":
