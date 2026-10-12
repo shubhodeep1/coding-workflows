@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:25594-25600 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `.body // \"\"` changes a null issue body from the literal `null` produced by the previous read to an empty string when re-issuing the issue.\n  WHY: This changes observable output despite comments and changelog text claiming the null-body behavior is unchanged.\n- scripts/orchestrate_poll_process.sh:12271-12278 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The final-PR fallback converts a null state to an empty string, whereas the previous read would have returned the literal `null`.\n  WHY: The comment claims the conversion matches `gh api --jq` behavior, but the review notes that it prints `null` for null values.\n- tests/test_orchestrate_poll_process.py:24416-24465 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The new tests check source strings and a standalone `jq` call instead of exercising the single-read paths and empty-read failure branches against the fake `gh`.\n  WHY: Regressions in the failure branches could still pass these tests.\n- tests/test_orchestrate_poll_process.py:24442-24450 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The new test asserts the changed empty-string result for a null body instead of preserving the previous `null` output.\n  WHY: The assertion encodes the behavior change rather than the task\u2019s no-behavior-change requirement.\n- tests/test_orchestrate_poll_process.py:test_local_issue_parse_keeps_null_body_empty | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The test docstring claims `gh api --jq` prints an empty string for null, although the test only runs local `jq` and does not verify `gh` behavior.\n  WHY: The claim could mislead maintainers into believing null-body behavior is unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:25594-25600 | severity=low | confidence=[3]\n  PROBLEM: The `jq -r '.body // \"\"'` read converts a null issue body to an empty string rather than preserving the previous literal `null` output.\n  WHY: The replacement issue body changes, contrary to the comment and changelog claim that null-body behavior is unchanged.\n- tests/test_orchestrate_poll_process.py:24416-24465 | severity=low | confidence=[4]\n  PROBLEM: The new tests only count and match source strings plus a standalone `jq` call; they do not exercise the single-read paths or empty-read branches against the fake `gh`.\n  WHY: A regression in the empty-read branches could still pass every new test.\n- tests/test_orchestrate_poll_process.py:test_local_issue_parse_keeps_null_body_empty | severity=low | confidence=[3]\n  PROBLEM: The docstring claims the empty string is what `gh api --jq` prints for null, but the test only runs local `jq` and does not verify `gh` behavior.\n  WHY: The claim could mislead maintainers into believing null-body behavior is unchanged.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:25597-25600 | severity=low | confidence=[5]\n  PROBLEM: `.body // \"\"` converts a null issue body to an empty string, whereas the previous `gh api --jq '.body'` read returned the literal `null`.\n  WHY: Re-issuing the issue changes its body despite the task\u2019s no-behavior-change requirement, and the new test asserts the changed result.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:25594-25600 | severity=low | confidence=[4]\n  PROBLEM: The implementation-failed sweep converts a null body to an empty string even though the old read produced the literal `null`.\n  WHY: This is an observable behavior change that the comment and changelog inaccurately describe as unchanged.\n- scripts/orchestrate_poll_process.sh:12271-12278 | severity=low | confidence=[4]\n  PROBLEM: The final-PR fallback converts a null state to an empty string, while the old read would have produced the literal `null`.\n  WHY: The comment claims `gh api --jq` prints an empty string for null, but the review notes it prints `null`.\n- tests/test_orchestrate_poll_process.py:24416-24439 | severity=low | confidence=[4]\n  PROBLEM: The new tests check source strings without exercising the single-read paths or their empty-read failure branches against the fake `gh`.\n  WHY: A regression in an empty-read branch could still pass the tests.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d896bbc62538c697da9ba525a07e1a37fb29b9839c15a8a8a9cf98cc82d1c36b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7271,
+    "run_id": "38264117596",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38264117596",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012150149_8cceb29a1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7271,
+    "run_id": "38264117596"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T15:01:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
