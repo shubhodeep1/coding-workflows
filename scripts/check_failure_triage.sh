@@ -636,6 +636,10 @@ ensure_triage_labels
 
 if [ "${GEN}" -gt "${MAX_DEPTH}" ]; then
 	log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	# This exit also skips an unverified PR-head route; report it as well.
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ] && [ -z "${ROUTING_REF}" ]; then
+		triage_report_routing_unverified
+	fi
 	# PRs are issues for the labels API, so issue edit works on the PR number.
 	if ! gh_retry gh issue edit "${PR_NUMBER}" --repo "${REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1; then
 		log "error escalation_label_failed pr=${PR_NUMBER} label=${ESCALATED_LABEL}"

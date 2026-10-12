@@ -2095,6 +2095,16 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 
+	def test_collect_lineage_cap_reports_unverified_route(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="<!-- check-failure-triage:gen=3 -->\n",
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40},
+		)
+		self.assertIn("CHECK_TRIAGE escalate reason=lineage_cap", proc.stdout)
+		self.assertIn("CHECK_TRIAGE skip reason=routing_unverified detail=sha_mismatch pr=17", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+
 	def test_collect_flag_off_never_routes_or_blocks(self) -> None:
 		for flag_env in ({}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "false"}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "nope"}):
 			with self.subTest(env=flag_env):
@@ -2162,6 +2172,8 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		# Base-gate skips (success and pending) also report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
 		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 2)
+		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
+		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" <<\'PY\'', script_text)
 		self.assertLess(script_text.index('log "skip reason=routing_unverified'), script_text.index("# --- Collect failing check-run context"))
 		triage_env = _workflow()["jobs"]["triage"]["env"]

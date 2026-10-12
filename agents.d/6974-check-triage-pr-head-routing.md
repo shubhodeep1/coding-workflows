@@ -8,5 +8,5 @@ route bypasses the base-branch gate (`base_gate outcome=file
 reason=pr_head_route`), because the fix lands on the PR's branch. An unverified
 route logs `CHECK_TRIAGE skip reason=routing_unverified detail=<reason>`, sends
 a WARNING and files nothing. The diagnose step re-checks the hand-off and, on a
-mismatch, logs `error reason=routing_unverified`, sends a WARNING and fails
-closed. The body validator admits only that one script-generated line.
+mismatch, logs `error reason=routing_unverified` and fails closed; that step
+has no Telegram secret, so the alert is the workflow's failure notification. The body validator admits only that one script-generated line.
