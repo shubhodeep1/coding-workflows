@@ -119,7 +119,8 @@ jobs:
           # 404/410 means the log expired: run the reproduction. Any other
           # error fails, so a transient error never starts a reproduction.
           probe_err="$(mktemp)"
-          if gh api "repos/${REPO}/actions/jobs/${HIST_JOB_ID}/logs" > /dev/null 2> "${probe_err}"; then
+          # Job logs carry ANSI codes; gh refuses them without the flag.
+          if gh api --allow-escape-sequences "repos/${REPO}/actions/jobs/${HIST_JOB_ID}/logs" > /dev/null 2> "${probe_err}"; then
             log_available=true
           elif grep -qE 'HTTP (404|410)' "${probe_err}"; then
             log_available=false

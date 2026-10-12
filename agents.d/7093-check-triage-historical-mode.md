@@ -20,3 +20,7 @@ secrets. Log keys: `CHECK_TRIAGE historical_mode`,
 `historical_evidence source=log|repro outcome=…`, `error
 historical_binding_mismatch|historical_evidence_unavailable|historical_inputs_incomplete`,
 and `HISTORICAL_TRIAGE` in the workflow.
+
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `HISTORICAL_TRIAGE` (`.github/workflows/check-failure-triage-historical.yml`: `skip reason=already_filed|failed_run_cap`, `run run= job= log_available= head_sha=`, `tested_tree= tested_sha=`, `extracted steps= group=`, `step= kind= rc=`)
+LOG_PREFIX.name=HISTORICAL_TRIAGE

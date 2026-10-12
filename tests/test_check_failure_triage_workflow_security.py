@@ -428,7 +428,7 @@ esac
 				"render_prompt.sh", "render_prompt.py", "assemble_prompt.sh",
 				"write_codex_config.sh", "codex_helpers.sh", "collect_pr_check_runs_context.py",
 				"check_failure_triage.sh", "clarify_isolated_run.sh", "clarify_openrouter_broker.py",
-				"sandbox_image.sh",
+				"sandbox_image.sh", "workflow_failure_heal.py",
 			):
 				(support / "scripts" / filename).write_bytes(
 					(REPO_ROOT / "scripts" / filename).read_bytes()
@@ -975,7 +975,10 @@ esac
 		workflow_inputs = workflow["on"]["workflow_call"]["inputs"]
 		self.assertEqual(
 			list(workflow_inputs),
-			["pr_number", "check_run_id", "check_name", "check_conclusion", "head_sha", "details_url"],
+			[
+				"pr_number", "check_run_id", "check_name", "check_conclusion", "head_sha", "details_url",
+				"historical_run_id", "historical_job_id", "historical_repro_artifact_prefix",
+			],
 		)
 		run_env = _step(triage_job, name="Collect check-failure context")["env"]
 		self.assertEqual(
@@ -987,6 +990,9 @@ esac
 				"CHECK_TRIAGE_CHECK_CONCLUSION",
 				"CHECK_TRIAGE_HEAD_SHA",
 				"CHECK_TRIAGE_DETAILS_URL",
+				"CHECK_TRIAGE_HISTORICAL_RUN_ID",
+				"CHECK_TRIAGE_HISTORICAL_JOB_ID",
+				"CHECK_TRIAGE_HISTORICAL_REPRO_DIR",
 			},
 		)
 		self.assertNotIn("GH_TOKEN", triage_job.get("env", {}))
@@ -1291,13 +1297,13 @@ case "$*" in
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
   "api --paginate --method GET repos/owner/repo/issues "*) printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-${MOCK_OPEN_TRIAGE:-[]}}" ;;
-  "api repos/owner/repo/actions/runs/37")
+  "api --allow-escape-sequences repos/owner/repo/actions/runs/37")
     [ -n "${MOCK_HIST_RUN:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     printf '%s\\n' "${MOCK_HIST_RUN}" ;;
-  "api repos/owner/repo/actions/jobs/113")
+  "api --allow-escape-sequences repos/owner/repo/actions/jobs/113")
     [ -n "${MOCK_HIST_JOB:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     printf '%s\\n' "${MOCK_HIST_JOB}" ;;
-  "api repos/owner/repo/actions/jobs/113/logs")
+  "api --allow-escape-sequences repos/owner/repo/actions/jobs/113/logs")
     [ -n "${MOCK_HIST_LOG_FILE:-}" ] || { echo 'gh: HTTP 410: Gone (HTTP 410)' >&2; exit 1; }
     cat "${MOCK_HIST_LOG_FILE}" ;;
   "label create "*) ;;

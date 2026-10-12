@@ -843,7 +843,9 @@ historical_api_get()
 	local hist_api_out="$1" hist_api_path="$2" hist_api_err hist_api_attempt=1
 	hist_api_err="${RUNTIME_DIR}/historical_api_err.txt"
 	while true; do
-		if gh api "${hist_api_path}" > "${hist_api_out}" 2> "${hist_api_err}"; then
+		# Job logs carry ANSI colour codes; gh refuses such a body without
+		# --allow-escape-sequences (harmless for the JSON reads).
+		if gh api --allow-escape-sequences "${hist_api_path}" > "${hist_api_out}" 2> "${hist_api_err}"; then
 			return 0
 		fi
 		if grep -qE 'HTTP (404|410)' "${hist_api_err}" 2>/dev/null; then
