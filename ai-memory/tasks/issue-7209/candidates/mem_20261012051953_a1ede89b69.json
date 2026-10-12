@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The body says \"Reissue for target branch stable\" but has no `Target branch:` header line, so the pipeline would open the PR against the default branch (`main`). It also says to release \"through the normal process\". Which branch should the fix PR target?\nChoices:\nA) `stable`, as the unblock judge's spec states; the planner adds a `Target branch: stable` line and the change reaches `main` through the existing stable-to-main forward merge (RECOMMENDED)\nB) `main` (the default branch); the fix reaches `stable` through the normal release/promotion gate\n**Note:** the original issue #7161 stopped at `support_ref_mismatch`. If A causes the same mismatch, implementation may block again, and B avoids that path.\nQ2: Pinning the sweep's support checkout to the release SHA means the renderer must rewrite a checkout `ref: stable`, not just `uses:` lines. The `provider-outage-resume` job in the same template has the same moving `ref: stable` checkout, and it runs with `GH_PAT`. Which checkouts should the renderer pin?\nChoices:\nA) Only the `security-hold-sweep` checkout (`.security-hold-support`), keeping strictly to the issue's scope; leave `provider-outage-resume` unchanged (RECOMMENDED)\nB) Every `actions/checkout` of `shubhodeep1/coding-workflows` with `ref: stable` in the wrapper, so `provider-outage-resume` (line 118) is pinned as well; only the pinning changes, and that job's token handling stays as it is\nC) A, plus a separate follow-up issue for the `provider-outage-resume` checkout",
+  "fingerprint": "127ff256b49a6ead07d8410e6d9c43d1179a1fc7d6b25d7fb92ac7229a9f350b",
+  "lineage": {
+    "issue_number": 7209,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38207041643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38207041643",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012051953_a1ede89b69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7209,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38207041643"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7209 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T05:19:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
