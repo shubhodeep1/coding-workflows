@@ -79,6 +79,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/pr6576-shard-followup.yml` — GitHub Actions workflow: PR 6576 orchestrate-poll shard follow-up.
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
 - `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
@@ -129,7 +130,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
-- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled or startup-failed CI on a current PR head.
+- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
@@ -215,6 +216,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_stall_retired_conflict.sh` — Stall-recovery helpers sourced by the poller that detect a PR conflict only on retired host-only files (issue #6680).
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
+- `scripts/pr6576_shard_followup.py` — One-time follow-up for PR #6576's failed orchestrate-poll shard: fetch the log or rerun the partition, confirm on main, report once on #7072 (single-use, issue #7072).
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
@@ -235,6 +237,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_count_iterations.sh` — body of the review_autofix.yml "Count autofix iterations" step (sourced by the step, `id: retrigger_guard`): classifies the orchestrator PR mode, counts `[ai-autofix]` rounds since the last `[judge-fix]` to decide `max_iterations_reached`, and counts `[judge-fix]` commits for the review-blocked judge retry budget.
 - `scripts/review_autofix_step_partial_finalize_safety.sh` — body of the review_autofix.yml "Decide partial-finalize validation/push safety" step (sourced by the step, moved out for the workflow file size limit, #6963): decides whether a partial-finalize run may still validate and push.
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_evaluate_gate.sh` — body of the review_autofix.yml "Evaluate review gate" step (`id: evaluate`) in the `gate` job (sourced by the step). The gate job runs before support staging, so the script is loaded only from the SHA-verified `.codex-head-gate-src` sparse checkout and the step fails closed when that checkout is unverified (issue #6972).
 - `scripts/review_autofix_step_assemble_failure_evidence.sh` — body of the review_autofix.yml "Assemble failure evidence" step, including the model-provider outage classification (issue #6633; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_provider_outage_record.sh` — body of the review_autofix.yml "Record model-provider outage" step: opens or reuses the `ai:provider-outage` tracker and sends its one alert (issue #6633).
 - `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (workflow failure)" step (moved out to keep the workflow under GitHub's 512,000-byte limit).

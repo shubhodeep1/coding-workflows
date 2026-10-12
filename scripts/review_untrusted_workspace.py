@@ -570,8 +570,10 @@ def check_paths(host, paths_file, report_file=None):
 	written as one line: ``host_only<TAB><path>`` when ``allowed()`` refuses a
 	plainly named path that sits on the host checkout as a regular file or is
 	absent (the sandbox policy keeps it out, so only a human can resolve it),
-	``unsafe`` with no name otherwise (symlinks, odd names, unreadable
-	entries). Unsafe names are never echoed. Each rejection also prints one
+	``unsafe<TAB><category><TAB><depth>`` with no name otherwise, where the
+	category is a fixed token from ``UNSAFE_PATH_CATEGORIES`` (symlinks, odd
+	names, special files, unreadable entries) and the depth a ``1|2|3+``
+	bucket. Unsafe names are never echoed. Each rejection also prints one
 	``REVIEW_RESOLVER_PATH_REJECTED reason=<token> path=<path|redacted>``
 	line to stderr; an ``unsafe`` entry always prints ``path=redacted``.
 	"""
@@ -588,15 +590,24 @@ def check_paths(host, paths_file, report_file=None):
 				raise LookupError("policy")
 			checked_path(host, name)
 		except LookupError:
-			rejections.append(_host_only_or_unsafe(host, name))
+			entry = _host_only_or_unsafe(host, name)
+			if entry == "unsafe":
+				category, depth = _unsafe_conflict_path_category(host, name)
+				entry = f"unsafe\t{category}\t{depth}"
+			rejections.append(entry)
 		except (ValueError, OSError):
-			rejections.append("unsafe")
+			category, depth = _unsafe_conflict_path_category(host, name)
+			# Name the cause instead of the generic token (#7059); "other"
+			# keeps the original unsafe_file.
+			if category != "other":
+				reason = category
+			rejections.append(f"unsafe\t{category}\t{depth}")
 		else:
 			continue
 		# Fixed reason token plus a charset-limited path (or "redacted"):
 		# the name is PR-controlled and must never reach logs verbatim, and
 		# an unsafe entry (symlink, odd name) never echoes its name.
-		shown_path = "redacted" if rejections[-1] == "unsafe" else _log_safe_path(name)
+		shown_path = "redacted" if rejections[-1].startswith("unsafe") else _log_safe_path(name)
 		print(f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={shown_path}", file=sys.stderr)
 		if rejections and report_file is None:
 			break
@@ -605,6 +616,37 @@ def check_paths(host, paths_file, report_file=None):
 	if rejections:
 		print("unsupported path", file=sys.stderr)
 		raise SystemExit(1)
+
+
+# Fixed, path-free causes of an ``unsafe`` conflict-path rejection (#7059).
+# The resolver re-validates every token against this closed set before it
+# prints one, so the report cannot carry other text into the workflow log.
+UNSAFE_PATH_CATEGORIES = frozenset({"symlink", "symlink_in_path", "special_file", "unsafe_name", "unreadable", "other"})
+
+
+def _unsafe_conflict_path_category(host, name):
+	"""Return (category, depth bucket) for an unsafe conflicted path.
+
+	Diagnostics only: computed after the rejection, never used to admit a path.
+	"""
+	depth = _directory_depth_bucket(name) if name else "1"
+	parts = PurePosixPath(name).parts if name else ()
+	# Never walk the host for a name that could leave the checkout.
+	if not parts or name.startswith("/") or ".." in parts or "\x00" in name:
+		return "unsafe_name", depth
+	odd_name = not REPORTABLE_PATH_RE.fullmatch(name) or "//" in name or _path_rejection_reason(name) == "unsafe_name"
+	# Filesystem shape first, so a symlink with an odd name still reads as a symlink.
+	try:
+		path = host
+		for index, part in enumerate(parts):
+			path = path / part
+			if path.is_symlink():
+				return ("symlink" if index == len(parts) - 1 else "symlink_in_path"), depth
+		if path.exists() and not path.is_file():
+			return "special_file", depth
+	except (OSError, ValueError):
+		return ("unsafe_name" if odd_name else "unreadable"), depth
+	return ("unsafe_name" if odd_name else "other"), depth
 
 
 def _host_only_or_unsafe(host, name):
