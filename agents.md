@@ -3607,6 +3607,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/orchestrate_clarify_respond.yml
 .github/workflows/orchestrate_poll.yml
 .github/workflows/plan.yml
+.github/workflows/pr6576-shard-followup.yml
 .github/workflows/promote-main-to-stable.yml
 .github/workflows/propagate-consumer-secrets.yml
 .github/workflows/publish-sandbox-images.yml
