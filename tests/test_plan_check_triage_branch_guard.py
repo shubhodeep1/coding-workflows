@@ -237,6 +237,31 @@ def test_refctx_emits_resolver_status_on_every_exit_path() -> None:
 	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in _workflow_text()
 
 
+@pytest.mark.parametrize(
+	("issue", "pr", "branch", "expected"),
+	[
+		("101", "55", "orchestrator/project-77", "true"),
+		("102", "55", "orchestrator/project-77", "false"),
+		("101", "55", "orchestrator/project-78", "false"),
+	],
+)
+def test_refctx_routed_detection_matches_resolver_line(tmp_path: Path, issue: str, pr: str, branch: str, expected: str) -> None:
+	# Run the workflow's own detection loop on the line the resolver emits.
+	body = _run_body("Resolve integration ref")
+	start = body.index("triage_routed=false")
+	end = body.index('done < "${resolver_err_file}"') + len('done < "${resolver_err_file}"')
+	loop = textwrap.dedent(body[start:end])
+	match = re.search(r'echo "(CI_TRIAGE_PR_BRANCH_ROUTING [^"]*outcome=routed[^"]*)" >&2', RESOLVER.read_text(encoding="utf-8"))
+	assert match, "resolver routing line not found"
+	line = match.group(1).replace("${ISSUE}", issue).replace("${pr}", pr).replace("${ref}", branch)
+	err = tmp_path / "resolver.err"
+	err.write_text(line + "\n", encoding="utf-8")
+	script = f'issue_number=101\nintegration_branch=orchestrator/project-77\nresolver_err_file="{err}"\n{loop}\necho "$triage_routed"\n'
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == expected
+
+
 def test_resolver_fixtures_for_check_triage_bodies() -> None:
 	prose = json.loads((FIXTURE_DIR / "check_triage_prose_branch_not_inferred.json").read_text(encoding="utf-8"))
 	target = json.loads((FIXTURE_DIR / "check_triage_target_branch_main.json").read_text(encoding="utf-8"))
