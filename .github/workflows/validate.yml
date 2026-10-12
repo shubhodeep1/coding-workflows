@@ -502,6 +502,12 @@ jobs:
               "scripts/validate_driver.sh",
               "scripts/validate_process.sh"
             ],
+            "self_repo_trusted_support_files": [
+              "scripts/templates/slot_manifest.schema.json",
+              "scripts/validation_harness_sandbox.sh",
+              "scripts/validate_driver.sh",
+              "scripts/validate_process.sh"
+            ],
             "self_repo_trusted_scripts": [
               "scripts/validation_harness_sandbox.sh",
               "scripts/codex_isolated_workspace.py",
