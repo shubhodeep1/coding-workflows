@@ -1669,9 +1669,13 @@ _summarize_final_merge_blockers()
 	' 2>/dev/null | tail -n1
 }
 
-# Helper: clear the Layer 2 ineligibility tracking state. Called from the
-# merge-success path in finalize_integration_merge_if_needed so a future
-# stall on the same project starts a fresh clock.
+# Helper: clear the Layer 2 ineligibility tracking state so a future stall
+# on the same project starts a fresh clock. It currently has no caller in
+# this poller; it is kept for direct use and is exercised by
+# tests/test_orchestrate_final_merge_required_checks_gate.py. The same
+# three-field reset is done inline, as part of larger atomic state writes,
+# in ensure_security_pass_repair_branch and on the merge-success path of
+# mark_validation_complete; keep those field lists in sync with this one.
 _clear_final_merge_ineligibility_state()
 {
 	jq '.final_merge_ineligible_blocked_at_sha = ""
@@ -12234,14 +12238,26 @@ finalize_integration_merge_if_needed() {
   if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
     local existing_pr_state
     local existing_pr_merged
+    local existing_pr_fallback_json
     local existing_pr_json_number
     existing_pr_json_number="$(_jq_field "${final_pr_json_snapshot}" '.number' '[0-9]+')"
     if [ "${existing_pr_json_number}" = "${final_pr}" ]; then
       existing_pr_state="$(_jq_field "${final_pr_json_snapshot}" '.state' 'open|closed|merged')"
       existing_pr_merged="$(_jq_field "${final_pr_json_snapshot}" '.merged_at != null' 'true|false')"
     else
-      existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
-      existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+      # One PR read; both fields are parsed locally. `jq -r` prints a null
+      # or missing field as the literal `null`, as the former per-field
+      # `--jq` reads did. A failed read leaves both values empty, as before.
+      # `--jq '.'` makes gh parse the body, so a malformed 2xx response
+      # fails inside gh_retry and is retried, as the per-field reads were.
+      existing_pr_fallback_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.' || echo "")"
+      if [ -n "${existing_pr_fallback_json}" ]; then
+        existing_pr_state="$(printf '%s' "${existing_pr_fallback_json}" | jq -r '.state' 2>/dev/null || echo "")"
+        existing_pr_merged="$(printf '%s' "${existing_pr_fallback_json}" | jq -r '.merged_at != null' 2>/dev/null || echo "")"
+      else
+        existing_pr_state=""
+        existing_pr_merged=""
+      fi
     fi
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
       # Re-check ahead_by here too: even though the recorded final PR is
@@ -25518,8 +25534,19 @@ ${RB_FIX_DESC}
     fi
 
     # Read the original issue to preserve its content
-    IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
-    IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+    # One issue read; title and body are parsed locally. `jq -r` prints a
+    # null or missing field as the literal `null`, as the former per-field
+    # `--jq` reads did. A failed read leaves both values empty, as before.
+    # `--jq '.'` makes gh parse the body, so a malformed 2xx response fails
+    # inside gh_retry and is retried, as the per-field reads were.
+    IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.' || echo "")"
+    if [ -n "${IF_ISSUE_JSON}" ]; then
+      IF_TITLE="$(printf '%s' "${IF_ISSUE_JSON}" | jq -r '.title' 2>/dev/null || echo "")"
+      IF_BODY="$(printf '%s' "${IF_ISSUE_JSON}" | jq -r '.body' 2>/dev/null || echo "")"
+    else
+      IF_TITLE=""
+      IF_BODY=""
+    fi
 
     sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
     if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then

@@ -2357,7 +2357,7 @@ if args[0] == 'api':
 				sys.exit(p.returncode)
 			print(p.stdout, end='')
 		else:
-			issue_payload = {'body': issue.get('body', ''), 'state': issue_state,
+			issue_payload = {'body': issue.get('body', ''), 'title': issue.get('title', ''), 'state': issue_state,
 				'number': num, 'repository_url': 'https://api.github.com/repos/owner/repo',
 				'labels': [{'name': label} for label in issue.get('labels', [])]}
 			# Opt-in author fields (automation-path gate tests, #6838).
@@ -24255,6 +24255,75 @@ def _extract_bash_function(script: str, signature: str) -> str:
 	start = script.index(signature)
 	end = script.index("\n}\n", start) + 3
 	return script[start:end]
+
+
+def test_finalize_fallback_reads_final_pr_once():
+	"""API-001: the final-PR fallback in finalize_integration_merge_if_needed
+	reads ``pulls/${final_pr}`` once and parses state and merged_at locally,
+	instead of one REST call per field."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(script, "finalize_integration_merge_if_needed() {")
+	assert "pulls/${final_pr}\" --jq '.state'" not in body
+	assert "pulls/${final_pr}\" --jq '.merged_at != null'" not in body
+	fetch = '_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq \'.\' || echo ""'
+	assert body.count(fetch) == 1, body.count(fetch)
+	assert "jq -r '.state' 2>/dev/null" in body
+	assert "jq -r '.merged_at != null'" in body
+
+
+def test_implementation_failed_sweep_reads_issue_once():
+	"""API-002: the implementation-failed reissue reads the issue once and
+	parses title and body locally."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "issues/${if_issue}\" --jq '.title'" not in script
+	assert "issues/${if_issue}\" --jq '.body'" not in script
+	fetch = 'IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq \'.\' || echo "")"'
+	assert script.count(fetch) == 1, script.count(fetch)
+	assert "jq -r '.title' 2>/dev/null" in script
+	assert "jq -r '.body' 2>/dev/null" in script
+
+
+def test_local_issue_parse_keeps_null_body_literal():
+	"""A null issue body keeps parsing to the literal ``null``, the output
+	the former per-field ``--jq '.body'`` read produced (see the note in
+	scripts/gh_helpers.sh), so the re-issued body is unchanged."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	payload = json.dumps({"title": "t", "body": None})
+	for expr, expected in ((".title", "t"), (".body", "null")):
+		out = subprocess.run(
+			["jq", "-r", expr], input=payload, capture_output=True, text=True, check=True
+		).stdout.rstrip("\n")
+		assert out == expected, (expr, out)
+	merged = subprocess.run(
+		["jq", "-r", ".merged_at != null"], input=json.dumps({"state": "closed"}),
+		capture_output=True, text=True, check=True,
+	).stdout.strip()
+	assert merged == "false"
+
+
+def test_clear_final_merge_ineligibility_helper_comment_is_accurate():
+	"""DEAD-002: the helper either has a caller, or its comment no longer
+	claims the finalize merge-success path calls it."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	name = "_clear_final_merge_ineligibility_state"
+	definition = f"{name}()\n{{"
+	def_idx = script.index(definition)
+	callers = [
+		line for line in script.splitlines()
+		if name in line and not line.lstrip().startswith("#") and line.strip() != f"{name}()"
+	]
+	comment_lines = []
+	for line in reversed(script[:def_idx].rstrip("\n").splitlines()):
+		if not line.startswith("#"):
+			break
+		comment_lines.append(line)
+	comment = "\n".join(reversed(comment_lines))
+	if not callers:
+		assert "Called from the" not in comment, comment
+		assert "finalize_integration_merge_if_needed" not in comment, comment
+	assert "ensure_security_pass_repair_branch" in comment, comment
+	assert "mark_validation_complete" in comment, comment
 
 
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
