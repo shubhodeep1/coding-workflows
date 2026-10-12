@@ -652,6 +652,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
 
+      - name: Clarify sandbox base image pre-seed tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
+
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail
@@ -875,6 +880,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
@@ -1624,6 +1630,11 @@ jobs:
               sys.exit(1)
           print("OK: both release jobs gate on CI / lint before tagging")
           PY
+
+      - name: Release validate-job CI gate and tagging switch contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_validate_ci_gate.py
 
       - name: Consumer secrets propagation contract tests
         run: |
