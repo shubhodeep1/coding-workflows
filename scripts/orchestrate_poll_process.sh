@@ -8311,6 +8311,7 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
         integration_conflict_total_dispatches: (.integration_conflict_total_dispatches // 0),
+        integration_conflict_episode_base_sha: (.integration_conflict_episode_base_sha // ""),
         merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
         final_merge_attempt_count: (.final_merge_attempt_count // 0),
         last_main_squash_at_utc: (.last_main_squash_at_utc // null),
@@ -11294,6 +11295,202 @@ Recreated \`${integration_branch}\` from \`${default_branch}\` and replayed ${re
   return 0
 }
 
+# integration_conflict_reset_on_progress <integration_branch> <default_branch>
+#
+# Every resolver or judge dispatch records the default-branch commit it was
+# asked to merge in (integration_conflict_episode_base_sha). Once the
+# integration branch contains that commit, the conflict that dispatch was for
+# has been resolved, so the lifetime counter and the per-episode counters
+# start again (Q84). A conflict the resolver never lands keeps counting and
+# still ends at INTEGRATION_CONFLICT_LIFETIME_MAX. Uses the refs the
+# pre-flight probe fetched, fetching them itself only when they are missing
+# and a recorded commit needs checking; a failed fetch or any git error
+# leaves the counters as they are. No GitHub API calls.
+# Logs: INTEGRATION_CONFLICT_EPISODE_RESOLVED tracking_issue=<n> base_sha=<sha> previous_total=<n>
+integration_conflict_reset_on_progress() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local episode_base_sha previous_total
+  episode_base_sha="$(jq -r '.integration_conflict_episode_base_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${episode_base_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
+  if ! git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    # The pre-flight probe fetches both refs; fetch them here only when it
+    # could not (merge-tree unsupported or its fetch failed).
+    git fetch --no-tags origin \
+      "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+      "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || return 0
+  fi
+  git merge-base --is-ancestor "${episode_base_sha}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 || return 0
+  previous_total="$(jq -r '.integration_conflict_total_dispatches // 0' "${STATE_FILE}")"
+  jq '.integration_conflict_total_dispatches = 0 |
+      .integration_conflict_dispatch_count = 0 |
+      .integration_conflict_unresolved_ticks = 0 |
+      .integration_conflict_episode_base_sha = ""' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  echo "INTEGRATION_CONFLICT_EPISODE_RESOLVED tracking_issue=${TRACKING_NUM:-?} base_sha=${episode_base_sha} previous_total=${previous_total}"
+}
+
+# recover_failed_integration_if_mergeable
+#
+# Integration self-healing ends a project as failed when it reaches
+# INTEGRATION_CONFLICT_LIFETIME_MAX or the judge escalation fails, and the
+# poller then skips the project for good, even after its final PR becomes
+# mergeable (#6664 and #6902 on 2026-10-11). Each tick, a failed project
+# whose integration_sync_status is "failed" is checked again: when its final
+# PR targets the repository's default branch and has been merged, or is
+# open, reported mergeable by GitHub and merges cleanly with the default
+# branch locally, the status it had before the failure comes back with fresh
+# conflict counters, and the next tick carries on from there (Q84). A final
+# PR closed without merging leaves the project failed. That status is
+# integration_failed_from_status, written when the project failed; a project
+# that failed before the field existed uses the newest trusted state snapshot
+# (V2, then legacy V1) whose status is not "failed". Only in-flight statuses
+# (in_progress, merge_conflict, validating, validation-fixing,
+# security-pass, security-pass-fixing) are restored; anything else stays
+# failed. A merged final PR always restores in_progress, because only that
+# status reaches the external-finalize path that records an already-merged
+# final PR (with its completeness and security-pass gates) and completes the
+# project; the validation and security-pass arms would instead try to
+# validate a branch that has already been merged (and is often deleted).
+#
+# API budget (CLAUDE.md §15): one REST read of the final PR, and only for a
+# project in this failed state; the default branch comes from the same
+# payload (base.repo.default_branch). The prior-status lookup reads the
+# comments this tick already fetched (COMMENTS). Every check that cannot be
+# verified leaves the project failed.
+#
+# Returns 10 after a recovery (the caller ends this project's tick), else 0.
+# Logs: INTEGRATION_FAILED_RECOVERY tracking_issue=<n> pr=<n> outcome=recovered|skip reason=<token> restored_status=<status>
+#   reason: final_pr_mergeable|final_pr_merged (recovered), no_final_pr,
+#   no_integration_branch, pr_unreadable, final_pr_wrong_base,
+#   final_pr_not_open, not_mergeable, fetch_failed, merge_not_clean,
+#   prior_status_unknown, state_write_failed (skip)
+recover_failed_integration_if_mergeable() {
+  local final_pr integration_branch pr_json pr_state pr_merged pr_mergeable base_ref pr_default_branch
+  local prior_status="" restored_status="" trusted_comments_file prior_state_json recovery_skip_reason="" recovery_reason="final_pr_mergeable"
+  local recovery_v1_comment recovery_v1_status
+
+  [ "$(jq -r '.integration_sync_status // ""' "${STATE_FILE}" 2>/dev/null)" = "failed" ] || return 0
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    recovery_skip_reason="no_final_pr"
+  elif [ -z "${integration_branch}" ]; then
+    recovery_skip_reason="no_integration_branch"
+  fi
+  if [ -z "${recovery_skip_reason}" ]; then
+    pr_json="$(_fetch_pr_json "${final_pr}")"
+    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed')"
+    pr_merged="$(_jq_field "${pr_json}" '.merged' 'true|false')"
+    pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+    base_ref="$(_jq_field "${pr_json}" '.base.ref')"
+    pr_default_branch="$(_jq_field "${pr_json}" '.base.repo.default_branch')"
+    if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ] || [ -z "${base_ref}" ] || [ -z "${pr_default_branch}" ]; then
+      # _fetch_pr_json returns {} on a failed read; never mistake that for a
+      # closed PR.
+      recovery_skip_reason="pr_unreadable"
+    elif [ "${base_ref}" != "${pr_default_branch}" ]; then
+      # A retargeted final PR must not recover the project against another
+      # branch: finalize would then deliver it there.
+      recovery_skip_reason="final_pr_wrong_base"
+    elif [ "${pr_merged}" = "true" ]; then
+      # Merged outside the poller (#6905 on 2026-10-11): restored as
+      # in_progress (below) so the external-finalize path records the merged
+      # final PR and lets the project complete.
+      recovery_reason="final_pr_merged"
+    elif [ "${pr_state}" != "open" ]; then
+      recovery_skip_reason="final_pr_not_open"
+    elif [ "${pr_mergeable}" != "true" ]; then
+      recovery_skip_reason="not_mergeable"
+    elif ! git fetch --no-tags origin \
+         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+         "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" >/dev/null 2>&1; then
+      recovery_skip_reason="fetch_failed"
+    elif ! git merge-tree --write-tree --name-only --no-messages \
+         "refs/remotes/origin/${base_ref}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      recovery_skip_reason="merge_not_clean"
+    fi
+  fi
+  # A merged final PR always restores in_progress (below), so its prior
+  # status is never needed: resolving it would only leave an older failure
+  # with no usable snapshot stuck as prior_status_unknown.
+  if [ -z "${recovery_skip_reason}" ] && [ "${recovery_reason}" != "final_pr_merged" ]; then
+    prior_status="$(jq -r '.integration_failed_from_status // ""' "${STATE_FILE}" 2>/dev/null || true)"
+    if [ -z "${prior_status}" ] && [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+      trusted_comments_file="$(mktemp "${TMPDIR:-/tmp}/integration_recovery_comments.XXXXXX")"
+      if printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' > "${trusted_comments_file}" 2>/dev/null; then
+        if prior_state_json="$(python3 scripts/orchestrate_state_v2.py extract --comments-json "${trusted_comments_file}" --skip-status failed 2>/dev/null)"; then
+          prior_status="$(printf '%s' "${prior_state_json}" | jq -r 'if type == "object" and (.status | type) == "string" then .status else "" end' 2>/dev/null || true)"
+        fi
+        if [ -z "${prior_status}" ]; then
+          # Legacy V1 single-comment state, newest first, as
+          # extract_latest_valid_orchestrator_state falls back to.
+          while IFS= read -r recovery_v1_comment; do
+            [ -n "${recovery_v1_comment}" ] || continue
+            recovery_v1_status="$(extract_orchestrator_state_payload "$(printf '%s' "${recovery_v1_comment}" | jq -r '.body // ""' 2>/dev/null)" \
+              | jq -r 'if type == "object" and (.status | type) == "string" then .status else "" end' 2>/dev/null || true)"
+            if [ -n "${recovery_v1_status}" ] && [ "${recovery_v1_status}" != "failed" ]; then
+              prior_status="${recovery_v1_status}"
+              break
+            fi
+          done < <(jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' "${trusted_comments_file}" 2>/dev/null || true)
+        fi
+      fi
+      rm -f "${trusted_comments_file}"
+    fi
+    case "${prior_status}" in
+      in_progress|merge_conflict|validating|validation-fixing|security-pass|security-pass-fixing) ;;
+      *) recovery_skip_reason="prior_status_unknown" ;;
+    esac
+  fi
+  restored_status="${prior_status}"
+  [ "${recovery_reason}" != "final_pr_merged" ] || restored_status="in_progress"
+  if [ -z "${recovery_skip_reason}" ]; then
+    cp -p "${STATE_FILE}" "${STATE_FILE}.recovery_bak" 2>/dev/null || recovery_skip_reason="state_write_failed"
+  fi
+  if [ -z "${recovery_skip_reason}" ]; then
+    if ! jq --arg restored "${restored_status}" \
+      '.status = $restored |
+       .final_merge_status = "pending" |
+       .integration_sync_status = "clean" |
+       .integration_sync_last_error = "" |
+       .integration_conflict_total_dispatches = 0 |
+       .integration_conflict_dispatch_count = 0 |
+       .integration_conflict_dispatch_ts = 0 |
+       .integration_conflict_unresolved_ticks = 0 |
+       .integration_conflict_episode_base_sha = "" |
+       del(.integration_failed_from_status)' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      # Announce nothing while the durable state is still failed.
+      rm -f "${STATE_FILE}.tmp" || true
+      recovery_skip_reason="state_write_failed"
+    elif ! post_state_comment; then
+      # The durable state (the V2 comment chain the next tick reloads) is
+      # still failed: put the local failed state back and announce nothing,
+      # so the next tick retries the recovery instead of repeating notices.
+      mv -f "${STATE_FILE}.recovery_bak" "${STATE_FILE}" 2>/dev/null || true
+      recovery_skip_reason="state_write_failed"
+    fi
+  fi
+  rm -f "${STATE_FILE}.recovery_bak" || true
+  if [ -n "${recovery_skip_reason}" ]; then
+    echo "INTEGRATION_FAILED_RECOVERY tracking_issue=${TRACKING_NUM:-?} pr=${final_pr:-none} outcome=skip reason=${recovery_skip_reason} restored_status=none"
+    return 0
+  fi
+
+  local recovery_detail="is mergeable again"
+  [ "${recovery_reason}" != "final_pr_merged" ] || recovery_detail="has been merged"
+  post_tracking_comment "## 🔁 Integration recovered
+
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${base_ref}\`) ${recovery_detail}, so the project is back in \`${restored_status}\` with fresh conflict-healing counters. The next poll tick continues from there."
+  update_completion_status_comment "in-progress" \
+    "## Completion status"$'\n\n'"**State:** \`in-progress\`"$'\n\n'"Recovered from an integration self-healing failure: final PR #${final_pr} ${recovery_detail}, and the project continues from \`${restored_status}\`." \
+    || true
+  tg_notify "🔁 Project #${TRACKING_NUM} recovered from an integration self-healing failure: final PR #${final_pr} ${recovery_detail}; continuing from ${restored_status}." "DEBUG"
+  echo "INTEGRATION_FAILED_RECOVERY tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=recovered reason=${recovery_reason} restored_status=${restored_status}"
+  return 10
+}
+
 heal_integration_branch_conflict() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -11347,6 +11544,12 @@ heal_integration_branch_conflict() {
       return 0
     fi
   fi
+
+  integration_conflict_reset_on_progress "${integration_branch}" "${default_branch}"
+  # The default-branch commit a dispatch on this tick asks the resolver to
+  # merge in, recorded with the dispatch (Q84); empty when no ref was fetched.
+  local integration_episode_base_sha=""
+  integration_episode_base_sha="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}^{commit}" 2>/dev/null || true)"
 
   local final_pr_payload=""
   local final_pr_head_sha=""
@@ -11468,7 +11671,8 @@ heal_integration_branch_conflict() {
       return 0
     fi
     jq --arg err "lifetime dispatch cap (${INTEGRATION_CONFLICT_LIFETIME_MAX}) reached" \
-      '.status = "failed" |
+      '.integration_failed_from_status = (if .status == "failed" then (.integration_failed_from_status // "") else .status end) |
+       .status = "failed" |
        .final_merge_status = "failed" |
        .integration_sync_status = "failed" |
        .integration_sync_last_error = $err' \
@@ -11562,10 +11766,11 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       [ ! -s "${RUNTIME_DIR}/integration_judge_invalid_reason" ] || integration_judge_retry_reason="$(head -n 1 "${RUNTIME_DIR}/integration_judge_invalid_reason" | tr -cd 'A-Za-z0-9_')"
       rm -f -- "${RUNTIME_DIR}/integration_judge_invalid_reason"
       total_dispatches=$((total_dispatches + 1))
-      jq --argjson total "${total_dispatches}" \
+      jq --argjson total "${total_dispatches}" --arg episode_base "${integration_episode_base_sha}" \
         '.integration_sync_status = "healing" |
          .integration_conflict_total_dispatches = $total |
-         .integration_sync_last_error = "integration judge returned an invalid diagnosis"' \
+         .integration_sync_last_error = "integration judge returned an invalid diagnosis" |
+         .integration_conflict_episode_base_sha = (if $episode_base == "" then (.integration_conflict_episode_base_sha // "") else $episode_base end)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       echo "INTEGRATION_JUDGE_RETRY pr=${final_pr} reason=${integration_judge_retry_reason:-unknown} total_dispatches=${total_dispatches} lifetime_max=${INTEGRATION_CONFLICT_LIFETIME_MAX}" >&2
@@ -11585,11 +11790,12 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       # integration_conflict_total_dispatches counts judge invocations
       # too — they share the lifetime cap with resolver dispatches.
       total_dispatches=$((total_dispatches + 1))
-      jq --argjson total "${total_dispatches}" \
+      jq --argjson total "${total_dispatches}" --arg episode_base "${integration_episode_base_sha}" \
         '.integration_sync_status = "healing" |
          .integration_conflict_unresolved_ticks = 0 |
          .integration_conflict_total_dispatches = $total |
-         .integration_sync_last_error = ""' \
+         .integration_sync_last_error = "" |
+         .integration_conflict_episode_base_sha = (if $episode_base == "" then (.integration_conflict_episode_base_sha // "") else $episode_base end)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       post_tracking_comment "## 🛠️ Integration judge invoked
@@ -11598,7 +11804,8 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did n
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
-      '.status = "failed" |
+      '.integration_failed_from_status = (if .status == "failed" then (.integration_failed_from_status // "") else .status end) |
+       .status = "failed" |
        .final_merge_status = "failed" |
        .integration_sync_status = "failed" |
        .integration_sync_last_error = $err' \
@@ -11667,11 +11874,12 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
     0)
       dispatch_count=$((dispatch_count + 1))
       total_dispatches=$((total_dispatches + 1))
-      jq --argjson count "${dispatch_count}" --argjson ts "${now_ts}" --argjson total "${total_dispatches}" \
+      jq --argjson count "${dispatch_count}" --argjson ts "${now_ts}" --argjson total "${total_dispatches}" --arg episode_base "${integration_episode_base_sha}" \
         '.integration_sync_status = "healing" |
          .integration_conflict_dispatch_count = $count |
          .integration_conflict_dispatch_ts = $ts |
-         .integration_conflict_total_dispatches = $total' \
+         .integration_conflict_total_dispatches = $total |
+         .integration_conflict_episode_base_sha = (if $episode_base == "" then (.integration_conflict_episode_base_sha // "") else $episode_base end)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       # Only post a user-facing comment on the FIRST dispatch of this
@@ -20941,6 +21149,13 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    integration_failure_recovery_rc=0
+    recover_failed_integration_if_mergeable || integration_failure_recovery_rc=$?
+    if [ "${integration_failure_recovery_rc}" -eq 10 ]; then
+      continue
+    fi
+  fi
   # Unblock judge (plan Phase 7): a project it closed is abandoned here; its
   # fix-up requests join the current wave; a failed project is offered to
   # this tick's unblock scan.
