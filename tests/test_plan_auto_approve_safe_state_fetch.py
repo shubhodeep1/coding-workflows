@@ -214,7 +214,7 @@ def test_ordinary_plan_unchanged_and_missing_plan_holds() -> None:
 	assert "reason=plan_gate_error outcome=defer" in stdout
 
 
-def test_plan_gate_wiring_defaults_off() -> None:
+def test_plan_gate_wiring_defaults_on() -> None:
 	text = _workflow_text()
 	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}" in text
 	assert "clarify_isolated_run.sh files_touched_scope_guard.py; do" in text
