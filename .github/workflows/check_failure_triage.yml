@@ -46,7 +46,7 @@ name: AI Check Failure Triage (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
 
 jobs:
   derive_check_name_key:
@@ -205,8 +205,14 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
+      # Opt-in: add a verified "Target branch: <PR head>" line to new triage
+      # issues (same-repository open PRs only). Off until an operator sets it.
+      CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+      # Off by default: add a verified PR-head Integration branch line to the
+      # triage issue only after an operator enables it.
+      CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED || 'false' }}
       # Issue #6726: add a verified Integration branch line for orchestrator/project-<N> PR heads.
-      TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'false' }}
+      TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -215,7 +221,7 @@ jobs:
       # with every Telegram send suppressed. SILENT > CRITICAL in
       # tg_helpers.sh, so scripts/check_failure_triage.sh and the
       # failure-notify step below both go quiet.
-      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'WARNING' }}
     steps:
       - name: Log trigger context
         env:
@@ -592,7 +598,7 @@ jobs:
             cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}" || exit 0
             source scripts/tg_helpers.sh 2>/dev/null || true
             type tg_send_msg >/dev/null 2>&1 && tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
-          elif [[ "${ALERT_MSG_LEVEL:-DEBUG}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+          elif [[ "${ALERT_MSG_LEVEL:-WARNING}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
             # No PR-checkout helper may run when trusted support staging failed.
             curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
               -d "chat_id=${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" -d 'disable_web_page_preview=true' \

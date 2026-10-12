@@ -35,7 +35,7 @@ name: Validation Refresh
 env:
   # `inputs` is null on schedule-triggered runs; use `github.event.inputs`
   # (which is null-safe via `||`) to avoid a parse-time/runtime miss.
-  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
 
 permissions:
   # Read-only: this workflow renders + self-tests validation assets in a temp
@@ -332,7 +332,7 @@ jobs:
           # automatically; gate explicitly on SILENT/ERROR/CRITICAL so
           # the smoke gate's release-gate dispatch
           # (alert_msg_level=SILENT) doesn't surface a failure ping.
-          case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
+          case "$(printf '%s' "${ALERT_MSG_LEVEL:-WARNING}" | tr '[:lower:]' '[:upper:]')" in
             ERROR|CRITICAL|SILENT)
               echo "ALERT_MSG_LEVEL=${ALERT_MSG_LEVEL} suppresses this WARNING-level Telegram failure ping (ERROR/CRITICAL/SILENT all filter it)."
               exit 0

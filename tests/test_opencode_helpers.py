@@ -145,7 +145,9 @@ def test_command_rejects_an_invalid_output_format() -> None:
 		assert b"invalid output format 'xml'" in result.stderr
 
 
-def test_alert_is_single_line_sanitized_and_uses_error_level() -> None:
+def test_alert_is_single_line_sanitized_and_runtime_failures_use_debug_level() -> None:
+	# Runtime model-call failures are retried or recovered by the caller, so
+	# they are DEBUG; only setup defects page at ERROR.
 	with tempfile.TemporaryDirectory() as directory:
 		capture = Path(directory) / "telegram"
 		result = _bash(
@@ -159,7 +161,7 @@ def test_alert_is_single_line_sanitized_and_uses_error_level() -> None:
 		assert stderr_lines == [
 			"opencode_agent_failure phase=phase_bad role=reviewer model=vendor/model rc=17 failure_class=auth_failure"
 		]
-		assert capture.read_text(encoding="utf-8").splitlines() == [stderr_lines[0], "ERROR"]
+		assert capture.read_text(encoding="utf-8").splitlines() == [stderr_lines[0], "DEBUG"]
 
 
 def test_alert_survives_broken_telegram_helper() -> None:
@@ -298,13 +300,13 @@ def test_alert_opens_tracker_when_provider_probe_is_down() -> None:
 
 def test_alert_is_sent_when_tracker_cannot_be_confirmed() -> None:
 	result, levels = _alert_with_probe("down", "invocation_failed", open_outcome="failed")
-	assert result.returncode == 17 and levels == ["ERROR"]
+	assert result.returncode == 17 and levels == ["DEBUG"]
 	assert b"outcome=sent reason=tracker_unconfirmed" in result.stderr
 
 
 def test_alert_is_sent_when_provider_probe_is_up_or_failure_is_setup() -> None:
 	result, levels = _alert_with_probe("up", "invocation_failed")
-	assert result.returncode == 17 and levels == ["ERROR"]
+	assert result.returncode == 17 and levels == ["DEBUG"]
 	result, levels = _alert_with_probe("down", "config_generation")
 	assert result.returncode == 17 and levels == ["ERROR"]
 

@@ -430,7 +430,19 @@ def test_sandbox_crash_logs_the_cli_result_text(tmp_path: Path) -> None:
 	error the CLI reports as a result) logged only `outcome=crashed
 	reason=result_success`. The sandbox now logs the result text."""
 	sandbox = SANDBOX.read_text(encoding="utf-8")
-	branch = sandbox.split('\t\t\tusage_limit|auth_failed)\n\t\t\t\tcontinue\n\t\t\t\t;;\n\t\t\t*)\n', 1)[1].split("\t\tesac\n", 1)[0]
+	# Anchor on the outcome case and its `*)` arm, not on how the other arms
+	# are grouped: `usage_limit` and `auth_failed` may share one arm or have
+	# their own (#7162), and either layout must keep this test meaningful.
+	outcome_case = sandbox.split('\t\tcase "${outcome}" in\n', 1)
+	assert len(outcome_case) == 2, 'case "${outcome}" in not found in review_untrusted_sandbox.sh'
+	outcome_block = outcome_case[1].split("\t\tesac\n", 1)[0]
+	wildcard = outcome_block.split("\t\t\t*)\n", 1)
+	assert len(wildcard) == 2, "the *) arm of the outcome case was not found"
+	# Usage limits and rejected tokens still rotate to the next account
+	# instead of logging a crash.
+	assert "usage_limit" in wildcard[0] and "auth_failed" in wildcard[0]
+	assert "continue" in wildcard[0]
+	branch = wildcard[1]
 	assert '_ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${root}/crash_result.txt"' in branch
 	assert "CLAUDE_POOL crash_detail role=${claude_role} account=${account} exit_code=${run_rc} result=" in branch
 	assert "head -c 400" in branch and "tr -cd '[:print:]'" in branch
