@@ -1070,6 +1070,8 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
+          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
@@ -1097,6 +1099,8 @@ jobs:
           UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
           PYTHONDONTWRITEBYTECODE: "1"
+          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
+          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC

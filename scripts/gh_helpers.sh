@@ -2684,3 +2684,117 @@ extract_repo_scoped_issue_refs_from_text()
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }
+
+# ---------------------------------------------------------------
+# Issue #7251 dependency wait (unblock fix-up #7257)
+#
+# Issue #7251 cannot be planned until PR #6667 merges into the default
+# branch. While it has not, the poller, clarify and plan hold #7251 only,
+# in this repository only; every other issue and every consumer repository
+# returns from issue_7251_dependency_wait_applies without an API call.
+#
+# Off switch: ISSUE_7251_DEPENDENCY_WAIT_ENABLED. Unset, empty or "true"
+# (any case) keeps the wait on; "false" turns it off; any other value
+# also turns it off and logs a warning. The default lives here (§8).
+# ---------------------------------------------------------------
+: "${ISSUE_7251_DEPENDENCY_SOURCE_REPO:=shubhodeep1/coding-workflows}"
+: "${ISSUE_7251_DEPENDENCY_ISSUE:=7251}"
+: "${ISSUE_7251_DEPENDENCY_PR:=6667}"
+
+issue_7251_dependency_wait_enabled()
+{
+	local _raw="${ISSUE_7251_DEPENDENCY_WAIT_ENABLED-}"
+	local _value _safe
+	_value="$(printf '%s' "${_raw}" | tr '[:upper:]' '[:lower:]')"
+	case "${_value}" in
+		''|true) return 0 ;;
+		false) return 1 ;;
+	esac
+	_safe="$(printf '%s' "${_raw}" | tr -cd 'A-Za-z0-9_-' | cut -c1-32)"
+	echo "::warning::ISSUE_7251_DEPENDENCY_WAIT_ENABLED=${_safe} is not true/false; dependency wait is off" >&2
+	return 1
+}
+
+# issue_7251_dependency_wait_applies <repo> <issue>
+# Returns 0 only for issue #7251 in the source repository with the wait on.
+# Makes no API call.
+issue_7251_dependency_wait_applies()
+{
+	local _repo="${1:-}" _issue="${2:-}"
+	[ "${_repo}" = "${ISSUE_7251_DEPENDENCY_SOURCE_REPO}" ] || return 1
+	[ "${_issue}" = "${ISSUE_7251_DEPENDENCY_ISSUE}" ] || return 1
+	issue_7251_dependency_wait_enabled
+}
+
+# issue_7251_dependency_snapshot <repo>
+# Batching contract (§14): input is "owner/name"; output (stdout) is the
+# GraphQL `repository` object with defaultBranchRef, pr (#6667: state,
+# merged, isDraft, baseRefName) and issue (#7251: state, labels, the last
+# 100 comments with authorAssociation, and totalCount). Costs exactly one
+# GraphQL call. Returns non-zero on any failure; callers treat that as
+# "unverified" (keep holding, write nothing).
+issue_7251_dependency_snapshot()
+{
+	local _repo="${1:-}" _owner _name _resp _query
+	[[ "${_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	_owner="${_repo%%/*}"
+	_name="${_repo##*/}"
+	_query='query($owner: String!, $name: String!, $pr: Int!, $issue: Int!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { name }
+    pr: pullRequest(number: $pr) { state merged isDraft baseRefName }
+    issue: issue(number: $issue) {
+      state
+      labels(first: 100) { nodes { name } }
+      comments(last: 100) { totalCount nodes { body authorAssociation } }
+    }
+  }
+}'
+	if type gh_retry >/dev/null 2>&1; then
+		_resp="$(gh_retry gh api graphql -f query="${_query}" -F owner="${_owner}" -F name="${_name}" \
+			-F pr="${ISSUE_7251_DEPENDENCY_PR}" -F issue="${ISSUE_7251_DEPENDENCY_ISSUE}" 2>/dev/null)" || return 1
+	else
+		_resp="$(gh api graphql -f query="${_query}" -F owner="${_owner}" -F name="${_name}" \
+			-F pr="${ISSUE_7251_DEPENDENCY_PR}" -F issue="${ISSUE_7251_DEPENDENCY_ISSUE}" 2>/dev/null)" || return 1
+	fi
+	printf '%s' "${_resp}" | jq -ce '.data.repository | select(type == "object")' 2>/dev/null || return 1
+}
+
+# issue_7251_dependency_pr_state <snapshot_json>
+# Prints exactly one of: merged | open | closed_unmerged | unverified.
+# A draft counts as open; a merge into a branch other than the default
+# counts as closed_unmerged; anything malformed is unverified.
+issue_7251_dependency_pr_state()
+{
+	local _state
+	_state="$(printf '%s' "${1:-}" | jq -r '
+		if type != "object" then "unverified"
+		else
+			(.defaultBranchRef.name // "") as $default
+			| (.pr // null) as $pr
+			| if ($pr | type) != "object" then "unverified"
+				elif $pr.merged == true then
+					(if $default == "" then "unverified"
+						elif $pr.baseRefName == $default then "merged"
+						else "closed_unmerged" end)
+				elif $pr.state == "OPEN" then "open"
+				elif $pr.state == "CLOSED" or $pr.state == "MERGED" then "closed_unmerged"
+				else "unverified" end
+		end' 2>/dev/null || true)"
+	case "${_state}" in
+		merged|open|closed_unmerged) printf '%s\n' "${_state}" ;;
+		*) printf 'unverified\n' ;;
+	esac
+}
+
+# issue_7251_dependency_gate_state <repo>
+# One snapshot read reduced to the PR state; a failed read is "unverified".
+issue_7251_dependency_gate_state()
+{
+	local _snapshot
+	if _snapshot="$(issue_7251_dependency_snapshot "${1:-}")"; then
+		issue_7251_dependency_pr_state "${_snapshot}"
+	else
+		printf 'unverified\n'
+	fi
+}
