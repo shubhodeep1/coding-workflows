@@ -571,6 +571,11 @@ jobs:
             tests/test_clarify_respond_standalone.py \
             tests/test_clarify_github_facts.py
 
+      - name: Clarify sandbox base image pre-seed tests (#6985)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
+
       - name: Single-issue security pass tests (port P1)
         run: |
           set -euo pipefail
@@ -748,6 +753,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
       - name: Orchestrator completion lessons + lesson retrieval tests
@@ -919,6 +925,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_ai_memory_cli.py \
             tests/test_branch_rebuild.py \
+            tests/test_clarify_sandbox_base_image_preseed.py \
             tests/test_codex_thread_reuse_review.py \
             tests/test_family_python_mongo_flask.py \
             tests/test_family_python_repo_checks.py \
