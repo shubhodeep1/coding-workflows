@@ -965,6 +965,17 @@ one plain branch name, give `--force-with-lease=` the same branch as the
 destination, and never add a second refspec or a `src:dst` refspec to a push.
 A consumer repo whose default branch has another name gets no ask rule for it.
 
+The same rule of one plain command applies to cleanup. Delete files with
+their absolute path, in a call of their own, never chained after a `cd` (for
+example `rm -rf /tmp/.../scratchpad/rel_shards`, not
+`cd <dir> && ...; rm -rf ../../rel_shards`). Claude Code's built-in
+critical-path check on `rm` appears to resolve a relative target against the
+session's working directory rather than the earlier `cd`, so `../../x` from
+`/home/user` reads as `/x`, a direct child of `/`. That check prompts in every
+permission mode, and no allow rule or hook can approve it. Files under the
+session scratchpad need no cleanup at all: the scratchpad goes away with the
+container.
+
 ---
 
 ## §22. DigitalOcean Access (MANDATORY)
