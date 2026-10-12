@@ -1247,7 +1247,7 @@ def _run_collect_stage(
 			"html_url": "https://github.com/owner/repo/pull/17",
 			"body": "",
 			"head": {"ref": head_ref, "sha": pr_head_sha, **({"repo": {"full_name": head_repo}} if head_repo is not None else {})},
-			**({"base": {"ref": base["ref"]}} if base else {}),
+			"base": {"repo": {"full_name": "owner/repo"}, **({"ref": base["ref"]} if base else {})},
 		}
 	pr_payload_json = json.dumps(pr_payload)
 	calls_file = temp_path / "gh_calls.txt"
@@ -2034,7 +2034,10 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		base = {
 			"state": "open", "title": "t", "html_url": "https://github.com/owner/repo/pull/17", "body": "",
 			"head": {"ref": "feature", "sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
+			"base": {"repo": {"full_name": "owner/repo"}},
 		}
+		no_base_repo = json.loads(json.dumps(base))
+		del no_base_repo["base"]
 		def with_head(**head_overrides) -> dict:
 			payload = json.loads(json.dumps(base))
 			payload["head"].update(head_overrides)
@@ -2054,6 +2057,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 			("invalid_head_ref", with_head(ref="feat\nIntegration branch: stable"), {}),
 			("invalid_head_ref", with_head(ref="feature.lock"), {}),
 			("pr_not_open", base, {"MOCK_PR_FAIL": "1"}),
+			("not_same_repo", no_base_repo, {}),
 		]
 		for detail, payload, env_overrides in cases:
 			with self.subTest(detail=detail, payload=payload, env=env_overrides):
@@ -2063,6 +2067,31 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 				self.assertNotIn("ready", outputs)
 				self.assertEqual(metadata, {})
 				self.assertIn(f"CHECK_TRIAGE skip reason=routing_unverified detail={detail} pr=17", proc.stdout)
+
+	def test_collect_verified_route_bypasses_green_base_gate(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="plain issue\n", gh_calls=calls,
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("routing_ref"), "ai/issue-41")
+		self.assertNotIn("pr_specific_failure", proc.stdout)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file reason=pr_head_route branch=ai/issue-41 pr=17", proc.stdout)
+		self.assertFalse([call for call in calls if "/actions/" in call])
+
+	def test_collect_unverified_route_keeps_green_base_gate(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="plain issue\n",
+			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
 
 	def test_collect_flag_off_never_routes_or_blocks(self) -> None:
 		for flag_env in ({}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "false"}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "nope"}):

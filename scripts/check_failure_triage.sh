@@ -121,8 +121,9 @@ triage_verify_pr_head_route()
 	fi
 	_route_head_repo="$(jq -r '.head.repo.full_name | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_head_repo=""
 	_route_base_repo="$(jq -r '.base.repo.full_name | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_base_repo=""
+	# Both sides must name this repository; a payload missing either fails closed.
 	if [ -z "${_route_head_repo}" ] || [ "${_route_head_repo}" != "${REPO}" ] ||
-		{ [ -n "${_route_base_repo}" ] && [ "${_route_base_repo}" != "${REPO}" ]; }; then
+		[ "${_route_base_repo}" != "${REPO}" ]; then
 		echo "not_same_repo"
 		return 1
 	fi
@@ -276,6 +277,7 @@ if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 		fi
 		if [ -n "${routing_detail}" ]; then
 			log "error reason=routing_unverified detail=${routing_detail} pr=${PR_NUMBER}"
+			tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: the PR-head routing hand-off could not be re-verified (detail: ${routing_detail}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 			exit 1
 		fi
 	fi
@@ -517,6 +519,17 @@ if [ -n "${EXISTING}" ]; then
 	exit 0
 fi
 
+# --- PR-head route verification (off by default) ---------------------------
+# Verified before the base-branch gate: a verified route lands the fix on the
+# failing PR's own head branch, so a green base branch does not make the
+# failure unfixable. An unverified route is reported by the routing gate below.
+routing_result=""
+if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+	if routing_result="$(triage_verify_pr_head_route "${PR_JSON_FILE}" "${HEAD_SHA}")"; then
+		ROUTING_REF="${routing_result}"
+	fi
+fi
+
 # --- Base-branch gate (#7020) ----------------------------------------------
 # The issue this script files is implemented as a new PR off the default
 # branch, so it can only fix a failure the base branch also has. A check that
@@ -544,6 +557,9 @@ elif [ -n "${INTEGRATION_BRANCH}" ]; then
 	# orchestrator/project-<N> head, so its fix lands on that PR's branch and a
 	# green base branch does not make the failure unfixable. No API reads.
 	log "base_gate outcome=file reason=integration_branch branch=${INTEGRATION_BRANCH} pr=${PR_NUMBER}"
+elif [ -n "${ROUTING_REF}" ]; then
+	# Issue #6974: routed to the failing PR's verified head ref (see above).
+	log "base_gate outcome=file reason=pr_head_route branch=${ROUTING_REF} pr=${PR_NUMBER}"
 elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
 	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
 else
@@ -620,8 +636,7 @@ fi
 # --- PR-head routing gate (off by default) ---------------------------------
 
 if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
-	if routing_result="$(triage_verify_pr_head_route "${PR_JSON_FILE}" "${HEAD_SHA}")"; then
-		ROUTING_REF="${routing_result}"
+	if [ -n "${ROUTING_REF}" ]; then
 		log "routing=pr_head pr=${PR_NUMBER} ref=${ROUTING_REF}"
 	else
 		log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
