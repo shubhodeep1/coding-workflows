@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The unblock judge asked for `stable` explicitly, and that is how this repo routes workflow fixes: heal issues carry `Target branch: stable`, and `forward-merge-stable-to-main.yml` carries the change to `main`. `ci.yml` and `lint-pr-body-auto-close.yml` both run on PRs into `stable`, so no check is skipped. The `support_ref_mismatch` risk in the note does not apply: `implement_heal_preflight.sh` runs only on the heal route (`HEAL_ROUTE=true`), and this is a normal issue. The underlying bug, an exported `GIT_DIR` overriding `git -C`, was also fixed in #7193 (`changelog.d/7193-heal-preflight-support-git-dir.md`).\nQ2: The spec only covers the sweep's support checkout (`workflow-templates/ai-review.yml` lines 79-85, `path: .security-hold-support`), and the plan must stay surgical. The renderer rewrite should therefore target only that checkout, keyed on its `path:`, and leave the `provider-outage-resume` checkout (line 118, `ref: stable`, `GH_TOKEN: secrets.GH_PAT`) as it is. That job has the same moving-ref exposure, which stays out of scope for this issue. If a human wants it pinned later, the same renderer rule can be extended to `.provider-outage-support` in a separate change.",
+  "fingerprint": "5f6c2f33b92680e0950f364dd8ce9aa0e71883aeac2d131c59361ec70410cbb3",
+  "lineage": {
+    "issue_number": 7209,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38207363246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38207363246",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7209"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012052733_dc23fa9061",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7209,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38207363246"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7209",
+  "timestamps": {
+    "created_at": "2026-10-12T05:27:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
