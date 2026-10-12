@@ -100,7 +100,7 @@ if [ -n "${SSB_REASON:-}" ]; then
   guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
     --add-label 'ai:needs-human' --remove-label 'ai:implementing' 2>/dev/null || \
   guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-    --add-label 'ai:needs-human' 2>/dev/null || true
+    --add-label 'ai:needs-human' || true
   SSB_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:needs-human\`, but the follow-up label read failed. Future redispatch is not confirmed blocked; re-check the label before redispatching."
   SSB_TG_LATCH_LINE="Could not verify ai:needs-human; the latch state is unknown and must be checked before redispatching."
   # No earlier staged-support call reads issue labels, so this dedicated read
@@ -220,7 +220,7 @@ if [ -n "${SVB_REASON:-}" ]; then
     --add-label 'ai:scope-blocked' \
     --remove-label 'ai:implementing' 2>/dev/null || \
   guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-    --add-label 'ai:scope-blocked' 2>/dev/null || true
+    --add-label 'ai:scope-blocked' || true
   SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch."
   SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked latch: gh issue view failed after the write attempt, so redispatch refusal is unknown until a human rechecks the label."
   scope_latch_read_ok=false
@@ -384,7 +384,7 @@ guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
   --add-label 'ai:destructive-blocked' \
   --remove-label 'ai:implementing' 2>/dev/null || \
 guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-  --add-label 'ai:destructive-blocked' 2>/dev/null || true
+  --add-label 'ai:destructive-blocked' || true
 
 # 2b. Verify the latch actually engaged. The best-effort edits
 #     above swallow their errors so the comment + TG alert still
