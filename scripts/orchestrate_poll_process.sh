@@ -11407,7 +11407,10 @@ recover_failed_integration_if_mergeable() {
       recovery_skip_reason="merge_not_clean"
     fi
   fi
-  if [ -z "${recovery_skip_reason}" ]; then
+  # A merged final PR always restores in_progress (below), so its prior
+  # status is never needed: resolving it would only leave an older failure
+  # with no usable snapshot stuck as prior_status_unknown.
+  if [ -z "${recovery_skip_reason}" ] && [ "${recovery_reason}" != "final_pr_merged" ]; then
     prior_status="$(jq -r '.integration_failed_from_status // ""' "${STATE_FILE}" 2>/dev/null || true)"
     if [ -z "${prior_status}" ] && [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
       trusted_comments_file="$(mktemp "${TMPDIR:-/tmp}/integration_recovery_comments.XXXXXX")"
@@ -11439,6 +11442,9 @@ recover_failed_integration_if_mergeable() {
   restored_status="${prior_status}"
   [ "${recovery_reason}" != "final_pr_merged" ] || restored_status="in_progress"
   if [ -z "${recovery_skip_reason}" ]; then
+    cp -p "${STATE_FILE}" "${STATE_FILE}.recovery_bak" 2>/dev/null || recovery_skip_reason="state_write_failed"
+  fi
+  if [ -z "${recovery_skip_reason}" ]; then
     if ! jq --arg restored "${restored_status}" \
       '.status = $restored |
        .final_merge_status = "pending" |
@@ -11454,14 +11460,20 @@ recover_failed_integration_if_mergeable() {
       # Announce nothing while the durable state is still failed.
       rm -f "${STATE_FILE}.tmp" || true
       recovery_skip_reason="state_write_failed"
+    elif ! post_state_comment; then
+      # The durable state (the V2 comment chain the next tick reloads) is
+      # still failed: put the local failed state back and announce nothing,
+      # so the next tick retries the recovery instead of repeating notices.
+      mv -f "${STATE_FILE}.recovery_bak" "${STATE_FILE}" 2>/dev/null || true
+      recovery_skip_reason="state_write_failed"
     fi
   fi
+  rm -f "${STATE_FILE}.recovery_bak" || true
   if [ -n "${recovery_skip_reason}" ]; then
     echo "INTEGRATION_FAILED_RECOVERY tracking_issue=${TRACKING_NUM:-?} pr=${final_pr:-none} outcome=skip reason=${recovery_skip_reason} restored_status=none"
     return 0
   fi
 
-  post_state_comment || true
   local recovery_detail="is mergeable again"
   [ "${recovery_reason}" != "final_pr_merged" ] || recovery_detail="has been merged"
   post_tracking_comment "## 🔁 Integration recovered

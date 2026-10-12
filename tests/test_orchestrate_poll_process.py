@@ -25014,6 +25014,33 @@ def test_failed_integration_project_recovers_when_the_final_pr_was_merged_elsewh
 	assert any("has been merged" in body for body in comments if body.startswith("## 🔁 Integration recovered"))
 
 
+def test_failed_integration_project_recovers_a_merged_final_pr_without_prior_status():
+	"""A merged final PR always restores in_progress, so an older failure with
+	no saved status and no trusted snapshot still reaches finalize."""
+	result = _run_poller(
+		state=_integration_failed_state(),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(state="closed", merged=True, mergeable=None),
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "INTEGRATION_FAILED_RECOVERY tracking_issue=192 pr=300 outcome=recovered reason=final_pr_merged restored_status=in_progress" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_failed_integration_project_stays_failed_when_the_fetch_fails():
+	result = _run_poller(
+		state=_integration_failed_state(integration_failed_from_status="in_progress"),
+		enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		prs=_mergeable_final_pr(),
+		mock_git_fetch_fail_after={"refs/heads/orchestrator/project-192:refs/remotes/origin/orchestrator/project-192": 0},
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=skip reason=fetch_failed" in output, output[-2000:]
+	assert result["latest_state"]["status"] == "failed"
+
+
 def test_failed_integration_project_stays_failed_when_main_conflicts_locally():
 	"""GitHub's mergeable flag can lag; the recovery also needs a clean local
 	merge of the default branch into the integration branch."""
