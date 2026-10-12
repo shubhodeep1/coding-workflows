@@ -11,6 +11,11 @@
 #      fix-up issue, checks the fix-up instead: still open, it refreshes the
 #      wait marker and stops; merged, it posts the stop's resume command
 #      (scripts/unblock_actions.py followup) and stops;
+#   2a. for a scope-blocked issue whose newest rejection is from the
+#      automation-path guard, re-runs today's guard on the rejected paths and,
+#      when it grants them all, resumes the issue without a verdict (once per
+#      rejection run); a blocked fix-up the judge filed itself is listed once
+#      in the `ai:operator-step` issue instead of getting another fix-up;
 #   3. fingerprints the failure, asks the ledger what is still allowed
 #      (never repeat a verdict per fingerprint, 2 rounds per item, 6 per
 #      project, the terminal close), and, unless only the close is left, asks
@@ -28,6 +33,8 @@
 # UNBLOCK_JUDGE_REASONING, UNBLOCK_JUDGE_TIMEOUT_SECS (default 1500),
 # UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
 # only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
+# UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
+# appends each issue number it creates to this file.
 #
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
@@ -43,7 +50,9 @@
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
-# the planned operations (at most about six writes). A failed project marker
+# the planned operations (at most about six writes). A scope re-grant also
+# reads the source issues a pipeline-authored item names (files_touched_scope_guard.py
+# --origin-repo: at most 8 issues, two attempts each). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
@@ -164,7 +173,7 @@ unblock_run_ops()
 		issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}")"
 		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ] \
 			&& ! { [ "${op}" = "add_labels" ] && [ "${close_succeeded}" = "true" ] && [ "${ITEM_KIND}" = "pr" ] \
-				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
+				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; }; then
 			continue
 		fi
 		case "${op}" in
@@ -245,6 +254,11 @@ unblock_run_ops()
 					fi
 				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
 				[ "${ops_failed}" != "true" ] || continue
+				# Opt-in record of created issue numbers (default unset: no-op); the
+				# conflict resolver's host-only re-issue names the replacement with it.
+				if [ -n "${UNBLOCK_CREATED_ISSUES_FILE:-}" ]; then
+					printf '%s\n' "${created}" >> "${UNBLOCK_CREATED_ISSUES_FILE}" 2>/dev/null || true
+				fi
 				number="$(jq -r ".ops[${idx}].wait_on // empty" "${ops_file}")"
 				if [[ "${number}" =~ ^[0-9]+$ ]]; then
 					gh api "repos/${REPOSITORY}/issues/${number}/comments" \
@@ -328,7 +342,7 @@ PY
 				;;
 			close)
 				if [ "${ops_failed}" = "true" ] && ! { [ "${ITEM_KIND}" = "pr" ] \
-					&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
+					&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; }; then
 					unblock_log "item=${ITEM} op=close issue=${issue} outcome=skip reason=prerequisite_failed"
 					continue
 				fi
@@ -357,7 +371,9 @@ PY
 						&& jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
 						# A failed terminal-label write cannot hide an unresolved finding.
 						unblock_tg "CRITICAL" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
-					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; then
+					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; then
+						# The untrusted-PR close (unblock_actions.py) reports at DEBUG when it
+						# lands; a failed close leaves the PR open, which needs a person.
 						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
 					fi
 					continue
@@ -443,6 +459,93 @@ unblock_rejection_snapshot()
 		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=unverified"
 		return 1
 	fi
+}
+
+# An automation-path latch set by an older guard (Q54). Re-run today's guard on
+# the paths the newest trusted rejection names; when it grants every one, post
+# the re-grant marker and the stop's resume command instead of asking the
+# judge. The implementation run checks the grant again before it commits.
+# Returns 0 when it acted (this run ends), 1 to let the judge decide.
+unblock_try_regrant()
+{
+	local rejection_file="${RUNTIME_DIR}/automation_rejection.json" grant_file="${RUNTIME_DIR}/automation_grant.json"
+	local staged_file="${RUNTIME_DIR}/automation_staged.txt" ops_file="${RUNTIME_DIR}/regrant_ops.json" run_id reason guard_rc
+	if [ "${UNBLOCK_JUDGE_REGRANT_ENABLED:-true}" != "true" ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=disabled"
+		return 1
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" automation-rejection --item "${ITEM}" \
+		--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${rejection_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=rejection_unreadable"
+		return 1
+	fi
+	if [ "$(jq -r '.status // ""' "${rejection_file}" 2>/dev/null)" != "ok" ]; then
+		reason="$(jq -r '.reason // "unknown"' "${rejection_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=${reason:-unknown}"
+		return 1
+	fi
+	run_id="$(jq -r '.run' "${rejection_file}")"
+	if ! [[ "${run_id}" =~ ^[0-9]+$ ]] || ! jq -r '.paths[]' "${rejection_file}" > "${staged_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant outcome=skip reason=rejection_unreadable"
+		return 1
+	fi
+	# --origin-repo (Q82): a re-grant re-checks a re-issue's source chain too
+	# (one gh api read per source issue, at most 8).
+	if ! unblock_py "${SUPPORT_DIR}/scripts/files_touched_scope_guard.py" --emit-automation-grant "${grant_file}" \
+		--issue-meta-file "${RUNTIME_DIR}/item.json" --pipeline-login "${UNBLOCK_LOGIN}" \
+		--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=skip reason=grant_unavailable"
+		return 1
+	fi
+	unblock_py "${SUPPORT_DIR}/scripts/files_touched_scope_guard.py" --check-automation-paths \
+		--automation-grant-file "${grant_file}" --staged-file "${staged_file}" \
+		--allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ITEM}" >/dev/null 2>&1
+	guard_rc=$?
+	if [ "${guard_rc}" -ne 0 ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=skip reason=still_denied rc=${guard_rc}"
+		return 1
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" regrant --context-file "${RUNTIME_DIR}/context.json" \
+		--rejection-file "${rejection_file}" > "${ops_file}" || ! unblock_run_ops "${ops_file}"; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=failed reason=actuation_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} paths=$(wc -l < "${staged_file}" | tr -d ' ') outcome=regranted"
+	return 0
+}
+
+# A blocked fix-up the judge filed for another item (Q56): the trusted fix-up
+# marker on the first non-blank line of an issue the pipeline login authored
+# (a project fix-up the poller files from a request comment starts with a
+# blank line). Prints the original item number.
+unblock_fixup_origin()
+{
+	jq -r --arg login "${UNBLOCK_LOGIN}" '
+		select((.user.login // "") == $login)
+		| (.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // ""
+		| capture("^<!-- ai:unblock-fixup:v1 item=(?<item>[1-9][0-9]*) round=[1-9][0-9]* -->$")? | .item
+	' "${RUNTIME_DIR}/item.json" 2>/dev/null || true
+}
+
+# Escalate a blocked fix-up once: an `ai:operator-step` entry, a marker
+# comment, one WARNING. A later run finds the marker and stops quietly.
+unblock_escalate_fixup()
+{
+	local origin="$1" ops_file="${RUNTIME_DIR}/fixup_escalate_ops.json"
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
+		any(.[]; (.user.login // "") == $login
+			and ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
+				== "<!-- ai:unblock-fixup-escalated:v1 item=\($item) -->")
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} origin=${origin} outcome=skip reason=fixup_escalated"
+		return 0
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" fixup-escalate --context-file "${RUNTIME_DIR}/context.json" \
+		--origin "${origin}" > "${ops_file}" || ! unblock_run_ops "${ops_file}"; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} origin=${origin} outcome=failed reason=fixup_escalation_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} origin=${origin} outcome=escalated reason=fixup_blocked"
 }
 
 # A project may only claim an issue that its authenticated V2 state lists.
@@ -625,6 +728,20 @@ unblock_main()
 		fi
 	fi
 
+	# Deterministic exits before the judge: a latch the current guard would not
+	# set (Q54), then a blocked fix-up, which never gets a fix-up of its own (Q56).
+	if [ "${ITEM_KIND}" = "issue" ]; then
+		if [ "${ITEM_STOP}" = "scope-blocked" ] && unblock_try_regrant; then
+			return 0
+		fi
+		local fixup_origin
+		fixup_origin="$(unblock_fixup_origin)"
+		if [[ "${fixup_origin}" =~ ^[1-9][0-9]*$ ]]; then
+			unblock_escalate_fixup "${fixup_origin}"
+			return 0
+		fi
+	fi
+
 	# Evidence and fingerprint.
 	echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
 	if [ "${ITEM_KIND}" = "pr" ]; then
@@ -802,7 +919,9 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		+ (if (.override // "") == "bulk_delete" then "Approved deletions: " + (.paths | tojson) + "\n\n" else "" end)
 		+ (if (.override // "") == "bulk_delete" then "Rejected run: " + (.rejected_run | tostring) + "\n\n" else "" end)
 		+ (if (.rejection_run // "") != "" then "Bound to guard rejection from run " + .rejection_run + ".\n\n" else "" end)
-		+ (if (.placeholder // "") != "" then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n" else "" end)
+		+ (if (.placeholder // "") == "" then ""
+			elif (.placeholder | endswith("_UNSET_OPERATOR_STEP")) then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n"
+			else "Ships on by default; `" + .placeholder + "=false` turns it off.\n\n" end)
 		+ $marker
 	' "${RUNTIME_DIR}/verdict.json")"
 	# The ledger record goes first, so a failed operation below can never

@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
@@ -31,7 +31,8 @@ OPENCODE_REVIEWER_EVENTS_FIXTURE = (
 
 
 def _read(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
+	# Moved review_autofix.yml step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text() if path == WORKFLOW else path.read_text(encoding="utf-8")
 
 
 def _stage_helper_text() -> str:
@@ -209,7 +210,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py"'
 	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
