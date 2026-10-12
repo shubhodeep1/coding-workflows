@@ -57,10 +57,14 @@ import re
 import shlex
 import subprocess
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
@@ -86,7 +90,7 @@ def _pr_checks_lib_text() -> str:
 
 
 def _review_autofix_text() -> str:
-	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _rb_judge_local_sanitize_fallback_block() -> str:

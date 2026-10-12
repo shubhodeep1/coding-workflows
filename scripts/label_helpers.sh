@@ -75,6 +75,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:workflow-heal"]="d876e3"
 	["ai:workflow-heal-escalated"]="b60205"
 	["ai:operator-step"]="fbca04"
+	["ai:provider-outage"]="b60205"
 	["ai:unblock-closed"]="5c5c5c"
 	["ai:codex"]="0e8a16"
 	["ai:engine-claude"]="d4c5f9"
@@ -135,6 +136,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:workflow-heal"]="Issue auto-filed from an escalated workflow failure by workflow failure heal"
 	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
 	["ai:operator-step"]="Steps only a person can take; the pipeline continues and gated work stays off until they are done"
+	["ai:provider-outage"]="Model provider outage tracker (automation); the review sweep resumes and closes it on recovery"
 	["ai:unblock-closed"]="Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
 	["ai:engine-claude"]="Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
@@ -206,7 +208,7 @@ set_issue_phase_label_resilient() {
 	if ! _cur="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::set_issue_phase_label_resilient: GET labels failed for #${issue_number} — falling back to POST add." >&2
-		if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
 			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 		fi
@@ -218,7 +220,7 @@ set_issue_phase_label_resilient() {
 	if ! _new="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
 		'(. - $p) + [$t] | unique' 2>/dev/null)"; then
 		echo "::warning::set_issue_phase_label_resilient: failed to compute new labels for #${issue_number} — falling back to POST add." >&2
-		if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
 			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 		fi
@@ -232,7 +234,7 @@ set_issue_phase_label_resilient() {
 	fi
 
 	echo "::warning::set_issue_phase_label_resilient: PUT labels failed for #${issue_number} — falling back to POST add." >&2
-	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 		-f "labels[]=${target_label}" >/dev/null 2>&1; then
 		echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 	fi
