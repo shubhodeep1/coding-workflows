@@ -242,6 +242,7 @@ def _run_step(tmp: Path, *, progress: str | None, enabled: str = "true", caller_
 			**os.environ,
 			"RUNTIME_DIR": str(runtime),
 			"POLL_FOLLOW_UP_ON_PROGRESS_ENABLED": enabled,
+			"AI_MEMORY_ENABLED": "true",
 			"POLL_CALLER_WORKFLOW_REF": caller_ref,
 			"FORCE_TICK_COOLDOWN_SECONDS": "300",
 			"GITHUB_REPOSITORY": "o/r",
@@ -296,6 +297,39 @@ def test_step_warns_on_an_unrecognised_switch_value() -> None:
 		result, calls = _run_step(Path(raw), progress="7126\n", enabled="sometimes")
 		assert result.returncode == 0, result.stderr
 		assert "::warning::POLL_FOLLOW_UP_ON_PROGRESS_ENABLED has an unrecognised value" in result.stdout
+		assert not calls.exists()
+
+
+def test_step_skips_when_the_memory_cooldown_ledger_is_disabled() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		_, _, body = _step_block()
+		runtime = tmp / "runtime"
+		runtime.mkdir()
+		(runtime / "poll_progress_tracking_issues").write_text("7126\n", encoding="utf-8")
+		calls = tmp / "calls.log"
+		scripts = tmp / ".codex-workflow-src" / "scripts"
+		scripts.mkdir(parents=True)
+		(scripts / "orchestrate_force_tick.sh").write_text('echo called >> "${CALLS_LOG}"\n', encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", body],
+			cwd=tmp,
+			capture_output=True,
+			text=True,
+			check=False,
+			env={
+				**os.environ,
+				"RUNTIME_DIR": str(runtime),
+				"POLL_FOLLOW_UP_ON_PROGRESS_ENABLED": "true",
+				"AI_MEMORY_ENABLED": "false",
+				"POLL_CALLER_WORKFLOW_REF": "",
+				"GITHUB_REPOSITORY": "o/r",
+				"GITHUB_RUN_ID": "42",
+				"CALLS_LOG": str(calls),
+			},
+		)
+		assert result.returncode == 0, result.stderr
+		assert "POLL_FOLLOW_UP outcome=skip reason=cooldown_unavailable" in result.stdout
 		assert not calls.exists()
 
 

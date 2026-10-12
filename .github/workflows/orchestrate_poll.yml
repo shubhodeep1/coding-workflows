@@ -1141,6 +1141,15 @@ jobs:
               exit 0
               ;;
           esac
+          # The 300-second cooldown lives in the AI-memory ledger; with memory
+          # off the helper would dispatch without it, so skip (cron remains).
+          case "$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ;;
+            *)
+              echo "POLL_FOLLOW_UP outcome=skip reason=cooldown_unavailable"
+              exit 0
+              ;;
+          esac
           tracking_issue="$(head -n 1 "${progress_file}")"
           if ! [[ "${tracking_issue}" =~ ^[1-9][0-9]*$ ]]; then
             echo "POLL_FOLLOW_UP outcome=skip reason=invalid_tracking_issue"
