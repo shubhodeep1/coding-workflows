@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Body of the "Detect smoke test and tune LLM settings" step in
 # .github/workflows/review_autofix.yml, moved out of the workflow to keep it
-# under GitHub's 512,000-byte workflow file limit (a larger file never
-# starts runs). The step sources this file in its own shell, so the step's
-# if:, env: and continue-on-error: stay in the workflow; edit those there.
+# under the 480,000-byte guard with headroom (GitHub never starts runs for a
+# workflow file over 512,000 bytes). The step sources this file in its own
+# shell, so the step's if:, env: and continue-on-error: stay in the workflow;
+# edit those there. GitHub does not substitute workflow expressions in a
+# sourced script, so the step passes github.repository in as
+# AUTOFIX_STEP_REPOSITORY; it defaults to the runner's GITHUB_REPOSITORY when
+# unset. The repository is spliced into the closing-keyword regex exactly as
+# the inline github.repository expression used to be.
 set -euo pipefail
-# The step passes github.repository as SMOKE_DETECT_REPOSITORY; fall back to
-# the runner's GITHUB_REPOSITORY when a caller does not set it.
-SMOKE_DETECT_REPOSITORY="${SMOKE_DETECT_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+AUTOFIX_STEP_REPOSITORY="${AUTOFIX_STEP_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
 PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
@@ -66,9 +69,9 @@ fi
 # cross-repo "Closes <other-repo>/issues/N" reference cannot route
 # an unrelated number into this repo's issues lookup.
 if [ "$IS_SMOKE" = "false" ]; then
-  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/'"${SMOKE_DETECT_REPOSITORY}"'/issues/|#)\K\d+\b' || true)
+  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/'"${AUTOFIX_STEP_REPOSITORY}"'/issues/|#)\K\d+\b' || true)
   if [ -n "${ISSUE_NUM:-}" ]; then
-    ISSUE_TITLE=$(_safe_gh_jq "repos/${SMOKE_DETECT_REPOSITORY}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${AUTOFIX_STEP_REPOSITORY}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
     # Anchored, matching the `^\[E2E ` convention used by
     # clarify.yml, plan.yml and implement.yml: real AI issue
     # titles never begin with the fixture tag, so this cannot

@@ -41,7 +41,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
@@ -50,6 +49,7 @@ REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 
 def _review_autofix_text() -> str:
+	# Moved step bodies (scripts/review_autofix_step_*.sh) are inlined again.
 	return expanded_review_autofix_text()
 
 

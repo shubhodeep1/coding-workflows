@@ -1515,12 +1515,25 @@ Create a new file only when one of these applies:
 - a reviewer finding you are applying, or the original PR's scope, requires it
 - a repository convention documented in CLAUDE.md / agents.md / AGENTS.md requires it for
   the change being fixed (for example a per-collection contract under
-  db/contracts/, a changelog fragment under changelog.d/, or a regression test
-  for a defect you fixed)
+  db/contracts/, a changelog fragment under changelog.d/, an agents.md fragment
+  under agents.d/ (never edit agents.md directly), or a regression test for a
+  defect you fixed)
 Otherwise do not create new utilities, modules, configuration systems, or
 documentation. Every file you create must be listed by path under
 "Changes made:" and "Files changed / commit status:" so the commit step can
 account for it.
+
+AGENTS.MD DISCIPLINE
+Never add text to agents.md (or AGENTS.md) directly, even when a finding asks
+to "document this in agents.md": write one fragment at
+agents.d/<issue-or-pr>-<slug>.md instead (reuse the PR's fragment when it
+already has one). Each block starts with
+<!-- agents: section="<exact ## heading>" --> and its text is appended to that
+section; a new log prefix goes under
+<!-- agents: section="Stable log prefixes (contractual)" --> as a
+"- PREFIX" registry bullet plus the LOG_PREFIX.name=PREFIX line. Edit the agents file
+directly only to correct or remove existing text. CI fails a pull request that
+adds to the agents file directly.
 
 EDITOR EXECUTION GUARDRAILS
 you may read and modify repository files directly as needed
@@ -2220,6 +2233,15 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   rm -rf "${_hb_tmpdir}"
   _hb_tmpdir=""
   _hb_fifo=""
+  # The editor's stderr goes to tmp_err through the heartbeat FIFO and is
+  # printed only on failure, so on a successful attempt the Claude engine's
+  # account-pool telemetry never reached the job log. Replay those lines on
+  # every attempt (once per attempt, so a retried run replays each attempt's
+  # lines) with a stage=editor prefix so they stay distinct from the raw
+  # failure dump. Like the consolidator's stage=consolidator stderr= replay,
+  # escape `%`, CR, `##[` and leading `::<cmd>` first so editor stderr can
+  # never be parsed as a workflow command.
+  { grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" 2>/dev/null || true; } | sed -e 's/%/%25/g' -e 's/\r/ /g' -e 's/##\[/##\\[/g' -e 's/^::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)\([[:space:]]\|::\)/::\\\1\2/g' -e 's/^/stage=editor /' >&2 || true
 
   # The watchdog subshell exits on its own (143/142/144) after it kills the
   # editor, so by the time the editor process is reaped the watchdog may
