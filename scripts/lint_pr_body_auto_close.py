@@ -31,6 +31,8 @@ Generator-side usage (P4 in docs/postmortems/2026-05-18-project-2734-stall.md):
   call this script BEFORE submitting an AI-authored PR body and refuse to
   create the PR if exit code != 0.
 
+Colon forms (`Resolved: #N`) count: GitHub closes issues on them.
+
 Markdown note: PR bodies are scanned after masking fenced code blocks and
 inline code spans so historical examples like `` `Fixes #2734` `` do not
 false-positive. Commit messages remain plain-text scans.
@@ -68,13 +70,14 @@ AUTO_CLOSE_KEYWORDS = (
 #   1. `keyword #N`                                          (same-repo short form)
 #   2. `keyword owner/repo#N`                                (cross-repo short form)
 #   3. `keyword https://github.com/owner/repo/issues/N`      (URL form)
-# Colon forms like `Closes: #N` are intentionally NOT matched because
-# GitHub does not auto-close on that syntax.
+# Colon forms like `Resolved: #N` ARE matched: GitHub closes on them too.
+# Merge commit ae99a17d202 (PR #7190) closed tracking issue #6664 through
+# the words "resolved: #6664" in a squashed commit message.
 # Boundaries `(?<![\w-])` / `(?![\w-])` prevent matches inside words
 # (e.g. "prefix" should not match "fix").
 _KEYWORD_ALT = "|".join(AUTO_CLOSE_KEYWORDS)
 AUTO_CLOSE_RE = re.compile(
-	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})\s+"
+	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})(?:\s*:\s*|\s+)"
 	rf"(?:"
 	rf"(?:(?P<issue_repo_short>[\w.-]+/[\w.-]+))?#(?P<issue_short>\d+)"
 	rf"|"
@@ -120,8 +123,20 @@ class LintViolation:
 			f"issue {issue_ref}. On merge this would auto-close the tracking issue "
 			f"and stop the orchestrator's wave dispatch (see CLAUDE.md §19 and "
 			f"docs/postmortems/2026-05-18-project-2734-stall.md). Use 'Refs #' or "
-			f"'Related to #' instead.\n"
+			f"'Related to #' instead.{self._commit_remediation()}\n"
 			f"    Matched line: {self.line}"
+		)
+
+	def _commit_remediation(self) -> str:
+		"""Extra guidance for a match in a commit message: editing the PR body
+		does not help, because a squash merge copies commit messages into the
+		commit that lands on the default branch."""
+		if not self.source.startswith("commit message #"):
+			return ""
+		return (
+			" Commit messages are numbered oldest first; reword that commit on "
+			"the PR branch (git rebase, then a force-push of the PR branch), "
+			"because a squash merge copies commit messages into the merge commit."
 		)
 
 

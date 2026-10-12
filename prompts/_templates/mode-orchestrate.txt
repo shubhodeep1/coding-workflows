@@ -103,6 +103,11 @@ File partitioning (prevents merge conflicts between parallel siblings):
   existing `<!-- anchor:NAME -->` HTML-comment anchors rather than
   renumbering or reflowing surrounding content. State this expectation in
   each doc-touching issue body.
+- agents.md fragments: a task that documents behaviour in `agents.md`
+  adds an `agents.d/<issue-or-pr>-<slug>.md` fragment instead of editing
+  the file (CLAUDE.md §30). Fragments never conflict, so such tasks do not
+  count against the `agents.md` hot file; list `agents.md` in
+  `files_touched` and the fragment is covered.
 - Implementer discipline: inside each issue body, instruct the
   implementer to stay inside the `files_touched` list, avoid reflowing
   unrelated code, and prefer append-only edits in shared files.

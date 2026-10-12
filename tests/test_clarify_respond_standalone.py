@@ -181,7 +181,9 @@ def test_every_later_step_waits_for_the_gate() -> None:
 	text = RESPOND.read_text(encoding="utf-8")
 	assert "outputs.is_orchestrator ==" not in text
 	for name, step in _steps().items():
-		if name == "Check orchestrator metadata":
+		# The retry-helper bootstrap (issue #6634) precedes the gate step,
+		# which itself calls gh_api_retry, so it cannot wait for the gate.
+		if name in ("Check orchestrator metadata", "Bootstrap GitHub API retry helper"):
 			continue
 		condition = str(step.get("if", ""))
 		assert "steps.check_orchestrator.outputs.respond == 'true'" in condition or "steps.check_orchestrator.outputs.mode == 'standalone'" in condition or "steps.ai_engine.outputs.engine == 'claude'" in condition, name

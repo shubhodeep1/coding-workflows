@@ -84,15 +84,46 @@ _static_context_regular_file() {
 	[ -f "$1" ]
 }
 
+# agents.md with pending agents.d/ fragments folded in (CLAUDE.md §30), so a
+# model sees documentation that is still waiting for the release fold. Uses
+# the assembler staged next to this script; any failure falls back to the
+# plain file. The assembler only parses text and never executes fragment content.
+_static_context_cat_agents() {
+	local agents_file="$1" static_context_assembler
+	static_context_assembler="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/assemble_agents.py"
+	if [ -d agents.d ] && [ ! -L agents.d ] && [ -f "${static_context_assembler}" ]; then
+		if PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${static_context_assembler}" render --repo-root . --agents-file "${agents_file}" 2>/dev/null; then
+			return 0
+		fi
+	fi
+	cat "${agents_file}"
+}
+
+# Print the local agents file to read: agents.md keeps precedence, and a
+# consumer repo that only has AGENTS.md (the casing update_workflows.yml folds
+# agents.d/ fragments into) falls back to it. Symlinks are refused with a warning.
+_static_context_local_agents_file() {
+	if _static_context_regular_file agents.md; then
+		echo agents.md
+		return 0
+	fi
+	if _static_context_regular_file AGENTS.md; then
+		echo AGENTS.md
+		return 0
+	fi
+	return 1
+}
+
 emit_agents_md() {
 	# Implement phase: include canonical-from-coding-workflows agents_canonical.md
 	# (staged from .codex-workflow-src) followed by the consumer repo's own
-	# agents.md if present. Other phases just emit the local agents.md.
+	# agents.md (or AGENTS.md) if present. Other phases just emit the local file.
 	# Guard RUNTIME_DIR explicitly under set -u.
-	local local_agents_regular
+	local local_agents_regular local_agents_file=""
+	local_agents_file="$(_static_context_local_agents_file)" || local_agents_file=""
 	case "${phase}" in
 		implement)
-			if _static_context_regular_file agents.md; then
+			if [ -n "${local_agents_file}" ]; then
 				local_agents_regular=true
 			else
 				local_agents_regular=false
@@ -105,15 +136,15 @@ emit_agents_md() {
 				fi
 				if [ "$local_agents_regular" = true ]; then
 					echo "=== REPO-SPECIFIC AGENTS.MD ==="
-					cat agents.md
+					_static_context_cat_agents "${local_agents_file}"
 					echo
 				fi
 			fi
 			;;
 		*)
-			if _static_context_regular_file agents.md; then
+			if [ -n "${local_agents_file}" ]; then
 				echo "=== AGENTS.MD ==="
-				cat agents.md
+				_static_context_cat_agents "${local_agents_file}"
 				echo
 			fi
 			;;
@@ -133,6 +164,10 @@ import sys
 
 MAX_README_BYTES = 2 * 1024 * 1024
 MAX_README_PROMPT_BYTES = 200000
+# Keep in step with scripts/review_untrusted_workspace.py: the "#### Variables"
+# env-var reference table is left out of prompts (issue #6902).
+README_VARIABLES_HEADING = b"#### Variables"
+README_VARIABLES_POINTER = b"(The variable reference table under this heading is left out of this prompt. Read the \"#### Variables\" section of README.md in the repository for a variable's default and description.)"
 readme_path = Path(sys.argv[1]) / "README.md"
 
 try:
@@ -183,10 +218,18 @@ if not readme_data:
 	sys.exit(0)
 
 trimmed_lines = []
+skipping_variables = False
 for readme_line in readme_data.split(b"\n")[: -1 if readme_data.endswith(b"\n") else None]:
 	if readme_line.startswith(b"### 2. Create wrapper workflows"):
 		break
+	if skipping_variables:
+		if not readme_line.startswith(b"#"):
+			continue
+		skipping_variables = False
 	trimmed_lines.append(readme_line)
+	if readme_line == README_VARIABLES_HEADING:
+		trimmed_lines.append(README_VARIABLES_POINTER)
+		skipping_variables = True
 
 if trimmed_lines:
 	if sum(len(readme_line) + len(b"UNTRUSTED_DATA: ") + 1 for readme_line in trimmed_lines) > MAX_README_PROMPT_BYTES:
