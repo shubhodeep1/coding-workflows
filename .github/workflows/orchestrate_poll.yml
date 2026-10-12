@@ -215,6 +215,7 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -236,7 +237,82 @@ jobs:
           if [ "${COUNT}" -eq 0 ]; then
             echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
-            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            # Standalone stall recovery (issue #7284, activation gap from PR
+            # #7044) runs only inside the full poller, so a repository with
+            # no open tracking issue never recovered a stalled standalone
+            # issue. The full poller runs when this probe finds candidates.
+            # Same truthy rule as is_truthy in orchestrate_poll_process.sh.
+            case "$(printf '%s' "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) ;;
+              *)
+                echo "STANDALONE_STALL_PROBE outcome=skip reason=disabled"
+                echo "has_work=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+            esac
+            # §14 audit: this step's only other call is the tracking-label
+            # issue listing above, which cannot see standalone issues. The
+            # poller's batched helpers (_fetch_standalone_marker_issues_graphql,
+            # _fetch_candidate_issue_details_graphql / _candidate_details_json)
+            # run only inside the full poller, after this decision is made.
+            # This is one aliased GraphQL call, made only on ticks with no
+            # open tracking issue; it reads integer counts only. The labels
+            # are the poller's pipeline_labels, one per alias so no
+            # multi-label filter semantics are assumed; the searches use the
+            # same query strings as _fetch_standalone_marker_issues_graphql.
+            # Fail open: a failed or malformed probe runs the full poller.
+            probe_owner="${GITHUB_REPOSITORY%%/*}"
+            probe_name="${GITHUB_REPOSITORY#*/}"
+            probe_q_state="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments"
+            probe_q_clarify="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments"
+            # shellcheck disable=SC2016
+            probe_query='query($owner: String!, $name: String!, $q_state: String!, $q_clarify: String!) {
+            repository(owner: $owner, name: $name) {
+              l0: issues(states: OPEN, labels: ["ai:clarification"], first: 1) { totalCount }
+              l1: issues(states: OPEN, labels: ["ai:planning"], first: 1) { totalCount }
+              l2: issues(states: OPEN, labels: ["ai:awaiting-approval"], first: 1) { totalCount }
+              l3: issues(states: OPEN, labels: ["ai:implementing"], first: 1) { totalCount }
+              l4: issues(states: OPEN, labels: ["ai:done"], first: 1) { totalCount }
+              l5: issues(states: OPEN, labels: ["ai:ready-to-merge"], first: 1) { totalCount }
+              l6: issues(states: OPEN, labels: ["ai:review-blocked"], first: 1) { totalCount }
+            }
+            state: search(query: $q_state, type: ISSUE, first: 1) { issueCount }
+            clarify: search(query: $q_clarify, type: ISSUE, first: 1) { issueCount }
+          }'
+            probe_resp=""
+            if ! probe_resp="$(gh_retry gh api graphql \
+                -f owner="${probe_owner}" \
+                -f name="${probe_name}" \
+                -f q_state="${probe_q_state}" \
+                -f q_clarify="${probe_q_clarify}" \
+                -f query="${probe_query}" 2>/dev/null)"; then
+              echo "::warning::Standalone stall recovery probe failed; running the full poller so recovery is not skipped."
+              echo "STANDALONE_STALL_PROBE outcome=probe_failed reason=graphql_failed"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            probe_counts=""
+            if ! probe_counts="$(printf '%s' "${probe_resp}" | jq -er '
+                def n: if type == "number" and . >= 0 and . == floor then . else error("bad") end;
+                .data as $d
+                | [$d.repository.l0.totalCount, $d.repository.l1.totalCount, $d.repository.l2.totalCount,
+                   $d.repository.l3.totalCount, $d.repository.l4.totalCount, $d.repository.l5.totalCount,
+                   $d.repository.l6.totalCount] as $labels
+                | [($labels | map(n) | add), ($d.state.issueCount | n), ($d.clarify.issueCount | n)]
+                | @tsv' 2>/dev/null)"; then
+              echo "::warning::Standalone stall recovery probe returned an unexpected response; running the full poller so recovery is not skipped."
+              echo "STANDALONE_STALL_PROBE outcome=probe_failed reason=malformed"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            read -r probe_labeled probe_state probe_clarify <<< "${probe_counts}"
+            if [ $((probe_labeled + probe_state + probe_clarify)) -gt 0 ]; then
+              echo "STANDALONE_STALL_PROBE outcome=candidates labeled=${probe_labeled} state_marker=${probe_state} clarify_marker=${probe_clarify}"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "STANDALONE_STALL_PROBE outcome=none labeled=${probe_labeled} state_marker=${probe_state} clarify_marker=${probe_clarify}"
+              echo "has_work=false" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
 

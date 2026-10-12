@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 import sys
 
@@ -215,6 +219,174 @@ def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> No
 	assert "run: bash scripts/worktree_gc.sh" in wf
 
 
+STANDALONE_PROBE_LABELS = (
+	"ai:clarification",
+	"ai:planning",
+	"ai:awaiting-approval",
+	"ai:implementing",
+	"ai:done",
+	"ai:ready-to-merge",
+	"ai:review-blocked",
+)
+
+
+def _find_tracking_step() -> dict:
+	data = yaml.safe_load(_workflow(ORCHESTRATE_POLL_WF))
+	return next(step for step in data["jobs"]["poll"]["steps"] if step.get("id") == "find_tracking")
+
+
+def _probe_response(labeled: int = 0, state: int = 0, clarify: int = 0) -> dict:
+	repository = {f"l{i}": {"totalCount": 0} for i in range(7)}
+	repository["l3"]["totalCount"] = labeled
+	return {"data": {"repository": repository, "state": {"issueCount": state}, "clarify": {"issueCount": clarify}}}
+
+
+def _run_find_tracking(
+	tmp_path: Path,
+	*,
+	tracking: list[dict] | None = None,
+	graphql: object | None = None,
+	graphql_rc: int = 0,
+	enabled: str = "true",
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], list[list[str]]]:
+	"""Run the find_tracking step's shell body against a fake gh (issue #7284)."""
+	script = _find_tracking_step()["run"].replace("${{ github.repository }}", "owner/repo")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	calls_file = tmp_path / "gh_calls.jsonl"
+	tracking_payload = json.dumps(tracking or [])
+	graphql_payload = graphql if isinstance(graphql, str) else json.dumps(graphql if graphql is not None else _probe_response())
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env python3\n"
+		"import json, os, sys\n"
+		"args = sys.argv[1:]\n"
+		"with open(os.environ['FAKE_GH_CALLS'], 'a', encoding='utf-8') as fh:\n"
+		"    fh.write(json.dumps(args) + '\\n')\n"
+		"if args[:2] == ['issue', 'list']:\n"
+		"    sys.stdout.write(os.environ['FAKE_GH_TRACKING'])\n"
+		"    sys.exit(0)\n"
+		"if args[:2] == ['api', 'graphql']:\n"
+		"    rc = int(os.environ['FAKE_GH_GRAPHQL_RC'])\n"
+		"    if rc:\n"
+		"        sys.exit(rc)\n"
+		"    sys.stdout.write(os.environ['FAKE_GH_GRAPHQL'])\n"
+		"    sys.exit(0)\n"
+		"sys.exit(9)\n",
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+	output_file = tmp_path / "github_output"
+	output_file.write_text("", encoding="utf-8")
+	env = {
+		**os.environ,
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"RUNTIME_DIR": str(runtime_dir),
+		"GITHUB_OUTPUT": str(output_file),
+		"GITHUB_ENV": str(tmp_path / "github_env"),
+		"GITHUB_REPOSITORY": "owner/repo",
+		"ENABLE_STANDALONE_STALL_RECOVERY": enabled,
+		"FAKE_GH_CALLS": str(calls_file),
+		"FAKE_GH_TRACKING": tracking_payload,
+		"FAKE_GH_GRAPHQL": graphql_payload,
+		"FAKE_GH_GRAPHQL_RC": str(graphql_rc),
+	}
+	for inherited in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
+	# No scripts/gh_helpers.sh in tmp_path, so the step's gh_retry fallback runs.
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
+	outputs = dict(
+		line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line
+	)
+	calls = [json.loads(line) for line in calls_file.read_text(encoding="utf-8").splitlines()] if calls_file.exists() else []
+	return result, outputs, calls
+
+
+def _graphql_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if call[:2] == ["api", "graphql"]]
+
+
+def test_find_tracking_step_maps_standalone_recovery_switch() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	step = _find_tracking_step()
+	assert step["env"]["ENABLE_STANDALONE_STALL_RECOVERY"] == "${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}"
+	start = wf.index("- name: Find active tracking issues")
+	end = wf.index("- name: Checkout repository", start)
+	assert "ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}" in wf[start:end]
+
+
+def test_find_tracking_with_tracking_issues_skips_standalone_probe(tmp_path: Path) -> None:
+	result, outputs, calls = _run_find_tracking(tmp_path, tracking=[{"number": 5, "title": "Project", "labels": []}])
+	assert result.returncode == 0, result.stderr
+	assert outputs["has_tracking"] == "true"
+	assert outputs["has_work"] == "true"
+	assert not _graphql_calls(calls)
+	assert "STANDALONE_STALL_PROBE" not in result.stdout
+
+
+@pytest.mark.parametrize("enabled", ("false", "FALSE", "0", "off"))
+def test_find_tracking_standalone_probe_disabled(tmp_path: Path, enabled: str) -> None:
+	result, outputs, calls = _run_find_tracking(tmp_path, enabled=enabled)
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"has_tracking": "false", "has_work": "false"}
+	assert "STANDALONE_STALL_PROBE outcome=skip reason=disabled" in result.stdout
+	assert not _graphql_calls(calls)
+
+
+@pytest.mark.parametrize(
+	("counts", "has_work", "outcome"),
+	(
+		({}, "false", "outcome=none labeled=0 state_marker=0 clarify_marker=0"),
+		({"labeled": 2}, "true", "outcome=candidates labeled=2 state_marker=0 clarify_marker=0"),
+		({"state": 1}, "true", "outcome=candidates labeled=0 state_marker=1 clarify_marker=0"),
+		({"clarify": 3}, "true", "outcome=candidates labeled=0 state_marker=0 clarify_marker=3"),
+	),
+)
+def test_find_tracking_standalone_probe_counts(tmp_path: Path, counts: dict, has_work: str, outcome: str) -> None:
+	result, outputs, calls = _run_find_tracking(tmp_path, graphql=_probe_response(**counts), enabled="On")
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"has_tracking": "false", "has_work": has_work}
+	assert f"STANDALONE_STALL_PROBE {outcome}" in result.stdout
+	graphql = _graphql_calls(calls)
+	assert len(graphql) == 1
+	call = graphql[0]
+	assert "owner=owner" in call
+	assert "name=repo" in call
+	assert 'q_state=repo:owner/repo is:issue is:open "AI_STANDALONE_STALL_STATE_V1" in:comments' in call
+	assert 'q_clarify=repo:owner/repo is:issue is:open "ai:clarification-questions" in:comments' in call
+	query = next(arg for arg in call if arg.startswith("query="))
+	for label in STANDALONE_PROBE_LABELS:
+		assert f'labels: ["{label}"]' in query
+	assert query.count("totalCount") == len(STANDALONE_PROBE_LABELS)
+	assert query.count("issueCount") == 2
+
+
+@pytest.mark.parametrize(
+	("kwargs", "reason"),
+	(
+		({"graphql_rc": 1}, "graphql_failed"),
+		({"graphql": "not json"}, "malformed"),
+		({"graphql": {"data": {"repository": None}}}, "malformed"),
+		({"graphql": {"data": {"repository": {f"l{i}": {"totalCount": 0} for i in range(6)}, "state": {"issueCount": 0}, "clarify": {"issueCount": 0}}}}, "malformed"),
+		({"graphql": {"data": {"repository": {f"l{i}": {"totalCount": "1"} for i in range(7)}, "state": {"issueCount": 0}, "clarify": {"issueCount": 0}}}}, "malformed"),
+	),
+)
+def test_find_tracking_standalone_probe_fails_open(tmp_path: Path, kwargs: dict, reason: str) -> None:
+	result, outputs, _calls = _run_find_tracking(tmp_path, **kwargs)
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"has_tracking": "false", "has_work": "true"}
+	assert f"STANDALONE_STALL_PROBE outcome=probe_failed reason={reason}" in result.stdout
+	assert "::warning::Standalone stall recovery probe" in result.stdout
+
+
+def test_standalone_stall_probe_log_prefix_is_registered() -> None:
+	agents_text = _agents_text_with_fragments()
+	assert "- `STANDALONE_STALL_PROBE`" in agents_text
+	assert "LOG_PREFIX.name=STANDALONE_STALL_PROBE" in agents_text
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
@@ -227,6 +399,8 @@ def main() -> int:
 	test_staged_support_latch_sweep_runs_without_tracking_issues()
 	test_unblock_scan_runs_without_tracking_issues()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
+	test_find_tracking_step_maps_standalone_recovery_switch()
+	test_standalone_stall_probe_log_prefix_is_registered()
 	return 0
 
 
