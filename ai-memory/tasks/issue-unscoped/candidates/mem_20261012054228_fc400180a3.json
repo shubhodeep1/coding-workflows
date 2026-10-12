@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:7266-7337 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: With `dry_run: true` and the new default-on release switch, the notify step reports \u201cRelease <v> SUCCEEDED\u201d with a success icon even though no release was published.\n  WHY: The publishing steps skip dry runs, but the notify logic checks only `RELEASE_ENABLED` and does not account for `inputs.dry_run`, so operators can receive a misleading success notification.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The `STABLE_RELEASE_SWITCH enabled=` log line and everything downstream of the switch are unchanged.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml notify step env and branch logic\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The notify step's env at line 7266-7271 only forwards `GATE_ONLY` and `RELEASE_ENABLED` (no `inputs.dry_run`), and its branch logic at lines 7327-7337 has three branches (gate_only, switch-off, default) with no branch for `inputs.dry_run=true`.\n- requirement: \"tests/test_mark_stable_release_tag_refspec_contract.py: the switch-resolution test now covers unset/empty \u2192 on, `false`/`FALSE` \u2192 off, `true`/`TRUE` \u2192 on, and `yes` / `true ` / `1` \u2192 off with the warning; the env-line assertion follows the new default.\"\n  expected_change_site: tests/test_mark_stable_release_tag_refspec_contract.py near `test_release_job_disabled_path_skips_every_publishing_step`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The existing notify-job assertion at line 1211 is a static text presence check (`assert \"publishing disabled (STABLE_RELEASE_ENABLED off)\" in notify_job`). There is no behavioural test that invokes the notify step's script with `inputs.dry_run=true` and verifies it does NOT emit the \"Release SUCCEEDED\" branch (or emits a distinct dry-run message), nor one that confirms the env exposes a dry-run signal.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:7327-7337, 7266-7271 | severity=high | confidence=5\n  PROBLEM: The notify step reports \"Release <v> SUCCEEDED\" with a green \u2713 icon when `inputs.dry_run=true` and the new default-on switch reports `enabled=true`, even though no tag, GitHub Release, consumer dispatch, or sync-to-main occurs.\n  WHY: The notify step's env does not expose `inputs.dry_run`, and its branch logic checks only the switch output, so a dry-run dispatch falls through to the success branch.\n- Requirement: \"The `STABLE_RELEASE_SWITCH enabled=` log line and everything downstream of the switch are unchanged.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml notify step env (line 7266-7271) and notify step branch logic (line 7327-7337)\n  Evidence of absence: The PR description explicitly claims that downstream of the switch is unchanged, but the notify step's Telegram summary is downstream of the switch and is NOT unchanged. The notify step's env at line 7266-7271 only forwards `GATE_ONLY` and `RELEASE_ENABLED` (no `inputs.dry_run`), and its branch logic at lines 7327-7337 has three branches (gate_only, switch-off, default) with no branch for `inputs.dry_run=true`. Pre-PR, dry_run dispatched runs fell through the switch-off branch because the switch was off by default. Post-PR, the new default-on switch routes them through the \"Release SUCCEEDED\" branch, which is a behavioural change directly contradicting the PR's stated guarantee. The LAST RUN DIFF (which only updated the stale changelog fragment) did not address this downstream interaction. Severity: MAJOR. ISSUE_CONFIDENCE: 5\n- Requirement: \"tests/test_mark_stable_release_tag_refspec_contract.py: the switch-resolution test now covers unset/empty \u2192 on, `false`/`FALSE` \u2192 off, `true`/`TRUE` \u2192 on, and `yes` / `true ` / `1` \u2192 off with the warning; the env-line assertion follows the new default.\"\n  Expected change site: tests/test_mark_stable_release_tag_refspec_contract.py near `test_release_job_disabled_path_skips_every_publishing_step` (around lines 1209-1211, which already inspect `notify_job`)\n  Evidence of absence: The existing notify-job assertion at line 1211 is a static text presence check (`assert \"publishing disabled (STABLE_RELEASE_ENABLED off)\" in notify_job`). There is no behavioural test that invokes the notify step's script with `inputs.dry_run=true` and verifies it does NOT emit the \"Release SUCCEEDED\" branch (or emits a distinct dry-run message), nor one that confirms the env exposes a dry-run signal. The PR's stated test coverage did not exercise the notify step's downstream behaviour, and the LAST RUN DIFF did not add such a test, leaving the regression in CORRECTNESS & LOGIC above uncaught by the test suite. Severity: NIT. ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml:7267-7268, 7327-7337 | severity=high | confidence=5\n  PROBLEM: The notify job reports \"Release <v> SUCCEEDED\" with a \u2713 icon when `dry_run: true` is used, even though no tag, GitHub Release, or dispatch happened.\n  WHY: Before this PR, the switch default was `false`, so a dry run would set `release_enabled=false` and the notify job would correctly report \"publishing disabled\". With the new default of `true`, a dry run sets `release_enabled=true`, and the notify job at line 7331-7336 checks only `RELEASE_ENABLED` (from `needs.release.outputs.release_enabled`) without checking `inputs.dry_run`. The publishing steps correctly skip when `!inputs.dry_run`, but the notify job's success message at line 7335 (\"Release ... SUCCEEDED\" with \u2713 icon) does not account for dry runs. An operator running `workflow_dispatch` with `dry_run: true` would see a Telegram message claiming the release succeeded when nothing was actually published.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f08b8ef255031c2b27d5a1975d417c63abd641de46676d72881ff6e9fcae341e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7206,
+    "run_id": "38203388760",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38203388760",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012054228_fc400180a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7206,
+    "run_id": "38203388760"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T05:42:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
