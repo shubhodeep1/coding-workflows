@@ -395,10 +395,22 @@ def test_run_from_another_repository_or_pr_is_not_evidence(tmp_path, monkeypatch
 	assert result["writes"] == []
 
 
-def test_unreadable_pr_is_unverified_without_writes(tmp_path, monkeypatch):
+def test_unreadable_pr_is_unverified_and_still_posts_traceback(tmp_path, monkeypatch):
 	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/pulls/{PR}": mod.GhApiError("rc=1")}))
 	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "pr_unreadable"
-	assert result["writes"] == []
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert [(w["method"], w["path"]) for w in result["writes"]] == [("POST", f"repos/{REPO}/issues/{ISSUE}/comments")]
+
+
+def test_unreadable_pr_check_run_triage_still_posts_traceback(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	routes = _check_run_triage_routes(check_run)
+	routes[rf"repos/{REPO}/pulls/{PR}"] = mod.GhApiError("rc=1")
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "pr_unreadable"
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
 
 
 def test_details_url_for_another_repository_is_ignored(tmp_path, monkeypatch):

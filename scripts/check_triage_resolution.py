@@ -288,12 +288,15 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		verdict["reason"] = reason
 		return verdict
 
+	# An unreadable PR still lets the failed jobs be collected first, so the
+	# unverified path can post the failing job's traceback.
 	try:
 		pr = _gh_api([f"repos/{repo}/pulls/{triage['pr']}"])
 	except GhApiError:
-		return _fail("pr_unreadable")
-	if not isinstance(pr, dict) or pr.get("number") != triage["pr"]:
-		return _fail("pr_unreadable")
+		pr = None
+	pr_readable = isinstance(pr, dict) and pr.get("number") == triage["pr"]
+	if not pr_readable:
+		pr = {}
 	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
 	base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
 	head_repo = (head.get("repo") or {}).get("full_name") if isinstance(head.get("repo"), dict) else None
@@ -332,6 +335,8 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		# fetch_failing_tracebacks reads the check run to pick the log source.
 		verdict["failed_jobs"] = [{"id": triage["check_run_id"], "name": triage["check_name"], "conclusion": "failure", "source": "check_run"}]
 
+	if not pr_readable:
+		return _fail("pr_unreadable")
 	merge_sha = pr.get("merge_commit_sha")
 	if pr.get("merged") is not True or not isinstance(merge_sha, str) or not SHA_RE.match(merge_sha):
 		return _fail("pr_not_merged")
