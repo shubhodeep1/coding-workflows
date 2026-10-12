@@ -113,7 +113,7 @@ env:
   MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
   MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
   MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
-  MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '24' }}
+  MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
   MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
   MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
@@ -121,11 +121,16 @@ env:
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m3
-    mistralai/mistral-small-2603
-    deepseek/deepseek-v4-pro
+    anthropic/claude-sonnet-5.5
+    z-ai/glm-5.3-flash
     google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
     openai/gpt-6-luna
+  # The anthropic/claude-* slot above runs on the Claude account pool, not
+  # OpenRouter (scripts/review_run_reviewers.sh run_pool_reviewer). When its
+  # Sonnet run does not succeed it retries once on this pool model; a
+  # pool-wide outage skips the slot (status skipped_pool).
+  REVIEWER_POOL_FALLBACK_MODEL: ${{ vars.REVIEWER_POOL_FALLBACK_MODEL || 'claude-haiku-5-5' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
@@ -277,7 +282,7 @@ env:
   # preflight-checked): the staging backfill copies them from the main
   # verified workflow checkout when the staging helper does not install them.
   REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
-    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh
+    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh provider_outage.py
 
 jobs:
   gate:
@@ -316,7 +321,39 @@ jobs:
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
       fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
+      force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Record GH_PAT budget at review gate start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -339,6 +376,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_event_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
@@ -361,11 +400,11 @@ jobs:
           elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
             # No existing gate lookup resolves the release tag. /commits/stable
             # selects the branch when both a branch and tag have that name.
-            support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_tag_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
             support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
             support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-              support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_tag_json="$(gh_api_retry "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
               support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
               support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             fi
@@ -377,7 +416,7 @@ jobs:
           else
             # The job workflow SHA follows a same-repo PR head. Read protected main independently.
             # Gate PR metadata lookups do not include source-repository branch protection or SHA.
-            support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            support_main_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)"
             support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
             if ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
               echo "::error::Review support main branch is not confirmed protected."
@@ -400,7 +439,9 @@ jobs:
       # autofix-identical-failure-count subcommand.
       - name: Checkout fingerprint cap helper
         id: checkout_fingerprint_cap
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -413,7 +454,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify fingerprint cap support identity
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
+        # force_rb_judge runs also need the helper for the host-only conflict
+        # skip (#6743), which has its own kill switch.
+        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' || inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true' }}
         env:
           WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
           WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
@@ -432,6 +475,7 @@ jobs:
             exit 1
           fi
           echo "FINGERPRINT_CAP_SUPPORT_VERIFIED=true" >> "$GITHUB_ENV"
+          echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       # Port P6 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
       # Phase 8d): "Evaluate review gate" retargets a stacked PR whose base
@@ -530,6 +574,10 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          # Freshness-update fast path (#7084, Q60): a head that is only
+          # GitHub's merge of an already-approved head with the base skips the
+          # reviewers and goes to deterministic-skip-merge (CI wait, then merge).
+          MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
@@ -545,6 +593,7 @@ jobs:
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).
           FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
+          REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
           # Skip the reviewer panel + editor cycle when:
           #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
@@ -664,9 +713,28 @@ jobs:
             # mergeable/mergeable_state (deterministic-skip conflict
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
-              2>/dev/null)"; then
+            source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+            type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+            # Classified retry (issue #6634): a 404 keeps the pr_state_unknown
+            # skip below; an exhausted transient error or a rate limit fails the
+            # gate loudly instead of silently skipping the review. A permanent
+            # error other than 404 (exit 2, e.g. a non-limit 403) fails too; the
+            # helper's GH_API_RETRY stderr line carries the status.
+            _pr_gate_rc=0
+            _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
+            _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
+            cat "${_pr_gate_err}" >&2 2>/dev/null || true
+            _pr_gate_not_found=false
+            if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
+            rm -f "${_pr_gate_err}"
+            if [ "${_pr_gate_rc}" -eq 75 ] \
+              || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; } \
+              || { [ "${_pr_gate_rc}" -eq 2 ] && declare -F _gh_api_classify >/dev/null && [ "${_pr_gate_not_found}" != "true" ]; }; then
+              echo "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}"
+              exit 1
+            fi
+            if [ "${_pr_gate_rc}" -eq 0 ]; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
@@ -912,7 +980,7 @@ jobs:
             # shellcheck disable=SC2016
             if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
               -f per_page=100 \
-              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:"))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+              --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
               2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
               && [ -s "${gate_marker_comments_file}" ]; then
               gate_marker_fetch_state="ok"
@@ -1130,7 +1198,9 @@ jobs:
           # failure to workflow failure heal. A push (new head) resets the
           # count by construction. A reason the helper reports as
           # non_retryable=true (NON_RETRYABLE_FAILURE_REASONS) trips the cap on
-          # its first marker (PR #6438: ~28 identical resolver runs).
+          # its first marker (PR #6438: ~28 identical resolver runs). It is
+          # re-armed once per verified support SHA not yet recorded as support=
+          # on a trusted marker for the head (#6911, rearm=true from the helper).
           #
           # Scope and fail-open rules:
           #   * Every event (pull_request and workflow_dispatch) of a PR with
@@ -1152,14 +1222,18 @@ jobs:
           FINGERPRINT_CAP_ALREADY_APPLIED="false"
           FINGERPRINT_CAP_NON_RETRYABLE="false"
           FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
+          FORCE_RB_JUDGE_CONFLICT_SKIP="false"
           case "${FINGERPRINT_CAP_MAX}" in
             ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
           esac
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${pr_base_retargeted}" != "true" ] \
-            && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+            && { [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] || [ "${FORCE_RB_JUDGE:-false}" = "true" ]; } \
             && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ] \
             && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            # force_rb_judge runs enter even with the cap disabled: they never
+            # evaluate the cap, only the host-only conflict skip below (#6743),
+            # which has its own kill switch.
             fingerprint_cap_helper=""
             for fingerprint_cap_candidate in .codex-workflow-src/scripts/workflow_failure_heal.py; do
               if [ -f "${fingerprint_cap_candidate}" ] && grep -q 'autofix-identical-failure-count' "${fingerprint_cap_candidate}"; then
@@ -1169,6 +1243,50 @@ jobs:
             done
             if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
               echo "AUTOFIX_FINGERPRINT cap=bypassed pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} reason=force_rb_judge"
+              # Issue #6743 (#6733): the newest trusted same-head marker with
+              # reason conflict_resolver_sandbox_path_host_only means the
+              # resolver will refuse again; skip it so the judge can run.
+              # Anything unverifiable keeps the conflict steps.
+              frj_skip_reason=""
+              frj_marker_reason="none"
+              if [ "${REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED:-true}" = "false" ]; then
+                frj_skip_reason="disabled"
+              elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+                frj_skip_reason="head_sha_unavailable"
+              elif [ -z "${fingerprint_cap_helper}" ]; then
+                frj_skip_reason="helper_missing"
+              else
+                gate_fetch_marker_comments
+                if [ "${gate_marker_fetch_state}" != "ok" ]; then
+                  frj_skip_reason="${gate_marker_fetch_state}"
+                else
+                  frj_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
+                    --comments-json "${gate_marker_comments_file}" \
+                    --head-sha "${pr_head_sha_gate}" \
+                    --author-login "${gate_marker_author_login}" \
+                    --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)" || frj_decision=""
+                  frj_count="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
+                  frj_marker_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+                  frj_newest_reason="$(printf '%s\n' "${frj_decision}" | awk -F= '$1 == "newest_reason" { print $2 }' | tail -n 1)"
+                  [ -n "${frj_marker_reason}" ] || frj_marker_reason="none"
+                  if ! [[ "${frj_count}" =~ ^[0-9]+$ ]]; then
+                    frj_skip_reason="parse_error"
+                  elif [ "${frj_count}" -eq 0 ]; then
+                    frj_skip_reason="no_trusted_marker"
+                  elif [ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+                    frj_skip_reason="reason_mismatch"
+                  elif [ "${frj_newest_reason}" != "conflict_resolver_sandbox_path_host_only" ]; then
+                    # A newer trusted marker (e.g. provider_unavailable, which
+                    # the counter passes over) has another reason.
+                    frj_skip_reason="newest_reason_mismatch"
+                    frj_marker_reason="${frj_newest_reason:-none}"
+                  else
+                    frj_skip_reason="host_only_marker"
+                    FORCE_RB_JUDGE_CONFLICT_SKIP="true"
+                  fi
+                fi
+              fi
+              echo "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} outcome=$([ "${FORCE_RB_JUDGE_CONFLICT_SKIP}" = "true" ] && echo skip || echo run) reason=${frj_skip_reason} marker_reason=${frj_marker_reason}"
             elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
               echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=unknown reason=head_sha_unavailable"
             elif [ -z "${fingerprint_cap_helper}" ]; then
@@ -1179,11 +1297,15 @@ jobs:
                 echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=${gate_marker_fetch_state}"
               else
                 fingerprint_cap_decision=""
+                fingerprint_cap_extra_args=()
+                if grep -q 'current-support-sha' "${fingerprint_cap_helper}"; then
+                  fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")
+                fi
                 if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
                   --comments-json "${gate_marker_comments_file}" \
                   --head-sha "${pr_head_sha_gate}" \
                   --author-login "${gate_marker_author_login}" \
-                  --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)"; then
+                  --support-sha "${REVIEW_SUPPORT_SHA:-}" "${fingerprint_cap_extra_args[@]}" 2>/dev/null)"; then
                   fingerprint_cap_decision=""
                 fi
                 fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
@@ -1200,7 +1322,12 @@ jobs:
                   if [ "${FINGERPRINT_CAP_COUNT}" -ge 1 ] && [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "non_retryable" { print $2 }' | tail -n 1)" = "true" ]; then
                     FINGERPRINT_CAP_NON_RETRYABLE="true"
                   fi
-                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
+                  fingerprint_cap_rearm="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "rearm" { print $2 }' | tail -n 1)"
+                  fingerprint_cap_prior_support="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "prior_support" { print $2 }' | tail -n 1)"
+                  if [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ] && [ "${fingerprint_cap_rearm}" = "true" ] \
+                    && [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+                    echo "AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}"
+                  elif [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
@@ -1238,8 +1365,43 @@ jobs:
             fi
             FORCE_FULL_REVIEW_TIER="${FORCE_REVIEW}"
 
+            # Freshness-update fast path (#7084, Q60): see
+            # scripts/review_head_gate.sh freshness-sync. Reuses the marker
+            # comments read above; a missing helper or comments read keeps
+            # the normal review.
+            gate_freshness_sync_fast_path()
+            {
+              [ "${MERGE_BASE_SYNC_FAST_PATH_ENABLED:-true}" != "false" ] || return 1
+              [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
+              [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
+              # Same suppressors as the doc-only / small-diff skip: the skip
+              # job runs no conflict resolver and no single-issue security
+              # pass, and the updated head has no audit of its own.
+              if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
+                return 1
+              fi
+              if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+                && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
+                && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
+                && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
+                && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
+                echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
+                return 1
+              fi
+              gate_fetch_marker_comments
+              [ "${gate_marker_fetch_state}" = "ok" ] || return 1
+              bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
+                "${pr_head_sha_gate}" "${pr_base_ref_gate:-${pr_base_ref:-}}" "${gate_marker_author_login}" "${gate_marker_comments_file}"
+            }
             if [ "${FORCE_REVIEW}" = "true" ]; then
               echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
+            elif gate_freshness_sync_fast_path; then
+              DETERMINISTIC_SKIP="true"
+              DET_SKIP_REASON="freshness_sync"
+              SHOULD_RUN="false"
+              SKIP_REASON="deterministic_skip_freshness_sync"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
             else
               # Size check uses the .additions/.deletions totals already
               # returned by the PR-state fetch above (no extra API call).
@@ -1533,7 +1695,10 @@ jobs:
                   materiality = "medium"
 
           print(json.dumps({
-              "agents_md_changed": "agents.md" in seen,
+              # CLAUDE.md §30: an agents.d/*.md fragment documents agents.md.
+              "agents_md_changed": "agents.md" in seen or any(
+                  gate_fragment.startswith("agents.d/") and gate_fragment.endswith(".md") and gate_fragment.count("/") == 1 for gate_fragment in seen
+              ),
               "materiality": materiality,
           }))
           PY
@@ -1720,6 +1885,7 @@ jobs:
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+          echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"
 
       - name: Withdraw stale auto-merge and publish head-gate status
         id: head_gate
@@ -2100,14 +2266,20 @@ jobs:
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # PR base ref from the gate's /pulls/{n} read (no extra call). The
+      # required-checks wait scopes its default CI check by base (#6963).
+      PR_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator
       # decision Q35: A), read from the same verified support commit the
       # gate resolved.
       MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+      MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
       # Required-checks wait before `gh pr merge --auto` (pr_checks_lib.sh):
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+      AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+      AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
     steps:
       - name: Checkout merge-base freshness helper
         id: checkout_freshness_helper
@@ -2279,6 +2451,10 @@ jobs:
             auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
             echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
+          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+            # Consumer-updater PRs (#7004): only update_workflows.yml's verify job enables auto-merge.
+            auto_merge_summary="SUPPRESSED (consumer-updater PR head ref '${PR_HEAD_REF}'; the update_workflows.yml verify job owns the merge)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=updater_pr_verify_job_owns_merge"
           elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             if deterministic_skip_head_is_current; then
               auto_merge_ready_labels_allowed="true"
@@ -2306,7 +2482,7 @@ jobs:
               if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
                 auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
-              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
                 auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
               elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
@@ -2333,7 +2509,7 @@ jobs:
             if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
               auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
-            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
               auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
             elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
@@ -2362,7 +2538,7 @@ jobs:
           # (avoids the heavyweight workflow-source checkout); the inline
           # definitions must stay in lockstep with the catalog.
           ensure_label_exists "ai:review-skipped" "${REPOSITORY}" "c2e0c6" "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
-          if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
+          if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
             -f "labels[]=ai:review-skipped" >/dev/null 2>&1; then
             echo "::warning::Failed to add ai:review-skipped label to PR #${PR_NUMBER}."
           fi
@@ -2402,7 +2578,7 @@ jobs:
             while IFS= read -r issue_number; do
               [ -n "${issue_number}" ] || continue
               echo "Setting ai:ready-to-merge on issue #${issue_number}"
-              if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
                 -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1; then
                 echo "::warning::Failed to set ai:ready-to-merge on issue #${issue_number}."
               fi
@@ -2569,7 +2745,7 @@ jobs:
           if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
             set_issue_phase_label_resilient() {
               ensure_label_exists "$2" "$3" || true
-              gh_retry gh api -X POST "repos/$3/issues/$1/labels" -f "labels[]=$2" >/dev/null 2>&1 \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/$3/issues/$1/labels" -f "labels[]=$2" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #$1."
             }
           fi
@@ -2643,7 +2819,7 @@ jobs:
             done <<< "${issue_numbers}"
             labeled_summary="linked issue(s) ${labeled_summary}"
           else
-            if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null 2>&1; then
+            if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked" >/dev/null 2>&1; then
               echo "::warning::Failed to add ai:review-blocked to PR #${PR_NUMBER}."
             fi
             labeled_summary="this pull request (no linked issue found)"
@@ -2697,7 +2873,10 @@ jobs:
             MSG+="PR: ${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/pull/${PR_NUMBER}"
             MSG+=$'\n'
             MSG+="Run: ${REPORT_RUN_URL}"
-            tg_send_msg "${MSG}" "WARNING" >/dev/null || true
+            # DEBUG: the ai:review-blocked label hands the PR to the
+            # review-blocked judge, whose outcome alert pages when a human
+            # is needed.
+            tg_send_msg "${MSG}" "DEBUG" >/dev/null || true
           fi
 
           # Heal report: the cap is the streak, so the reporter sends it on
@@ -2819,6 +2998,10 @@ jobs:
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
       AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Verified support commit, recorded as support= on that marker (#6911).
+      AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
+      # Issue #6743: skip conflict detection + resolver on force_rb_judge runs.
+      AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}
       REVIEW_CHECKOUT_SHA: ${{ needs.gate.outputs.review_checkout_sha }}
       RETARGETED_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       RETARGETED_BASE_UPDATED_AT: ${{ needs.gate.outputs.retargeted_base_updated_at }}
@@ -2889,6 +3072,10 @@ jobs:
       VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+      # Model-provider outage classifier switch and probe model (issue #6633),
+      # read by scripts/provider_outage.py in the failure paths.
+      PROVIDER_OUTAGE_CLASSIFY_ENABLED: ${{ vars.PROVIDER_OUTAGE_CLASSIFY_ENABLED || 'true' }}
+      PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without
@@ -3217,6 +3404,7 @@ jobs:
           AI_ENGINE_REVIEW_CONSOLIDATOR: ${{ vars.AI_ENGINE_REVIEW_CONSOLIDATOR || '' }}
           AI_ENGINE_CONFLICT_RESOLVER: ${{ vars.AI_ENGINE_CONFLICT_RESOLVER || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_PANEL_REVIEWER: ${{ vars.AI_ENGINE_PANEL_REVIEWER || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
         run: |
           set -euo pipefail
@@ -3231,6 +3419,20 @@ jobs:
             [ "${engine}" = "codex" ] || any_claude=true
             echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
           done
+          # An anthropic/claude-* REVIEWER_MODELS slot runs on the Claude
+          # account pool (engine role PANEL_REVIEWER, read-only sandbox,
+          # scripts/review_run_reviewers.sh run_pool_reviewer); the slot is
+          # skipped when the role resolves to codex.
+          panel_engine="codex"
+          if printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Eq '^anthropic/claude-'; then
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" ]; then
+              # shellcheck disable=SC1091
+              panel_engine="$(source "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" && ai_engine_for_role PANEL_REVIEWER || echo codex)"
+            fi
+            [ "${panel_engine}" = "claude" ] || panel_engine="codex"
+            [ "${panel_engine}" = "codex" ] || any_claude=true
+          fi
+          echo "AI_ENGINE_RESOLVED_PANEL_REVIEWER=${panel_engine}" >> "$GITHUB_ENV"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
@@ -3241,11 +3443,35 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Resolve Claude credential
+        id: claude_pool
         if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Record Claude pool capacity
+        # Issue #6633 (Q3): every pool account at its usage gate is a capacity
+        # event, not a PR failure. One deduplicated ai:provider-outage tracker
+        # (kind=capacity) and alert; it never pauses reviews and closes on the
+        # next run that gets an account.
+        if: always() && env.PR_CLOSED != 'true' && (steps.claude_pool.outputs.reason == 'all_gated' || steps.claude_pool.outputs.available == 'true')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          CLAUDE_POOL_STEP_REASON: ${{ steps.claude_pool.outputs.reason }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_pool_capacity.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_pool_capacity.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_claude_pool_capacity.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record Claude pool capacity' (fail open)."
+            exit 0
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Install OS-level dependencies
         shell: bash
@@ -3293,87 +3519,13 @@ jobs:
 
       - name: Initialize runtime workspace
         run: |
-          set -euo pipefail
-
-          RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
-          PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
-          RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
-          job_start_epoch="$(date +%s)"
-          review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"
-          review_soft_deadline_minutes_raw="${review_soft_deadline_minutes}"
-
-          case "${review_soft_deadline_minutes}" in
-            ''|*[!0-9]*)
-              echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes}'; defaulting to 210." >&2
-              review_soft_deadline_minutes="210"
-              ;;
-            *)
-              review_soft_deadline_minutes="$(( 10#${review_soft_deadline_minutes} ))"
-              if [ "${review_soft_deadline_minutes}" -le 0 ]; then
-                echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes_raw}'; defaulting to 210." >&2
-                review_soft_deadline_minutes="210"
-              fi
-              ;;
-          esac
-
-          codex_run_budget_total_secs="$(( review_soft_deadline_minutes * 60 ))"
-          codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
-
-          install -d -m 0700 "${RUNTIME_DIR}" "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
-
-          {
-            echo "JOB_START_EPOCH=${job_start_epoch}"
-            echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"
-            echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"
-            echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
-            echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
-            echo "RUNTIME_DIR=${RUNTIME_DIR}"
-            echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
-            echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
-            echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
-            echo "PR_META_FILE=${RUNTIME_DIR}/pr_meta.json"
-            echo "PR_DIFF_FILE=${RUNTIME_DIR}/pr_diff.patch"
-            echo "ORIGINAL_PR_DIFF_FILE=${RUNTIME_DIR}/original_pr_diff.patch"
-            echo "PR_ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/pr_issue_comments.json"
-            echo "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json"
-            echo "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md"
-            echo "PR_REVIEWS_FILE=${RUNTIME_DIR}/pr_reviews.json"
-            echo "PR_REVIEW_COMMENTS_FILE=${RUNTIME_DIR}/pr_review_comments.json"
-            echo "PR_ALL_COMMENTS_CONTEXT_FILE=${RUNTIME_DIR}/pr_all_comments_context.txt"
-            echo "PR_CHECK_RUNS_CONTEXT_FILE=${RUNTIME_DIR}/pr_check_runs_context.txt"
-            echo "LAST_RUN_DIFF_FILE=${RUNTIME_DIR}/last_run_diff.patch"
-            echo "LAST_RUN_CHANGED_FILES_FILE=${RUNTIME_DIR}/last_run_changed_files.txt"
-            echo "PR_CHANGED_FILES_FILE=${RUNTIME_DIR}/pr_changed_files.txt"
-            echo "LAST_COMMIT_STAT_FILE=${RUNTIME_DIR}/last_commit_stat.txt"
-            echo "LAST_RUN_DIFF_STAT_FILE=${RUNTIME_DIR}/last_run_diff_stat.txt"
-            echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"
-            echo "REVIEWER_PROMPT_BODY_FILE=${RUNTIME_DIR}/reviewer_prompt_body.txt"
-            echo "EDITOR_PROMPT_BODY_FILE=${RUNTIME_DIR}/editor_prompt_body.txt"
-            echo "REVIEWER_PROMPT_FILE=${RUNTIME_DIR}/reviewer_prompt.txt"
-            echo "EDITOR_PROMPT_FILE=${RUNTIME_DIR}/editor_prompt.txt"
-            echo "EDITOR_SUMMARY_FILE=${RUNTIME_DIR}/editor_summary.txt"
-            echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
-            echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
-            echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
-            echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"
-            echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
-            echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
-            echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
-            echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"
-            echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
-            echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
-            echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
-            echo "SEMBLE_AVAILABLE=false"
-            echo "SEMBLE_BIN="
-            echo "SEMBLE_INDEX_AVAILABLE=false"
-            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
-            echo "SERENA_AVAILABLE=false"
-            echo "SERENA_PROJECT_PREEXISTED=false"
-            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
-            echo "HAS_PR_DIFF=false"
-            echo "PR_DIFF_SOURCE=uninitialized"
-            echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
-          } >> "$GITHUB_ENV"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_init_runtime_workspace.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_init_runtime_workspace.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_init_runtime_workspace.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Initialize runtime workspace'."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Initialize workspace metadata
         if: env.PR_CLOSED != 'true'
@@ -4313,10 +4465,10 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
-          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_reviewer_preflight.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_reviewer_preflight.sh"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_preflight_required_files.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_preflight_required_files.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_reviewer_preflight.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Preflight: Verify required files before reviewer invocation'."
+            echo "::error::review_autofix_step_preflight_required_files.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Preflight: Verify required files before reviewer invocation'."
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -4425,6 +4577,7 @@ jobs:
             ${{ env.PREVIOUS_REVIEWS_DIR }}/status_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/review_*.txt
             ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/rejected_*.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -4611,16 +4764,26 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
+        id: deps_prepare
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
+          REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'false' }}
+          REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS: ${{ vars.REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS || '600' }}
           DEPENDENCY_INSTALL_TIMEOUT_SECONDS: ${{ vars.DEPENDENCY_INSTALL_TIMEOUT_SECONDS || '600' }}
+          REVIEW_SANDBOX_BUILD_ATTEMPTS: ${{ vars.REVIEW_SANDBOX_BUILD_ATTEMPTS || '3' }}
+          REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 || '10' }}
+          REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2 || '30' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
           # Both the editor and consolidator share the prepared sandbox.
+          # Each prepare's stderr is also kept for "Post editor summary
+          # comment": a failed prepare skips the editor, and that step names
+          # the failure sandbox_prepare_failed instead of an empty editor.
+          sandbox_prepare_log="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/sandbox_prepare_stderr.txt"
           if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ] || [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]; then
-            if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude; then
+            if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude 2> >(tee -a "${sandbox_prepare_log}" >&2); then
               for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do
                 resolved="AI_ENGINE_RESOLVED_${role}"
                 if [ "${!resolved:-codex}" = "claude" ]; then
@@ -4628,10 +4791,10 @@ jobs:
                   echo "${resolved}=codex" >> "$GITHUB_ENV"
                 fi
               done
-              bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+              bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare 2> >(tee -a "${sandbox_prepare_log}" >&2)
             fi
           else
-            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare 2> >(tee -a "${sandbox_prepare_log}" >&2)
           fi
 
       - name: Switch reasoning effort for editor
@@ -4674,10 +4837,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
-          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_apply_fixes.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_apply_fixes.sh"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_apply_fixes_editor.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_apply_fixes_editor.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_apply_fixes.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Apply fixes with editor model'."
+            echo "::error::review_autofix_step_apply_fixes_editor.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Apply fixes with editor model'."
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -4707,55 +4870,13 @@ jobs:
       - name: Decide partial-finalize validation/push safety
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         run: |
-          set -euo pipefail
-
-          validation_tail_can_complete="true"
-          edits_withheld_for_safety="false"
-          withheld_reason="none"
-
-          if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then
-            workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"
-            if [ ! -f "${workflow_timeout_source_path}" ]; then
-              workflow_timeout_source_path=".github/workflows/review_autofix.yml"
-            fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
-              job_timeout_minutes="240"
-              resolver_timeout_minutes="170"
-            fi
-            # Requiring a full resolver window plus 10 minutes of
-            # smoke/detect/push slack keeps the partial-publish path inside the
-            # workflow's existing validation envelope instead of publishing
-            # edits that the current run cannot fully re-validate before the
-            # hard timeout.
-            job_timeout_total_secs=$(( job_timeout_minutes * 60 ))
-            partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))
-            now_epoch="$(date +%s)"
-            budget_start_epoch="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
-            hard_timeout_remaining_secs=0
-
-            if [[ "${budget_start_epoch}" =~ ^[0-9]+$ ]] && [ "${budget_start_epoch}" -gt 0 ] && [ "${now_epoch}" -ge "${budget_start_epoch}" ]; then
-              job_deadline_epoch=$(( budget_start_epoch + job_timeout_total_secs ))
-              hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))
-              if [ "${hard_timeout_remaining_secs}" -lt 0 ]; then
-                hard_timeout_remaining_secs=0
-              fi
-            fi
-
-            if [ "${hard_timeout_remaining_secs}" -lt "${partial_finalize_validation_minimum_secs}" ]; then
-              validation_tail_can_complete="false"
-              edits_withheld_for_safety="true"
-              withheld_reason="insufficient_budget_for_validation_tail"
-              echo "Partial finalize publish-safety gate: findings-only fallback (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
-            else
-              echo "Partial finalize publish-safety gate: validated tail remains available (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize_safety.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize_safety.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_partial_finalize_safety.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Decide partial-finalize validation/push safety'."
+            exit 1
           fi
-
-          {
-            echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"
-            echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"
-            echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
-          } >> "$GITHUB_ENV"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -4858,17 +4979,188 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}
-          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
-          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
-          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
+          SANDBOX_PREPARE_STEP_OUTCOME: ${{ steps.deps_prepare.outcome }}
         run: |
-          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
-          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_post_editor_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post editor summary comment'."
+          set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # Empty-editor-output short-circuit.
+          #
+          # If the editor produced no structured summary AND no file
+          # changes were committed, this run has nothing meaningful to
+          # report — the synthetic fallback summary (below) would be a
+          # false positive that masks a codex crash/timeout/empty-prompt.
+          # Post a distinct, retry-friendly comment, signal the
+          # failure handlers to NOT apply ai:review-blocked for this
+          # specific cause, and fail the step so the stall poller can
+          # retry the review later instead of poisoning the linked
+          # issue with an unrecoverable label.
+          if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
+            echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            # A failed reviewer step skips the editor, so its empty output is
+            # only the symptom (PR #4323: every reviewer slot and the
+            # summariser exited 226 and the run was reported as
+            # editor_empty_noop). Name the earliest failing phase and keep the
+            # slot / summariser exit codes as evidence; the retry handling
+            # below is unchanged.
+            autofix_empty_failure_reason="editor_empty_noop"
+            noop_explanation="The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR."
+            if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then
+              autofix_empty_failure_reason="reviewers_failed"
+              noop_explanation="The reviewer stage failed, so the editor never ran and no file changes were committed. The reviewer and summariser exit codes are in the workflow run log."
+              echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
+              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+                reviewers_failure_log_args=()
+                for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
+                  [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
+                done
+                PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
+                  > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
+                echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
+              fi
+            elif [ "${SANDBOX_PREPARE_STEP_OUTCOME:-}" = "failure" ]; then
+              # The review sandbox could not be prepared (PR #6645: Docker
+              # Hub answered 500/504 on the base image), so the editor never
+              # ran. Name that phase and keep its last error line as evidence.
+              autofix_empty_failure_reason="sandbox_prepare_failed"
+              echo "AUTOFIX_SANDBOX_PREPARE_FAILED=true" >> "$GITHUB_ENV"
+              if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+                sandbox_prepare_last_error="$(grep -E '^(#[0-9]+ )?(::error::|ERROR:? )' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 | sed -E 's/^#[0-9]+ //; s/^::error:://; s/^ERROR:? //' | tr -d '\r' | cut -c1-300 || true)"
+                {
+                  echo "sandbox_prepare_failed=true"
+                  grep -E '^REVIEW_SANDBOX_BUILD .*outcome=fail' "${RUNTIME_DIR}/sandbox_prepare_stderr.txt" 2>/dev/null | tail -n 1 || true
+                  if [ -n "${sandbox_prepare_last_error}" ]; then
+                    printf '::error::Review sandbox prepare failed: %s\n' "${sandbox_prepare_last_error}"
+                  else
+                    echo "::error::Review sandbox prepare failed"
+                  fi
+                } > "${RUNTIME_DIR}/sandbox_prepare_failure_evidence.txt"
+              fi
+              sandbox_prepare_headline=""
+              if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+                sandbox_prepare_headline="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
+                  --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
+              fi
+              noop_explanation="The review sandbox could not be prepared (step \"Install project dependencies\"), so the editor never ran and no file changes were committed. ${sandbox_prepare_headline:-The prepare error is in the workflow run log.}"
+              echo "AUTOFIX_SANDBOX_PREPARE_FAILED reason=sandbox_prepare_failed error_present=$([ -n "${sandbox_prepare_headline}" ] && echo 1 || echo 0)"
+            fi
+            # Model-provider outage (issue #6633): a live probe confirms the
+            # log evidence, so the reason is provider_unavailable (no cap
+            # count, no label, one repo-wide tracker). Fail-open.
+            if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py" ]; then
+              provider_outage_log_args=()
+              for provider_outage_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log "${RUNTIME_DIR}/reviewers_failure_evidence.txt" "${RUNTIME_DIR}/editor_stage_stderr.txt" "${RUNTIME_DIR}/collect_metadata_stderr.txt" "${RUNTIME_DIR}/resolver_stage_stderr.txt"; do
+                [ -f "${provider_outage_log}" ] && provider_outage_log_args+=(--log-file "${provider_outage_log}")
+              done
+              if [ "${#provider_outage_log_args[@]}" -gt 0 ]; then
+                provider_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR}/provider_outage_probe.json" "${provider_outage_log_args[@]}" 2>/dev/null | head -n 1 || true)"
+                if [[ "${provider_outage_class}" == reason=provider_unavailable* ]]; then
+                  provider_outage_status="$(printf '%s\n' "${provider_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
+                  autofix_empty_failure_reason="provider_unavailable"
+                  noop_explanation="The model provider failed (status ${provider_outage_status:-unknown}, confirmed by a live probe). This is a repo-wide outage tracked on the ai:provider-outage issue, not a defect in this PR, and it does not count toward the identical-failure cap; review resumes automatically when the provider recovers."
+                  { echo "AUTOFIX_FAILURE_REASON=provider_unavailable"; echo "AUTOFIX_PROVIDER_STATUS=${provider_outage_status:-unknown}"; } >> "$GITHUB_ENV"
+                fi
+              fi
+            fi
+            # review-autofix-failure:v1 marker for the gate's identical-failure
+            # fingerprint cap. Same evidence files and reason precedence as
+            # "Assemble failure evidence", so every failure comment of one run
+            # carries one fingerprint. Empty when the helper is unavailable.
+            AUTOFIX_FAILURE_MARKER_SUFFIX=""
+            if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+              autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+                --failure-reason "${autofix_empty_failure_reason}" \
+                --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+                --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+                --support-sha "${REVIEW_SUPPORT_SHA:-}" \
+                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+              if [ -n "${autofix_failure_marker_line}" ]; then
+                AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
+              fi
+            fi
+            NOOP_BODY="$(cat <<EOF
+          **AI review/autofix produced no output — will retry**
+
+          ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
+
+          [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
+          EOF
+          )"
+            if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then
+              NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"
+            fi
+            NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
+            echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
             exit 1
           fi
-          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
+          if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
+            cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+          Changes made:
+          - none (no editor summary output was generated)
+
+          Already satisfied (suggested but already present):
+          - none (no editor summary output was generated)
+
+          Ignored suggestions (with short reason):
+          - no summary available from editor stage
+
+          Reviewer files processed:
+          - none (no editor summary output was generated)
+
+          Review file issue audit:
+          - none (no editor summary output was generated)
+
+          Regression fingerprint:
+          - unavailable (editor fallback)
+
+          Runtime failure path:
+          - unavailable (editor fallback)
+          __EDITOR_SUMMARY__
+          fi
+
+          {
+            echo "AI autofix editor summary"
+            echo
+            cat "${EDITOR_SUMMARY_FILE}"
+            echo
+            echo "Files changed / commit status:"
+            if [ -s "${COMMITTED_FILES_FILE}" ]; then
+              cat "${COMMITTED_FILES_FILE}"
+            else
+              echo "- none"
+            fi
+            echo
+          } > "${PR_EDITOR_COMMENT_FILE}"
+
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          if gh_retry gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
+            echo "Posted editor summary comment."
+            # Signal to the failure-comment step (line ~3269) that the
+            # editor summary already landed on the PR thread. The generic
+            # "AI review/autofix failed" body speculates about editor /
+            # dependency / infra failure modes and would contradict the
+            # success-looking summary above when the editor in fact ran
+            # to completion and a later step (push, conflict resolver,
+            # auto-merge config, telemetry) is what actually failed.
+            # Set only on a successful post; on retry exhaustion the
+            # editor summary is not visible to the reader, so the
+            # generic body is the right thing to post. See PR #1476
+            # follow-up for the contradictory-comment regression this
+            # signal resolves.
+            echo "EDITOR_SUMMARY_POSTED=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Unable to post editor summary comment after retries."
+          fi
 
       - name: Clear Serena after editor
         if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -4905,7 +5197,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.AUTOFIX_UPDATER_COMMIT_WITHHELD != 'true'"
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_uncommitted_changes.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_uncommitted_changes.sh"
@@ -4962,15 +5254,17 @@ jobs:
         # reviewer-phase partial finalizes retain the existing skip behavior.
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'"
         run: |
-          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_validate_editor_noop.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_validate_editor_noop.sh"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_noop_disposition.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_disposition.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::error::review_autofix_step_validate_editor_noop.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Validate editor no-op disposition'."
+            echo "::error::review_autofix_step_editor_noop_disposition.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Validate editor no-op disposition'."
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Detect merge conflicts
+        # Skipped on force_rb_judge runs after a trusted same-head host-only
+        # resolver refusal (#6743, #6733): the resolver would refuse again.
         # The pre-review gate above only short-circuits deterministic stale/
         # structurally-unmergeable cases before reviewer spend. This late step
         # remains the authoritative MERGE_CONFLICT + resolver entry point for
@@ -5001,7 +5295,7 @@ jobs:
         # conflict sweep re-dispatched a no-op run every tick. The editor and
         # "Commit changes" still skip on terminal resume, so the only commit a
         # terminal run can push is a resolved merge.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -5034,7 +5328,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # Kill switch for deterministic resolution of conflicts on the generated
@@ -5043,6 +5337,13 @@ jobs:
           # Default true; set the repo var to 'false' to route manifest
           # conflicts back through the Codex resolver.
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
+          # Kill switch for host-side resolution of host-only conflicted paths
+          # (issue #6748, scripts/review_conflict_prepare.sh). Default true;
+          # 'false' keeps the pre-#6748 manual-merge failure.
+          HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED: ${{ vars.HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED || 'true' }}
+          # Keep the PR's copy of a changelog.d / agents.d fragment that the
+          # base branch folded and deleted (modify/delete, #7130).
+          CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED: ${{ vars.CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
@@ -5074,7 +5375,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -5245,8 +5546,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # CONFLICT_RESOLVED_ALERT_LEVEL is a step-scoped override for this
           # one ping (same pattern as PR_PROCESSED_ALERT_LEVEL); it falls back
-          # to the global ALERT_MSG_LEVEL, then DEBUG.
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          # to the global ALERT_MSG_LEVEL, then WARNING (which filters this
+          # DEBUG ping by default).
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -5326,8 +5628,11 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
@@ -5375,7 +5680,7 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #${issue_number}."
             }
@@ -5386,7 +5691,7 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #${issue_number}."
             }
@@ -5501,8 +5806,11 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # Single-issue security pass settings, the same as the
@@ -5533,22 +5841,42 @@ jobs:
           #            poller's dispatch_rb_judge rung can recover from
           #            on a later cycle).
           _judge_exit=0
-          bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
+          # Judge output is also kept so a failure is named an outage only
+          # on provider-error evidence plus a failing probe (issue #6633).
+          rb_judge_log="${RUNTIME_DIR:-/tmp}/rb_judge_output.log"
+          { bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" 2>&1 | { tee -a "${rb_judge_log}" || true; }; } || _judge_exit=$?
           if [ "${_judge_exit}" -eq 2 ]; then
             echo "::warning::review_rb_judge.sh exited 2 (syntax error) — retrying once after 5 s"
             sleep 5
             _judge_exit=0
-            bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
+            { bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" 2>&1 | { tee -a "${rb_judge_log}" || true; }; } || _judge_exit=$?
           fi
           if [ "${_judge_exit}" -eq 42 ]; then
             echo "::error::Security-pass extension marker was not published; refusing the deferred push of the judge fix."
             exit 1
+          fi
+          # The judge also reports a failed model call as exit 0 with
+          # judge_skip_reason=llm_failed / json_parse_failed (issue #6633).
+          rb_judge_skip_reason=""
+          if [ "${_judge_exit}" -eq 0 ] && [ -f "${GITHUB_OUTPUT:-}" ]; then
+            rb_judge_skip_reason="$(grep -E '^judge_skip_reason=' "${GITHUB_OUTPUT}" | tail -n 1 | cut -d= -f2- || true)"
           fi
           if [ "${_judge_exit}" -ne 0 ]; then
             echo "::warning::review_rb_judge.sh exited ${_judge_exit} — degrading to ai:review-blocked recovery path"
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
           else
             echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
+          fi
+          # Issue #6633: a failed judge during a provider outage still gets
+          # the label below, marked so the outage resume can remove it.
+          if { [ "${_judge_exit}" -ne 0 ] || [ "${rb_judge_skip_reason}" = "llm_failed" ] || [ "${rb_judge_skip_reason}" = "json_parse_failed" ]; } \
+            && [ -f "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" ] && [ -f "${rb_judge_log}" ]; then
+            rb_judge_outage_class="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/provider_outage.py" classify --probe-cache "${RUNTIME_DIR:-/tmp}/provider_outage_probe.json" --log-file "${rb_judge_log}" 2>/dev/null | head -n 1 || true)"
+            if [[ "${rb_judge_outage_class}" == reason=provider_unavailable* ]]; then
+              # The status reaches the tracker alert (issue #6633).
+              rb_judge_outage_status="$(printf '%s\n' "${rb_judge_outage_class}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p' | head -n 1)"
+              { echo "rb_judge_provider_unavailable=true"; echo "rb_judge_provider_status=${rb_judge_outage_status:-unknown}"; } >> "$GITHUB_OUTPUT"
+            fi
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
         if: "(success() || steps.rb_judge.outputs.rb_judge_status == 'failed') && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
@@ -5585,7 +5913,7 @@ jobs:
                 local target_label="$2"
                 local repo="$3"
                 ensure_label_exists "${target_label}" "${repo}" || true
-                gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                   -f "labels[]=${target_label}" >/dev/null 2>&1 \
                   || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
               }
@@ -5597,7 +5925,7 @@ jobs:
               local target_label="$2"
               local repo="$3"
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 \
                 || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
             }
@@ -5634,12 +5962,45 @@ jobs:
             set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
 
+      - name: Mark outage-caused review-blocked labels (autofix exhaustion)
+        # Issue #6633: the judge failed because the model provider is down.
+        # Mark the labels just applied so the outage resume removes them, and
+        # record the repo-wide tracker.
+        if: "(success() || steps.rb_judge.outputs.rb_judge_status == 'failed') && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && steps.rb_judge.outputs.rb_judge_provider_unavailable == 'true'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          RB_JUDGE_PROVIDER_STATUS: ${{ steps.rb_judge.outputs.rb_judge_provider_status }}
+        run: |
+          set -uo pipefail
+          helper="${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py"
+          [ -f "${helper}" ] || { echo "PROVIDER_OUTAGE op=mark_label outcome=skip reason=helper_missing"; exit 0; }
+          outage_status="${RB_JUDGE_PROVIDER_STATUS:-unknown}"
+          [[ "${outage_status}" =~ ^[a-z0-9_]{1,20}$ ]] || outage_status="unknown"
+          items="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
+          [ -n "${items}" ] || items="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          [ -n "${items}" ] || items="${PR_NUMBER}"
+          while IFS= read -r item; do
+            [[ "${item}" =~ ^[0-9]+$ ]] || continue
+            PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" mark-label --repo "${REPOSITORY}" --item "${item}" --pr "${PR_NUMBER}" --head "${AUTOFIX_FAILURE_HEAD_SHA:-}" --run "${GITHUB_RUN_ID:-}" || true
+          done <<< "${items}"
+          alert_file="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" open --repo "${REPOSITORY}" --kind outage --provider openrouter --status "${outage_status}" --alert-out "${alert_file}" || true
+          if [ -s "${alert_file}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+            tg_send_msg "$(cat "${alert_file}")" "CRITICAL" >/dev/null || true
+          fi
+          rm -f -- "${alert_file}"
       - name: Force orchestrate poll after review-blocked exhaustion
         # Best-effort re-poke of the orchestrator poll. Its failure must never
         # turn the AI Review check red — this is a notification/recovery hook,
         # not a gate. (orchestrate_force_tick.sh runs under set -euo pipefail.)
         continue-on-error: true
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && steps.rb_judge.outputs.rb_judge_provider_unavailable != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5698,6 +6059,16 @@ jobs:
         run: |
           set -euo pipefail
           export LANG=C
+
+          # Consumer-updater PRs (#7004): only update_workflows.yml writes these
+          # branches and only its verify job may merge them. A review push
+          # (editor, [ai-merge-resolve]) would land an unverified head.
+          if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+            echo "AUTOFIX_PUSH_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+            echo "DID_COMMIT=false" >> "$GITHUB_ENV"
+            echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
           # Pre-push stale-base gate.  Soft-exit 0 if the remote tip
           # advanced past INITIAL_HEAD_SHA with a non-autofix commit
@@ -6033,6 +6404,7 @@ jobs:
             autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
               --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6052,7 +6424,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
           elif [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; then
             echo "Editor changes lost re-dispatch skipped; peer run already in flight."
           else
@@ -6097,7 +6469,7 @@ jobs:
               MSG+="PR: ${PR_URL}"
               MSG+=$'\n'
               MSG+="Run: ${RUN_URL}"
-              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
             fi
           fi
 
@@ -6123,6 +6495,7 @@ jobs:
             autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
               --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+              --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
               --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
@@ -6162,7 +6535,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor model returned a safety-policy refusal (safety filter), so no fix was applied this pass."
             BODY+=$'\n\n'
@@ -6213,7 +6586,7 @@ jobs:
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
             BODY+=$'\n\n'
@@ -6227,12 +6600,15 @@ jobs:
             MSG+=$'\n'
             MSG+="Editor claimed no changes needed but disposition could not be verified."
             MSG+=$'\n'
-            MSG+="Auto-merge blocked. Manual review or re-run required."
+            MSG+="Auto-merge blocked. The no-op recovery sweep re-dispatches the review automatically."
             MSG+=$'\n'
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+            # DEBUG for all three no-op branches: the orchestrator's no-op
+            # recovery sweep (or, for orchestrator sub-issue PRs, the stall
+            # ladder) re-dispatches; its force-merge gate failures page once.
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
             BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
             BODY+=$'\n\n'
@@ -6244,7 +6620,7 @@ jobs:
           fi
 
       - name: Telegram review-blocked judge decision
-        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && steps.rb_judge.outputs.rb_judge_provider_unavailable != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -6252,8 +6628,10 @@ jobs:
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
+          JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6265,6 +6643,10 @@ jobs:
           if [ -n "${ISSUE_NUM}" ]; then
             ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
           fi
+          # CRITICAL pages a human. Outcomes the pipeline finishes or retries
+          # on its own (judge merged/fixed/re-issued, stall recovery retries,
+          # conflict resolver re-dispatch) are DEBUG.
+          JUDGE_ALERT_LEVEL="CRITICAL"
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               approval_pending)
@@ -6292,11 +6674,47 @@ jobs:
                 HOLD_REASON="${JUDGE_SKIP_REASON#security_hold_}"
                 MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")" ;;
               merge)
-                MSG="Review-blocked judge merged PR as-is" ;;
+                # judge_merge_status (scripts/review_rb_judge.sh) says whether
+                # the merge went through. Only finished or self-retrying
+                # outcomes are DEBUG; a failed merge, failing required checks,
+                # ENABLE_AUTO_MERGE=false or an unknown status still pages.
+                MSG="$(printf 'Review-blocked judge approved PR as-is, but the merge did not go through (status: %s)\nNeeds merge investigation' "${JUDGE_MERGE_STATUS:-unknown}")"
+                if [ "${JUDGE_MERGE_STATUS}" = "merge_requested" ] || [ "${JUDGE_MERGE_STATUS}" = "already_merged" ]; then
+                  MSG="Review-blocked judge merged PR as-is (or enabled auto-merge)"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "ready_to_merge" ]; then
+                  MSG="Review-blocked judge approved PR as-is; linked issues moved to ai:ready-to-merge"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "deferred_base_moved" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; base moved under its files, branch update requested\nThe synchronize run re-validates automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "checks_not_ready" ] || [ "${JUDGE_MERGE_STATUS}" = "mergeability_pending" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; merge waits for checks or mergeability (%s)\nStall recovery will retry automatically' "${JUDGE_MERGE_STATUS}")"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "merge_conflict" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but it has merge conflicts\nThe conflict resolver is re-dispatched automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "checks_failed" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nNeeds a CI fix before the merge')"
+                elif [ "${JUDGE_MERGE_STATUS}" = "manual_merge_required" ]; then
+                  MSG="$(printf 'Review-blocked judge approved PR as-is; ENABLE_AUTO_MERGE=false\nManual merge required')"
+                fi ;;
               fix)
-                MSG="Review-blocked judge pushed fix commit" ;;
+                MSG="Review-blocked judge pushed fix commit"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               close_and_reissue)
-                MSG="Review-blocked judge closed PR and created replacement issue" ;;
+                # A closed PR without a replacement issue leaves the work
+                # untracked: that pages.
+                MSG="$(printf 'Review-blocked judge closed PR but could not create the replacement issue\nNeeds a replacement issue for the remaining work')"
+                if [ "${JUDGE_REISSUE_CREATED}" = "true" ]; then
+                  MSG="Review-blocked judge closed PR and created replacement issue"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                fi ;;
+              merge_with_followup)
+                # Merged, and the follow-up issue was created for the
+                # pipeline to implement: nothing left for a person.
+                MSG="Review-blocked judge merged PR and created a follow-up issue"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               *)
                 MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
             esac
@@ -6309,19 +6727,32 @@ jobs:
               missing_followup_details)
                 MSG="$(printf 'PR review blocked — judge selected merge_with_followup but omitted follow-up details\nNeeds judge retry or manual follow-up issue creation')" ;;
               unresolved_head_sha)
-                MSG="$(printf 'PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               check_runs_query_failed)
-                MSG="$(printf 'PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               blocking_check_runs)
-                MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              base_moved_overlap)
+                # review_rb_judge.sh requested a branch update; its
+                # synchronize run re-validates the PR without a person.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               sync_merge_failed)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;
               auto_merge_disabled)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but ENABLE_AUTO_MERGE=false\nManual merge required before follow-up creation')" ;;
               merge_conflict)
-                MSG="$(printf 'PR review blocked — PR has merge conflicts\nNeeds rebase or conflict resolution')" ;;
+                MSG="$(printf 'PR review blocked — PR has merge conflicts\nThe conflict resolver is re-dispatched automatically')"
+                # The orchestrator's review-blocked loop and the standalone
+                # conflict sweep re-dispatch the resolver; the sweep pages once
+                # when a head stays conflicted (STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS).
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               mergeability_pending)
-                MSG="$(printf 'PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically')" ;;
+                MSG="$(printf 'PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               followup_issue_create_failed)
                 MSG="$(printf 'PR review blocked — PR merged but follow-up issue creation failed\nNeeds follow-up issue creation or retry')" ;;
               llm_failed_critical_issues|json_parse_failed_critical_issues)
@@ -6336,7 +6767,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
 
       - name: Check PR state before failure alerts
         if: failure() && env.PR_CLOSED != 'true'
@@ -6371,122 +6802,47 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          set -uo pipefail
-          # Name the failure for the PR comment (fail-open): the job's first
-          # failed step, from one jobs-API call (CLAUDE.md §15), and the first
-          # specific ::error:: line of the captured stage stderr, redacted.
-          failed_step="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs?per_page=100" \
-            --jq '[.jobs[] | select(.runner_name == env.RUNNER_NAME) | .steps[] | select(.conclusion == "failure") | .name][0] // empty' 2>/dev/null | head -n 1 | tr -d '\r' | cut -c1-200 || true)"
-          echo "AUTOFIX_FAILED_STEP=${failed_step}" >> "$GITHUB_ENV"
-          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-            first_error="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
-              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
-            echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"
-          fi
-          echo "AUTOFIX_FAILURE_HEADLINE step=${failed_step:-unknown} first_error_present=$([ -n "${first_error:-}" ] && echo 1 || echo 0)"
-          if [ -z "${AUTOFIX_FAILURE_HEAL_PY:-}" ] || [ ! -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-            echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
-            echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_assemble_failure_evidence.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_assemble_failure_evidence.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_assemble_failure_evidence.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Assemble failure evidence' (fail open)."
             exit 0
           fi
-          evidence_out=""
-          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
-            evidence_out="${RUNTIME_DIR}/failure_evidence_tail.txt"
-          fi
-          fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
-            --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-            --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
-            --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
-            --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
-            --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
-            --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-            --evidence-out "${evidence_out}" \
-            --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
-            --support-sha "${REVIEW_SUPPORT_SHA:-}" \
-            --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
-          failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
-          failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"
-          failure_reason="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^reason=//p' | head -n 1)"
-          failure_marker="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1)"
-          if ! [[ "${failure_fp}" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
-            echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_failed"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
+      - name: Record model-provider outage
+        # Issue #6633: one repo-wide ai:provider-outage tracker and one alert
+        # instead of a per-PR failure; the scheduled sweep resumes on recovery.
+        if: always() && env.AUTOFIX_FAILURE_REASON == 'provider_unavailable' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_provider_outage_record.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_provider_outage_record.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_provider_outage_record.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record model-provider outage' (fail open)."
             exit 0
           fi
-          {
-            echo "AUTOFIX_FAILURE_FP=${failure_fp}"
-            echo "AUTOFIX_FAILURE_REASON=${failure_reason}"
-            echo "AUTOFIX_FAILURE_MARKER=${failure_marker}"
-          } >> "$GITHUB_ENV"
-          echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
-            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_review_blocked_workflow_failure.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_mark_review_blocked_workflow_failure.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues review-blocked (workflow failure)'."
+            exit 1
           fi
-          if ! type ensure_label_exists >/dev/null 2>&1; then
-            ensure_label_exists() {
-              local label_name="$1"
-              local repo="$2"
-              gh_retry gh label create "${label_name}" --repo "${repo}" \
-                --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
-                2>/dev/null || true
-            }
-          fi
-          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
-            set_issue_phase_label_resilient() {
-              local issue_number="$1"
-              local target_label="$2"
-              local repo="$3"
-              ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                -f "labels[]=${target_label}" >/dev/null 2>&1 \
-                || echo "::warning::Fallback label add failed for #${issue_number}."
-            }
-          fi
-
-          ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
-
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
-          fi
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
-          fi
-
-          while IFS= read -r issue_number; do
-            [ -n "${issue_number}" ] || continue
-            echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
-          done <<< "${ISSUE_NUMBERS}"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Force orchestrate poll after workflow failure review-blocked label
         # Best-effort re-poke of the orchestrator poll on the failure path.
@@ -6494,7 +6850,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -6522,67 +6878,24 @@ jobs:
         if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEW_FAILURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          # Pick a body variant that doesn't contradict an editor
-          # summary comment when one was already posted.
-          # EDITOR_SUMMARY_POSTED=true only guarantees the summary
-          # comment is visible on the PR thread; it does not by
-          # itself prove editor execution succeeded (fallback summaries
-          # can also be posted). Keep this branch wording limited to
-          # that invariant.
-          if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
-            BODY="$(cat <<EOF
-          **AI review/autofix encountered a post-editor failure — needs human intervention**
-
-          An editor summary comment is visible above, but a downstream stage still failed before completion. Possible failure domains include push, conflict resolver, label/auto-merge, or telemetry plumbing.
-
-          [View workflow run](${RUN_URL}) for details.
-
-          Linked issues have been labeled \`ai:review-blocked\`.
-          EOF
-          )"
-          else
-            BODY="$(cat <<EOF
-          **AI review/autofix failed — needs human intervention**
-
-          The review/autofix workflow encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue.
-
-          [View workflow run](${RUN_URL}) for details.
-
-          Linked issues have been labeled \`ai:review-blocked\`.
-          EOF
-          )"
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_failure_comment.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_failure_comment.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_failure_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post review-blocked comment on PR (workflow failure)'."
+            exit 1
           fi
-          # Name what failed ("Assemble failure evidence"): the failed step and
-          # its first specific error line, so the cause is readable from the PR.
-          if [ -n "${AUTOFIX_FAILED_STEP:-}" ] || [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then
-            BODY+=$'\n'
-            if [ -n "${AUTOFIX_FAILED_STEP:-}" ]; then
-              BODY+=$'\n'"**Failed step:** \`${AUTOFIX_FAILED_STEP//\`/\'}\`"
-            fi
-            if [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then
-              BODY+=$'\n'"**First error:** \`${AUTOFIX_FAILURE_FIRST_ERROR//\`/\'}\`"
-            fi
-          fi
-          # review-autofix-failure:v1 marker ("Assemble failure evidence").
-          if [ -n "${AUTOFIX_FAILURE_MARKER:-}" ]; then
-            BODY+=$'\n\n'"${AUTOFIX_FAILURE_MARKER}"
-          fi
-
-          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Telegram failure
-        if: failure() && env.PR_CLOSED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -6605,7 +6918,11 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_phase_failure review_autofix "${MSG}" "ERROR" "${PR_NUMBER}"
+          # DEBUG: the failure steps above label linked issues
+          # ai:review-blocked, poke the orchestrator and file a heal report;
+          # the review-blocked judge, the stall ladder and workflow heal page
+          # when a person is needed.
+          tg_send_phase_failure review_autofix "${MSG}" "DEBUG" "${PR_NUMBER}"
 
       - name: Record review run completion in memory (fail-open)
         if: success()
@@ -6671,106 +6988,13 @@ jobs:
         # editor-changes-lost" alerts.
         if: always() && env.RUNTIME_DIR != '' && (failure() || cancelled() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')
         run: |
-          set -euo pipefail
-          # Stage everything under RUNNER_TEMP so the Cleanup step
-          # below cannot race the upload — it rm -rf's RUNTIME_DIR.
-          # The upload step's path: glob is also more predictable when
-          # rooted at a single dir we own.
-          STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-review-autofix-failure-logs"
-          rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}/runtime" "${STAGE_DIR}/previous_reviews" "${STAGE_DIR}/codex-home-log"
-
-          if [ -d "${RUNTIME_DIR:-}" ]; then
-            # Top-level prompts, summaries, and diagnostic context. The
-            # editor_* and conflict_resolver_* files are the codex stdout
-            # / synthesised summaries; floor_tags / review_issues /
-            # ledger_status / consolidator_raw / parser_stats are the
-            # advisory editor inputs declared at the top of
-            # scripts/review_apply_fixes.sh — without them a cold post-
-            # mortem can't tell whether bad consolidator/parser output
-            # was the upstream cause of an empty editor turn.
-            # pr_check_runs_context.txt and reviewer_consensus.txt let
-            # us reconstruct what context the editor saw without re-
-            # fetching from the API. summariser_{pass1,review}.log hold
-            # each consensus-summariser attempt's stderr tail (issue
-            # #4653: exit 0 with empty stdout had no uploaded trace).
-            for f in editor_summary.txt editor_prompt.txt editor_prompt_body.txt \
-                     pr_editor_comment.txt reviewer_consensus.txt \
-                     reviewer_prompt.txt reviewer_prompt_body.txt \
-                     reviewer_prompt_pass1.txt reviewer_prompt_pass2.txt \
-                     cross_pollination_summary.txt \
-                     reviewer_bundle.txt reviewer_manifest.txt \
-                     conflict_resolver_summary.txt conflict_resolver_prompt.txt \
-                     committed_files.txt pr_check_runs_context.txt \
-                     pr_meta.json pr_all_comments_context.txt \
-                     linked_issue_context.txt memory_context.txt \
-                     pr_diff.patch original_pr_diff.patch \
-                     last_run_diff.patch last_run_changed_files.txt \
-                     pr_changed_files.txt last_commit_stat.txt \
-                     last_run_diff_stat.txt \
-                     symbol_diff_summary.txt \
-                     floor_tags.txt review_issues.txt ledger_status.txt \
-                     consolidator_raw.txt parser_stats.txt \
-                     summariser_pass1.log summariser_review.log; do
-              [ -f "${RUNTIME_DIR}/${f}" ] && \
-                cp -f "${RUNTIME_DIR}/${f}" "${STAGE_DIR}/runtime/${f}" || true
-            done
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_stage_codex_logs.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_stage_codex_logs.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_stage_codex_logs.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Stage codex logs for upload (failure or empty-editor)' (fail open)."
+            exit 0
           fi
-
-          # Per-attempt editor stdout / stderr — the primary signal for
-          # the empty-output failure. review_apply_fixes.sh writes
-          # editor_attempt_${attempt}.txt (codex stdout) and
-          # editor_attempt_${attempt}.err (codex stderr) for every retry,
-          # plus editor_attempt_${attempt}_changes_lost.txt when the
-          # claimed-changes-lost guard fires. The reviewer-side .log /
-          # .txt / status_* files plus pass1/pass2 two-pass logs and
-          # consensus_pass1.txt cover the reviewer-fanout failure modes
-          # (all written by review_run_reviewers.sh into
-          # PREVIOUS_REVIEWS_DIR — note: reviewers produce .log not
-          # .err, the .err extension is editor-only). Without these the
-          # only remaining trace of why a codex stage produced 0 bytes
-          # is the truncated stderr in the live job log.
-          if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
-            for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err \
-                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/review_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/review_*.log \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass1_*.log \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass2_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/pass2_*.log \
-                     "${PREVIOUS_REVIEWS_DIR}"/status_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/consensus_pass1.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/cache_probe_*.log; do
-              [ -f "${f}" ] && cp -f "${f}" "${STAGE_DIR}/previous_reviews/" || true
-            done
-          fi
-
-          # Codex CLI's own session log directory carries the raw
-          # OpenRouter wire trace (request/response bodies, finish_reason,
-          # tool-router rejections). The editor stage runs under the
-          # default ${CODEX_HOME:-$HOME/.codex}, which survives until
-          # this step. Reviewer-fanout and summariser stages run under
-          # ephemeral ${RUNNER_TEMP}/codex_home_{reviewers,summariser,
-          # consolidator,...} dirs that those scripts rm -rf themselves
-          # before this step runs (see review_run_reviewers.sh L816,
-          # L958, L970, L1019 and summarize_reviewer_consensus.sh L211
-          # trap), so this glob captures editor wire logs but NOT
-          # reviewer/summariser ones — those are reconstructed from the
-          # PREVIOUS_REVIEWS_DIR/.log files copied above. Preserving
-          # reviewer wire logs would require a script-side change
-          # (logged as a follow-up). Copy unconditionally with no
-          # mtime filter so multi-attempt failures don't lose the
-          # earliest session log to a sliding window; retention-days
-          # on the upload step bounds storage cost.
-          if [ -d "${CODEX_HOME:-$HOME/.codex}/log" ]; then
-            cp -rf "${CODEX_HOME:-$HOME/.codex}/log/." "${STAGE_DIR}/codex-home-log/" 2>/dev/null || true
-          fi
-
-          echo "CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR=${STAGE_DIR}" >> "$GITHUB_ENV"
-          echo "Staged $(find "${STAGE_DIR}" -type f | wc -l) file(s) for review_autofix failure-log upload."
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Upload codex logs (failure or empty-editor)
         if: always() && env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR != ''
@@ -6844,7 +7068,7 @@ jobs:
         # reported through the ai:resolver-escalated label path. Fail-open by
         # construction: the script always exits 0 and the step never blocks
         # cleanup.
-        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

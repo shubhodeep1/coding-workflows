@@ -478,11 +478,11 @@ def test_missing_engine_keeps_every_role_on_codex(tmp_path):
 
 def test_sandbox_prepare_follows_both_roles_with_an_opencode_fallback():
 	run = AGENT_STEPS["Install project dependencies (best-effort)"]["run"]
-	assert 'review_untrusted_sandbox.sh" prepare claude; then' in run
+	assert 'review_untrusted_sandbox.sh" prepare claude 2> >(tee -a "${sandbox_prepare_log}" >&2); then' in run
 	assert '[ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]' in run
 	assert 'for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do' in run
 	assert 'echo "${resolved}=codex" >> "$GITHUB_ENV"' in run
-	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare\n') == 2
+	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare 2> >(tee -a "${sandbox_prepare_log}" >&2)\n') == 2
 
 
 def test_engine_files_ride_the_optional_bootstrap():

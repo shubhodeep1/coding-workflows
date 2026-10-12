@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 SCRIPT = ROOT / "scripts" / "retarget_merged_base.sh"
 IMPLEMENT = ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW = ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -289,6 +291,7 @@ def test_verified_retarget_helper_identity_mismatch_fails_gate(tmp_path: Path) -
 
 
 def _steps(path: Path, job: str) -> dict[str, dict]:
+	# review_autofix.yml step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
 	text = expanded_review_autofix_text() if path == REVIEW else path.read_text(encoding="utf-8")
 	workflow = yaml.safe_load(text)
 	return {step.get("name", ""): step for step in workflow["jobs"][job]["steps"]}
