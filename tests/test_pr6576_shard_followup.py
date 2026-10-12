@@ -241,7 +241,11 @@ def test_rerun_uses_transferred_old_results_and_still_confirms_on_main(tmp_path)
 	assert "test_passes" not in results["main"]["flaky_on_main"]
 
 
-@pytest.mark.parametrize("old", [[], {"groups": "x"}, {"groups": [{"group": "g", "shards": []}]}, {"groups": [{"group": 0, "shards": [{"rc": "x", "tests": 1}]}]}])
+@pytest.mark.parametrize("old", [
+	[], {"groups": "x"}, {"groups": [{"group": "g", "shards": []}]}, {"groups": [{"group": 0, "shards": [{"rc": "x", "tests": 1}]}]},
+	{"groups": [{"group": 9, "shards": []}]}, {"groups": [{"group": 0, "shards": [{"rc": 10 ** 4000, "tests": 1}]}]},
+	{"groups": [{"group": 0, "shards": [{"rc": 1, "tests": -1}]}]},
+])
 def test_rerun_rejects_malformed_old_results(tmp_path, old):
 	main_dir = tmp_path / "main"
 	(main_dir / "tests").mkdir(parents=True)

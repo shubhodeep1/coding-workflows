@@ -396,10 +396,15 @@ def _clean_old_entry(entry: Any) -> dict[str, Any] | None:
 		return None
 	if not isinstance(entry, dict):
 		raise ValueError("old-head entry is not an object")
+	# Bound the integers: an oversized value from the untrusted runner could push
+	# the report past GitHub's comment size limit, so the marker never lands.
+	rc, tests = int(entry["rc"]), int(entry["tests"])
+	if not (-255 <= rc <= 255 and 0 <= tests <= 100000):
+		raise ValueError("old-head entry out of range")
 	return {
 		"label": _neutralize(entry.get("label"), 40),
-		"rc": int(entry["rc"]),
-		"tests": int(entry["tests"]),
+		"rc": rc,
+		"tests": tests,
 		"failed": _safe_names(entry.get("failed")),
 		"process_failure": entry.get("process_failure") is True,
 		"log": _neutralize(entry.get("log"), 60),
@@ -420,6 +425,8 @@ def clean_old_results(raw: Any) -> dict[str, Any]:
 	for group in raw["groups"][:GROUPS]:
 		if not isinstance(group, dict) or not isinstance(group.get("shards"), list):
 			raise ValueError("old-head group malformed")
+		if not 0 <= int(group["group"]) < GROUPS:
+			raise ValueError("old-head group out of range")
 		groups.append({"group": int(group["group"]), "shards": [_clean_old_entry(s) for s in group["shards"][:SHARDS] if s is not None]})
 	cleaned: dict[str, Any] = {
 		"groups": groups,
