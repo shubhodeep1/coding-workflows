@@ -52,6 +52,16 @@ REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # CommandExecutor default so the explicit cap and the budget math agree.
 DISCOVERY_CODEX_CALL_TIMEOUT_SECS = 300
 
+# `gh repo clone` attempts per consumer repo, and the waits between them.
+# A clone failure is an `error` outcome, which fails the runner and with it
+# the release smoke (`orphan-workflows-test`). One transient GitHub answer
+# must not do that: release run 38253656098 (2026-10-12) failed because a
+# single clone got "GraphQL: Something went wrong while executing your
+# query". A failure that persists through every attempt still reports
+# `error`.
+CLONE_ATTEMPTS = 3
+CLONE_RETRY_DELAYS_SECS = (5, 15)
+
 
 def _env_bool(name: str, default: bool) -> bool:
 	value = os.environ.get(name)
@@ -370,6 +380,26 @@ class ValidationRefreshRunner:
 		return "main", "default_branch_lookup_empty_fallback_main"
 
 	def _clone_repository(self, repository: str, repo_dir: Path) -> None:
+		"""Clone with up to CLONE_ATTEMPTS tries; re-raise the last failure.
+
+		Logs VALIDATION_REFRESH_CLONE_RETRY repository=<r> attempt=<n> max=<m>
+		returncode=<rc> delay_secs=<s> before each retry.
+		"""
+		for attempt in range(1, CLONE_ATTEMPTS + 1):
+			try:
+				self._clone_repository_once(repository, repo_dir)
+				return
+			except CommandFailure as exc:
+				if attempt >= CLONE_ATTEMPTS:
+					raise
+				delay = CLONE_RETRY_DELAYS_SECS[min(attempt - 1, len(CLONE_RETRY_DELAYS_SECS) - 1)]
+				print(
+					f"VALIDATION_REFRESH_CLONE_RETRY repository={repository} attempt={attempt} "
+					f"max={CLONE_ATTEMPTS} returncode={exc.returncode} delay_secs={delay}"
+				)
+				time.sleep(delay)
+
+	def _clone_repository_once(self, repository: str, repo_dir: Path) -> None:
 		if repo_dir.exists():
 			try:
 				shutil.rmtree(repo_dir)
