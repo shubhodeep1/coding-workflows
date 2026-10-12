@@ -299,6 +299,22 @@ def test_defect_body_marker_last_and_neutralised():
 	assert "Refs #7072" in body and "Refs #6576" in body
 
 
+def test_report_and_defect_body_stay_under_comment_limit_with_huge_name_lists():
+	# The rerun-old artifact is untrusted: thousands of valid names must not push
+	# the body past GitHub's limit, or the one-time marker never lands.
+	many = [f"test_{'x' * 150}_{i}" for i in range(3000)]
+	shard = {"label": "l", "rc": 1, "tests": 3000, "failed": many, "process_failure": False, "log": "l"}
+	old = {"groups": [{"group": g, "shards": [shard] * 4} for g in range(4)], "fast_fail": shard, "old_head_failures": many}
+	results = {**mod.clean_old_results(old), "source": "fallback", "head_sha": SHA}
+	results["main"] = {"attempts": [{"rc": 1, "failed": many, "process_failure": False}] * 2, "reproduced_on_main": many, "flaky_on_main": many, "absent_on_main": many, "excerpts": {}}
+	evidence = {**EVIDENCE, "source": "fallback", "names": many}
+	body = mod.build_report(results, evidence, "12")
+	assert len(body) < 65536 and body.splitlines()[0] == mod.MARKER
+	assert "more" in body
+	defect = mod.build_defect_body(results, evidence)
+	assert len(defect) < 65536 and defect.rstrip().splitlines()[-1] == mod.DEFECT_MARKER
+
+
 def test_file_defect_noop_without_reproduction(monkeypatch):
 	fake = FakeGh({})
 	_install(monkeypatch, fake)

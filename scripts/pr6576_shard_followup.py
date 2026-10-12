@@ -57,6 +57,11 @@ MAX_JOB_CALLS = 8
 MAX_LOGS = 4
 EXCERPT_LINES = 40
 EXCERPT_TOTAL_BYTES = 8000
+# Name lists come partly from the untrusted rerun-old artifact. Cap what one list
+# shows and the whole body so a POST never exceeds GitHub's 65,536-character
+# limit (a rejected report would leave the one-time marker unposted).
+MAX_NAMES_SHOWN = 10
+MAX_BODY_CHARS = 60000
 HEAL_SCRIPT = Path(__file__).resolve().parent / "workflow_failure_heal.py"
 
 
@@ -136,6 +141,20 @@ def _neutralize(text: Any, limit: int = 2000) -> str:
 	if len(value) > limit:
 		value = value[:limit] + "... [truncated]"
 	return value
+
+
+def _join_names(names: Any, quote: bool = False, limit: int = MAX_NAMES_SHOWN) -> str:
+	safe = _safe_names(names)
+	shown = [f"`{n}`" if quote else n for n in safe[:limit]]
+	if len(safe) > limit:
+		shown.append(f"... and {len(safe) - limit} more")
+	return ", ".join(shown)
+
+
+def _cap_body(body: str) -> str:
+	if len(body) <= MAX_BODY_CHARS:
+		return body
+	return body[:MAX_BODY_CHARS] + "\n\n... [truncated; the full result is in this run's results artifact]\n"
 
 
 def _safe_names(names: Any) -> list[str]:
@@ -533,7 +552,8 @@ def build_defect_body(results: dict[str, Any], evidence: dict[str, Any]) -> str:
 		"Found by the one-time PR #6576 `orchestrate-poll` follow-up (`.github/workflows/pr6576-shard-followup.yml`).",
 		"",
 		"Failing tests:",
-		*[f"- `{n}`" for n in names],
+		*[f"- `{n}`" for n in names[:MAX_NAMES_SHOWN * 5]],
+		*([f"- ... and {len(names) - MAX_NAMES_SHOWN * 5} more"] if len(names) > MAX_NAMES_SHOWN * 5 else []),
 		"",
 		"Evidence:",
 		*_source_links(evidence),
@@ -543,15 +563,15 @@ def build_defect_body(results: dict[str, Any], evidence: dict[str, Any]) -> str:
 		parts.append(f"- Follow-up run: {run_url}")
 	budget = EXCERPT_TOTAL_BYTES
 	excerpts = main.get("excerpts") or {}
-	for name in names:
+	for name in names[:MAX_NAMES_SHOWN]:
 		lines = excerpts.get(name) or []
 		if not lines or budget <= 0:
 			continue
 		text = _neutralize("\n".join(str(line) for line in lines[:EXCERPT_LINES]), budget)
 		budget -= len(text)
 		parts += ["", f"Log excerpt for `{name}` (main, attempt 1):", "```text", text, "```"]
-	parts += ["", "Refs #7072", "Refs #6576", "", DEFECT_MARKER]
-	return "\n".join(parts) + "\n"
+	head = _cap_body("\n".join(parts))
+	return head + "\n".join(["", "", "Refs #7072", "Refs #6576", "", DEFECT_MARKER]) + "\n"
 
 
 def file_defect(repo: str, results: dict[str, Any], evidence: dict[str, Any]) -> str:
@@ -606,32 +626,32 @@ def build_report(results: dict[str, Any], evidence: dict[str, Any], defect_issue
 	links = _source_links(evidence)
 	lines += ["", "Original CI jobs:", *(links or ["- none found"])]
 	if source == "log":
-		lines += ["", "Failing tests in the original log: " + (", ".join(f"`{n}`" for n in _safe_names(evidence.get("names"))) or "none")]
+		lines += ["", "Failing tests in the original log: " + (_join_names(evidence.get("names"), quote=True) or "none")]
 	else:
 		lines += ["", "| Group | Shard | Tests | Exit | Failed |", "| --- | --- | --- | --- | --- |"]
 		ff = results.get("fast_fail")
 		if ff:
-			lines.append(f"| 0 | fast-fail | {int(ff['tests'])} | {int(ff['rc'])} | {', '.join(_safe_names(ff['failed'])) or ('process failure' if ff['process_failure'] else '-')} |")
+			lines.append(f"| 0 | fast-fail | {int(ff['tests'])} | {int(ff['rc'])} | {_join_names(ff['failed']) or ('process failure' if ff['process_failure'] else '-')} |")
 		for group in results.get("groups") or []:
 			for shard_index, shard in enumerate(group.get("shards") or []):
-				failed = ", ".join(_safe_names(shard.get("failed"))) or ("process failure" if shard.get("process_failure") else "-")
+				failed = _join_names(shard.get("failed")) or ("process failure" if shard.get("process_failure") else "-")
 				lines.append(f"| {int(group['group'])} | {shard_index} | {int(shard['tests'])} | {int(shard['rc'])} | {failed} |")
 		if results.get("old_head_process_failure"):
 			lines.append("\nAt least one run at the recorded head failed without naming a test, so that part of the evidence is inconclusive.")
 	lines += ["", "Rerun on current `main` (two attempts):"]
 	for attempt_index, attempt in enumerate(main.get("attempts") or [], start=1):
-		failed = ", ".join(_safe_names(attempt.get("failed"))) or ("process failure" if attempt.get("process_failure") else "none")
+		failed = _join_names(attempt.get("failed")) or ("process failure" if attempt.get("process_failure") else "none")
 		lines.append(f"- Attempt {attempt_index}: exit {int(attempt.get('rc') or 0)}, failed: {failed}")
 	if not main.get("attempts"):
 		lines.append("- Nothing to rerun: no failing test names to confirm on main.")
 	for key, label in (("reproduced_on_main", "Reproduced on main"), ("flaky_on_main", "Failed once on main (flaky, not filed)"), ("absent_on_main", "Not defined on main")):
-		lines.append(f"- {label}: " + (", ".join(f"`{n}`" for n in _safe_names(main.get(key))) or "none"))
+		lines.append(f"- {label}: " + (_join_names(main.get(key), quote=True) or "none"))
 	lines.append("")
 	if defect_issue and defect_issue.isdigit():
 		lines.append(f"Reproduced defect filed as #{defect_issue}.")
 	else:
 		lines.append("No reproduced defect, so nothing was filed.")
-	return "\n".join(lines) + "\n"
+	return _cap_body("\n".join(lines) + "\n")
 
 
 def cmd_report(args: argparse.Namespace) -> int:
