@@ -1769,7 +1769,7 @@ class CheckFailureTriageIntegrationBranchTests(unittest.TestCase):
 				self.assertFalse(ready)
 
 	def test_flag_off_with_legacy_metadata_adds_no_line(self) -> None:
-		for flag, extra in ((None, {}), ("true", {}), (None, {"integration_branch": ""})):
+		for flag, extra in ((None, {}), ("true", {}), ("false", {}), (None, {"integration_branch": ""}), ("false", {"integration_branch": ""})):
 			with self.subTest(flag=flag, extra=extra):
 				proc, body, ready = _run_diagnose_stage(metadata_extra=extra, branch_flag=flag)
 				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
