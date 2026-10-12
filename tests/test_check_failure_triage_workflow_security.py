@@ -2090,6 +2090,8 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
+		# The unverified route is still reported (log + WARNING) on this exit.
+		self.assertIn("CHECK_TRIAGE skip reason=routing_unverified detail=sha_mismatch pr=17", proc.stdout)
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 
@@ -2157,6 +2159,9 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertIn('log "skip reason=routing_unverified detail=${routing_result}', script_text)
 		gate = script_text.split('log "skip reason=routing_unverified', 1)[1].split("exit 0", 1)[0]
 		self.assertIn('"WARNING"', gate)
+		# Base-gate skips (success and pending) also report an unverified route.
+		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
+		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 2)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" <<\'PY\'', script_text)
 		self.assertLess(script_text.index('log "skip reason=routing_unverified'), script_text.index("# --- Collect failing check-run context"))
 		triage_env = _workflow()["jobs"]["triage"]["env"]

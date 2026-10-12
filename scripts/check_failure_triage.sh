@@ -529,6 +529,13 @@ if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
 		ROUTING_REF="${routing_result}"
 	fi
 fi
+# Every exit that skips an unverified route (base-gate skips included) reports
+# it, so the operator always gets the routing_unverified log and WARNING.
+triage_report_routing_unverified()
+{
+	log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: PR-head routing could not be verified (detail: ${routing_result}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+}
 
 # --- Base-branch gate (#7020) ----------------------------------------------
 # The issue this script files is implemented as a new PR off the default
@@ -595,6 +602,9 @@ else
 	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
 	if [ "${base_gate_conclusion}" = "success" ]; then
 		log "skip reason=pr_specific_failure base=${BASE_REF} base_conclusion=success pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+			triage_report_routing_unverified
+		fi
 		exit 0
 	fi
 	# The base branch's newest run of this check is still in progress: its
@@ -606,6 +616,9 @@ else
 	# completes, because every PR then fails the same way.
 	if [ "${base_gate_conclusion}" = "pending" ]; then
 		log "skip reason=base_pending base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+			triage_report_routing_unverified
+		fi
 		exit 0
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
@@ -639,8 +652,7 @@ if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
 	if [ -n "${ROUTING_REF}" ]; then
 		log "routing=pr_head pr=${PR_NUMBER} ref=${ROUTING_REF}"
 	else
-		log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
-		tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: PR-head routing could not be verified (detail: ${routing_result}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		triage_report_routing_unverified
 		exit 0
 	fi
 fi
