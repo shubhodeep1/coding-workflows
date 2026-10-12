@@ -966,9 +966,14 @@ consumer repo whose default branch has another name is covered too. When
 neither `origin/HEAD` nor `git ls-remote --symref origin HEAD` names the
 default branch, it asks for every destination outside `claude/*`. What still
 passes without a prompt: `claude/x:release` (a non-default branch, checked
-only against its merged PR) and
+only against its merged PR), a short `heads/<name>` destination such as
+`claude/x:heads/main` (the hook compares it unexpanded), a push to a renamed
+default branch while the checkout's cached `origin/HEAD` still names the old
+one, and
 `--force-with-lease=claude/a:<sha> origin claude/b` (which leases a different
-branch from the one it overwrites). So push exactly one plain branch name, give
+branch from the one it overwrites). `CLAUDE_PR_MERGE_GUARD=off` turns these
+deletion and default-branch asks off together with the merged-PR check; the
+`settings.json` ask rules still apply. So push exactly one plain branch name, give
 `--force-with-lease=` the same branch as the destination, and never add a
 second refspec, a `+` refspec or a `src:dst` refspec to a push.
 
