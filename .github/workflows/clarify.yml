@@ -893,7 +893,7 @@ jobs:
           preseed_ref="$(awk 'toupper($1) == "FROM" { print $2; exit }' "${preseed_dockerfile}")"
           if ! [[ "${preseed_ref}" =~ ${preseed_ref_re} ]]; then
             preseed_safe_ref="$(preseed_sanitize "${preseed_ref}")"
-            echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_safe_ref:-none} outcome=skip reason=unsupported_ref"
+            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=${preseed_safe_ref:-none} outcome=skip reason=unsupported_ref"
             exit 0
           fi
 

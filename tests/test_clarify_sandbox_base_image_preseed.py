@@ -390,6 +390,19 @@ def test_unsupported_or_malicious_refs_are_skipped() -> None:
 		_with_sandbox(f"# fixture\nFROM {ref}\n", check)
 
 
+def test_missing_dockerfile_warns_and_skips() -> None:
+	def check(sb: Sandbox) -> None:
+		sb.dockerfile.unlink()
+		result = sb.run_step(good_mirrors="public.ecr.aws/docker/library")
+		assert result.returncode == 0, result.stderr
+		assert (
+			"::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=dockerfile_missing"
+		) in result.stdout
+		assert sb.log_lines() == [], sb.log_lines()
+
+	_with_sandbox(_real_dockerfile(), check)
+
+
 def test_isolated_run_build_does_not_force_pull() -> None:
 	"""The pre-seeded local image is only used while the build omits --pull."""
 	script = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
@@ -416,6 +429,7 @@ def main() -> int:
 		test_present_image_is_not_pulled_again,
 		test_invalid_mirror_entries_are_skipped,
 		test_unsupported_or_malicious_refs_are_skipped,
+		test_missing_dockerfile_warns_and_skips,
 		test_isolated_run_build_does_not_force_pull,
 		test_invalid_timeout_falls_back_to_default,
 	]
