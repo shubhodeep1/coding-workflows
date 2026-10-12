@@ -205,3 +205,43 @@ The largest workflow is `.github/workflows/test-and-mark-stable.yml` at **418,66
 | Code modularization | At least 12 existing workflows/scripts, plus shared helpers | Large |
 | Expression size reduction | 5 workflows, plus extracted scripts | Large |
 | Medium/Low fixes | 4 existing workflow/script files, plus tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-12)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for implementation as written; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because a safety-sensitive call is involved.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION.** **Calls:** `scripts/review_collect_pr_metadata.sh:265-274` and `scripts/review_collect_pr_metadata.sh:308-329` (via `_fetch_linked_issue_bodies_graphql`, `scripts/review_collect_pr_metadata.sh:87-180`). **Current → proposed:** two GraphQL reads → one when the closing-reference read succeeds but returns no issues and PR text supplies fallback issue numbers; retain the second read when the first fails. **Endpoint:** `POST /graphql`. **Evidence:** the PR-text issue numbers are computed at `scripts/review_collect_pr_metadata.sh:246-258`, before the closing-reference query. An empty result currently triggers a second query for those already-known numbers. **Proposed fix:** extend the initial closing-reference query with aliases for at most 20 PR-text issue numbers, using the alias pattern in `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:17094-17124`). Update its response parsing and `_fetch_linked_issue_bodies_graphql`’s caller to use those aliases only on the existing empty-reference path; retain the separate fallback after a failed first read. **Safety rationale:** although both reads use the same GraphQL endpoint and token, combining their responses changes failure handling and the `LINKED_ISSUES_RAW_FILE.status` completeness contract, so identical error semantics are not yet proven. **Downstream signal:** Test empty, nonempty, failed, partial-alias and 50-reference responses, plus the 20-issue cap; verify unchanged `LINKED_ISSUES_JSON`, prompt context, status sidecar, and retry/fallback behavior before implementation.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `scripts/workflow_failure_heal_intake.sh:469-471` and `scripts/workflow_failure_heal_intake.sh:874-884`; the earlier result is consumed for provenance at `scripts/workflow_failure_heal_intake.sh:489-491`. **Current → proposed:** two `GET /user` reads → one for a verified `autofix_failure` with numeric `SOURCE_GEN` when `PROVENANCE_LOGIN` is nonempty; retain the later read on cache miss. **Endpoint:** `GET /user`. **Evidence:** the later lineage-author selection starts with `PHASE_COMMENT_AUTHOR`, but does not consult the already-fetched `PROVENANCE_LOGIN` before querying `/user` again. **Proposed fix:** initialize `HEAL_TRUSTED_AUTHOR` from `PHASE_COMMENT_AUTHOR`, then `PROVENANCE_LOGIN`, retaining the existing `/user` fallback when both are empty. **Safety rationale:** both reads participate in identity and provenance decisions—an explicit `RISKY_SKIP` trigger—even though the script does not change its token between them. **Downstream signal:** Do not auto-implement; manually review token identity, failed-first-read recovery, and lineage-author tests for phase, autofix, and workflow-run reports.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — its source comment read is paginated, and the gate can mutate queue state before upsert.
+- BATCH-001: RISKY_SKIP — poller replay depends on complete paginated history and defends against duplicate-command races.
+- BATCH-002: NEEDS_VERIFICATION — confirm GraphQL/default-branch field parity and preserve per-repository fallback diagnostics.
+- BATCH-003: RISKY_SKIP — origin reads are in a two-attempt retry path and authorize a trust-chain verdict.
+- API-002: RISKY_SKIP — the second non-idempotent POST is a retry after an ambiguous write outcome; reconciliation needs manual review.
+
+### Summary Counts
+
+*Counts cover net-new findings above; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
