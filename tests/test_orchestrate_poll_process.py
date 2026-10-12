@@ -24423,7 +24423,7 @@ def test_finalize_fallback_reads_final_pr_once():
 	assert "pulls/${final_pr}\" --jq '.merged_at != null'" not in body
 	fetch = '_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" || echo ""'
 	assert body.count(fetch) == 1, body.count(fetch)
-	assert "jq -r '.state // \"\"'" in body
+	assert "jq -r '.state' 2>/dev/null" in body
 	assert "jq -r '.merged_at != null'" in body
 
 
@@ -24435,17 +24435,18 @@ def test_implementation_failed_sweep_reads_issue_once():
 	assert "issues/${if_issue}\" --jq '.body'" not in script
 	fetch = 'IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" || echo "")"'
 	assert script.count(fetch) == 1, script.count(fetch)
-	assert "jq -r '.title // \"\"'" in script
-	assert "jq -r '.body // \"\"'" in script
+	assert "jq -r '.title' 2>/dev/null" in script
+	assert "jq -r '.body' 2>/dev/null" in script
 
 
-def test_local_issue_parse_keeps_null_body_empty():
-	"""A null issue body must parse to an empty string, as ``gh api --jq``
-	prints it, not to the literal ``null``."""
+def test_local_issue_parse_keeps_null_body_literal():
+	"""A null issue body keeps parsing to the literal ``null``, the output
+	the former per-field ``--jq '.body'`` read produced (see the note in
+	scripts/gh_helpers.sh), so the re-issued body is unchanged."""
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	payload = json.dumps({"title": "t", "body": None})
-	for expr, expected in ((".title // \"\"", "t"), (".body // \"\"", "")):
+	for expr, expected in ((".title", "t"), (".body", "null")):
 		out = subprocess.run(
 			["jq", "-r", expr], input=payload, capture_output=True, text=True, check=True
 		).stdout.rstrip("\n")
