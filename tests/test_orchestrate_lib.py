@@ -59,7 +59,8 @@ def _parse_issue(endpoint: str):
 
 
 def main() -> int:
-	args = sys.argv[1:]
+	# gh_api_retry adds -i per attempt (issue #6634); the mock prints bodies only.
+	args = [a for a in sys.argv[1:] if a != '-i']
 	if len(args) < 2 or args[0] != 'api':
 		print('mock gh only supports gh api', file=sys.stderr)
 		return 2

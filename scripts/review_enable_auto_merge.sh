@@ -219,6 +219,14 @@ if [ -z "${_orch_pr_head_ref}" ]; then
 	exit 0
 fi
 
+# Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
+# only that workflow's `verify` job may enable auto-merge, after it has checked
+# the PR tree against the attested release manifest. Review never does.
+if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge"
+	exit 0
+fi
+
 _orch_pr_head_sha="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
 if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
