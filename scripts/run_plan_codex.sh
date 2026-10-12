@@ -174,8 +174,13 @@ Rules:
   Reduction mode as a substitute for the existing scope-too-large gate.
 - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
   from the planning context and do not assume `main`.
-- If checked-out ref mismatches Integration branch metadata, emit exactly
-  `BLOCKED: integration branch mismatch`.
+- If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads
+  `true`, emit exactly `BLOCKED: integration branch mismatch`. Decide this
+  from that line only. Your workspace's own git, when it has one, is a
+  filtered read-only snapshot on a local branch named `isolated`, and its
+  commit ID never matches the planning ref; some sandboxes have no git at
+  all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
+  error there is evidence of a mismatch.
 - Before exiting, run a self-check on the plan you are about to emit.
   If the plan is implementation-ready, end with `STATUS: CLEAR` and
   `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
@@ -282,6 +287,34 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
   fi
 fi
 
+# The planner's sandbox git is a filtered snapshot on branch `isolated`
+# (scripts/codex_isolated_workspace.py seed_git), so a model that checks git
+# there sees a "mismatch" that is not real. Issue #7172 sat blocked for a
+# human after one such answer although the workflow had computed
+# PLANNING_REF_MISMATCH=false. Returns 0 when the output's first BLOCKED line
+# (closed fences stripped, as plan.yml's parser does) is that reason while the
+# workflow found no mismatch. The second perl reads to EOF so the first never
+# gets SIGPIPE under pipefail on a large output.
+plan_output_contradicts_ref_context()
+{
+  local output_file="$1" blocked_reason
+  [ "${PLANNING_REF_MISMATCH:-}" = "false" ] || return 1
+  blocked_reason="$(perl -0pe '
+    s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;
+  ' "${output_file}" | perl -ne '
+    if (!$seen && /^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; $seen = 1; }
+  ')" || return 1
+  blocked_reason="${blocked_reason,,}"
+  blocked_reason="${blocked_reason%.}"
+  # Also match a reason the model embellished after the phrase, e.g.
+  # "integration branch mismatch (workspace is on isolated)".
+  case "${blocked_reason}" in
+    "integration branch mismatch" | "integration branch mismatch"[!a-z0-9_]*) return 0 ;;
+  esac
+  return 1
+}
+plan_ref_retry_note_added=false
+
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
@@ -317,12 +350,26 @@ for attempt in $(seq 1 "${max_attempts}"); do
     bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
   if [ "${plan_rc}" -eq 0 ]; then
-    if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+    if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+      echo "::warning::Codex returned empty output on attempt ${attempt}."
+    elif plan_output_contradicts_ref_context "${CODEX_OUTPUT_FILE}" && [ "${attempt}" -lt "${max_attempts}" ]; then
+      echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=retry planning_ref_mismatch=false"
+      echo "::warning::Planner answered 'BLOCKED: integration branch mismatch' on attempt ${attempt}, but the workflow found no mismatch; retrying."
+      if [ "${plan_ref_retry_note_added}" = false ]; then
+        {
+          printf '\n=== RETRY NOTE ===\n'
+          printf '%s\n' "A previous attempt answered \`BLOCKED: integration branch mismatch\`, but PLANNING REF CONTEXT reports \`Integration branch mismatch: false\`: the workflow checked out the integration branch. Git inside your workspace, if any (branch \`isolated\`), is a snapshot, not the planning ref. Plan the issue."
+        } >> "${CODEX_PROMPT_FILE}"
+        plan_ref_retry_note_added=true
+      fi
+    else
+      if plan_output_contradicts_ref_context "${CODEX_OUTPUT_FILE}"; then
+        echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=kept planning_ref_mismatch=false"
+      fi
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
       echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
       break
     fi
-    echo "::warning::Codex returned empty output on attempt ${attempt}."
   else
     echo "::warning::Codex exited with code ${plan_rc} on attempt ${attempt}."
   fi

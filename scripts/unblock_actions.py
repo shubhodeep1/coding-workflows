@@ -17,7 +17,13 @@ the network; the shell only executes.
        `has_plan` is true when the issue already has an implementation plan;
        `security_finding_id` is optional and validated before reuse).
        PR provenance is validated again here; missing or malformed fields fail
-       closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
+       closed for issue-creating PR verdicts. Optional `source_issue_body` /
+       `source_issue_labels` (a trusted PR's single linked issue, sent only by
+       the conflict resolver's host-only re-issue, issue #6748; the unblock
+       judge never sends them) carry that issue's security finding marker,
+       `Integration branch` and `Depends on` lines onto a PR re-issue; optional
+       `pr_base_branch` (same caller) is the Integration branch when the
+       linked issue declares none. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
@@ -42,6 +48,16 @@ the network; the shell only executes.
       `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
       and the issue's single line-anchored integration branch. Conflicting PR
       numbers or a URL into another repository give `pr: null`.
+  regrant --context-file PATH --rejection-file PATH
+      For a scope-blocked issue whose newest automation-path rejection
+      (`unblock_ledger.py automation-rejection`) the current guard now grants:
+      a comment ending in `<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->`,
+      then the stop's resume command. No verdict, no operator step.
+  fixup-escalate --context-file PATH --origin N
+      For a blocked fix-up issue the judge filed for item N: one entry in the
+      `ai:operator-step` issue, a comment ending in
+      `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, and one WARNING. The
+      judge never files a fix-up for a fix-up.
 
 Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "comment", "issue": n, "body": s}
@@ -248,6 +264,41 @@ def _context(raw: object) -> dict:
 	)
 	if security_source_body is not None and SECURITY_FINDING_MARKER_PREFIX in security_source_body and finding_id is None:
 		security_metadata_unsafe = True
+	# A trusted PR's linked issue is the lineage source for a PR re-issue; the
+	# PR body itself stays author-controlled and is never read for metadata.
+	source_body = raw.get("source_issue_body")
+	source_labels = raw.get("source_issue_labels")
+	pr_source_present = (
+		pr_trusted
+		and isinstance(source_body, str)
+		and len(source_body) <= 65536
+		and isinstance(source_labels, list)
+		and all(isinstance(label, str) for label in source_labels)
+	)
+	pr_source_finding_id = None
+	pr_source_depends_on, pr_source_target_branch, pr_source_metadata_unsafe = None, None, False
+	if pr_source_present:
+		linked = raw.get("linked_issue")
+		pr_source_depends_on, pr_source_target_branch, pr_source_metadata_unsafe = _security_reissue_metadata(
+			source_body, source_labels, linked if isinstance(linked, int) and linked > 0 else item
+		)
+		if SECURITY_LABEL in source_labels and SECURITY_FINDING_MARKER_PREFIX in source_body:
+			marker = re.search(r"<!-- ai:security-finding:(.*?) -->", source_body)
+			candidate = marker.group(1) if marker else ""
+			if SECURITY_FINDING_ID_RE.fullmatch(candidate):
+				pr_source_finding_id = candidate
+			else:
+				pr_source_metadata_unsafe = True
+	# Optional trusted-PR base branch (sent only by the host-only re-issue,
+	# issue #6748): the replacement's Integration branch when the linked issue
+	# declares none. An invalid value is dropped, never trusted.
+	base_branch = raw.get("pr_base_branch")
+	pr_base_branch = (
+		base_branch
+		if pr_trusted and isinstance(base_branch, str) and SECURITY_BRANCH_REF_RE.fullmatch(base_branch)
+		and ".." not in base_branch and "//" not in base_branch and not base_branch.endswith(("/", ".", ".lock"))
+		else None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -268,6 +319,12 @@ def _context(raw: object) -> dict:
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
 		"ci_owner": _ci_owner(raw.get("ci_owner")) if kind == "issue" else None,
+		"pr_source_present": pr_source_present,
+		"pr_source_finding_id": pr_source_finding_id,
+		"pr_source_depends_on": pr_source_depends_on,
+		"pr_source_target_branch": pr_source_target_branch,
+		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
+		"pr_base_branch": pr_base_branch,
 	}
 
 
@@ -293,7 +350,9 @@ def _untrusted_pr_ops(ctx: dict, verdict_name: str) -> list[dict]:
 		},
 		{"op": "close", "issue": item, "reason": "not_planned", "pr": True},
 		{"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]},
-		{"op": "telegram", "level": "WARNING", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
+		# DEBUG: closing the untrusted PR is the finished outcome; nothing is
+		# left for a person to do.
+		{"op": "telegram", "level": "DEBUG", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
 	]
 
 
@@ -370,8 +429,10 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 	if verdict.get("placeholder"):
 		lines += [
 			"",
-			f"Keep the new behaviour off until a person finishes the operator step: gate it behind `{verdict['placeholder']}`"
-			" (a feature flag that defaults off, or a placeholder env var that makes the code skip safely).",
+			f"Keep the new behaviour off until a person finishes the operator step: gate only the new code path behind `{verdict['placeholder']}`"
+			" (a feature flag that defaults off, or a placeholder env var that makes the new code skip safely)."
+			" Never put an existing path behind it: with the flag unset, everything that runs today (releases, tagging,"
+			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
 	if _provenance_line(ctx):
@@ -489,7 +550,24 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
-			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": [], "wait_on": None})
+			pr_labels: list[str] = []
+			pr_target_branch = None
+			if ctx.get("pr_source_present"):
+				if ctx.get("pr_source_metadata_unsafe"):
+					return [
+						{"op": "comment", "issue": item, "body": "This pull request stays open: its linked issue's security finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
+						{"op": "telegram", "level": "WARNING", "text": f"Could not safely re-issue PR #{item}; its linked issue's metadata needs correction."},
+					]
+				if ctx.get("pr_source_finding_id"):
+					body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['pr_source_finding_id']} -->\n{body}"
+					pr_labels = [SECURITY_LABEL]
+				pr_target_branch = ctx.get("pr_source_target_branch")
+			pr_target_branch = pr_target_branch or ctx.get("pr_base_branch")
+			if pr_target_branch:
+				body += f"\n\n- Integration branch: `{pr_target_branch}`"
+			if ctx.get("pr_source_present") and ctx.get("pr_source_depends_on") is not None:
+				body += f"\n- Depends on: #{ctx['pr_source_depends_on']}"
+			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": pr_labels, "wait_on": None})
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
 		elif ctx["tracking"]:
 			ops.append(
@@ -559,6 +637,64 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	return ops
 
 
+def regrant_ops(ctx: dict, run_id: str, paths: list[str]) -> list[dict]:
+	"""Clear an automation-path latch the current guard no longer sets (Q54).
+
+	The marker comment goes first: it is the once-per-rejection-run record, so
+	a resume that fails afterwards is never retried for the same run.
+	"""
+	if ctx["kind"] != "issue" or ctx["stop"] != "scope-blocked":
+		raise UsageError("regrant applies only to a scope-blocked issue")
+	if not re.fullmatch(r"[0-9]+", str(run_id)) or not paths or not all(isinstance(path, str) for path in paths):
+		raise UsageError("regrant needs the rejection run and its paths")
+	item = ctx["item"]
+	listing = "\n".join(f"- `{path}`" for path in paths)
+	body = "\n".join([
+		f"The automation-path grant guard rejected run {run_id}. The current guard grants every path it rejected,"
+		" so the unblock judge cleared the latch without a verdict and resumed this issue. The implementation run"
+		" checks the grant again before it commits.",
+		"",
+		listing,
+		"",
+		f"<!-- ai:unblock-regrant:v1 item={item} run={run_id} -->",
+	])
+	return [{"op": "comment", "issue": item, "body": body}] + reset_ops(ctx, f"current guard grants rejection run {run_id}")
+
+
+def fixup_escalate_ops(ctx: dict, origin: int) -> list[dict]:
+	"""A blocked unblock fix-up goes to the operator once, never to another fix-up (Q56)."""
+	if ctx["kind"] != "issue" or origin < 1:
+		raise UsageError("fixup-escalate needs a fix-up issue and its original item")
+	item = ctx["item"]
+	return [
+		{
+			"op": "operator_step",
+			"key": f"unblock-fixup-{item}",
+			"source": f"Unblock judge, fix-up #{item}",
+			"steps": [
+				{
+					"title": f"Unblock fix-up #{item} is blocked ({ctx['stop']})",
+					"instructions": (
+						f"#{item} is the unblock judge's fix-up for #{origin}, and it is blocked itself. The judge never files"
+						f" a fix-up for a fix-up. Clear the block on #{item}, or close #{item} and decide #{origin} directly."
+					),
+				}
+			],
+		},
+		{
+			"op": "comment",
+			"issue": item,
+			"body": "\n".join([
+				f"This is the unblock judge's fix-up for #{origin}, and it is blocked ({ctx['stop']}). The judge does not file"
+				" another fix-up for it; it is listed in the `ai:operator-step` issue instead.",
+				"",
+				f"<!-- ai:unblock-fixup-escalated:v1 item={item} -->",
+			]),
+		},
+		{"op": "telegram", "level": "WARNING", "text": f"Unblock fix-up #{item} (for #{origin}) is blocked ({ctx['stop']}); listed under Operator steps"},
+	]
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = _Parser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
@@ -571,6 +707,12 @@ def build_parser() -> argparse.ArgumentParser:
 	owner_cmd = sub.add_parser("ci-owner")
 	owner_cmd.add_argument("--item-file", required=True)
 	owner_cmd.add_argument("--repo", required=True)
+	regrant_cmd = sub.add_parser("regrant")
+	regrant_cmd.add_argument("--context-file", required=True)
+	regrant_cmd.add_argument("--rejection-file", required=True)
+	escalate_cmd = sub.add_parser("fixup-escalate")
+	escalate_cmd.add_argument("--context-file", required=True)
+	escalate_cmd.add_argument("--origin", required=True, type=int)
 	return parser
 
 
@@ -590,6 +732,13 @@ def run(argv: list[str] | None = None) -> dict:
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
 		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	if args.command == "regrant":
+		rejection = _read_json(args.rejection_file, "--rejection-file")
+		if not isinstance(rejection, dict) or rejection.get("status") != "ok":
+			raise UsageError("--rejection-file must hold an ok automation-path rejection")
+		return {"ops": regrant_ops(ctx, rejection.get("run", ""), rejection.get("paths") or [])}
+	if args.command == "fixup-escalate":
+		return {"ops": fixup_escalate_ops(ctx, args.origin)}
 	verdict = _read_json(args.verdict_file, "--verdict-file")
 	if not isinstance(verdict, dict):
 		raise UsageError("--verdict-file must hold a JSON object")
