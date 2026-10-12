@@ -2376,16 +2376,27 @@ REISSUE = {"verdict": "reissue", "reason": "r", "instructions": "correct spec"}
 
 
 def test_merged_green_owner_closes_the_issue_without_a_reissue(tmp_path: Path) -> None:
-	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS)
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
+		AUTO_MERGE_REQUIRED_CI_CHECK="CI")
 	assert f"op=reissue outcome=superseded pr=6786 head={'c' * 40}" in result.stdout, result.stdout + result.stderr
 	assert state["created"] == []
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state_reason") == "not_planned" for endpoint, fields in state["patched"])
 	assert any(comment["body"].startswith("Superseded: owning PR #6786") for comment in state["comments"])
 
 
+def test_merged_owner_without_a_named_ci_check_is_not_superseded(tmp_path: Path) -> None:
+	# No AUTO_MERGE_REQUIRED_CI_CHECK (the consumer default, `disabled`): a green
+	# run of any name is no proof that the required checks ran, so reissue as today.
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
+		AUTO_MERGE_REQUIRED_CI_CHECK="")
+	assert "outcome=superseded" not in result.stdout, result.stdout + result.stderr
+	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
+
+
 def test_merged_owner_with_failing_checks_reissues_with_the_marker(tmp_path: Path) -> None:
 	red = json.dumps([{"check_runs": [{"name": "CI", "status": "completed", "conclusion": "failure"}]}])
-	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=red)
+	result, state = _judge(tmp_path, CI_ISSUE, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=red,
+		AUTO_MERGE_REQUIRED_CI_CHECK="CI")
 	assert "outcome=superseded" not in result.stdout
 	assert state["created"][0]["body"].startswith("<!-- check-failure-triage:pr=6786 -->\n")
 

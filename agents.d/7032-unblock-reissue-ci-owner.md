@@ -11,7 +11,9 @@ otherwise), then reads the same-repository PR once. A PR merged into the
 default branch or the issue's declared integration branch counts as superseding
 the issue only when `_pr_checks_completed` returns `ok` (not `allow_all`) with
 at least one check-run on its head and the named CI check
-(`PR_CHECKS_LAST_CI_STATE`) is `success` or `disabled`. The issue is then closed
+(`AUTO_MERGE_REQUIRED_CI_CHECK`, state `PR_CHECKS_LAST_CI_STATE`) ran and
+succeeded on it; with no named check configured (`disabled`, the consumer
+default) the issue is never superseded. The issue is then closed
 `not_planned` without a replacement
 (`UNBLOCK_JUDGE item=<n> op=reissue outcome=superseded pr=<n> head=<sha>`).
 Otherwise the replacement carries the marker, and, when the PR is open and its

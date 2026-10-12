@@ -619,12 +619,15 @@ unblock_resolve_ci_owner()
 					# Three arguments: the shared required-checks filter applies.
 					_pr_checks_completed "${owner_pr}" "${owner_head_sha}" "${owner_base_ref}" >/dev/null 2>&1 || exit 1
 					# A head with no check-runs at all is not evidence of green checks,
-					# nor is an allow-all required set; the named CI check
+					# nor is an allow-all required set. The required-set filter only
+					# blocks failed runs that exist, so an absent required check plus
+					# an unrelated green run still returns ok: the named CI check
 					# (AUTO_MERGE_REQUIRED_CI_CHECK, from the same listing) must have
-					# run and succeeded when one is required.
+					# run and succeeded. With no named check (`disabled`, the consumer
+					# default) nothing proves CI passed, so the reissue stays as today.
 					[ "${PR_CHECKS_LAST_TOTAL:-0}" -gt 0 ] 2>/dev/null || exit 1
 					[ "${PR_CHECKS_LAST_REASON:-}" = "ok" ] || exit 1
-					case "${PR_CHECKS_LAST_CI_STATE:-unknown}" in success|disabled) ;; *) exit 1 ;; esac
+					[ "${PR_CHECKS_LAST_CI_STATE:-unknown}" = "success" ] || exit 1
 				); then
 				owner_state="superseded"
 			fi
