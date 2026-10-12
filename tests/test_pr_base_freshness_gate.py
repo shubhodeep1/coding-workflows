@@ -38,8 +38,11 @@ RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 HEAD = "a" * 40
 
 
-def _compare(ahead_by: int, files: list[str]) -> str:
-	return json.dumps({"ahead_by": ahead_by, "behind_by": 3, "files": [{"filename": f} for f in files]})
+def _compare(ahead_by: int, files: list[str], commits: list[str] | None = None) -> str:
+	payload: dict = {"ahead_by": ahead_by, "behind_by": 3, "files": [{"filename": f} for f in files]}
+	if commits is not None:
+		payload["commits"] = [{"sha": sha} for sha in commits]
+	return json.dumps(payload)
 
 
 def _pr_files(files: list[str]) -> str:
@@ -78,6 +81,9 @@ source {str(LIB)!r}
 		"PR_JSON": pr_json,
 		"UPDATE_RC": str(update_rc),
 		"CALL_LOG": str(call_log),
+		# Keep the post-update head poll to one short read in tests.
+		"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": "1",
+		"MERGE_BASE_SYNC_HEAD_POLL_SECONDS": "1",
 	}
 	if env:
 		full_env.update(env)
@@ -728,76 +734,153 @@ class HeadBoundPollerMerge(unittest.TestCase):
 # the full review cycle, and main moved again before it finished.
 
 SYNC_LOGIN = "workflow-bot"
+BASE_TIP = "d" * 40
+UPDATE_SHA = "e" * 40
 
 
-def _sync_marker(sync: int, *, pr: int = 7, author: str = SYNC_LOGIN) -> dict:
-	return {"user": {"login": author}, "body": f"**Branch updated from `main` before merging** (update {sync} of at most 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync} -->"}
+def _sync_marker(sync: int, *, pr: int = 7, author: str = SYNC_LOGIN, bound: bool = False) -> dict:
+	fields = f" base={BASE_TIP} merge={UPDATE_SHA}" if bound else ""
+	return {"user": {"login": author}, "body": f"**Branch updated from `main` before merging** (update {sync} of at most 2).\n\n<!-- ai:merge-base-sync:v1 pr={pr} from={'c' * 40} sync={sync}{fields} -->"}
 
 
-def _sync_gate(comments: list[dict] | None, *, max_syncs: str | None = None, user_ok: bool = True) -> tuple[int, str, list[str]]:
-	"""Overlap case with the user and comments reads answered from fixtures."""
+def _update_commit(parents: list[str] | None = None, *, verified: bool = True, committer: str = "web-flow") -> dict:
+	return {"parents": [{"sha": s} for s in (parents if parents is not None else [HEAD, BASE_TIP])],
+		"committer": {"login": committer}, "commit": {"verification": {"verified": verified}}}
+
+
+def _sync_gate(comments: list[dict] | None, *, max_syncs: str | None = None, user_ok: bool = True,
+		new_head: str | None = UPDATE_SHA, head_changes_at: int = 1, commit: dict | None = None,
+		compare_commits: list[str] | None = None, base_status: str = "", attempts: str = "1") -> tuple[int, str, list[str]]:
+	"""Overlap case with the user, comments, PR-head poll and commit reads answered from fixtures."""
 	comments_json = json.dumps([comments]) if comments is not None else ""
 	user_json = json.dumps({"login": SYNC_LOGIN}) if user_ok else ""
+	commit_json = json.dumps(commit if commit is not None else _update_commit())
+	new_head_json = json.dumps({"head": {"sha": new_head or HEAD}})
+	old_head_json = json.dumps({"head": {"sha": HEAD}})
 	body = f'''
+sleep() {{ :; }}
+rm -f "${{CALL_LOG}}.poll"
 eval "base_$(declare -f _safe_gh_jq)"
 _safe_gh_jq() {{
   case "$*" in
     user) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {user_json!r} ] || return 1; printf '%s' {user_json!r} ;;
     *"/issues/7/comments?per_page=100"*) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; [ -n {comments_json!r} ] || return 1; printf '%s' {comments_json!r} ;;
+    *"repos/owner/repo/pulls/7")
+      printf '%s\\n' "$*" >> "${{CALL_LOG}}"
+      # A file counter: each call runs in a command-substitution subshell.
+      poll_n=$(( $(cat "${{CALL_LOG}}.poll" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "${{poll_n}}" > "${{CALL_LOG}}.poll"
+      if [ "${{poll_n}}" -ge {head_changes_at} ]; then printf '%s' {new_head_json!r}; else printf '%s' {old_head_json!r}; fi ;;
+    *"repos/owner/repo/commits/"*) printf '%s\\n' "$*" >> "${{CALL_LOG}}"; printf '%s' {commit_json!r} ;;
+    *"/compare/{BASE_TIP}...main") printf '%s\\n' "$*" >> "${{CALL_LOG}}"; printf '{{"status":"%s"}}' {base_status!r} ;;
     *) base__safe_gh_jq "$@" ;;
   esac
 }}
 _pr_base_fresh_for_merge 7 {HEAD} main; rc=$?; printf "%s\\n" "rc=${{rc}}"
 '''
-	env = {"MERGE_BASE_FRESHNESS_MAX_SYNCS": max_syncs} if max_syncs is not None else None
-	res = _run(body, compare_json=_compare(2, ["agents.md"]), pr_files_json=_pr_files(["agents.md"]), env=env)
+	env = {"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": attempts}
+	if max_syncs is not None:
+		env["MERGE_BASE_FRESHNESS_MAX_SYNCS"] = max_syncs
+	commits = compare_commits if compare_commits is not None else ["1" * 40, BASE_TIP]
+	res = _run(body, compare_json=_compare(len(commits) if compare_commits != [] else 2, ["agents.md"], commits or None),
+		pr_files_json=_pr_files(["agents.md"]), env=env)
 	assert res.returncode == 0, res.stderr
 	rc = int([line for line in res.stdout.splitlines() if line.startswith("rc=")][-1][3:])
 	return rc, res.stdout + res.stderr, res.calls  # type: ignore[attr-defined]
 
 
+def _posted(calls: list[str]) -> list[str]:
+	return [c for c in calls if c.startswith("-X POST repos/owner/repo/issues/7/comments")]
+
+
 class FreshnessSyncCap(unittest.TestCase):
-	def test_first_update_posts_the_marker_for_the_approved_head(self) -> None:
+	def test_first_update_posts_a_marker_bound_to_the_update_commit(self) -> None:
 		rc, out, calls = _sync_gate([])
 		self.assertEqual(rc, 1)
-		self.assertIn("update 1 of at most 2", out)
+		self.assertIn("update 1, warning threshold 2", out)
 		# The comment body spans several log lines; match on the whole log.
 		log = "\n".join(calls)
-		self.assertEqual(len([c for c in calls if c.startswith("-X POST repos/owner/repo/issues/7/comments")]), 1)
-		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=1 -->", log)
-		self.assertIn("**Branch updated from `main` before merging** (update 1 of at most 2)", log)
-		self.assertIn("MERGE_BASE_SYNC_MARKER pr=7 head_sha=" + HEAD + " sync=1 outcome=posted", out)
+		self.assertEqual(len(_posted(calls)), 1)
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=1 base={BASE_TIP} merge={UPDATE_SHA} -->", log)
+		self.assertIn("**Branch updated from `main` before merging** (update 1; warning threshold 2)", log)
+		self.assertIn(f"MERGE_BASE_SYNC_MARKER pr=7 head_sha={HEAD} sync=1 merge={UPDATE_SHA} outcome=posted", out)
+
+	def test_the_head_poll_waits_for_the_update_commit(self) -> None:
+		rc, out, calls = _sync_gate([], head_changes_at=3, attempts="5")
+		self.assertEqual(rc, 1)
+		self.assertEqual(len([c for c in calls if c.endswith("repos/owner/repo/pulls/7")]), 3)
+		self.assertEqual(len(_posted(calls)), 1)
 
 	def test_second_update_counts_only_the_workflow_logins_markers_for_this_pr(self) -> None:
 		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(1, author="someone-else"), _sync_marker(1, pr=8)])
 		self.assertEqual(rc, 1)
-		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=2 -->", "\n".join(calls))
+		self.assertIn(f"<!-- ai:merge-base-sync:v1 pr=7 from={HEAD} sync=2 base={BASE_TIP} merge={UPDATE_SHA} -->", "\n".join(calls))
 
-	def test_after_the_cap_the_merge_proceeds_without_another_update(self) -> None:
-		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(2)])
-		self.assertEqual(rc, 0)
-		self.assertIn("outcome=overlap action=proceed reason=max_syncs syncs=2 max=2", out)
-		self.assertFalse(any("/update-branch" in c for c in calls))
-		self.assertFalse(any("-X POST" in c for c in calls))
+	def test_after_the_cap_remaining_overlap_still_updates_and_never_merges(self) -> None:
+		# Security-pass finding merge-base-sync-cap-proceeds-on-overlap.
+		rc, out, calls = _sync_gate([_sync_marker(1), _sync_marker(2, bound=True)])
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=overlap action=update reason=max_syncs_exceeded syncs=2 max=2", out)
+		self.assertNotIn("action=proceed", out)
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
+		self.assertIn(f"sync=3 base={BASE_TIP} merge={UPDATE_SHA}", "\n".join(calls))
 
-	def test_the_cap_is_configurable_and_validated(self) -> None:
+	def test_the_threshold_is_configurable_and_validated(self) -> None:
 		rc, out, _ = _sync_gate([_sync_marker(1)], max_syncs="1")
-		self.assertEqual(rc, 0)
-		self.assertIn("reason=max_syncs syncs=1 max=1", out)
-		rc, _out, _calls = _sync_gate([_sync_marker(1)], max_syncs="nine")
-		self.assertEqual(rc, 1, "an invalid cap falls back to 2")
+		self.assertEqual(rc, 1)
+		self.assertIn("reason=max_syncs_exceeded syncs=1 max=1", out)
+		rc, out, _calls = _sync_gate([_sync_marker(1)], max_syncs="nine")
+		self.assertEqual(rc, 1)
+		self.assertNotIn("max_syncs_exceeded", out, "an invalid threshold falls back to 2")
 
-	def test_cap_zero_never_updates_and_reads_nothing(self) -> None:
+	def test_threshold_zero_warns_from_the_first_update_and_reads_no_comments(self) -> None:
 		rc, out, calls = _sync_gate(None, max_syncs="0", user_ok=False)
-		self.assertEqual(rc, 0)
-		self.assertIn("reason=max_syncs syncs=0 max=0", out)
-		self.assertFalse(any(c == "user" or "/comments" in c or "/update-branch" in c for c in calls))
+		self.assertEqual(rc, 1)
+		self.assertIn("reason=max_syncs_exceeded syncs=0 max=0", out)
+		self.assertFalse(any(c == "user" or "/comments?per_page" in c for c in calls))
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
 
 	def test_an_unreadable_count_updates_as_before(self) -> None:
 		rc, out, calls = _sync_gate(None, user_ok=False)
 		self.assertEqual(rc, 1)
 		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
-		self.assertIn("update 1 of at most 2", out)
+		self.assertIn("update 1, warning threshold 2", out)
+
+	def test_unobserved_or_unverified_update_commits_get_no_marker(self) -> None:
+		cases = (
+			({"new_head": None}, "head_not_observed"),
+			({"commit": _update_commit(["f" * 40, BASE_TIP])}, "parents_mismatch"),
+			({"commit": _update_commit([HEAD])}, "parents_mismatch"),
+			({"commit": _update_commit(verified=False)}, "not_github_merge"),
+			({"commit": _update_commit(committer="someone")}, "not_github_merge"),
+			({"commit": _update_commit([HEAD, "2" * 40])}, "base_mismatch"),
+		)
+		for kwargs, reason in cases:
+			with self.subTest(reason=reason, kwargs=kwargs):
+				rc, out, calls = _sync_gate([], **kwargs)
+				self.assertEqual(rc, 1)
+				self.assertIn(f"MERGE_BASE_SYNC_MARKER pr=7 head_sha={HEAD} outcome=skipped reason={reason}", out)
+				self.assertEqual(_posted(calls), [])
+
+	def test_a_truncated_commit_list_posts_no_marker(self) -> None:
+		# Containment in the base would also accept a web conflict-resolver
+		# merge against a newer base tip, so an unknown compared tip fails
+		# safe: no head poll, no marker, the next run reviews in full.
+		for status in ("ahead", "identical", "diverged", ""):
+			with self.subTest(status=status):
+				rc, out, calls = _sync_gate([], compare_commits=[], base_status=status)
+				self.assertEqual(rc, 1)
+				self.assertIn(f"MERGE_BASE_SYNC_MARKER pr=7 head_sha={HEAD} outcome=skipped reason=base_tip_unknown", out)
+				self.assertFalse(any(f"/compare/{BASE_TIP}...main" in c for c in calls))
+				self.assertFalse(any(c.endswith("repos/owner/repo/pulls/7") or "/commits/" in c for c in calls))
+				self.assertEqual(_posted(calls), [])
+
+	def test_the_base_tip_is_recorded_only_for_a_complete_commit_list(self) -> None:
+		body = f'_pr_base_freshness 7 {HEAD} main >/dev/null; echo "tip=${{PR_BASE_FRESHNESS_BASE_SHA}}"'
+		res = _run(body, compare_json=_compare(2, ["a.py"], ["1" * 40, BASE_TIP]), pr_files_json=_pr_files(["a.py"]))
+		self.assertIn(f"tip={BASE_TIP}", res.stdout)
+		res = _run(body, compare_json=_compare(300, ["a.py"], ["1" * 40, BASE_TIP]), pr_files_json=_pr_files(["a.py"]))
+		self.assertIn("tip=\n", res.stdout + "\n")
 
 	def test_a_failed_update_posts_no_marker(self) -> None:
 		body_calls = _run(
@@ -810,6 +893,42 @@ class FreshnessSyncCap(unittest.TestCase):
 		res = _run('_pr_base_sync_marker_post 7 abc1234 1 2', env={})
 		self.assertIn("outcome=skipped reason=short_head_sha", res.stdout)
 		self.assertFalse(any("-X POST" in c for c in res.calls))  # type: ignore[attr-defined]
+
+	def test_an_unbound_update_gets_no_marker(self) -> None:
+		res = _run(f'_pr_base_sync_marker_post 7 {HEAD} 1 2', env={})
+		self.assertIn("outcome=skipped reason=unbound_update", res.stdout)
+		self.assertFalse(any("-X POST" in c for c in res.calls))  # type: ignore[attr-defined]
+
+	def test_the_count_includes_legacy_and_bound_markers(self) -> None:
+		comments = json.dumps([[_sync_marker(1), _sync_marker(2, bound=True), _sync_marker(3, author="x")]])
+		body = f'''
+eval "base_$(declare -f _safe_gh_jq)"
+_safe_gh_jq() {{
+  case "$*" in
+    user) printf '%s' {json.dumps({"login": SYNC_LOGIN})!r} ;;
+    *"/issues/7/comments"*) printf '%s' {comments!r} ;;
+    *) base__safe_gh_jq "$@" ;;
+  esac
+}}
+_pr_base_sync_count 7; echo "count=${{PR_BASE_SYNC_COUNT}}"
+'''
+		self.assertIn("count=2", _run(body).stdout)
+
+
+class LibraryMissingFallbacks(unittest.TestCase):
+	"""Same defect class: unverified freshness must never authorize a merge."""
+
+	def test_every_fallback_defers(self) -> None:
+		for path in (ENABLE_AUTO_MERGE, RB_JUDGE, POLLER, WORKFLOW):
+			with self.subTest(path=path.name):
+				text = path.read_text(encoding="utf-8")
+				stub = text.split("_pr_base_fresh_for_merge()", 1)[1][:600]
+				# The stub's first return statement must be the fail-closed one.
+				first_return = stub[stub.index("return "):][:8]
+				self.assertEqual(first_return, "return 1")
+				stub = stub[:stub.index("return ")]
+				self.assertIn("library_unavailable", stub)
+				self.assertIn('PR_BASE_FRESHNESS_OUTCOME="unknown"', stub)
 
 
 class FreshnessSyncWiring(unittest.TestCase):

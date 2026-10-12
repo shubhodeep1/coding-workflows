@@ -390,7 +390,7 @@ def test_fallback_alert_names_the_panel_slot_action(tmp_path: Path, role: str, e
 		source "{REPO_ROOT / 'scripts' / 'ai_engine.sh'}"
 		ai_engine_fallback {role} all_usage_limit
 		""")
-	subprocess.run(["bash", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path)}, capture_output=True, text=True, check=True)
+	subprocess.run(["bash", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path), "AI_ENGINE_FALLBACK_POLICY": "always"}, capture_output=True, text=True, check=True)
 	message = sent.read_text(encoding="utf-8")
 	assert expected in message
 	assert absent not in message

@@ -255,14 +255,16 @@ if [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null || true
 fi
-# Merge-base freshness gate (operator decision Q35: A). Fail-open stub when
-# the library did not load: the check-runs gate above already refuses an
-# unbound merge in that case.
+# Merge-base freshness gate (operator decision Q35: A). Fail-closed stub when
+# the library did not load: freshness cannot be verified, so the merge defers
+# (outcome=unknown, no branch update) like any other unverifiable freshness.
 if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
   _pr_base_fresh_for_merge()
   {
-    echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
-    return 0
+    PR_BASE_FRESHNESS_OUTCOME="unknown"
+    PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+    echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+    return 1
   }
 fi
 # Required-checks wait before `gh pr merge --auto`: an unprotected base has

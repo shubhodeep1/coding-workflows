@@ -42,7 +42,7 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 # Q35: A): a reviewed head whose base moved under files this PR touches is
 # updated from the base instead of auto-merged, so CI and review run on the
 # combined tree first. The library is a required bootstrap script; a missing
-# copy logs once and keeps the pre-gate behaviour.
+# copy fails closed: freshness cannot be verified, so auto-merge defers.
 # shellcheck source=/dev/null
 if [ -f "${SCRIPT_DIR}/pr_checks_lib.sh" ]; then
 	source "${SCRIPT_DIR}/pr_checks_lib.sh" 2>/dev/null || true
@@ -50,8 +50,10 @@ fi
 if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
 	_pr_base_fresh_for_merge()
 	{
-		echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
-		return 0
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+		echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+		return 1
 	}
 fi
 if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then

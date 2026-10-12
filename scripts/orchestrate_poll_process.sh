@@ -281,13 +281,15 @@ unset _OPP_LIB_DIR
 # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
 # Q35: A): before a direct merge, a PR whose base moved under files it
 # touches is updated from the base instead and re-validated by its
-# synchronize run. Fail-open stub when the library is missing: the
-# check-runs gate is already undefined then and refuses the merge.
+# synchronize run. Fail-closed stub when the library is missing: freshness
+# cannot be verified, so the merge defers (outcome=unknown, no branch update).
 if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
   _pr_base_fresh_for_merge()
   {
-    echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
-    return 0
+    PR_BASE_FRESHNESS_OUTCOME="unknown"
+    PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+    echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+    return 1
   }
 fi
 # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
