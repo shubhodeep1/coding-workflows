@@ -2,14 +2,16 @@
 name: CI
 
 "on":
-  # Orchestrator integration branches (Q45): a sub-issue PR into
-  # `orchestrator/project-*` is checked before it merges, not only at the
-  # project's final PR into main. Pushes to those branches run too, so
-  # check-failure triage has a base-branch result to compare a failing PR
-  # against (a green base means the failure is the PR's own and is left to
-  # its autofix). Heal intake and budget-watch act on main pushes only.
+  # Pull-request CI runs for every base (issue #7283). A fix PR routed to a
+  # failing PR's head branch (CI-triage routing, #6726 / #7042) then gets its
+  # own `CI / lint` before it merges, like a sub-issue PR into
+  # `orchestrator/project-*` (Q45). Push CI stays on main, stable and the
+  # integration branches, so check-failure triage has a base-branch result
+  # to compare a failing PR against (a green base means the failure is the
+  # PR's own and is left to its autofix). Heal intake and budget-watch act
+  # on main pushes only.
   pull_request:
-    branches: [main, stable, "orchestrator/project-*"]
+    branches: ["**"]
   push:
     branches: [main, stable, "orchestrator/project-*"]
 
