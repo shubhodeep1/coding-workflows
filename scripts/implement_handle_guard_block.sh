@@ -29,7 +29,9 @@ guard_block_gh()
 
 # Ensure a label exists. One raw create attempt first, so the normal
 # "already exists" case costs no retries (gh_retry does not treat it as
-# permanent); only unexpected failures are retried. Call only when ready.
+# permanent); only unexpected failures are retried (gh_retry repeats
+# `gh label create`: it is not on its single-attempt POST-create list).
+# Retry diagnostics go to stderr (the job log). Call only when ready.
 guard_block_ensure_label()
 {
 	local label_name="$1" label_color="$2" label_description="$3" edit_existing="$4" create_err create_rc=0
@@ -89,7 +91,7 @@ if [ -n "${SSB_REASON:-}" ]; then
   if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
     guard_block_ensure_label 'ai:needs-human' 'e11d48' \
       'Escalated for human intervention; autonomous stall recovery is paused' false \
-      2>/dev/null || true
+      || true
   else
     gh label create 'ai:needs-human' --repo "${GITHUB_REPOSITORY}" \
       --color 'e11d48' --description 'Escalated for human intervention; autonomous stall recovery is paused' \
@@ -105,7 +107,7 @@ if [ -n "${SSB_REASON:-}" ]; then
   # verifies that the best-effort writes above actually halted automation.
   staged_support_latch_read_ok=false
   if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
-    if staged_support_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    if staged_support_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
       staged_support_latch_read_ok=true
     fi
   elif staged_support_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
@@ -200,7 +202,7 @@ if [ -n "${SVB_REASON:-}" ]; then
   SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
   if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
     guard_block_ensure_label 'ai:scope-blocked' 'b60205' "${SCOPE_BLOCK_LABEL_DESCRIPTION}" true \
-      2>/dev/null || \
+      || \
       echo "::warning::Could not ensure the ai:scope-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
   elif ! gh label create 'ai:scope-blocked' \
     --repo "${GITHUB_REPOSITORY}" \
@@ -223,7 +225,7 @@ if [ -n "${SVB_REASON:-}" ]; then
   SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked latch: gh issue view failed after the write attempt, so redispatch refusal is unknown until a human rechecks the label."
   scope_latch_read_ok=false
   if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
-    if scope_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    if scope_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
       scope_latch_read_ok=true
     fi
   elif scope_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
@@ -359,7 +361,7 @@ fi
 DESTRUCTIVE_BLOCK_LABEL_DESCRIPTION='Implementation blocked for mass/destructive deletions; this issue ID now waits for human review'
 if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
   guard_block_ensure_label 'ai:destructive-blocked' 'b60205' "${DESTRUCTIVE_BLOCK_LABEL_DESCRIPTION}" true \
-    2>/dev/null || \
+    || \
     echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
 elif ! gh label create 'ai:destructive-blocked' \
   --repo "${GITHUB_REPOSITORY}" \
@@ -397,7 +399,7 @@ guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
 #     pipeline) so set -o pipefail cannot misfire on -q's early exit.
 destructive_latch_read_ok=false
 if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
-  if latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+  if latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
     destructive_latch_read_ok=true
   fi
 elif latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then

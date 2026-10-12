@@ -284,6 +284,9 @@ if args[0] == "label" and len(args) >= 3 and args[1] in ("create", "edit"):
 		"repo": first_value("--repo"),
 	})
 	save()
+	if args[1] == "create" and os.environ.get("MOCK_GH_LABEL_CREATE_EXISTS") == "true":
+		sys.stderr.write(f'label with name "{args[2]}" already exists; use `--force` to update its color and description\n')
+		sys.exit(1)
 	sys.exit(0)
 
 if args[0] == "issue" and len(args) >= 3 and args[1] == "edit":
@@ -2555,6 +2558,7 @@ def _run_guard_handler_case(
 	guard_overrides: dict[str, str] | None = None,
 	with_gh_helpers: bool = False,
 	issue_edit_transient_failures: int = 0,
+	mock_label_create_exists: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -2611,6 +2615,7 @@ def _run_guard_handler_case(
 			"SSB_AUTO_RELEASE_SAFE": "true" if staged_support_auto_release_safe else "",
 			"MOCK_GH_ISSUE_EDIT_FAILURE": "true" if mock_issue_edit_failure else "false",
 			"MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES": str(issue_edit_transient_failures),
+			"MOCK_GH_LABEL_CREATE_EXISTS": "true" if mock_label_create_exists else "false",
 		},
 		cwd=repo_dir,
 	)
@@ -2819,6 +2824,25 @@ def test_guard_handler_scope_latch_with_gh_helpers() -> None:
 		assert gh_state["issue_labels"] == ["ai:scope-blocked"]
 		assert "Confirmed ai:scope-blocked is latched" in output
 		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_existing_label_edits_without_retrying_create() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_label_exists_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+			mock_label_create_exists=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		# One raw create; the "already exists" reply goes straight to the edit, never to a create retry.
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["label_edits"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert "gh command failed" not in output
+		assert "Could not ensure the ai:scope-blocked label exists" not in output
+		assert "Confirmed ai:scope-blocked is latched" in output
 
 
 def test_guard_handler_fails_open_without_gh_helpers() -> None:
