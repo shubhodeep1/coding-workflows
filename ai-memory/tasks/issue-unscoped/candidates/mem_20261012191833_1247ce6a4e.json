@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr6576_shard_followup.py:248-269 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The job-log download path treats GitHub\u2019s ZIP archive response as plain-text log data instead of extracting the log files.\n  WHY: The redactor and failing-test parser receive ZIP bytes rather than log lines, so log processing can fail or produce no test names and prevent the intended log-based follow-up; reviewers rated this MAJOR, MAJOR, MAJOR, and BLOCKER.\n- tests/test_pr6576_shard_followup.py:test_locate_extracts_names_from_redacted_log_and_iterates_attempts | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: No contract test verifies that `locate()` accepts jobs with a `cancelled` conclusion.\n  WHY: Removing `cancelled` from the accepted conclusions would silently skip timeout-cancelled shard jobs and leave the regression undetected.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr6576_shard_followup.py: lines 248-264 and line 269 | severity=high | confidence=[5]\n  PROBLEM: The script incorrectly treats GitHub Actions log API output as a raw text stream without ZIP extraction.\n  WHY: `_redact` and the failing-tests parser operate on the stream as if it were uncompressed text, so they cannot find failing test names and force a fallback to a full partition rerun.\n- tests/test_pr6576_shard_followup.py:test_locate_extracts_names_from_redacted_log_and_iterates_attempts | severity=low | confidence=[4]\n  PROBLEM: Missing test coverage for the recently added cancelled job conclusion in `locate()`.\n  WHY: If the cancelled condition is removed from the `locate` filter, no contract test will fail, silently regressing the logic needed to capture shards killed by timeout-minutes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/pr6576_shard_followup.py:249-255 | severity=high | confidence=[5]\n  PROBLEM: The job-logs API response is a ZIP archive, but `_gh_raw` passes its bytes to `_redact` and writes them as a `.txt` log file without extracting the log contents.\n  WHY: The failing-test parser receives archive data instead of log lines, leaves `evidence[\"names\"]` empty, and causes `locate()` to fall back to a partition rerun.\n- scripts/pr6576_shard_followup.py:225 | severity=low | confidence=[3]\n  PROBLEM: No contract test exercises the `cancelled` job conclusion path.\n  WHY: If a future refactor drops `cancelled` from the accepted conclusions, timeout shards will use the partition-rerun path without a test catching the regression.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr6576_shard_followup.py: locate(), lines 249-255; _redact(), lines 186-188 | severity=high | confidence=[5]\n  PROBLEM: The job-logs endpoint response is passed to the text redactor as though it were plain log text, although GitHub returns a ZIP archive.\n  WHY: The redactor reads stdin as UTF-8 text, and ZIP bytes can trigger a decoding error that causes `locate` to fail before it writes evidence or reaches the recorded-head fallback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/pr6576_shard_followup.py: locate() function, around line 249-255 where _gh_raw is called for job logs | severity=critical | confidence=[5]\n  PROBLEM: GitHub's job logs API endpoint returns a ZIP archive, but the code treats the response as plain text bytes and passes it directly to `_redact()` and then to the failing-test parser.\n  WHY: The redactor may fail on invalid UTF-8 or produce garbage output, and the parser cannot extract failing test names from archive bytes, forcing fallback mode even when logs are available.\n- scripts/pr6576_shard_followup.py: locate() function, job conclusion filter at line 225 | severity=low | confidence=[3]\n  PROBLEM: No contract test exercises the `cancelled` job conclusion path.\n  WHY: If a future refactor removes `cancelled` from the accepted conclusions tuple, the workflow will skip cancelled jobs and fall back to a partition rerun without a test catching the regression.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e8d3bf89e58b8ecd083636a6ddc4396c77a70693ca45f850222e7909d1f57fda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7076,
+    "run_id": "38294045551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38294045551",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012191833_1247ce6a4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7076,
+    "run_id": "38294045551"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T19:18:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
