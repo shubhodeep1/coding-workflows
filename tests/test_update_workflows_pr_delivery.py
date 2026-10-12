@@ -285,12 +285,6 @@ class Fixture:
 		self.stage_change()
 		self.output.write_text("", encoding="utf-8")
 		script = _run_text().replace("/tmp/", f"{self.state}/")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_assembled }}", "false")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_fragment_count }}", "0")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_layout }}", "none")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_assembled }}", "false")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_file }}", "AGENTS.md")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_fragment_count }}", "0")
 		assert "${{" not in script
 		env = {
 			**_clean_env(),
@@ -306,6 +300,12 @@ class Fixture:
 			"RELEASE_TAG": release_tag,
 			"DEFAULT_BRANCH": "main",
 			"UPDATER_PR_DELIVERY_ENABLED": flag,
+			"CHANGELOG_ASSEMBLED": "false",
+			"CHANGELOG_FRAGMENT_COUNT": "0",
+			"CHANGELOG_LAYOUT": "none",
+			"AGENTS_ASSEMBLED": "false",
+			"AGENTS_FILE": "AGENTS.md",
+			"AGENTS_FRAGMENT_COUNT": "0",
 			"FAKE_GH_LOG": str(self.gh_log),
 			"FAKE_PR_LIST": str(self.pr_list),
 			"FAKE_STALE_LIST": str(self.stale_list),
