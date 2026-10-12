@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The current hold in `scripts/security_dependency.py` is limited to security follow-ups. It accepts only `- Depends on: #N` (regex `SECURITY_DEPENDENCY_RE`, line 34). It requires the `ai:security` label and finding marker (lines 61-62). It treats a PR as \"dependency missing or not an issue\" (line 83). Widening it (option C) would weaken that security rule. Hard-coding #6667 (option B) would be a one-off that has to be removed later. A generic, separate declaration keeps the security path as it is and reuses its hook points: clarify's \"Decide clarify route\", the implement gates, and the stall poller. The new `- Depends on PR: #N` line does not collide with the security matcher: `SECURITY_DEPENDENCY_LINE_RE` (`Depends\\s+on\\s*:`) needs a colon straight after \"on\".\nQ2: The issue says the dependency-gate repair comes first and that capacity-tier, caller and engine changes are not allowed until the conditions pass. Option B puts both scopes in one issue, which breaks that rule. Option C is invalid: #7186 is closed as not_planned, and GITHUB FACTS confirms this. Option A gives each of the four tracks its own issue and PR from main. The hold parks them until PR #6667 is merged and the content check passes. GITHUB FACTS shows #6667 still open, not merged, with base `main`.\nQ3: The security hold already resumes issues by posting one `/reclarify` with a release marker that the pipeline account wrote (`<!-- ai:security-dependency-released:<n> -->`, checked in `scripts/orchestrate_poll_process.sh` around line 18743). Using the same pattern gives exactly-once resumption backed by a marker. A fresh clarify is the right restart for feature issues whose code base changed under them. Option B skips clarification on old answers. Option C relies on the stall poller, which does not promise exactly-once.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Every decision is a lettered choice. Implementation notes for the planner:\n- Q1: Put the generic hold in a new helper module next to `scripts/security_dependency.py` (for example `scripts/pr_dependency.py`; check the name is free). Leave the security module and its CLI unchanged.\n  - Accept the declaration only when the issue author is the GH_PAT login or has OWNER, MEMBER or COLLABORATOR association.\n  - Require exactly one `- Depends on PR: #N` line and exactly one `- Requires on main: <path> contains <fixed string>` line.\n  - Validate the path the same way other scope paths are validated: repo-relative, no `..`, no `.git`.\n  - Return `ready` only when both checks pass. The PR check uses one REST read of `pulls/N`: `merged_at` is set, and `base.ref` equals the repository default branch. The content check is one fixed-string check of `<path>` on the default branch, read either from the contents API or from a local `git show origin/<default>:<path>`.\n  - Every other outcome is `held` with a reason: malformed, repeated, untrusted, self-reference, not a PR, unmerged, wrong base, string missing, or an unreadable read.\n  - Add contract tests that mirror `tests/test_security_dependency.py`.\n- Q2: A held issue must not appear as `ai:blocked` to the unblock scan, and no planning or implementation run may be dispatched for it. The hold check runs before any label change that the scan picks up, the same way the security hold works today. This issue's PR may use the normal closing keyword for this standalone issue.\n- Q3: Use the marker `<!-- ai:pr-dependency-released:<issue> -->`. Count only comments from the pipeline account for deduplication. If the comment-history read fails, do not post anything that tick.\n\nSETUP REQUIRED:\n- PR_DEPENDENCY_FEATURE_TRACK_ISSUES (resource): after this issue's PR merges, the pipeline account or a trusted maintainer files four standalone issues (capacity tiers, MEMORY_LEARNINGS, SOFT_ERROR_ANALYZER, JUDGE_INTERIM). Each carries `- Depends on PR: #6667` and `- Requires on main: scripts/ai_engine.sh contains _AI_ENGINE_EXIT_REFUSED`. Until they exist, nothing happens for those tracks. Once filed, the hold keeps them parked without anyone watching and resumes each one exactly once.",
+  "fingerprint": "854c54a79729597b4684c2a13911ee5b85956e817f2c3013eb2c0d3eecfce4f1",
+  "lineage": {
+    "issue_number": 7228,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38217883101",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38217883101",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7228"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012075307_39899f24ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7228,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38217883101"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7228",
+  "timestamps": {
+    "created_at": "2026-10-12T07:53:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
