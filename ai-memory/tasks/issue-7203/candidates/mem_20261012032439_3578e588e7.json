@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: #6667 is not on the default branch yet, and both plans forbid starting without it. How should this issue proceed?\nChoices:\nA) Hold this issue until #6667 merges into `main`, then `/reclarify` it. Nothing is built before then. (RECOMMENDED)\nB) Build on the integration branch `orchestrator/project-6664` by adding an `Integration branch:` header. This goes against both plans' \"dispatch after #6667 merges into the default branch\" decision (Q10 A / Q27 A).\nC) Treat #6667 as already merged and this checkout as stale; go ahead against `main` as it is today. **Note:** if the preflight greps still fail during planning, this choice bounces straight back to re-clarification.\nQ2: The 9 gaps cover two 4-phase plans. How should the work be split?\nChoices:\nA) Run it as orchestrator work: use each plan's own phase order (capacity-wait phases 1\u20134; tiers phases 1\u20134), one PR per phase, with this issue kept only as the record of the gaps. (RECOMMENDED)\nB) Split in two: this issue covers the capacity-wait plan (gaps 1\u20135, its phases in order, one PR per phase), and gaps 6\u20139 move to a new issue for the tiers plan.\nC) Ship all 9 gaps in one PR from this issue. **Note:** this goes against the capacity-wait plan's Phase 1 rule that the off switch defaults to `false` until the resume pass exists, and it will exceed the per-issue time budget.",
+  "fingerprint": "8029c28f016fbc5d40fe82ca8c4e15621feeb4b8a32aab3a205877b9f2ee0382",
+  "lineage": {
+    "issue_number": 7203,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38199312996",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38199312996",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012032439_3578e588e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7203,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38199312996"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7203 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T03:24:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
