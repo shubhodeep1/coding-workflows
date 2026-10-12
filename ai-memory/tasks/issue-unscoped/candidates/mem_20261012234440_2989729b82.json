@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:102 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The documentation implies operators must manually enable `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` after required checks pass, although the flag now defaults to `true`.\n  WHY: Operators may believe automatic approval is disabled until they set the variable, despite it being enabled by default.\n- tests/test_plan_auto_approve_safe_state_fetch.py:216-218 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The test name `test_plan_gate_wiring_defaults_off` says the wiring defaults off, while its assertion checks that the workflow default is `true`.\n  WHY: The test passes, but its name misrepresents the behavior it verifies and may confuse future readers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_plan_auto_approve_safe_state_fetch.py:216 | severity=NIT | confidence=5\n  PROBLEM: The test function `test_plan_gate_wiring_defaults_off` asserts that the default for `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `'true'`.\n  WHY: The test name implies it is verifying that the default value is `false` (the legacy behavior), but the test is technically correct regarding the new code implementation and is misleading for future developers.\n- README.md:102 | severity=NIT | confidence=5\n  PROBLEM: The documentation for `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` incorrectly states: \"Set to `true` only after required checks pass\".\n  WHY: The workflow now defaults this variable to `true` at `.github/workflows/plan.yml:65`, so the documentation should reflect this change to avoid confusing operators.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:Line 102, `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` description | severity=NIT | confidence=5\n  PROBLEM: The row says \u201cSet to `true` only after required checks pass,\u201d but the flag now defaults to `true`.\n  WHY: The gate is already enabled when the variable is unset. This guidance can mislead operators about when automatic approval is active; the trusted exact-grant check still applies.\n- tests/test_plan_auto_approve_safe_state_fetch.py:Line 217, `test_plan_gate_wiring_defaults_off` | severity=NIT | confidence=5\n  PROBLEM: The test name says the wiring defaults off, but its assertion checks that the workflow defaults the flag to `true`.\n  WHY: The test passes, but its name misrepresents the behavior it verifies and can mislead readers interpreting test results.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:line 102 (variable table row for `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`) | severity=NIT | confidence=5\n  PROBLEM: The row's description still ends with \"Set to `true` only after required checks pass,\" but the default column now says `true` and the workflow defaults are all `'true'`.\n  WHY: No runtime failure, but operators reading the README will believe automatic approval remains disabled until they set the variable, when in fact it is on by default and only requires an exact `files_touched` grant.\n- tests/test_plan_auto_approve_safe_state_fetch.py:`def test_plan_gate_wiring_defaults_off() -> None:` (line 218) | severity=NIT | confidence=5\n  PROBLEM: The test name says \"defaults_off\" but the assertion now checks that the workflow default is `'true'` (on): `assert \"... || 'true' }}\" in text`.\n  WHY: No runtime failure \u2014 the test passes. But a future reader scanning test names will incorrectly believe this test verifies the default is off, causing confusion when debugging or extending the gate logic.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1976084b6a02da2a2668e19434c8f33829932a78bde2add32e74eafbf48c31a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7293,
+    "run_id": "38322202128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38322202128",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012234440_2989729b82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7293,
+    "run_id": "38322202128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T23:44:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
