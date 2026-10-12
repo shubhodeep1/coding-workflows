@@ -360,10 +360,10 @@ def test_invalid_mirror_entries_are_skipped() -> None:
 	def check(sb: Sandbox) -> None:
 		result = sb.run_step(
 			good_mirrors="mirror.gcr.io/library",
-			mirrors="evil$(touch_pwned) HOST:5000/lib mirror.gcr.io/library",
+			mirrors="evil$(touch_pwned) HOST:5000/lib -x/lib mirror.gcr.io/library",
 		)
 		assert result.returncode == 0, result.stderr
-		assert result.stdout.count("reason=invalid_mirror") == 2
+		assert result.stdout.count("reason=invalid_mirror") == 3
 		assert "outcome=seeded source=mirror.gcr.io/library" in result.stdout
 		pulls = [line for line in sb.log_lines() if line.startswith("pull")]
 		assert pulls == [f"pull --quiet mirror.gcr.io/library/{_real_base_ref()}"], pulls
@@ -390,6 +390,14 @@ def test_unsupported_or_malicious_refs_are_skipped() -> None:
 		_with_sandbox(f"# fixture\nFROM {ref}\n", check)
 
 
+def test_isolated_run_build_does_not_force_pull() -> None:
+	"""The pre-seeded local image is only used while the build omits --pull."""
+	script = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
+	builds = [line for line in script.splitlines() if "docker build" in line]
+	assert builds, "clarify_isolated_run.sh no longer runs docker build"
+	assert not any("--pull" in line for line in builds), builds
+
+
 def test_invalid_timeout_falls_back_to_default() -> None:
 	body = _step(STEP_NAME)["run"]
 	assert 'preseed_timeout=300' in body
@@ -408,6 +416,7 @@ def main() -> int:
 		test_present_image_is_not_pulled_again,
 		test_invalid_mirror_entries_are_skipped,
 		test_unsupported_or_malicious_refs_are_skipped,
+		test_isolated_run_build_does_not_force_pull,
 		test_invalid_timeout_falls_back_to_default,
 	]
 	passed = 0

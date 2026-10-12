@@ -874,7 +874,9 @@ jobs:
           # Only an implicit Docker Hub official image (`name:tag`) maps onto
           # `<mirror>/<name>:<tag>`; anything else is left to docker build.
           preseed_ref_re='^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._-]{1,128}$'
-          preseed_mirror_re='^[a-z0-9.-]+(/[a-z0-9._-]+)*$'
+          # The first character must be alphanumeric so an entry can never be
+          # parsed by `docker pull` as a CLI flag (for example `-x/lib`).
+          preseed_mirror_re='^[a-z0-9][a-z0-9.-]*(/[a-z0-9._-]+)*$'
           preseed_sanitize() { printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._:/@-' '_' | cut -c1-200; }
           preseed_docker() { env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker "$@"; }
 
