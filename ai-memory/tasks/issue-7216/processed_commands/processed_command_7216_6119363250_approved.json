@@ -5,13 +5,30 @@
   "entry_id": "processed_command_7216_6119363250_approved",
   "issue_number": 7216,
   "metadata": {
+    "branch": "ai/issue-7216",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/plan.yml",
+      "README.md",
+      "agents.d/7216-plan-superseded-merged-pr.md",
+      "changelog.d/7216-plan-superseded-merged-pr.md",
+      "docs/INVENTORY.md",
+      "scripts/plan_superseded_merged_pr.py",
+      "tests/test_plan_superseded_merged_pr.py",
+      "tests/test_plan_superseded_merged_pr_workflow.py"
+    ],
+    "issue_number": 7216,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7216",
+    "pr_number": 7229,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7229",
+    "run_attempt": "1",
+    "run_id": "38215354288",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38215354288"
   },
   "run_attempt": 1,
   "run_id": "38215354288",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-12T07:02:51Z",
+  "status": "completed",
+  "timestamp": "2026-10-12T07:23:50Z",
   "workflow": "implement"
 }
