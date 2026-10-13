@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:957-958 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reroute step\u2019s tar command fails when no staged-support files match, preventing checkout of the base branch.\n  WHY: With an empty file list, GNU tar exits non-zero and the workflow sets `SKIP_PLAN=true`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the check did not pass, plan against the PR\u2019s base branch.\"\n  expected_change_site: .github/workflows/plan.yml, the merged_check_not_passed branch of \u201cClose superseded CI-repair issue (merged PR)\u201d\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic only reroutes when PLAN_SUPERSEDE_RESOLVED_REF equals the former head branch of the PR; when planning runs on a different branch, it logs \"merged_check_not_passed\" and proceeds with the original checkout instead of planning against the PR's base branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:957-958 | severity=MAJOR | confidence=5\n  PROBLEM: The reroute step uses GNU tar to archive staged files, but it fails if no files are matched.\n  WHY: When no tracked staged-support files differ between the former head and base, and no untracked staged files exist, the pipe feeding `tar -T -` is empty. GNU tar refuses to create an empty archive and exits with a non-zero status, causing the workflow to set `SKIP_PLAN=true` instead of performing the checkout of the base branch.\n- TASK_GAP:\n  Requirement: \"If the check did not pass, plan against the PR\u2019s base branch.\"\n  Expected change site: .github/workflows/plan.yml, the merged_check_not_passed branch of \u201cClose superseded CI-repair issue (merged PR)\u201d.\n  Evidence of absence: The logic only reroutes when PLAN_SUPERSEDE_RESOLVED_REF equals the former head branch of the PR. If planning is running on a different branch (e.g., a declared integration branch that is not the PR base branch), it logs \"merged_check_not_passed\" and proceeds with the original checkout, failing to plan against the PR's base branch as required.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d25ac40b2279a4e049ca3686be3448db1fd56b2ce6e9f40fd1979147cc74ee60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7229,
+    "run_id": "38433774999",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38433774999",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013172214_b52ff328c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7229,
+    "run_id": "38433774999"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T17:22:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
