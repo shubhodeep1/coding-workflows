@@ -3122,7 +3122,10 @@ def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
 	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in poll
 	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
 	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
-	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    bash scripts/codex_heartbeat.sh \\\n      --phase "orchestrate-security-pass"' in process
+	# The security pass runs its trusted support copies against a clean
+	# worktree of the integration head (#7126 security-pass fix cycle 2).
+	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n      SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}" \\\n' in process
+	assert 'bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \\\n        --phase "orchestrate-security-pass"' in process
 
 
 def main() -> int:

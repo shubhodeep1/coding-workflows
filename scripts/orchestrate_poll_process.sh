@@ -7834,6 +7834,95 @@ sys.stdout.write("\n".join(lines) + "\n")
 PY
 }
 
+# Security-pass audit tree (security-pass fix cycle 2 of #7126).
+# The security pass prepares its checkout with keep_trusted_support=true, so
+# _judge_refresh_trusted_support overwrites every scripts/ and prompts/ file
+# with the verified support copy from the default branch. That checkout is
+# trusted for *execution* only: auditing it showed the model the default
+# branch's scripts/prompts next to the integration branch's changelog
+# fragments and diff hunks, so fixed findings were re-reported every cycle and
+# a project's real scripts/ or prompts/ changes were never audited.
+# _security_pass_prepare_audit_tree checks the integration head out into a
+# separate, clean, detached worktree under RUNTIME_DIR; the audit snapshots
+# that tree while still running only the trusted support copies. On success
+# it sets SECURITY_PASS_AUDIT_TREE_DIR (the worktree) and
+# SECURITY_PASS_AUDIT_TREE_PARENT (the mktemp directory holding it).
+SECURITY_PASS_AUDIT_TREE_DIR=""
+SECURITY_PASS_AUDIT_TREE_PARENT=""
+_security_pass_prepare_audit_tree() {
+  local audit_tree_head="$1"
+  local audit_tree_runtime audit_tree_parent audit_tree_path audit_tree_actual
+  SECURITY_PASS_AUDIT_TREE_DIR=""
+  SECURITY_PASS_AUDIT_TREE_PARENT=""
+  audit_tree_runtime="$(cd "${RUNTIME_DIR:-}" 2>/dev/null && pwd -P || true)"
+  # RUNTIME_DIR must already be absolute: the audit runs with the worktree as
+  # its cwd, and its context/findings/error paths are built from RUNTIME_DIR.
+  if [[ "${RUNTIME_DIR:-}" != /* ]] || [ -z "${audit_tree_runtime}" ] || [[ "${audit_tree_runtime}" != /* ]]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head} outcome=failed reason=runtime_dir_unavailable"
+    return 1
+  fi
+  if ! [[ "${audit_tree_head}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head:-none} outcome=failed reason=head_mismatch"
+    return 1
+  fi
+  audit_tree_parent="$(mktemp -d "${audit_tree_runtime}/security-audit-tree.XXXXXX" 2>/dev/null || true)"
+  if [ -z "${audit_tree_parent}" ] || [ ! -d "${audit_tree_parent}" ]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head} outcome=failed reason=runtime_dir_unavailable"
+    return 1
+  fi
+  audit_tree_path="${audit_tree_parent}/tree"
+  # core.hooksPath=/dev/null: no repository hook runs during the checkout.
+  if ! git -c core.hooksPath=/dev/null worktree add --quiet --detach "${audit_tree_path}" "${audit_tree_head}" >/dev/null 2>&1; then
+    _security_pass_remove_audit_tree "${audit_tree_path}" "${audit_tree_parent}" "quiet"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head} outcome=failed reason=worktree_add_failed"
+    return 1
+  fi
+  audit_tree_actual="$(git -C "${audit_tree_path}" rev-parse HEAD 2>/dev/null || true)"
+  if [ "${audit_tree_actual}" != "${audit_tree_head}" ]; then
+    _security_pass_remove_audit_tree "${audit_tree_path}" "${audit_tree_parent}" "quiet"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head} outcome=failed reason=head_mismatch"
+    return 1
+  fi
+  if ! git -C "${audit_tree_path}" status --porcelain --untracked-files=no >"${audit_tree_parent}/status" 2>/dev/null \
+    || [ -s "${audit_tree_parent}/status" ]; then
+    _security_pass_remove_audit_tree "${audit_tree_path}" "${audit_tree_parent}" "quiet"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head} outcome=failed reason=dirty_tree"
+    return 1
+  fi
+  rm -f "${audit_tree_parent}/status"
+  SECURITY_PASS_AUDIT_TREE_DIR="${audit_tree_path}"
+  SECURITY_PASS_AUDIT_TREE_PARENT="${audit_tree_parent}"
+  echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_tree_head} outcome=prepared"
+  return 0
+}
+
+# Removes the audit worktree. Failures only warn: the security verdict never
+# depends on cleanup, and a stale registration is pruned on the next run.
+_security_pass_remove_audit_tree() {
+  local remove_tree_path="$1"
+  local remove_tree_parent="$2"
+  local remove_tree_quiet="${3:-}"
+  local remove_tree_failed=0
+  if [ -n "${remove_tree_path}" ] && [ -e "${remove_tree_path}" ]; then
+    git worktree remove --force "${remove_tree_path}" >/dev/null 2>&1 || remove_tree_failed=1
+  fi
+  if [ -n "${remove_tree_parent}" ] && [ -d "${remove_tree_parent}" ]; then
+    rm -rf -- "${remove_tree_parent}" 2>/dev/null || remove_tree_failed=1
+  fi
+  git worktree prune >/dev/null 2>&1 || true
+  if [ -n "${remove_tree_parent}" ] && [ -e "${remove_tree_parent}" ]; then
+    remove_tree_failed=1
+  fi
+  [ -n "${remove_tree_quiet}" ] && return 0
+  if [ "${remove_tree_failed}" -ne 0 ]; then
+    echo "::warning::Could not remove the security-pass audit tree for tracking issue #${TRACKING_NUM:-unknown}; it is pruned on a later run."
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} outcome=remove_failed"
+  else
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} outcome=removed"
+  fi
+  return 0
+}
+
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -8120,24 +8209,58 @@ run_security_pass_inline() {
     return 1
   fi
 
-  if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
-    SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
-    SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
-    SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
-    SECURITY_AUDIT_DIFF_SINCE="${security_pass_audit_since_sha}" \
-    SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
-    SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
-    SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
-    SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
-    SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
-    SECURITY_AUDIT_INCREMENTAL="true" \
-    SECURITY_AUDIT_CLAUDE_REJECTED_OUT="${RUNTIME_DIR}/security_pass_claude_rejected_${TRACKING_NUM}.txt" \
-    WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
-    AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
-    bash scripts/codex_heartbeat.sh \
-      --phase "orchestrate-security-pass" \
-      --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+  # The refreshed checkout (cwd) holds the verified support copies installed
+  # by _judge_refresh_trusted_support: it is trusted for execution only and
+  # its working tree is never what gets audited. The audit runs with the clean
+  # integration-head worktree as its cwd (security_audit.sh snapshots its git
+  # toplevel), and every executable, prompt and the false-positive exclusion
+  # catalog resolve from this support root by absolute path, so neither a
+  # branch-supplied security_audit.sh nor a branch catalog that excludes its
+  # own findings is ever used.
+  local security_pass_support_root security_pass_audit_rc=0 security_pass_support_asset
+  security_pass_support_root="$(pwd -P)"
+  for security_pass_support_asset in \
+    scripts/security_audit.sh \
+    scripts/codex_heartbeat.sh \
+    scripts/security_audit_fp_exclusions.json \
+    prompts/mode-security-audit.txt; do
+    if [ ! -f "${security_pass_support_root}/${security_pass_support_asset}" ]; then
+      security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${security_pass_support_asset} is unavailable." "${prior_security_status}"
+      return 1
+    fi
+  done
+  if ! _security_pass_prepare_audit_tree "${current_head_sha}"; then
+    security_pass_fail_closed "engine_unavailable" "The integration head could not be checked out into a clean audit tree." "${prior_security_status}"
+    return 1
+  fi
+
+  (
+    cd "${SECURITY_PASS_AUDIT_TREE_DIR}" || exit 97
+    SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+      SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
+      SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
+      SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
+      SECURITY_AUDIT_DIFF_SINCE="${security_pass_audit_since_sha}" \
+      SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
+      SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
+      SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
+      SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
+      SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
+      SECURITY_AUDIT_INCREMENTAL="true" \
+      SECURITY_AUDIT_CLAUDE_REJECTED_OUT="${RUNTIME_DIR}/security_pass_claude_rejected_${TRACKING_NUM}.txt" \
+      WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
+      AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
+      SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}" \
+      SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json" \
+      bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \
+        --phase "orchestrate-security-pass" \
+        --stderr-file "${audit_error_file}" \
+        -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}"
+  ) || security_pass_audit_rc=$?
+  _security_pass_remove_audit_tree "${SECURITY_PASS_AUDIT_TREE_DIR}" "${SECURITY_PASS_AUDIT_TREE_PARENT}"
+  SECURITY_PASS_AUDIT_TREE_DIR=""
+  SECURITY_PASS_AUDIT_TREE_PARENT=""
+  if [ "${security_pass_audit_rc}" -ne 0 ]; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -28572,6 +28695,16 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 			# Operator sentinel (ORCH_FINAL_MERGE_REQUIRED_CHECKS=""): check-run
 			# outcomes are left to branch protection, as before. The named CI
 			# check, when configured, was still required by the wait helper.
+			# _pr_checks_completed returns before counting check-runs under
+			# this sentinel, so with no named CI check nothing shows that any
+			# check ran on this head: fail closed, page once (issue #7126).
+			case "${PR_CHECKS_LAST_CI_NAME:-none}" in
+				""|none)
+					_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: no check-run verified on ${N_HEAD_SHA} (reason=no_check_runs_verified, required-checks gate is allow-all and no CI check is configured). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+					NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+					continue
+					;;
+			esac
 			;;
 		0:ok)
 			# The shared helper counts an unreadable actions/runs listing as

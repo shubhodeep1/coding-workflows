@@ -941,7 +941,7 @@ def _noop_activity(actor: str = PIPELINE_LOGIN, before: str = "0" * 40, after: s
 
 def _run_noop_sweep(*, snapshot=None, comments=None, commits=None, pr=None,
 		wait_outcome: str = "ok", wait_total: str = "5", login: str = PIPELINE_LOGIN,
-		runs_read: str = "true", activity=None) -> dict:
+		runs_read: str = "true", activity=None, ci_name: str = "lint") -> dict:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		log = root / "log"
@@ -985,6 +985,7 @@ _pr_wait_for_required_checks() {
 	PR_CHECKS_WAIT_OUTCOME="${WAIT_OUTCOME}"
 	PR_CHECKS_LAST_TOTAL="${WAIT_TOTAL}"
 	PR_CHECKS_RUNS_READ="${WAIT_RUNS_READ}"
+	PR_CHECKS_LAST_CI_NAME="${WAIT_CI_NAME}"
 	case "${WAIT_OUTCOME}" in ok|allow_all) return 0 ;; *) return 1 ;; esac
 }
 GITHUB_REPOSITORY="o/r"
@@ -994,7 +995,7 @@ STANDALONE_PRS="$(cat "${FX}/snapshot.json")"
 STANDALONE_COUNT="$(printf '%s' "${STANDALONE_PRS}" | jq 'length')"
 """ + _noop_sweep_slice()
 		env = {**os.environ, "TRUSTED": login, "WAIT_OUTCOME": wait_outcome, "WAIT_TOTAL": wait_total,
-			"WAIT_RUNS_READ": runs_read, "PYTHONDONTWRITEBYTECODE": "1"}
+			"WAIT_RUNS_READ": runs_read, "WAIT_CI_NAME": ci_name, "PYTHONDONTWRITEBYTECODE": "1"}
 		result = subprocess.run(["bash", "-c", script, "sweep", str(root), str(log)], cwd=tmp, env=env,
 			capture_output=True, text=True)
 		assert result.returncode == 0, result.stderr + result.stdout
@@ -1111,6 +1112,16 @@ def test_noop_no_check_runs_fails_closed():
 	assert len(out["alerts"]) == 1 and "reason=no_check_runs" in out["alerts"][0], out
 
 
+def test_noop_allow_all_without_ci_check_fails_closed():
+	"""Issue #7126: under the allow-all sentinel the shared gate counts no
+	check-runs, so without a named CI check nothing shows a check ran."""
+	for ci_name in ("none", ""):
+		out = _run_noop_sweep(wait_outcome="allow_all", wait_total="", ci_name=ci_name)
+		assert not out["merges"], out
+		assert len(out["alerts"]) == 1 and "reason=no_check_runs_verified" in out["alerts"][0], out
+	assert len(_run_noop_sweep(wait_outcome="allow_all", wait_total="", ci_name="lint")["merges"]) == 1
+
+
 def test_noop_unreadable_ci_runs_wait_without_paging():
 	"""Issue #7126: the shared helper reads an unreadable actions/runs
 	listing as zero pending runs; Gate D must not merge on that."""
@@ -1194,6 +1205,38 @@ def test_noop_productive_identity_matches_commit_writers():
 		writer = (REPO_ROOT / rel).read_text()
 		assert re.search(r'git config user\.name "codex-bot"', writer), rel
 		assert re.search(r'git config user\.email "codex@users\.noreply\.github\.com"', writer), rel
+
+
+def test_noop_force_merge_controls_named_by_security_pass_findings_stay_in_place():
+	"""Security-pass fix cycle 2 of #7126 re-reported
+	`noop-force-merge-forged-comment-gates` and
+	`noop-gate-d-ignores-pending-checks-unbound-merge` because the audit read
+	the default branch's support copy of this script. Pin each control those
+	findings name, so a later sync that drops one fails here."""
+	text = _poller_text()
+	conflict = text[text.index('echo "Standalone PR conflict sweep"'):text.index(SWEEP_HEADER)]
+	pr_list = [line for line in conflict.splitlines() if "--json number,headRefName" in line]
+	assert pr_list, "the open-PR snapshot must request its fields explicitly"
+	assert all("isCrossRepository" in line and "headRepositoryOwner" in line for line in pr_list), pr_list
+	sweep_code = _strip_shell_comments(_sweep_block())
+	selections = [m.start() for m in re.finditer(r'--arg lit "\$\{NOOP_WARNING_LITERAL\}"', sweep_code)]
+	assert len(selections) >= 3, "noop-warning selections moved; re-check the author filter"
+	for start in selections:
+		jq_filter = sweep_code[start:sweep_code.index("2>/dev/null", start)]
+		assert '(.user.login // "") == $login' in jq_filter, jq_filter
+	summary_lines = [line for line in sweep_code.splitlines() if 'startswith("AI autofix editor summary")' in line]
+	assert summary_lines and all('(.user.login // "") == $login' in line for line in summary_lines), summary_lines
+	# Gate C: a qualifying commit must carry the pipeline git identity and
+	# arrive in a push by the pipeline login on this head ref.
+	gate_c = sweep_code[sweep_code.index("N_PROD_PUSHED="):sweep_code.index('if [ "${N_PROD_PUSHED}" != "true" ]')]
+	assert '--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}"' in gate_c and '--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}"' in gate_c, gate_c
+	assert '(.value.commit.committer.name // "") == $name' in gate_c and '(.value.commit.author.email // "") == $email' in gate_c, gate_c
+	assert '(.actor.login // "") == $login and (.ref // "") == $ref' in gate_c, gate_c
+	assert "select(.b < $k and $k <= .a)" in gate_c, gate_c
+	assert '_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0' in sweep_code
+	merges = [line for line in sweep_code.splitlines() if "gh pr merge" in line and "--squash" in line]
+	assert len(merges) == 1, merges
+	assert '--match-head-commit "${N_HEAD_SHA}"' in merges[0], merges
 
 
 def main() -> int:

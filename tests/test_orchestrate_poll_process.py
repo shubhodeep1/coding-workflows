@@ -1189,11 +1189,23 @@ esac
 			mock_security_audit.write_text(
 				"#!/usr/bin/env bash\n"
 				"set -euo pipefail\n"
-				"python3 - \"${SECURITY_AUDIT_CAPTURE}\" \"${1:-}\" <<'PY'\n"
-				"import json, os, sys\n"
+				"python3 - \"${SECURITY_AUDIT_CAPTURE}\" \"${1:-}\" \"${BASH_SOURCE[0]}\" <<'PY'\n"
+				"import json, os, subprocess, sys\n"
 				"from pathlib import Path\n"
+				"def _git_out(*git_args):\n"
+				"  try:\n"
+				"    return subprocess.run(['git', *git_args], capture_output=True, text=True, check=False).stdout.strip()\n"
+				"  except OSError:\n"
+				"    return ''\n"
 				"Path(sys.argv[1]).write_text(json.dumps({\n"
 				"  'project_spec_path': sys.argv[2],\n"
+				"  'script_path': os.path.realpath(sys.argv[3]),\n"
+				"  'cwd': os.path.realpath(os.getcwd()),\n"
+				"  'toplevel': os.path.realpath(_git_out('rev-parse', '--show-toplevel') or '/nonexistent'),\n"
+				"  'tree_head': _git_out('rev-parse', 'HEAD'),\n"
+				"  'tree_status': _git_out('status', '--porcelain', '--untracked-files=no'),\n"
+				"  'support_dir': os.environ.get('SECURITY_AUDIT_SUPPORT_DIR'),\n"
+				"  'fp_exclusions': os.environ.get('SECURITY_AUDIT_FP_EXCLUSIONS'),\n"
 				"  'output_mode': os.environ.get('SECURITY_AUDIT_OUTPUT_MODE'),\n"
 				"  'diff_base': os.environ.get('SECURITY_AUDIT_DIFF_BASE'),\n"
 				"  'diff_head': os.environ.get('SECURITY_AUDIT_DIFF_HEAD'),\n"
@@ -3878,6 +3890,58 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert "SECURITY_PASS_CLEAN" in combined_log
 	assert result["telegram_cleanup_calls"] == ["192"]
 	assert not any(prior_alert_marker in comment["body"] for comment in result["issues"]["192"]["comments"])
+
+
+def test_security_pass_audits_a_clean_worktree_of_the_integration_head() -> None:
+	"""Security-pass fix cycle 2 of #7126: the refreshed checkout carries the
+	verified support copies of scripts/ and prompts/, so the audit runs with a
+	separate, clean worktree of the integration head as its cwd while every
+	executable and the exclusion catalog come from the trusted support root."""
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert capture is not None, combined_log
+	support_dir = capture["support_dir"]
+	assert support_dir and support_dir.startswith("/"), capture
+	assert capture["cwd"] != os.path.realpath(support_dir), capture
+	assert "/security-audit-tree." in capture["cwd"] and capture["cwd"].endswith("/tree"), capture
+	assert capture["toplevel"] == capture["cwd"], capture
+	assert capture["tree_head"] == capture["diff_head"], capture
+	assert capture["tree_status"] == "", capture
+	assert capture["script_path"] == os.path.realpath(os.path.join(support_dir, "scripts", "security_audit.sh")), capture
+	assert capture["fp_exclusions"] == os.path.join(support_dir, "scripts", "security_audit_fp_exclusions.json"), capture
+	assert f"SECURITY_PASS_AUDIT_TREE tracking_issue=192 head_sha={capture['diff_head']} outcome=prepared" in combined_log
+	assert "SECURITY_PASS_AUDIT_TREE tracking_issue=192 outcome=removed" in combined_log
+	assert result["latest_state"]["security_pass_status"] == "passed"
+
+
+def test_security_pass_failed_audit_still_removes_the_audit_tree() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_exit_code=3,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "outcome=prepared" in combined_log
+	assert "SECURITY_PASS_AUDIT_TREE tracking_issue=192 outcome=removed" in combined_log
+	assert combined_log.index("outcome=removed") < combined_log.index("SECURITY_PASS_FAILED reason=engine_unavailable")
+	assert result["latest_state"]["security_pass_status"] == "failed"
 
 
 def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> None:
@@ -24705,6 +24769,95 @@ def test_security_pass_judge_checkout_refreshes_support_from_the_verified_checko
 		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
 		assert (repo / "changelog.d" / "1-fix.md").exists()
 		assert "reason=trusted_support trusted_refreshed=2" in out, out
+
+
+def _security_pass_audit_tree_functions() -> str:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = poller.index('SECURITY_PASS_AUDIT_TREE_DIR=""\nSECURITY_PASS_AUDIT_TREE_PARENT=""\n_security_pass_prepare_audit_tree() {')
+	end = poller.index("run_security_pass_inline() {", start)
+	return poller[start:end]
+
+
+def _run_audit_tree_script(repo: Path, body: str, runtime: str) -> str:
+	script = _security_pass_audit_tree_functions() + "\nTRACKING_NUM=7126\n" + body
+	env = {**_git_test_env(), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "RUNTIME_DIR": runtime}
+	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, capture_output=True, text=True, check=False)
+	return result.stdout + result.stderr
+
+
+def _audit_tree_repo(tmp_path: Path) -> tuple[Path, str]:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	env = {**_git_test_env(), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+	def git(*args: str) -> str:
+		return subprocess.run(["git", "-C", str(repo), *args], env=env, capture_output=True, text=True, check=True).stdout.strip()
+	git("init", "-q")
+	(repo / "scripts").mkdir()
+	(repo / "scripts" / "probe.sh").write_text("branch\n", encoding="utf-8")
+	(repo / "scripts" / "security_audit_fp_exclusions.json").write_text('{"branch": true}\n', encoding="utf-8")
+	git("add", ".")
+	git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "head")
+	head = git("rev-parse", "HEAD")
+	# The refreshed checkout's working tree carries the trusted overlay.
+	(repo / "scripts" / "probe.sh").write_text("trusted\n", encoding="utf-8")
+	(repo / "scripts" / "security_audit_fp_exclusions.json").write_text('{"trusted": true}\n', encoding="utf-8")
+	return repo, head
+
+
+def test_security_pass_audit_tree_checks_out_branch_content_not_the_overlay() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo, head = _audit_tree_repo(Path(td))
+		runtime = Path(td) / "runtime"
+		runtime.mkdir()
+		out = _run_audit_tree_script(repo, (
+			'_security_pass_prepare_audit_tree "$1" || exit 9\n'
+			'echo "TREE=${SECURITY_PASS_AUDIT_TREE_DIR}"\n'
+			'cat "${SECURITY_PASS_AUDIT_TREE_DIR}/scripts/probe.sh"\n'
+			'git -C "${SECURITY_PASS_AUDIT_TREE_DIR}" rev-parse HEAD\n'
+			'_security_pass_remove_audit_tree "${SECURITY_PASS_AUDIT_TREE_DIR}" "${SECURITY_PASS_AUDIT_TREE_PARENT}"\n'
+		).replace("$1", head), str(runtime))
+		assert f"SECURITY_PASS_AUDIT_TREE tracking_issue=7126 head_sha={head} outcome=prepared" in out, out
+		assert "\nbranch\n" in out and head in out, out
+		assert "outcome=removed" in out, out
+		assert list(runtime.iterdir()) == [], out
+		assert (repo / "scripts" / "probe.sh").read_text(encoding="utf-8") == "trusted\n"
+		listed = subprocess.run(["git", "-C", str(repo), "worktree", "list"], env=_git_test_env(),
+			capture_output=True, text=True, check=True).stdout.strip().splitlines()
+		assert len(listed) == 1, listed
+
+
+def test_security_pass_audit_tree_fails_closed_and_leaves_nothing_behind() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo, head = _audit_tree_repo(Path(td))
+		runtime = Path(td) / "runtime"
+		runtime.mkdir()
+		out = _run_audit_tree_script(repo, '_security_pass_prepare_audit_tree "' + "a" * 40 + '"; echo "rc=$?"\n', str(runtime))
+		assert "outcome=failed reason=worktree_add_failed" in out and "rc=1" in out, out
+		assert list(runtime.iterdir()) == [], out
+		out = _run_audit_tree_script(repo, '_security_pass_prepare_audit_tree "not-a-sha"; echo "rc=$?"\n', str(runtime))
+		assert "reason=head_mismatch" in out and "rc=1" in out, out
+		out = _run_audit_tree_script(repo, f'_security_pass_prepare_audit_tree "{head}"; echo "rc=$?"\n', "relative-runtime")
+		assert "reason=runtime_dir_unavailable" in out and "rc=1" in out, out
+
+
+def test_security_pass_runs_trusted_support_against_the_audit_tree() -> None:
+	"""The audit cwd is the clean worktree; executables and the exclusion
+	catalog resolve from the trusted support root by absolute path, and the
+	tree is removed before the exit code is evaluated."""
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	runner = poller[poller.index("run_security_pass_inline() {"):]
+	runner = runner[:runner.index("\n}\n")]
+	assert 'security_pass_support_root="$(pwd -P)"' in runner
+	assert 'cd "${SECURITY_PASS_AUDIT_TREE_DIR}" || exit 97' in runner
+	assert 'SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"' in runner
+	assert 'SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json"' in runner
+	assert 'bash "${security_pass_support_root}/scripts/codex_heartbeat.sh"' in runner
+	assert '-- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}"' in runner
+	assert "-- bash scripts/security_audit.sh" not in runner
+	prepare = runner.index('_security_pass_prepare_audit_tree "${current_head_sha}"')
+	remove = runner.index('_security_pass_remove_audit_tree "${SECURITY_PASS_AUDIT_TREE_DIR}"')
+	rc_check = runner.index('if [ "${security_pass_audit_rc}" -ne 0 ]; then')
+	assert prepare < remove < rc_check
 
 
 def _run_judge_checkout(repo: Path, ref: str, keep: str) -> str:
