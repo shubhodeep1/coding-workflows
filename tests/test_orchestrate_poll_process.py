@@ -24679,6 +24679,31 @@ def test_security_pass_plain_checkout_restores_trusted_files_the_target_deleted(
 		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "trusted prompt\n", out
 
 
+def test_judge_checkout_fallback_restore_does_not_write_through_target_symlinks() -> None:
+	"""The backup restore after the forced checkout must not follow a
+	target-tracked symlink out of the checkout."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		outside = Path(td) / "outside.sh"
+		outside.write_text("outside\n", encoding="utf-8")
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").unlink()
+		(repo / "scripts" / "pr_checks_lib.sh").symlink_to(outside)
+		subprocess.run(["git", "add", "scripts/pr_checks_lib.sh"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "link"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert "outcome=forced" in out, out
+		assert outside.read_text(encoding="utf-8") == "outside\n", out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+
+
 def test_judge_checkout_fallback_keeps_staged_support_the_target_deleted() -> None:
 	"""Stale removal keeps a path the verified support checkout also has: it is
 	a staged support file later poller steps run."""

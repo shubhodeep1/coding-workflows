@@ -5772,11 +5772,15 @@ prepare_tracking_judge_checkout() {
       git ls-files -z -- scripts prompts .github/ai > "${_judge_prev_tracked}" 2>/dev/null || : > "${_judge_prev_tracked}"
 
       if git checkout --detach -f -q "${target_ref}" >/dev/null 2>&1; then
-        # Force checkout succeeded — restore workflow support files
+        # Force checkout succeeded — restore workflow support files. A
+        # target-tracked symlink at a restore root is skipped and
+        # --remove-destination replaces file symlinks instead of writing
+        # through them, so the restore never writes outside the checkout.
         for _d in scripts prompts; do
-          [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
+          [ -d "${_wf_backup}/${_d}" ] && [ ! -L "${_d}" ] && { mkdir -p "${_d}"; cp -a --remove-destination "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
         done
-        [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
+        [ -d "${_wf_backup}/github_ai" ] && [ ! -L ".github/ai" ] && _judge_support_parents_real ".github/ai" \
+          && { mkdir -p ".github/ai"; cp -a --remove-destination "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
         rm -rf "${_wf_backup}"
         # Files the target ref tracks keep the target's version, as on the
         # plain checkout path: only support files it does not track stay
