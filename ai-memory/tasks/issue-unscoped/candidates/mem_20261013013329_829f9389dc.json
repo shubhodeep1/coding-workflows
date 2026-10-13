@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_triage_resolution.py:311-324 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: When the Actions run-metadata read fails, the fallback accepts failed jobs without verifying that the run belongs to the expected workflow, repository, or pull request, so it can post logs from an unrelated run as this issue\u2019s traceback.\n  WHY: If the metadata read fails but the jobs read succeeds for an unrelated run, its logs are posted without the success-path identity checks; severity disagreement: anthropic_claude-sonnet-5_5 rated this NIT, while the other reviewers rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/check_triage_resolution.py:311-324 | severity=low | confidence=2\n  PROBLEM: When the run metadata is unreadable, the fallback can collect and post failed jobs without the identity checks applied by the readable path.\n  WHY: If the issue's details URL names an unrelated run and the metadata read fails while the jobs read succeeds, redacted log excerpts from that run may be posted as the triage traceback; the issue author must be trusted or the issue hand-edited.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_triage_resolution.py:318-323 | severity=high | confidence=4\n  PROBLEM: The metadata-fetch fallback fetches failed jobs without verifying that the run belongs to the expected workflow, repository, or pull request.\n  WHY: If the triage issue points to an unrelated run in the same repository, the bot can fetch and post that run's job logs on the triage issue, causing incorrect failure diagnosis and potential output leakage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_triage_resolution.py:311-323 | severity=high | confidence=3\n  PROBLEM: When run metadata is unavailable or non-dict, the fallback treats the run's jobs as belonging to the triage issue without applying the success-path identity checks.\n  WHY: A trusted author can point the issue's Check details URL to a different run in the same repository; if metadata fails but jobs load, unrelated job excerpts can be posted as the failing-shard traceback and influence a fix against the wrong shard.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_triage_resolution.py:315-323 | severity=high | confidence=4\n  PROBLEM: When the run-metadata read fails, the fallback accepts failed jobs without verifying the run's workflow, repository, or PR association.\n  WHY: If the issue's Check details URL identifies another run in the repository and its metadata read fails while its jobs read succeeds, that run's logs can be posted as this issue's failing-job traceback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ca7fb12f5a3564a509fabc4f87004d9217f355e2cbe1f5b42d32ff88f8d351d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7097,
+    "run_id": "38329545936",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38329545936",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013013329_829f9389dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7097,
+    "run_id": "38329545936"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T01:33:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
