@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:lines 955-958 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The reroute archive can omit ignored, untracked support files, allowing the forced checkout to overwrite them when the base branch tracks the same path.\n  WHY: The reviewers disagree on severity (BLOCKER, MAJOR, and NIT); the highest severity is retained. If this path collision occurs, planning loses the staged support file.\n- .github/workflows/plan.yml:lines 955-958 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The depth-1 fetch of the base branch may leave later history-walking operations without the required history.\n  WHY: The planning context or downstream steps may use `git log` or `git merge-base`, which can return empty results or fail with truncated history.\n- .github/workflows/plan.yml:line 957 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `tar --ignore-failed-read` can silently omit an unreadable or disappearing staged support file while creating the reroute archive.\n  WHY: The forced checkout can then discard the only working-tree copy, leaving later planning steps without that file.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:lines 955-958 | severity=critical | confidence=[4]\n  PROBLEM: The reroute archive excludes ignored, untracked support files, which may be lost or overwritten by the forced checkout when the base branch tracks the same path.\n  WHY: Pipeline steps that depend on these ignored support scripts may fail after rerouting.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:lines 955-958 (the reroute archive block: `{ git diff -z --name-only HEAD; git ls-files -z --others --exclude-standard -- scripts prompts ai-memory; } | tar --null --ignore-failed-read -cf \"${staged_tar}\" -T - 2>/dev/null && git checkout --quiet -f -B \"${base_ref}\" FETCH_HEAD && tar -xf \"${staged_tar}\"`) | severity=low | confidence=[2]\n  PROBLEM: `--exclude-standard` makes the archive omit ignored, untracked files under `scripts/`, `prompts/`, or `ai-memory/` that the forced checkout may overwrite when the base branch tracks the same path.\n  WHY: A staged support asset that is untracked and gitignored may be silently lost before the planning model reads it.\n- .github/workflows/plan.yml:lines 955-958 (the same archive-and-checkout block) | severity=low | confidence=[2]\n  PROBLEM: The depth-1 fetch of the base branch may leave later history-walking operations without the required history.\n  WHY: The planning context or downstream steps may use `git log` or `git merge-base`, which can return empty results or fail with truncated history.\n- .github/workflows/plan.yml:line 957 (`tar --null --ignore-failed-read -cf \"${staged_tar}\" -T - 2>/dev/null`) | severity=low | confidence=[2]\n  PROBLEM: `tar --ignore-failed-read` can silently drop a file that cannot be opened during archive creation.\n  WHY: The forced checkout may discard the only working-tree copy, causing a later missing-file failure.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/plan.yml:Lines 955\u2013958, especially `git ls-files -z --others --exclude-standard` before `git checkout -f` | severity=high | confidence=[4]\n  PROBLEM: The reroute archive omits ignored, untracked support files, allowing the forced checkout to replace them when the base branch tracks the same path.\n  WHY: Planning can continue without the staged support file that the workflow intended to preserve.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1f2b7f2cb77ed1afcc4c16cc8ee9e17dccd4d446792cac32d3e0616de496d80b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7229,
+    "run_id": "38428075046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38428075046",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013164840_798616b3f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7229,
+    "run_id": "38428075046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T16:48:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
