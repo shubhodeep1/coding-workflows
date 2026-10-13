@@ -189,11 +189,17 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 
 def test_poller_runs_the_scan_once_per_tick_after_the_project_loop() -> None:
 	lines = POLLER.read_text(encoding="utf-8").splitlines()
-	top_level = [i for i, line in enumerate(lines) if line.startswith("run_unblock_scan || echo ")]
-	assert len(top_level) == 1
-	release = lines.index("release_staged_support_needs_human_latches")
-	sweep = lines.index("close_merged_issues_sweep")
-	assert release < top_level[0] < sweep
+	# Since #7177 the post-loop calls sit inside the STANDALONE_PR_SWEEP_ONLY
+	# guard (indented); the earlier UNBLOCK_SCAN_SWEEP_ONLY block is excluded.
+	guard_line = 'if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then'
+	guard = max(i for i, line in enumerate(lines) if line == guard_line)
+	assert lines[guard + 1].strip() == "run_standalone_stall_recovery"
+	post_loop = [i for i, line in enumerate(lines) if i > guard and line.strip().startswith("run_unblock_scan || echo ")]
+	assert len(post_loop) == 1
+	block_end = next(i for i in range(guard + 1, len(lines)) if lines[i] == "fi")
+	release = next(i for i in range(guard, block_end) if lines[i].strip() == "release_staged_support_needs_human_latches")
+	sweep = next(i for i in range(guard, block_end) if lines[i].strip() == "close_merged_issues_sweep")
+	assert release < post_loop[0] < sweep < block_end
 
 
 def test_scan_budget_is_one_search_one_graphql_one_runs_list() -> None:
