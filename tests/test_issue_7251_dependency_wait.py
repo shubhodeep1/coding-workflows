@@ -154,7 +154,8 @@ def test_gate_state_reads_one_snapshot_and_fails_unverified(tmp_path):
 	Path(env["FAKE_SNAPSHOT_FILE"]).write_text(json.dumps(_snapshot()), encoding="utf-8")
 	script = f'source "{GH_HELPERS}"; gh_retry() {{ "$@"; }}; issue_7251_dependency_gate_state "{SOURCE_REPO}"'
 	assert _bash(script, env).stdout.strip() == "open"
-	assert len((tmp_path / "calls.txt").read_text().splitlines()) == 1
+	# One gh call per run; the logged GraphQL document spans several lines.
+	assert (tmp_path / "calls.txt").read_text().count("api graphql") == 1
 	env["FAKE_GRAPHQL_RC"] = "1"
 	assert _bash(script, env).stdout.strip() == "unverified"
 
