@@ -2805,7 +2805,10 @@ issue_7251_dependency_gate_marker()
 	[[ "${_count}" =~ ^[0-9]+$ ]] || _count=0
 	[ "${_total}" -gt "${_count}" ] || return 1
 	[[ "${_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 2
-	if ! _comments="$(gh api --paginate "repos/${_repo}/issues/${ISSUE_7251_DEPENDENCY_ISSUE}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+	# Retry transient errors like the snapshot read does when gh_retry exists.
+	local _retry=()
+	type gh_retry >/dev/null 2>&1 && _retry=(gh_retry)
+	if ! _comments="$("${_retry[@]}" gh api --paginate "repos/${_repo}/issues/${ISSUE_7251_DEPENDENCY_ISSUE}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
 		return 2
 	fi
 	printf '%s' "${_comments}" | jq -e --argjson ps "${_prefixes}" "${_filter}" >/dev/null 2>&1 && return 0
