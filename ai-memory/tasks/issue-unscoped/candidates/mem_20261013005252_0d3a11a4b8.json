@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_triage_resolution.py:311-335 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Workflow-run triage returns on run-metadata or jobs-read failures before populating `failed_jobs`, so the traceback path has no jobs to process.\n  WHY: Severity ranges from low/NIT to high/MAJOR, and one reviewer considers the issue diagnostic degradation rather than a correctness failure; the early returns leave the unverified path unable to retrieve or post tracebacks from `failed_jobs`.\n- scripts/check_triage_resolution.py:305-306 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `run_id_unavailable` workflow-run branch returns without constructing a synthetic failed-job entry, unlike the `check_run_id` branch.\n  WHY: When the workflow-run triage URL cannot be parsed, the gate does not attempt to fetch a traceback using the known workflow name.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/check_triage_resolution.py: `verify_resolution`, workflow-run triage branch | severity=low | confidence=[3]\n  PROBLEM: The `_fail(\"run_unreadable\")` and `_fail(\"run_jobs_unreadable\")` returns come before `verdict[\"failed_jobs\"]` is set, leaving `failed_jobs` empty.\n  WHY: `fetch_failing_tracebacks` gets an empty list, so no traceback comment is posted; only a failed run read is recoverable by still trying the jobs call, while a jobs-read failure cannot yield a traceback.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_triage_resolution.py:311-315 | severity=high | confidence=[4]\n  PROBLEM: When the workflow run metadata fetch fails, `verify_resolution` returns immediately with `failed_jobs` empty.\n  WHY: The later traceback path (`fetch_failing_tracebacks`) relies on the `failed_jobs` list, so it cannot retrieve or post tracebacks even if the failing shard's job logs could still have been retrieved.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_triage_resolution.py: verify_resolution() lines 311-315 (run_unreadable) and 333-335 (run_jobs_unreadable); traceback loop at lines 595-597 in gate() | severity=high | confidence=[4]\n  PROBLEM: The `run_unreadable` and `run_jobs_unreadable` early returns happen before `failed_jobs` is populated, so the traceback loop has no jobs to process.\n  WHY: The gate drops the traceback when either run-side API read fails; the new tests cover the PR-side failure but not these run-side paths.\n- scripts/check_triage_resolution.py: verify_resolution() lines 305-306 | severity=low | confidence=[3]\n  PROBLEM: The `run_id_unavailable` early return does not construct a synthetic failed-job entry, unlike the `check_run_id` branch.\n  WHY: A workflow-run triage whose `details_url` cannot be parsed loses the traceback instead of attempting to fetch logs using the known workflow name.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_triage_resolution.py: verify_resolution(), lines 311-315 and 329-332; gate(), lines 592-597 | severity=low | confidence=[5]\n  PROBLEM: For workflow-run triage, a failed run-metadata read returns `run_unreadable` before populating `failed_jobs`.\n  WHY: `gate()` fetches tracebacks only for jobs in `failed_jobs`, which remains empty, so the failing shard\u2019s traceback is not obtained or posted even if the jobs endpoint is accessible using the parsed run ID.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c3c3f7bc12d99574ff0cbc0324431212391edf044b4dfdb366b528f7149c489",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7097,
+    "run_id": "38324769065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38324769065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013005252_0d3a11a4b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7097,
+    "run_id": "38324769065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T00:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
