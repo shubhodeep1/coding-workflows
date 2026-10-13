@@ -1,0 +1,14 @@
+<!-- changelog: security -->
+- **The poller's noop-suspicious force-merge acts only on pipeline-written evidence and merges only the head it checked.** Refs #7126 (security-pass fix cycle 1).
+
+The sweep that force-merges a PR after three "Editor no-op suspicious" warnings could be driven by anyone who can comment on a PR or push a commit. A fork PR with three pasted warnings, a pasted editor summary and an `[ai-autofix]` commit message could reach `gh pr merge --squash --auto` under the poller's token. Now:
+
+- Fork PRs are skipped. The sweep reads `isCrossRepository` and `headRepositoryOwner` from the open-PR list it already loads, and checks `head.repo.full_name` again before merging. A missing field skips the PR.
+- Warnings and the editor summary count only when the pipeline's own account posted them. If that account cannot be resolved, the sweep neither re-dispatches nor merges.
+- A productive commit needs the `[ai-autofix]` / `[judge-fix]` prefix and the pipeline's git identity (`codex-bot <codex@users.noreply.github.com>`) as author or committer.
+- Gate D uses the same required-checks rule as review auto-merge. The named CI check (`lint` here) must exist on the head and have succeeded. A queued CI run or a pending check waits for the next sweep without paging. A head with no check-runs at all pages once and is not merged.
+- The head read before the comments and commits must still be the PR's head, and `gh pr merge` gets `--match-head-commit`, so a push after the gates ran is not merged.
+
+The poller's other merge sites now also pass `--match-head-commit` with the head their checks were read for: stall-recovery `attempt_merge`, the backward scan, ready-to-merge, the review-blocked judge's merge, final-retry fix and no-fix paths, and the final integration merge. A site whose head SHA is missing skips the merge for that tick.
+
+What this means for operators: nothing to configure. Every control is automated and fails closed. A PR the fallback skips stays open for the normal review path or a person.
