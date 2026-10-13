@@ -18,8 +18,11 @@
 # REVIEW_AUTOFIX_CALLER_WORKFLOW_REF (github.workflow_ref of the caller),
 # ALLOW_WORKFLOW_EDITS, FRESHNESS_CI_FAILED_REDISPATCH_ENABLED (unset, empty
 # or `true` = on; `false` = off; anything else = off with a warning).
-# API budget (§15): one comment POST and one workflow dispatch (a failed
-# dispatch tries the next review workflow name). Never fails the job.
+# FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS (default 5): wait between marker POST
+# attempts.
+# API budget (§15): one comment POST (up to 3 attempts on failure) and one
+# workflow dispatch (a failed dispatch tries the next review workflow name).
+# Never fails the job.
 # Logs: FRESHNESS_CI_FAILED pr=<n> head=<sha> outcome=redispatched|disabled|invalid_input|marker_failed|dispatch_failed [workflow=<file>]
 
 set -uo pipefail
@@ -60,7 +63,18 @@ freshness_ci_failed_main()
 	# shellcheck disable=SC2016
 	body="$(printf '**CI failed on the updated head `%s`.** This head was an update from the base branch, so it skipped the reviewers and only waited for CI. CI failed on the combined tree, so the PR goes back to a normal review and autofix run, which sees the failing checks.\n\n%s pr=%s head=%s -->' \
 		"${PR_HEAD_SHA:0:12}" "${FRESHNESS_CI_FAILED_MARKER_PREFIX}" "${PR_NUMBER}" "${PR_HEAD_SHA}")"
-	if ! gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+	# Up to 3 attempts: a transient API error must not strand the PR, and a
+	# duplicate marker (a lost success response) is harmless.
+	local marker_attempt=1 marker_posted=false
+	while [ "${marker_attempt}" -le 3 ]; do
+		if gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+			marker_posted=true
+			break
+		fi
+		[ "${marker_attempt}" -lt 3 ] && sleep "${FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS:-5}"
+		marker_attempt=$((marker_attempt + 1))
+	done
+	if [ "${marker_posted}" != "true" ]; then
 		# Without the marker the redispatched run would take the fast path
 		# again and refuse the merge again, so do not dispatch.
 		echo "::warning::Could not post the freshness CI-failure marker on PR #${PR_NUMBER}; not sending it back to review."

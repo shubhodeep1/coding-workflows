@@ -1126,9 +1126,19 @@ PY
     # (scripts/review_freshness_ci_failed.sh, Q103): a docs-only or
     # small-diff skip would refuse the merge again with nothing to
     # re-run review. Reuses the marker comments the freshness fast
-    # path already read; no extra API call.
+    # path already read; no extra API call. The fetch is cached, so
+    # calling it here only reads when no earlier gate check did. An
+    # unreadable comment list cannot rule the marker out, and only
+    # the freshness_sync route re-dispatches on failed CI, so it
+    # keeps the normal review instead of a skip.
     FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="false"
-    if [ "${candidate_skip}" = "true" ] && [ "${gate_marker_fetch_state}" = "ok" ] \
+    if [ "${candidate_skip}" = "true" ]; then
+      gate_fetch_marker_comments
+    fi
+    if [ "${candidate_skip}" = "true" ] && [ "${gate_marker_fetch_state}" != "ok" ]; then
+      FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="true"
+      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=freshness_ci_failed_unverifiable pr=${PR_NUMBER} candidate=${candidate_skip_reason} detail=comments_${gate_marker_fetch_state}"
+    elif [ "${candidate_skip}" = "true" ] && [ "${gate_marker_fetch_state}" = "ok" ] \
       && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] \
       && jq -e --arg login "${gate_marker_author_login}" --arg pr "${PR_NUMBER}" --arg head "${pr_head_sha_gate}" '
         [ .[]? | select(type == "object" and (.author_login // "") == $login)

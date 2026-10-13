@@ -55,6 +55,7 @@ def _run(**overrides: str) -> tuple[subprocess.CompletedProcess[str], list[list[
 			"REVIEW_AUTOFIX_CALLER_WORKFLOW_REF": "o/r/.github/workflows/internal-review.yml@refs/heads/main",
 			"ALLOW_WORKFLOW_EDITS": "true",
 			"FRESHNESS_CI_FAILED_REDISPATCH_ENABLED": "true",
+			"FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS": "0",
 			**overrides,
 		}
 		result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=False)
@@ -96,7 +97,7 @@ def test_every_dispatch_failing_warns_and_succeeds() -> None:
 def test_a_failed_marker_post_does_not_dispatch() -> None:
 	result, calls = _run(FAKE_FAIL_COMMENT="1")
 	assert result.returncode == 0
-	assert len(calls) == 1 and calls[0][0] == "api"
+	assert len(calls) == 3 and all(call[0] == "api" for call in calls)
 	assert "outcome=marker_failed" in result.stdout
 
 
@@ -144,7 +145,8 @@ def test_gate_reads_the_marker_comments() -> None:
 def test_gate_marker_also_suppresses_docs_only_and_small_diff_skips() -> None:
 	text = GATE_STEP.read_text(encoding="utf-8")
 	block = text[text.index('FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="false"'):]
-	assert '[ "${gate_marker_fetch_state}" = "ok" ]' in block[:600]
+	assert '[ "${gate_marker_fetch_state}" = "ok" ]' in block[:1200]
+	assert "reason=freshness_ci_failed_unverifiable" in block[:1200]
 	assert "reason=freshness_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}" in block
 	final = block[block.index('if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ]'):]
 	assert '[ "${FRESHNESS_CI_FAILED_SKIP_SUPPRESSED}" != "true" ]' in final[:600]
