@@ -31,7 +31,12 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -74,9 +79,10 @@ EXPECTED_STEP_DECLARATIONS = {
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 1,
-	# 5 = includes "Alert on Claude pool accounts at the usage gate" (#6951)
-	# and the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630).
-	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 5,
+	# 6 = includes "Alert on Claude pool accounts at the usage gate" (#6951),
+	# the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630)
+	# and "Run standalone stall recovery without active projects" (#7174).
+	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 6,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
 	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,
@@ -120,6 +126,10 @@ FIXTURE_TAG_RE = re.compile(r"\[E2E [^\]\n]*\]")
 
 
 def _read(name: str, base: Path = WORKFLOWS) -> str:
+	# review_autofix.yml sources some step bodies (including smoke detection)
+	# from scripts/; read it with those bodies inlined.
+	if name == "review_autofix.yml" and base == WORKFLOWS:
+		return expanded_review_autofix_text()
 	return (base / name).read_text(encoding="utf-8")
 
 

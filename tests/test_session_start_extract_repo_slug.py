@@ -187,6 +187,20 @@ printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
         return result.stdout
 
 
+def _settings_sync_pending() -> bool:
+    """True when tests/claude_template_drift.py tolerates settings.json drift."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "claude_template_drift", Path(__file__).resolve().parent / "claude_template_drift.py"
+    )
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return "settings.json" in module.pending_template_paths(REPO_ROOT)
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -201,7 +215,10 @@ def main() -> int:
 
     # settings.json must also be byte-identical — it registers the SessionStart
     # hook in consumer repos and is mirrored by the same claude_sync step.
-    if SETTINGS.read_bytes() != TEMPLATE_SETTINGS.read_bytes():
+    # On PR CI only, a settings change the PR made (or drift its base already
+    # has) waits for the post-merge live-copy sync; main pushes and the
+    # release gates leave CLAUDE_PARITY_PR_BASE_SHA unset and stay strict.
+    if SETTINGS.read_bytes() != TEMPLATE_SETTINGS.read_bytes() and not _settings_sync_pending():
         failures.append(
             f"{TEMPLATE_SETTINGS.relative_to(REPO_ROOT)} must be byte-identical to "
             f"{SETTINGS.relative_to(REPO_ROOT)}; consumer auto-sync would otherwise "
