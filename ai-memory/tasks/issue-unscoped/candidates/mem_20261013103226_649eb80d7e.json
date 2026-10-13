@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py | test_heal_scope_recovery_second_budget_must_open (~lines 6948-6959)\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test does not explicitly pin the markerless issue\u2019s creation date, so a future oldest-created duplicate-selection heuristic could select #32 instead of #33.\n  WHY: The explicit early date on verified #32 leaves a gap: the test could exercise `scope_verified issue=32` and fail its `budget_duplicate issue=33` assertion without explaining the date dependency.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py | test_heal_scope_recovery_second_budget_must_open (~lines 6948-6959)\n  PROBLEM: The test does not explicitly pin the markerless issue\u2019s creation date, so a future oldest-created duplicate-selection heuristic could select #32 instead of #33.\n  WHY: This is a robustness concern, not a current bug. The explicit early date on verified #32 leaves a gap if a future heuristic flips to oldest-created; the test would then exercise `scope_verified issue=32` and its `budget_duplicate issue=33` assertion would fail without a comment explaining the date dependency.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- The reviewer reports that the prompt contains no actionable task, issue number, plan, or severity-classification reference text. It suggests the prompt builder may not have substituted `{{REFERENCE_SEVERITY_CLASSIFICATION}}` or the task body may have been dropped from the dispatch payload, and asks for an issue or plan reference.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1ac15d7c4813aeb2f12f8465a239a5c44d0771548e6d927dd26dcdb32dc176d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7194,
+    "run_id": "38380358589",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38380358589",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013103226_649eb80d7e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7194,
+    "run_id": "38380358589"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T10:32:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
