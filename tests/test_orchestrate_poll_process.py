@@ -792,6 +792,7 @@ def _run_poller(
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_comment_post_after_write_for: list[int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
+	fail_issue_patch_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_issue_close_for: list[int] | None = None,
@@ -855,6 +856,9 @@ def _run_poller(
 	# A coding-workflows origin skips the consumer artifact cleanup.
 	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
+	# Replaces RUNTIME_DIR/tracking_issues.json; [] mirrors a cron tick with
+	# no open tracking issue (the idle-tick sweep steps, #7174).
+	tracking_issues_override: list | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -888,6 +892,7 @@ def _run_poller(
 	fail_issue_comment_post_for = fail_issue_comment_post_for or []
 	fail_issue_comment_post_after_write_for = fail_issue_comment_post_after_write_for or []
 	fail_issue_get_for = fail_issue_get_for or []
+	fail_issue_patch_for = fail_issue_patch_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
 	fail_issue_edit_on_calls = fail_issue_edit_on_calls or {}
 	fail_issue_close_for = fail_issue_close_for or []
@@ -1316,6 +1321,7 @@ esac
 			"fail_issue_comment_post_for": [int(x) for x in fail_issue_comment_post_for],
 			"fail_issue_comment_post_after_write_for": [int(x) for x in fail_issue_comment_post_after_write_for],
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
+			"fail_issue_patch_for": [int(x) for x in fail_issue_patch_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
 			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
 			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
@@ -1374,7 +1380,10 @@ esac
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
-			json.dumps([{"number": tracking_num, "title": "Test tracking"}]),
+			json.dumps(
+				[{"number": tracking_num, "title": "Test tracking"}]
+				if tracking_issues_override is None else tracking_issues_override
+			),
 			encoding="utf-8",
 		)
 
@@ -2322,6 +2331,18 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
+	if m and method == 'PATCH' and any(f.startswith('body=') for f in fields):
+		# Issue body write (pipeline plan grant, Q108).
+		num = int(m.group(1))
+		if num in set(store.get('fail_issue_patch_for', [])):
+			print('forced issue PATCH failure', file=sys.stderr)
+			sys.exit(1)
+		issue = get_issue(m.group(1))
+		issue['body'] = next(f.split('=', 1)[1] for f in fields if f.startswith('body='))
+		store.setdefault('issue_body_patch_calls', []).append({'issue': num, 'body': issue['body']})
+		save()
+		print(json.dumps({'number': num, 'body': issue['body']}))
+		sys.exit(0)
 	if m:
 		num = int(m.group(1))
 		if num in set(store.get('fail_issue_get_for', [])):
@@ -5306,6 +5327,32 @@ def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
 		assert "Standalone issue stall recovery" not in combined_log
 		assert "Staged-support needs-human latch release" not in combined_log
 		assert result["api_calls"].count("search/issues") == (enabled == "true")
+
+
+def test_standalone_pr_sweep_only_mode_runs_only_the_standalone_pr_sweeps() -> None:
+	# Issue #7177: without a tracking issue, the workflow runs only the
+	# standalone conflict and noop-suspicious sweeps through this mode.
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		env_overrides={
+			"STANDALONE_PR_SWEEP_ONLY": "true",
+			"ALERT_MSG_LEVEL": "SILENT",
+			"STANDALONE_SWEEP_ALERT_MSG_LEVEL": "WARNING",
+			"OPENROUTER_API_KEY": "",
+		},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Standalone PR sweep-only mode" in combined_log
+	assert "Standalone PR conflict sweep" in combined_log
+	assert "Standalone PR noop-suspicious recovery sweep" in combined_log
+	assert "Noop-suspicious recovery complete." in combined_log
+	assert "Standalone PR sweeps alert level: WARNING (poller level: SILENT)" in combined_log
+	assert "Processing tracking issue" not in combined_log
+	assert "Standalone issue stall recovery" not in combined_log
+	assert "UNBLOCK_SCAN" not in combined_log
+	assert "Staged-support needs-human latch release" not in combined_log
 
 
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
@@ -24451,6 +24498,281 @@ def _extract_bash_function(script: str, signature: str) -> str:
 	return script[start:end]
 
 
+def _judge_checkout_repo(tmp_path: Path) -> tuple[Path, str]:
+	"""A repo whose integration commit changes a tracked 0644 script, checked
+	out at the base with the poll workflow's staging applied (0755 install
+	plus an untracked support-only file). Returns (repo, integration sha)."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+	def git(*args: str) -> str:
+		return subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	(repo / "scripts").mkdir()
+	(repo / "prompts").mkdir()
+	(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+	(repo / "prompts" / "mode-judge.txt").write_text("main prompt\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("checkout", "-q", "-b", "integration")
+	(repo / "scripts" / "pr_checks_lib.sh").write_text("integration copy\n", encoding="utf-8")
+	(repo / "changelog.d").mkdir()
+	(repo / "changelog.d" / "1-fix.md").write_text("- fix\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-q", "-m", "integration work")
+	integration_sha = git("rev-parse", "HEAD")
+	git("checkout", "-q", "main")
+	# Stage workflow support files: install -m 0755 over the tracked 0644
+	# script (same content), plus a support file the repo does not track.
+	(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+	(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+	return repo, integration_sha
+
+
+def _judge_checkout_functions() -> str:
+	"""prepare_tracking_judge_checkout plus the helpers it calls."""
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	return "".join(
+		_extract_bash_function(poller, signature)
+		for signature in (
+			"_judge_support_parents_real() {",
+			"_judge_refresh_trusted_support() {",
+			"prepare_tracking_judge_checkout() {",
+		)
+	)
+
+def test_judge_checkout_fallback_keeps_the_targets_tracked_scripts() -> None:
+	"""Project #7126: the 0755 staging made the plain checkout fail, and the
+	fallback restored the poller's scripts/ over the integration branch, so
+	the judge reviewed main's code and filed #7296, #7306 and #7307. The
+	fallback now keeps the target's tracked files and restores only support
+	files the target does not track."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp_path = Path(td)
+		repo, integration_sha = _judge_checkout_repo(tmp_path)
+		func = _judge_checkout_functions()
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1"\necho "rc=$? ref=${JUDGE_EXECUTION_REF}"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "main prompt\n"
+		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced kept_target=1" in out, out
+
+
+def test_security_pass_judge_checkout_keeps_the_trusted_support_scripts() -> None:
+	"""The security pass runs scripts/security_audit.sh from this checkout with
+	the poller's credentials, so its forced checkout keeps the poller's staged
+	support files instead of the audited branch's copies."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+		func = _judge_checkout_functions()
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "main copy\n", out
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced_overlay_kept kept_target=0 reason=trusted_support" in out, out
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}" "true"' in poller
+	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"' in poller
+
+
+def test_security_pass_judge_checkout_refreshes_support_from_the_verified_checkout() -> None:
+	"""An earlier judge checkout in the same tick can leave another project's
+	tracked scripts in the tree. In keep mode the forced fallback re-copies
+	every backed-up support file from .codex-workflow-src, so the security
+	pass never runs a project-supplied security_audit.sh."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").write_text("project A copy\n", encoding="utf-8")
+		(repo / "scripts" / "security_audit.sh").write_text("project A audit\n", encoding="utf-8")
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
+		(trusted / "security_audit.sh").write_text("trusted audit\n", encoding="utf-8")
+		func = _judge_checkout_functions()
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "trusted copy\n", out
+		assert (repo / "scripts" / "security_audit.sh").read_text(encoding="utf-8") == "trusted audit\n", out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert "reason=trusted_support trusted_refreshed=2" in out, out
+
+
+def _run_judge_checkout(repo: Path, ref: str, keep: str) -> str:
+	func = _judge_checkout_functions()
+	script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "$2"\necho "rc=$?"\n'
+	env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+	result = subprocess.run(["bash", "-c", script, "judge", ref, keep], cwd=repo, env=env,
+		capture_output=True, text=True, check=False)
+	return result.stdout + result.stderr
+
+
+def test_security_pass_plain_checkout_also_refreshes_trusted_support() -> None:
+	"""A non-keep judge checkout leaves the tree clean, so the security pass's
+	plain checkout succeeds and switches tracked scripts to the audited
+	branch's copies. Keep mode must re-copy them from the verified checkout on
+	that path too."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o644)
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, integration_sha, "true")
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "trusted copy\n", out
+		assert "outcome=plain reason=trusted_support trusted_refreshed=1" in out, out
+
+
+def test_security_pass_checkout_refuses_a_symlink_over_trusted_support() -> None:
+	"""A branch-tracked symlink where the verified checkout has a support
+	directory would redirect the copy out of the checkout: fail closed and
+	write nothing through it."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		outside = Path(td) / "outside"
+		outside.mkdir()
+		(outside / "helper.sh").write_text("outside\n", encoding="utf-8")
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "lib").symlink_to(outside)
+		subprocess.run(["git", "add", "scripts/lib"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "link"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		trusted = repo / ".codex-workflow-src" / "scripts" / "lib"
+		trusted.mkdir(parents=True)
+		(trusted / "helper.sh").write_text("trusted\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "true")
+		assert "rc=1" in out, out
+		assert "outcome=trusted_refresh_failed" in out, out
+		assert (outside / "helper.sh").read_text(encoding="utf-8") == "outside\n"
+
+
+def test_judge_checkout_fallback_removes_support_paths_the_target_deleted() -> None:
+	"""The backup restore brings back files the previous checkout tracked and
+	the target deleted; the fallback removes them, as a plain checkout would."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert not (repo / "prompts" / "mode-judge.txt").exists(), out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
+		assert "outcome=forced kept_target=1 removed_stale=1" in out, out
+
+
+def test_security_pass_checkout_fails_closed_without_a_trusted_root() -> None:
+	"""With no usable verified support checkout the security pass must not run
+	support scripts from the audited branch: keep mode fails closed."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		out = _run_judge_checkout(repo, integration_sha, "true")
+		assert "rc=1" in out, out
+		assert "outcome=trusted_refresh_failed" in out and "reason=no_trusted_root" in out, out
+
+
+def test_security_pass_plain_checkout_restores_trusted_files_the_target_deleted() -> None:
+	"""A plain checkout of a branch that lacks a tracked support file deletes
+	it; keep mode copies it back from the verified checkout so the security
+	pass's assets stay present."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		trusted = repo / ".codex-workflow-src" / "prompts"
+		trusted.mkdir(parents=True)
+		(trusted / "mode-judge.txt").write_text("trusted prompt\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "true")
+		assert "rc=0" in out, out
+		assert "outcome=plain" in out, out
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "trusted prompt\n", out
+
+
+def test_judge_checkout_fallback_restore_does_not_write_through_target_symlinks() -> None:
+	"""The backup restore after the forced checkout must not follow a
+	target-tracked symlink out of the checkout."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		outside = Path(td) / "outside.sh"
+		outside.write_text("outside\n", encoding="utf-8")
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").unlink()
+		(repo / "scripts" / "pr_checks_lib.sh").symlink_to(outside)
+		subprocess.run(["git", "add", "scripts/pr_checks_lib.sh"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "link"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert "outcome=forced" in out, out
+		assert outside.read_text(encoding="utf-8") == "outside\n", out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+
+
+def test_judge_checkout_fallback_keeps_staged_support_the_target_deleted() -> None:
+	"""Stale removal keeps a path the verified support checkout also has: it is
+	a staged support file later poller steps run."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		trusted = repo / ".codex-workflow-src" / "prompts"
+		trusted.mkdir(parents=True)
+		(trusted / "mode-judge.txt").write_text("main prompt\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "main prompt\n", out
+		assert "outcome=forced kept_target=1 removed_stale=0" in out, out
+
+
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	"""Regression for PR #3991 / issue #3990: stall recovery closed a
 	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``
@@ -24676,19 +24998,54 @@ def test_managed_auto_approve_holds_without_trusted_plan_comment() -> None:
 	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
 
 
+def _pipeline_plan_grant_run(**overrides) -> dict:
+	# Pipeline-authored security finding without files_touched (open grant).
+	kwargs = {
+		"state": _managed_awaiting_approval_state(), "enable_validation": "false", "max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		"issue_comments": {10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		"issue_bodies": {10: "Security finding. No allowlist."},
+		"issue_authors": {10: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
+		"env_overrides": {"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def test_managed_auto_approve_writes_pipeline_plan_grant_then_approves() -> None:
+	# Q108: the open grant never approves on its own; the poller writes an
+	# exact files_touched block from the plan into the issue body first.
+	result = _pipeline_plan_grant_run()
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "PIPELINE_PLAN_GRANT issue=10 source=poller outcome=written" in log
+	patches = result.get("issue_body_patch_calls", [])
+	assert len(patches) == 1, log
+	body = patches[0]["body"]
+	assert body.startswith("Security finding. No allowlist.\n\n---\n**Pipeline plan grant.**")
+	assert "<!-- ai:pipeline-plan-grant:v1 -->\nfiles_touched:\n" in body
+	# `$(cat ...)` drops the body's final newline.
+	assert body.endswith("\n".join(f"  - {p}" for p in (*_PROTECTED_PLAN_FILES, "tests/**", "changelog.d/*", "agents.d/*")))
+
+
+def test_managed_pipeline_plan_grant_write_failure_holds() -> None:
+	result = _pipeline_plan_grant_run(fail_issue_patch_for=[10])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert "PIPELINE_PLAN_GRANT issue=10 source=poller outcome=failed reason=issue_body_write_failed" in log
+	assert "reason=pipeline_plan_grant_write_failed outcome=defer issue=10" in log
+
+
+def test_managed_pipeline_plan_grant_skipped_for_directory_plan() -> None:
+	# A listed directory can never be an exact grant: no body write, hold.
+	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(("scripts/", "scripts/a.sh"))]})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_body_patch_calls", []) == []
+	assert "reason=path_not_granted outcome=defer issue=10 paths=scripts/" in log
+
+
 def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> None:
-	# Pipeline-authored security finding without files_touched: open grant,
-	# never an exact grant for auto-approval.
-	held = _run_poller(
-		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
-		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
-		issue_bodies={10: "Security finding. No allowlist."},
-		issue_authors={10: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
-		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
-	)
-	assert _approved_bodies(held, "10") == []
-	assert "reason=open_grant_not_exact outcome=defer issue=10" in held["stdout"] + held["stderr"]
 
 	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
 	granted = _run_poller(
@@ -24717,6 +25074,35 @@ def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
 	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
 
 
+def test_standalone_idle_tick_sweep_approves_held_plan_after_grant() -> None:
+	# Issue #7174: with no open tracking issue only the sweep-only mode runs.
+	# A standalone plan held for automation paths is re-checked there and is
+	# approved once its body carries an exact trusted files_touched grant.
+	def _idle_tick(body: str, author: dict) -> dict:
+		return _run_poller(
+			state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+			issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+			issue_bodies={501: body},
+			issue_authors={501: author},
+			mock_gh_issue_list_label_filter=True,
+			tracking_issues_override=[],
+			env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+		)
+
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+	held = _idle_tick("Fix it. No allowlist yet.", maintainer)
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "501") == [], held_log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _idle_tick(granted_body, maintainer)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "501"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
 def test_plan_gate_poller_wiring() -> None:
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"' in poller
@@ -24729,7 +25115,7 @@ def test_plan_gate_poller_wiring() -> None:
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "workflow_failure_heal.py files_touched_scope_guard.py; do" in workflow
 	assert workflow.count(
-		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}") == 4
+		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}") == 5
 	# The staged-support latch release is intentionally not gated (AD-3: B).
 	release = poller.split("release_staged_support_needs_human_latches()", 1)[1].split("\n}\n", 1)[0]
 	assert "_plan_auto_approval_gate" not in release

@@ -448,6 +448,15 @@ def _excerpt(filtered: str) -> str:
 	return encoded.decode("utf-8", errors="ignore")
 
 
+def _actions_job_log(repo: str, job_id: int) -> Any:
+	"""Raw Actions job log text.
+
+	Job logs carry ANSI colour codes; gh refuses such a body without
+	--allow-escape-sequences. The flag goes first so the path stays last.
+	"""
+	return _gh_api(["--allow-escape-sequences", f"repos/{repo}/actions/jobs/{job_id}/logs"], raw=True)
+
+
 def _check_run_log_text(repo: str, check_run_id: int) -> str:
 	"""Log text for a check run: the Actions job log for a github-actions check,
 	else the check run's own output (a non-Actions id is not an Actions job id)."""
@@ -456,7 +465,7 @@ def _check_run_log_text(repo: str, check_run_id: int) -> str:
 		raise GhApiError("check_run_unreadable")
 	app = check_run.get("app") if isinstance(check_run.get("app"), dict) else {}
 	if app.get("slug") == "github-actions":
-		return _gh_api([f"repos/{repo}/actions/jobs/{check_run_id}/logs"], raw=True)
+		return _actions_job_log(repo, check_run_id)
 	output = check_run.get("output") if isinstance(check_run.get("output"), dict) else {}
 	parts = [output.get(key) for key in ("title", "summary", "text")]
 	return "\n".join(part for part in parts if isinstance(part, str) and part)
@@ -470,7 +479,7 @@ def fetch_failing_tracebacks(repo: str, failed_jobs: list[dict[str, Any]]) -> li
 			if job.get("source") == "check_run":
 				log_text = _check_run_log_text(repo, job["id"])
 			else:
-				log_text = _gh_api([f"repos/{repo}/actions/jobs/{job['id']}/logs"], raw=True)
+				log_text = _actions_job_log(repo, job["id"])
 		except GhApiError:
 			continue
 		if not isinstance(log_text, str) or not log_text:
