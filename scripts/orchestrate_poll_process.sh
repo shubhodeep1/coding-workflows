@@ -21167,7 +21167,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   DEFAULT_BRANCH_TRACKING=""
   # Per-project: mark_validation_failed records this run's head_branch
   # (issue #7138), so a previous project's run must never leak into it.
-  LAST_VAL_RUN_INFO='{}'
+  # Empty (not '{}') keeps validation_history_run_info_json's lazy fetch.
+  LAST_VAL_RUN_INFO=''
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ "${PROJECT_STATUS}" = "failed" ]; then
     integration_failure_recovery_rc=0
@@ -22440,6 +22441,9 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
     VSP_RUN_HEAD_BRANCH_STATE=""
     if [ "${VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED:-true}" != "true" ]; then
       VSP_SKIP_REASON="disabled"
+    elif [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+      # Automatic recovery never overrides the validation kill switch.
+      VSP_SKIP_REASON="validation_disabled"
     elif [ "$(jq -r '.validation_last_raw_status // ""' "${STATE_FILE}" 2>/dev/null || echo '')" != "harness_error" ]; then
       VSP_SKIP_REASON="not_harness_error"
     elif [ -n "$(jq -r '.validation_stale_pin_recovered_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" ]; then
@@ -22503,6 +22507,13 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
          del(.validation_failure_class) |
          del(.validation_last_raw_status)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      # A failed rewrite would leave the failed state without the guard flag.
+      if [ "$(jq -r '.validation_stale_pin_recovered_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" != "${VSP_DEFAULT_SHA}" ]; then
+        rm -f "${STATE_FILE}.tmp"
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
       # The persisted state flag is the once-only guard: without it a later
       # tick would reload the failed state and dispatch a second run, so
       # nothing is dispatched until it lands. Retry on the next tick.

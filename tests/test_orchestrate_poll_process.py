@@ -17757,6 +17757,14 @@ def test_stale_pin_recovery_skips_when_disabled():
 	_assert_stale_pin_skipped(result, "disabled")
 
 
+def test_stale_pin_recovery_skips_when_validation_disabled():
+	result = _run_stale_pin_poller(
+		_stale_pin_state(),
+		env_overrides={"ENABLE_VALIDATION": "false"},
+	)
+	_assert_stale_pin_skipped(result, "validation_disabled")
+
+
 def test_stale_pin_recovery_skips_default_branch_only_project():
 	state = _stale_pin_state(integration_branch="")
 	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "no_integration_branch")
