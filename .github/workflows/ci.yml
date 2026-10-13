@@ -1313,6 +1313,8 @@ jobs:
             tests/test_gh_helpers_list_runs_method.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
             tests/test_pytest_git_env_isolation.py \
             tests/test_render_validation_templates.py \
             tests/test_render_validation_templates_repo_checks.py \
