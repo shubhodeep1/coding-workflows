@@ -2350,6 +2350,29 @@ else
   VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED="false"
 fi
 
+# Put the failure labels back after an aborted stale-pin recovery (#7138).
+# Restores ai:validation-failed and ai:harness-broken, plus the legacy
+# ai:validate-failed only when the issue carried it before (the label may not
+# exist in the repo, and an unknown label fails the whole edit). A failed
+# restore leaves the project failed with no label the /revalidate gate
+# matches, so it is logged and paged instead of being swallowed.
+# Args: <tracking issue number> <labels JSON read before the recovery>
+_vsp_restore_failure_labels() {
+  local vsp_issue="$1"
+  local vsp_prior_labels="${2:-[]}"
+  local -a vsp_add_args=(--add-label "ai:validation-failed" --add-label "ai:harness-broken")
+  if has_label "${vsp_prior_labels}" "ai:validate-failed"; then
+    vsp_add_args+=(--add-label "ai:validate-failed")
+  fi
+  if gh_retry gh issue edit "${vsp_issue}" --repo "${GITHUB_REPOSITORY}" \
+    "${vsp_add_args[@]}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::VALIDATION_STALE_PIN_RECOVERY tracking_issue=${vsp_issue} outcome=label_restore_failed"
+  tg_notify "Project #${vsp_issue}: stale-pin validation recovery was rolled back, but the failure labels could not be restored. Add ai:validation-failed to the tracking issue so /revalidate works." "WARNING" || true
+  return 1
+}
+
 # Auto release of the ai:needs-human latch that implement.yml's staged-support
 # rejection handler sets on IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT.  The
 # cause (a 3-way re-base of editor edits onto branch helpers) is gone since
@@ -22537,8 +22560,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
         || has_label "${VSP_FRESH_LABELS}" "ai:harness-broken"; then
         mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
         # Put the failure labels back so the /revalidate gate still matches.
-        gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
-          --add-label "ai:validation-failed" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
+        _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS}" || true
         echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=label_write_failed"
         continue
       fi
@@ -22549,8 +22571,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
         mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
         # The labels were removed above; restore them so the failed state
         # keeps its labels and an operator /revalidate still matches.
-        gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
-          --add-label "ai:validation-failed" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
+        _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS}" || true
         echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
         continue
       fi

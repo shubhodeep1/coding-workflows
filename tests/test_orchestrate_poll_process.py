@@ -17771,6 +17771,10 @@ def test_stale_pin_recovery_skips_when_failure_label_removal_fails():
 	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_edit_for=[192])
 	_assert_stale_pin_skipped(result, "label_write_failed")
 	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+	# Every edit fails, so the label restore fails too and must be surfaced.
+	assert "VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=label_restore_failed" in (
+		result["stdout"] + result["stderr"]
+	)
 
 
 def test_stale_pin_recovery_skips_when_state_write_fails():
