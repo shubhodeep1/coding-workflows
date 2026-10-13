@@ -1168,10 +1168,10 @@ path is ungranted, or the check cannot run, the issue stays in
 comment and a WARNING. The poller logs `STALL_SKIP ...
 reason=automation_path_ungranted|automation_path_check_unavailable` without
 counting a recovery attempt. `orchestrate_poll.yml` forwards the flag to the
-poller with a `false` default, so it checks when enabled even if the plan-step
+poller with a `true` default, so it checks even if the plan-step
 hold marker fails to post; explicitly disabling it ignores old markers.
-Direct script callers with an unset flag can still activate the gate with a
-trusted hold marker newer than the latest trusted plan comment. The extractor
+Direct script callers with an unset flag get the same `true` default
+(`scripts/orchestrate_poll_process.sh`). The extractor
 block is byte-identical in both files, and
 `tests/test_plan_auto_approve_safe_state_fetch.py` pins that.
 
