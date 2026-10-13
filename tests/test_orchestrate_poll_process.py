@@ -5891,8 +5891,6 @@ def test_staged_support_release_guard_is_comment_order_independent() -> None:
 		# Deliberately newest-first, matching the former REST fallback shape.
 		issue_comments={501: [release_comment, latch_comment, standalone_state_comment, _trusted_plan_comment()]},
 		mock_gh_issue_list_label_filter=True,
-		# No plan comment: opt out of the default-on automation-path gate (#7181).
-		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 
 	combined_log = result["stdout"] + result["stderr"]
@@ -19473,8 +19471,6 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 			"target_pr": None,
 			"head_ref": None,
 		},
-		# No plan comment: opt out of the default-on automation-path gate (#7181).
-		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
@@ -24763,6 +24759,42 @@ def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> No
 		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
 	)
 	assert _approved_bodies(granted, "10"), granted["stdout"] + granted["stderr"]
+
+
+def test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts_granted() -> None:
+	# Issue #7181: with AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED unset (the
+	# script default), a member's security finding whose plan lists automation
+	# paths without a files_touched grant is held and the missing paths are
+	# named; the same plan with an exact grant is approved.
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+
+	def _default_tick(body: str) -> dict:
+		return _run_poller(
+			state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+			issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+			issue_bodies={10: body},
+			issue_authors={10: maintainer},
+		)
+
+	held = _default_tick("Security finding in scripts/security_audit.sh. No allowlist.")
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "10") == [], held_log
+	assert "reason=automation_path_plan_auto_approval_disabled" not in held_log
+	assert ("outcome=defer issue=10 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in held_log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+	assert held["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	holds = [c.get("body", "") for c in held["issues"]["10"]["comments"]
+		if "<!-- ai:automation-path-plan-hold:v1 issue=10 " in c.get("body", "")]
+	assert len(holds) == 1, held_log
+	assert "- `scripts/security_audit.sh`" in holds[0]
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _default_tick(granted_body)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "10"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
 
 
 def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
