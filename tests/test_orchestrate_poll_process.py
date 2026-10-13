@@ -24797,6 +24797,53 @@ def test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts
 	assert "reason=automation_path_plan_hold" not in granted_log
 
 
+def test_managed_auto_approve_default_on_holds_without_plan_comment() -> None:
+	# Issue #7181: with the flag unset, a missing plan comment fails closed.
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: []},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_standalone_auto_approve_default_on_holds_ungranted_plan_and_posts_granted() -> None:
+	# Issue #7181: standalone stall recovery with the flag unset holds a plan
+	# listing ungranted automation paths and approves it once the body carries
+	# an exact trusted files_touched grant.
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+
+	def _default_tick(body: str) -> dict:
+		return _run_poller(
+			state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+			issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+			issue_bodies={501: body},
+			issue_authors={501: maintainer},
+			mock_gh_issue_list_label_filter=True,
+			tracking_issues_override=[],
+			env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+		)
+
+	held = _default_tick("Security finding in scripts/security_audit.sh. No allowlist.")
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "501") == [], held_log
+	assert "reason=automation_path_plan_auto_approval_disabled" not in held_log
+	assert ("outcome=defer issue=501 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in held_log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _default_tick(granted_body)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "501"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
 def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
 	state = _base_state(status="complete")
 	result = _run_poller(
