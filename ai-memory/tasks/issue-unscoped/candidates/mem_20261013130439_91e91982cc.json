@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:2447-2454 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The live `.claude/settings.json` does not register the `prepush_affected_tests.py` hook from `workflow-templates/.claude/settings.json`, and the live hook file is absent.\n  WHY: The settings-parity assertion and `tests/test_session_start_extract_repo_slug.py` fail, causing CI jobs and aggregate `lint` to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description says this is the squash merge of project #7126, so `main` and `orchestrator/project-7126` must stay in step, with CI green on the PR head.\n  expected_change_site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Both live files are missing or unchanged; no hunk in the PR diff adds them.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_pr_merge_status_guard.py:2451 | severity=BLOCKER | confidence=5\n  PROBLEM: The live `.claude/settings.json` does not register the hook from `workflow-templates/.claude/settings.json`, and the live `.claude/hooks/prepush_affected_tests.py` file is missing.\n  WHY: `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` and `tests/test_session_start_extract_repo_slug.py` fail, causing CI jobs and aggregate `lint` to fail.\n- TASK_GAP\n  Requirement: PR description says this is the squash merge of project #7126, so `main` and `orchestrator/project-7126` must stay in step, with CI green on the PR head.\n  Expected change site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py` (live copies of the template files that came in from `main`).\n  Evidence of absence: Both live files are missing or unchanged, as in the BLOCKER above. No hunk in the PR diff adds them.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:2451 | severity=BLOCKER | confidence=5\n  PROBLEM: The template registers a PreToolUse hook that the live settings.json does not have, and the live hook file `.claude/hooks/prepush_affected_tests.py` does not exist.\n  WHY: The parity assertion fails, as does `tests/test_session_start_extract_repo_slug.py`, causing CI jobs and aggregate `lint` to fail.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_pr_merge_status_guard.py:2447-2454 | severity=BLOCKER | confidence=5\n  PROBLEM: The current PR head has a declared-vs-effective hook mismatch: `workflow-templates/.claude/settings.json` registers the `prepush_affected_tests.py` Bash hook, but the live `.claude/settings.json` does not, and the live hook file is absent.\n  WHY: CI confirms the settings-parity assertion fails at line 2451, also failing `tests/test_session_start_extract_repo_slug.py` and causing `tests-hooks-and-orchestrator`, `tests-release-and-log-analysis`, and aggregate `lint` to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`\n  PROBLEM: The sync merge of `main` (commit 11e61118) brought a new pre-push hook registration into `workflow-templates/.claude/settings.json`, but the live `.claude/settings.json` does not register it and the live hook file is absent.\n  WHY: The three CI failures (`lint`, `tests-hooks-and-orchestrator`, `tests-release-and-log-analysis`) are all caused by this pre-existing issue.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No actionable task was provided in this message \u2014 only the unattended instruction header, and the `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder was not substituted (template error). Please supply the actual task or issue to work on.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "43ac1f387e2b075e6001d9614d5726725e9d07f6dadf8d86ba31a78b82aa2a5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38400357863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38400357863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013130439_91e91982cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38400357863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T13:04:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
