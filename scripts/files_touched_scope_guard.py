@@ -36,6 +36,19 @@ Inputs:
   --check-automation-paths --automation-grant-file PATH --staged-file PATH
                           --allow-workflow-edits VALUE --issue-number NUMBER
                           Verify staged automation paths against the snapshot.
+  --plan-auto-approval-gate --plan-file PATH --flag-enabled VALUE
+                          [--issue-meta-file PATH --pipeline-login LOGIN
+                          --allow-workflow-edits VALUE --issue-number NUMBER
+                          --origin-repo OWNER/NAME
+                          --pipeline-grant-body-out PATH]
+                          Decide whether an automatic `/approved` may be posted
+                          for a plan that lists automation paths (issue #6769).
+                          Prints one JSON line; exit 0 approves, 30 holds.
+                          With --pipeline-grant-body-out, a pipeline-authored
+                          issue without files_touched can approve with reason
+                          pipeline_plan_grant; the record then has
+                          pipeline_grant_body: true and the caller must write
+                          the body at PATH to the issue first.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
@@ -158,6 +171,12 @@ def extract_files_touched(text: str) -> list[str] | None:
 		if stripped not in {"files_touched:", "- files_touched:"}:
 			continue
 		base_indent = len(raw) - len(raw.lstrip(" "))
+		# YAML also lets a bare `files_touched:` key keep its list at the
+		# key's own indent (`- path` lines flush with the key, as the
+		# orchestrator judge wrote #7296). The first entry fixes the indent:
+		# a flush list continues only with flush entries.
+		flush_allowed = stripped == "files_touched:"
+		flush: bool | None = None
 		entries: list[str] = []
 		for candidate in lines[idx + 1 :]:
 			if not candidate.strip():
@@ -165,7 +184,12 @@ def extract_files_touched(text: str) -> list[str] | None:
 					break
 				continue
 			indent = len(candidate) - len(candidate.lstrip(" "))
-			if indent <= base_indent:
+			if flush is None:
+				flush = flush_allowed and indent == base_indent
+			if flush:
+				if indent != base_indent:
+					break
+			elif indent <= base_indent:
 				break
 			match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
 			if not match:
@@ -502,6 +526,322 @@ def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: lis
 	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles)
 
 
+# --- Plan auto-approval gate (issue #6769) ---------------------------------
+# Automatic `/approved` posts (plan.yml "Auto-approve clear plan" and the
+# poller's stall-recovery arms) are held for plans that list automation
+# paths. While AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is false (it defaults to true)
+# every such plan is held; when it is on, every protected path the plan lists
+# needs a trusted, exact issue-body grant. The open pipeline-author grant
+# (PIPELINE_AUTHOR_OPEN_REASON) never counts as exact here, although the
+# implement-time guard (check_automation_paths) still accepts it.
+
+PLAN_DECISION_APPROVE = "approve"
+PLAN_DECISION_HOLD = "hold"
+PLAN_LOG_PATHS_MAX_ENTRIES = 20
+PLAN_LOG_PATH_MAX_CHARS = 200
+_PLAN_FILES_LEADIN_RE = re.compile(
+	r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchange\b", re.IGNORECASE)
+_PLAN_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+\S")
+# A lead-in that is not itself a heading has no known level; only a top-level
+# (`#` or `##`) heading ends its section, so nested headings never truncate it.
+_PLAN_PLAIN_LEADIN_LEVEL = 2
+# A protected path token: optional "./" or "/" prefix, an automation prefix in
+# any letter case, a slash, then everything up to whitespace, a backtick, a
+# quote or `<>|` (globs kept so they hold). The token is never cut at an
+# unusual filename character: `scripts/a+b.py` must stay whole, or a grant for
+# `scripts/a` would approve it. `_` is not a boundary character, so
+# `_scripts/x.sh_` or `my_scripts/x.sh` still holds (fail closed).
+_PLAN_PATH_TOKEN_RE = re.compile(
+	r"(?:^|[^A-Za-z0-9./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`'\"<>|]*)",
+	re.IGNORECASE)
+_PLAN_PATH_TRAILING_PUNCT = ".,;:!)]}"
+_PLAN_PATH_LINE_SUFFIX_RE = re.compile(r":\d+(?::\d+)?$")
+_PLAN_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]")
+
+
+def _plan_files_section(plan_text: str) -> str | None:
+	"""Text of a plan's "Files ... change" section; None when no section exists.
+
+	A heading or numbered lead-in naming "Files ... change" opens the section.
+	Only a heading at the lead-in's level or shallower ends it (a plain lead-in
+	ends at a `#`/`##` heading), so a nested sub-heading cannot cut the list
+	short. Negated wording ("No changes to:") does not suppress any line: every
+	protected path in the section counts, so the gate fails closed (#6769).
+	"""
+	found = False
+	inside = False
+	level = 0
+	kept: list[str] = []
+	for line in plan_text.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			found = True
+			inside = True
+			heading = _PLAN_HEADING_RE.match(line)
+			level = len(heading.group(1)) if heading else _PLAN_PLAIN_LEADIN_LEVEL
+			# Paths on the lead-in line itself ("Files to change: `scripts/x.sh`") count.
+			kept.append(line)
+			continue
+		heading = _PLAN_HEADING_RE.match(line)
+		if inside and heading and len(heading.group(1)) <= level:
+			inside = False
+		if inside:
+			kept.append(line)
+	return "\n".join(kept) if found else None
+
+
+def _plan_path_token(raw: str) -> str:
+	"""Strip prose punctuation, a `:line[:col]` suffix and markdown bold from a token."""
+	token = raw
+	while True:
+		previous = token
+		token = _PLAN_PATH_LINE_SUFFIX_RE.sub("", token.rstrip(_PLAN_PATH_TRAILING_PUNCT))
+		if token.endswith("**") and not token.endswith("/**"):
+			token = token.rstrip("*")
+		if token == previous:
+			return token
+
+
+def extract_plan_automation_paths(plan_text: str) -> list[str]:
+	"""Protected paths a plan lists, scanning its Files section.
+
+	Falls back to the whole plan text when no Files section exists, so a plan
+	without the section errs toward holding. Directory and glob entries are
+	kept: they can never be granted exactly, so they hold the plan.
+	"""
+	section = _plan_files_section(plan_text or "")
+	text = section if section is not None else (plan_text or "")
+	seen: set[str] = set()
+	paths: list[str] = []
+	for line in text.splitlines():
+		for match in _PLAN_PATH_TOKEN_RE.finditer(line):
+			path = normalize_path(_plan_path_token(match.group(1)))
+			if not path or not is_automation_path(path) or path in seen:
+				continue
+			seen.add(path)
+			paths.append(path)
+	return paths
+
+
+def evaluate_plan_auto_approval(plan_paths: list[str], grant: object, *, flag_enabled: bool,
+	allow_workflow_edits: str, issue_number: str) -> tuple[str, str, list[str]]:
+	"""Decide whether an automatic `/approved` may be posted for a plan."""
+	protected = [path for path in (normalize_path(p) for p in plan_paths) if path and is_automation_path(path)]
+	if not protected:
+		return PLAN_DECISION_APPROVE, "none", []
+	if not flag_enabled:
+		return PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+	if isinstance(grant, dict) and grant.get("open") is True:
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	status, denied, reason = check_automation_paths(protected, grant, allow_workflow_edits, issue_number)
+	if status == STATUS_IN_SCOPE and reason == "granted":
+		return PLAN_DECISION_APPROVE, "granted", []
+	if status == STATUS_IN_SCOPE:
+		# Any other in-scope reason (the open pipeline-author grant) is not an
+		# exact grant for auto-approval.
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	return PLAN_DECISION_HOLD, reason, denied or protected
+
+
+def plan_gate_log_paths(paths: list[str]) -> str:
+	"""Log-safe, comma-joined rendering of untrusted plan paths."""
+	rendered: list[str] = []
+	for path in paths[:PLAN_LOG_PATHS_MAX_ENTRIES]:
+		safe = _PLAN_LOG_UNSAFE_RE.sub("", path)[:PLAN_LOG_PATH_MAX_CHARS]
+		if safe:
+			rendered.append(safe)
+	return ",".join(rendered) if rendered else "none"
+
+
+# Pipeline plan grant (Q108). A pipeline-authored issue with no
+# files_touched block gets the open grant, which never auto-approves a plan.
+# When the gate would otherwise hold for that reason alone, it proposes an
+# exact block: every file the plan's Files section lists plus the companion
+# entries below. The caller writes it into the issue body (the pipeline
+# account owns the issue) and only then posts /approved; from then on the
+# block is the issue's ordinary exact grant and its implement-time scope.
+PIPELINE_PLAN_GRANT_COMPANIONS = ("tests/**", "changelog.d/*", "agents.d/*")
+PIPELINE_PLAN_GRANT_MAX_PATHS = 50
+PIPELINE_PLAN_GRANT_MARKER = "<!-- ai:pipeline-plan-grant:v1 -->"
+PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
+_PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+_PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
+_PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
+# A root file is any name with a letter-led extension (the same rule as a
+# nested last segment), so a planned `main.c` or `app.php` is never left out of
+# the grant; a harmless extra entry beats an approved plan whose implement
+# scope then blocks a listed file. A root dotfile needs an extension
+# (`.gitlab-ci.yml`) or one of the names below: an extensionless dot name
+# (`.vscode`, `.devcontainer`) is often a directory. `.env*` files, which can
+# hold credentials, are never written.
+_PLAN_GRANT_ROOT_FILE_RE = re.compile(
+	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*"
+	r"|\.(?!env(?:\.|$))[A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*"
+	r"|\.(?:gitignore|gitattributes|gitmodules|editorconfig|dockerignore|npmignore|prettierrc|prettierignore"
+	r"|eslintrc|eslintignore|stylelintrc|nvmrc|node-version|python-version|ruby-version|tool-versions|flake8"
+	r"|pylintrc|yamllint|shellcheckrc|mailmap|markdownlint)"
+	r"|Makefile|Dockerfile)$")
+# Extensionless file names accepted as the last segment of a grant path. Any
+# other extensionless (or `.d`) last segment may be a directory, and a
+# files_touched entry without a trailing slash covers everything beneath it
+# (entry_matches), so it is never written as an "exact" grant.
+_PLAN_GRANT_BARE_FILE_RE = re.compile(
+	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile"
+	r"|Pipfile|Jenkinsfile|Containerfile|Brewfile|Podfile|Tiltfile)$")
+# The extension must start with a letter: a digit-led suffix (`v1.0`,
+# `2024.01.15`) is usually a versioned directory, which would cover its subtree.
+_PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")
+
+
+def _plan_grant_path(raw: str) -> str:
+	"""A plan token as an exact repo-relative file path, or "" when it is not one.
+
+	Directories, globs, absolute or parent paths, URLs and anything outside a
+	plain path alphabet are rejected: they can never be an exact grant.
+	"""
+	# Only `*` is stripped: `_` is part of names such as `__init__.py`.
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
+		return ""
+	segments = path.split("/")
+	if any(seg in {"", ".", ".."} or not _PLAN_GRANT_SEGMENT_RE.match(seg) for seg in segments):
+		return ""
+	if segments[0].startswith("-") or any(char in path for char in _GLOB_CHARS):
+		return ""
+	last = segments[-1]
+	if _PLAN_GRANT_BARE_FILE_RE.match(last):
+		return path
+	if len(segments) == 1 and not _PLAN_GRANT_ROOT_FILE_RE.match(path):
+		return ""
+	if not _PLAN_GRANT_FILE_SEGMENT_RE.match(last) or last.endswith(".d"):
+		return ""
+	return path
+
+
+def extract_plan_file_paths(plan_text: str) -> list[str]:
+	"""Exact file paths a plan's Files section lists (empty without a section).
+
+	Reads backticked spans, a bullet's first token when the bullet has no
+	backticks, and bare protected-path tokens. Only tokens that are exact file
+	paths are kept (see _plan_grant_path); a listed directory or glob is
+	dropped here and still holds the plan through the protected-path check.
+	"""
+	section = _plan_files_section(plan_text or "")
+	if section is None:
+		return []
+	seen: set[str] = set()
+	paths: list[str] = []
+	for line in section.splitlines():
+		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
+		# The bullet's first token counts even when the line also has
+		# backticked spans (`- README.md — use `parse()``): otherwise a
+		# non-path span would drop the listed file from the grant.
+		bullet = _PLAN_GRANT_BULLET_RE.match(line)
+		if bullet:
+			candidates.append(bullet.group(1))
+		candidates.extend(match.group(1) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
+		for raw in candidates:
+			path = _plan_grant_path(raw)
+			if path and path not in seen:
+				seen.add(path)
+				paths.append(path)
+	return paths
+
+
+def build_pipeline_plan_grant_body(body: str, plan_paths: list[str]) -> str:
+	"""Issue body with a canonical files_touched block appended after a rule."""
+	entries = list(plan_paths) + [c for c in PIPELINE_PLAN_GRANT_COMPANIONS if c not in plan_paths]
+	block = [
+		"",
+		"---",
+		("**Pipeline plan grant.** The pipeline wrote this `files_touched` list from the approved plan's"
+			" file list, plus tests, changelog and agents fragments. Implementation is limited to these paths."),
+		PIPELINE_PLAN_GRANT_MARKER,
+		"files_touched:",
+	] + ["  - " + entry for entry in entries]
+	return (body or "").rstrip("\n") + "\n" + "\n".join(block) + "\n"
+
+
+def _flag_enabled(value: str) -> bool:
+	# On by default: an unset or empty value is on, like the workflow defaults.
+	return (value or "").strip().lower() in {"", "1", "true", "yes", "on"}
+
+
+def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
+	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "",
+	grant_body_out: str = "") -> tuple[dict, int]:
+	"""CLI body: returns (decision record, exit code). Errors always hold.
+
+	``origin_repo`` (owner/name) lets a pipeline-authored issue that names a
+	source issue pass the Q82 origin-chain check, as the implement-time grant
+	does; without it such an issue holds with ``origin_unverified``.
+
+	With ``grant_body_out``, a hold caused only by the open pipeline-author
+	grant becomes ``approve`` with reason ``pipeline_plan_grant`` when the body
+	from build_pipeline_plan_grant_body would grant every protected path. That
+	body is written to ``grant_body_out`` and the record carries
+	``pipeline_grant_body: true``; the caller must write it to the issue
+	before it posts /approved, and hold if that write fails.
+	"""
+	protected: list[str] = []
+	grant_proposed = False
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		flag_on = _flag_enabled(flag_value)
+		grant: object = None
+		if protected and flag_on:
+			if not issue_meta_file:
+				record = {"decision": PLAN_DECISION_HOLD, "reason": "issue_meta_unavailable",
+					"protected_paths": protected, "denied_paths": protected}
+				record["log_paths"] = plan_gate_log_paths(protected)
+				return record, EXIT_AUTOMATION_UNGRANTED
+			with open(issue_meta_file, encoding="utf-8") as handle:
+				metadata = json.load(handle)
+			repo = origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", origin_repo or "") else ""
+			origin_cache: dict[int, dict | None] = {}
+
+			def fetch_origin(number: int) -> dict | None:
+				# Cached so the proposed-grant re-check below reads each
+				# source issue once.
+				if number not in origin_cache:
+					origin_cache[number] = fetch_issue_with_gh(repo, number)
+				return origin_cache[number]
+
+			grant = build_automation_grant(metadata, pipeline_login, fetch_origin if repo else None)
+		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
+			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+		if (grant_body_out and decision == PLAN_DECISION_HOLD and reason == "open_grant_not_exact"
+				and isinstance(grant, dict) and grant.get("open") is True
+				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
+			plan_paths = extract_plan_file_paths(plan_text)
+			if plan_paths and len(plan_paths) <= PIPELINE_PLAN_GRANT_MAX_PATHS:
+				proposed_body = build_pipeline_plan_grant_body(metadata.get("body") or "", plan_paths)
+				proposed_grant = build_automation_grant(dict(metadata, body=proposed_body), pipeline_login,
+					fetch_origin if repo else None)
+				proposed = evaluate_plan_auto_approval(protected, proposed_grant, flag_enabled=flag_on,
+					allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+				if proposed[0] == PLAN_DECISION_APPROVE:
+					with open(grant_body_out, "w", encoding="utf-8") as handle:
+						handle.write(proposed_body)
+					decision, reason, denied = PLAN_DECISION_APPROVE, PIPELINE_PLAN_GRANT_REASON, []
+					grant_proposed = True
+				else:
+					# Report what the proposed grant still misses (a listed
+					# directory or glob, or a path the plan named only in prose).
+					decision, reason, denied = proposed
+	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+		grant_proposed = False
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
+	if grant_proposed:
+		record["pipeline_grant_body"] = True
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
 def _read_text_file(path: str) -> str:
 	try:
 		with open(path, encoding="utf-8") as handle:
@@ -537,7 +877,18 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--automation-grant-file", default="")
 	parser.add_argument("--allow-workflow-edits", default="false")
 	parser.add_argument("--issue-number", default="")
+	parser.add_argument("--plan-auto-approval-gate", action="store_true")
+	parser.add_argument("--plan-file", default="")
+	parser.add_argument("--flag-enabled", default="true")
+	parser.add_argument("--pipeline-grant-body-out", default="",
+		help="plan gate: write the proposed pipeline plan grant body here (Q108)")
 	args = parser.parse_args(argv)
+	if args.plan_auto_approval_gate:
+		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
+			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo,
+			args.pipeline_grant_body_out)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
 	if args.emit_automation_grant:
 		try:
 			metadata = json.loads(_read_text_file(args.issue_meta_file))
