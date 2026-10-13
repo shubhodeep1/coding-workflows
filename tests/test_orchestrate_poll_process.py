@@ -760,6 +760,7 @@ def _run_poller(
 	issue_bodies: dict[int, str] | None = None,
 	issue_events: dict[int, list[dict]] | None = None,
 	issue_events_after_first_get: dict[int, list[dict]] | None = None,
+	issue_authors: dict[int, dict] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	gql_comments_unavailable_for: list[int] | None = None,
@@ -791,6 +792,7 @@ def _run_poller(
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_comment_post_after_write_for: list[int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
+	fail_issue_patch_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_issue_close_for: list[int] | None = None,
@@ -854,9 +856,9 @@ def _run_poller(
 	# A coding-workflows origin skips the consumer artifact cleanup.
 	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
-	# Copy files_touched_scope_guard.py into the sandbox's verified support
-	# checkout (.codex-workflow-src/scripts/), where the poller resolves it.
-	support_guard_copy: bool = False,
+	# Replaces RUNTIME_DIR/tracking_issues.json; [] mirrors a cron tick with
+	# no open tracking issue (the idle-tick sweep steps, #7174).
+	tracking_issues_override: list | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -865,6 +867,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
+	issue_authors = issue_authors or {}
 	issue_events = issue_events or {}
 	issue_events_after_first_get = issue_events_after_first_get or {}
 	gql_labels = gql_labels or {}
@@ -889,6 +892,7 @@ def _run_poller(
 	fail_issue_comment_post_for = fail_issue_comment_post_for or []
 	fail_issue_comment_post_after_write_for = fail_issue_comment_post_after_write_for or []
 	fail_issue_get_for = fail_issue_get_for or []
+	fail_issue_patch_for = fail_issue_patch_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
 	fail_issue_edit_on_calls = fail_issue_edit_on_calls or {}
 	fail_issue_close_for = fail_issue_close_for or []
@@ -940,10 +944,6 @@ def _run_poller(
 			_make_poller_sandbox(sandbox, sandbox_origin_url)
 		else:
 			_make_poller_sandbox(sandbox)
-		if support_guard_copy:
-			support_scripts = sandbox / ".codex-workflow-src" / "scripts"
-			support_scripts.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(REPO_ROOT / "scripts" / "files_touched_scope_guard.py", support_scripts / "files_touched_scope_guard.py")
 		if mock_local_integration_content_conflict:
 			# The GitHub-side 409 alone does not make the local git merge conflict.
 			# Both branches must add different content at an admitted source path.
@@ -1267,6 +1267,8 @@ esac
 				"comments": issue_comment_entries,
 				"body": issue_bodies.get(inum, f"Issue {inum}"),
 				"closed": bool(issue_closed.get(inum, False)),
+				"author_login": str(issue_authors.get(inum, {}).get("login", "octocat")),
+				"author_association": str(issue_authors.get(inum, {}).get("association", "OWNER")),
 			}
 
 		store = {
@@ -1319,6 +1321,7 @@ esac
 			"fail_issue_comment_post_for": [int(x) for x in fail_issue_comment_post_for],
 			"fail_issue_comment_post_after_write_for": [int(x) for x in fail_issue_comment_post_after_write_for],
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
+			"fail_issue_patch_for": [int(x) for x in fail_issue_patch_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
 			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
 			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
@@ -1377,7 +1380,10 @@ esac
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
-			json.dumps([{"number": tracking_num, "title": "Test tracking"}]),
+			json.dumps(
+				[{"number": tracking_num, "title": "Test tracking"}]
+				if tracking_issues_override is None else tracking_issues_override
+			),
 			encoding="utf-8",
 		)
 
@@ -2015,6 +2021,10 @@ if args[0] == 'api':
 				issue_payload['state'] = issue_state
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
+			if re.search(r'(?m)^\s*author \{ login \}\s*$', query):
+				issue_payload['author'] = {'login': str(issue.get('author_login', 'octocat'))}
+			if re.search(r'(?m)^\s*authorAssociation\s*$', query):
+				issue_payload['authorAssociation'] = str(issue.get('author_association', 'OWNER'))
 			if 'labels(first:' in query:
 				label_limit = int(re.search(r'labels\(first:\s*(\d+)\)', query).group(1))
 				issue_payload['labels'] = {
@@ -2321,6 +2331,18 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
+	if m and method == 'PATCH' and any(f.startswith('body=') for f in fields):
+		# Issue body write (pipeline plan grant, Q108).
+		num = int(m.group(1))
+		if num in set(store.get('fail_issue_patch_for', [])):
+			print('forced issue PATCH failure', file=sys.stderr)
+			sys.exit(1)
+		issue = get_issue(m.group(1))
+		issue['body'] = next(f.split('=', 1)[1] for f in fields if f.startswith('body='))
+		store.setdefault('issue_body_patch_calls', []).append({'issue': num, 'body': issue['body']})
+		save()
+		print(json.dumps({'number': num, 'body': issue['body']}))
+		sys.exit(0)
 	if m:
 		num = int(m.group(1))
 		if num in set(store.get('fail_issue_get_for', [])):
@@ -3579,6 +3601,9 @@ sys.exit(proc.returncode)
 		)
 
 		env = os.environ.copy()
+		# Exercise the script default of the automation-path plan gate (#7181)
+		# unless a test sets the flag through env_overrides.
+		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
 		env.update(
 			{
 				"HOME": str(home_dir),
@@ -5307,6 +5332,32 @@ def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
 		assert result["api_calls"].count("search/issues") == (enabled == "true")
 
 
+def test_standalone_pr_sweep_only_mode_runs_only_the_standalone_pr_sweeps() -> None:
+	# Issue #7177: without a tracking issue, the workflow runs only the
+	# standalone conflict and noop-suspicious sweeps through this mode.
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		env_overrides={
+			"STANDALONE_PR_SWEEP_ONLY": "true",
+			"ALERT_MSG_LEVEL": "SILENT",
+			"STANDALONE_SWEEP_ALERT_MSG_LEVEL": "WARNING",
+			"OPENROUTER_API_KEY": "",
+		},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Standalone PR sweep-only mode" in combined_log
+	assert "Standalone PR conflict sweep" in combined_log
+	assert "Standalone PR noop-suspicious recovery sweep" in combined_log
+	assert "Noop-suspicious recovery complete." in combined_log
+	assert "Standalone PR sweeps alert level: WARNING (poller level: SILENT)" in combined_log
+	assert "Processing tracking issue" not in combined_log
+	assert "Standalone issue stall recovery" not in combined_log
+	assert "UNBLOCK_SCAN" not in combined_log
+	assert "Staged-support needs-human latch release" not in combined_log
+
+
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
 	engine_sha = "c" * 40
 
@@ -5625,167 +5676,6 @@ def test_managed_auto_approve_skips_unresolved_staged_support_latch() -> None:
 	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
 
 
-_AUTOMATION_GATE_PLAN = (
-	"Implementation Plan\n\n"
-	"1. Files likely to change\n"
-	"- `.github/workflows/plan.yml`\n"
-	"- `scripts/orchestrate_poll_process.sh`\n"
-	"- `tests/test_x.py`\n\n"
-	"2. Functions / modules\n"
-)
-_AUTOMATION_GATE_PLAN_NO_AUTOMATION = (
-	"Implementation Plan\n\n1. Files likely to change\n- `tests/test_x.py`\n- `README.md`\n\n2. Functions\n"
-)
-
-
-def _automation_gate_plan_comment(body: str = _AUTOMATION_GATE_PLAN) -> dict:
-	return {"body": body, "author_association": "OWNER", "user": {"login": "workflow-owner"}}
-
-
-def _automation_gate_marker_comment(issue_num: int, association: str = "OWNER") -> dict:
-	return {
-		"body": (
-			"**Automatic approval withheld.**\n\n"
-			f"<!-- ai:automation-path-plan-hold:v1 issue={issue_num} reason=automation_path_ungranted source=plan paths=W10= -->"
-		),
-		"author_association": association,
-		"user": {"login": "workflow-owner" if association == "OWNER" else "stranger"},
-	}
-
-
-def _automation_gate_body(granted: list[str]) -> str:
-	return "Do the thing.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in granted)
-
-
-def _run_managed_automation_gate(*, comments: list, granted: list[str] | None, env: dict[str, str]) -> dict:
-	state = _base_state(status="in_progress")
-	issue = state["waves"][0]["issues"][0]
-	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1, "stall_recovery_count": 0})
-	return _run_poller(
-		state=state,
-		enable_validation="false",
-		max_validate_cycles="3",
-		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
-		issue_comments={10: comments},
-		issue_bodies={10: _automation_gate_body(granted or [])},
-		env_overrides=env,
-		support_guard_copy=True,
-		mock_store_extra={"issue_authors": {"10": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
-	)
-
-
-def _automation_gate_approved(result: dict, issue_num: int) -> bool:
-	return any(c["body"].startswith("/approved") for c in result["issues"][str(issue_num)]["comments"])
-
-
-def _automation_gate_holds(result: dict, issue_num: int) -> list[dict]:
-	return [c for c in result["issues"][str(issue_num)]["comments"] if "ai:automation-path-plan-hold:v1" in c["body"] and "source=poller" in c["body"]]
-
-
-def test_managed_auto_approve_automation_path_gate_off_by_default() -> None:
-	result = _run_managed_automation_gate(comments=[_automation_gate_plan_comment()], granted=None, env={})
-	assert _automation_gate_approved(result, 10)
-	assert _automation_gate_holds(result, 10) == []
-	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
-
-
-def test_managed_auto_approve_explicitly_disabled_gate_ignores_old_hold() -> None:
-	result = _run_managed_automation_gate(
-		comments=[_automation_gate_plan_comment(), _automation_gate_marker_comment(10)],
-		granted=[], env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
-	)
-	assert _automation_gate_approved(result, 10)
-	assert _automation_gate_holds(result, 10) == []
-	assert "reason=automation_path_" not in result["stdout"] + result["stderr"]
-
-
-def test_managed_auto_approve_automation_path_gate_holds_ungranted_plan() -> None:
-	result = _run_managed_automation_gate(
-		comments=[_automation_gate_plan_comment()],
-		granted=[".github/workflows/plan.yml"],
-		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
-	)
-	combined_log = result["stdout"] + result["stderr"]
-	assert "STALL_SKIP issue=10 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in combined_log
-	assert not _automation_gate_approved(result, 10)
-	holds = _automation_gate_holds(result, 10)
-	assert len(holds) == 1
-	assert "`scripts/orchestrate_poll_process.sh`" in holds[0]["body"]
-	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
-
-
-def test_managed_auto_approve_automation_path_gate_approves_granted_or_plain_plans() -> None:
-	granted = _run_managed_automation_gate(
-		comments=[_automation_gate_plan_comment()],
-		granted=[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
-		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
-	)
-	assert _automation_gate_approved(granted, 10)
-	assert _automation_gate_holds(granted, 10) == []
-	plain = _run_managed_automation_gate(
-		comments=[_automation_gate_plan_comment(_AUTOMATION_GATE_PLAN_NO_AUTOMATION)],
-		granted=None,
-		env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
-	)
-	assert _automation_gate_approved(plain, 10)
-	assert "reason=automation_path_" not in plain["stdout"] + plain["stderr"]
-
-
-def test_managed_auto_approve_automation_path_gate_fails_closed_without_plan() -> None:
-	result = _run_managed_automation_gate(
-		comments=["routine comment"], granted=None, env={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
-	)
-	assert "STALL_SKIP issue=10 reason=automation_path_check_unavailable phase=ai:awaiting-approval action=none" in result["stdout"] + result["stderr"]
-	assert not _automation_gate_approved(result, 10)
-
-
-def test_standalone_auto_approve_honours_trusted_plan_hold_marker() -> None:
-	stall_state_comment = (
-		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
-		+ json.dumps({
-			"schema_version": 1,
-			"last_seen_phase": "ai:awaiting-approval",
-			"status_since_ts": 1,
-			"stall_recovery_count": 0,
-		})
-		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
-	)
-
-	def run(comments: list, granted: list[str]) -> dict:
-		state = _base_state(status="in_progress")
-		state["waves"][0]["issues"][0]["status"] = "merged"
-		return _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			issue_labels={10: ["ai:merged"], 700: ["ai:awaiting-approval"]},
-			issue_comments={700: [stall_state_comment, *comments]},
-			issue_bodies={700: _automation_gate_body(granted)},
-			mock_gh_issue_list_label_filter=True,
-			env_overrides={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"},
-			support_guard_copy=True,
-			mock_store_extra={"issue_authors": {"700": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}}},
-		)
-
-	held = run([_automation_gate_plan_comment(), _automation_gate_marker_comment(700)], [".github/workflows/plan.yml"])
-	assert "STALL_SKIP issue=700 reason=automation_path_ungranted phase=ai:awaiting-approval action=none" in held["stdout"] + held["stderr"]
-	assert not _automation_gate_approved(held, 700)
-	assert len(_automation_gate_holds(held, 700)) == 1
-
-	granted = run(
-		[_automation_gate_plan_comment(), _automation_gate_marker_comment(700)],
-		[".github/workflows/plan.yml", "scripts/orchestrate_poll_process.sh"],
-	)
-	assert _automation_gate_approved(granted, 700)
-
-	untrusted = run([_automation_gate_plan_comment(), _automation_gate_marker_comment(700, "NONE")], [])
-	assert _automation_gate_approved(untrusted, 700)
-	assert "reason=automation_path_" not in untrusted["stdout"] + untrusted["stderr"]
-
-	stale = run([_automation_gate_marker_comment(700), _automation_gate_plan_comment()], [])
-	assert _automation_gate_approved(stale, 700)
-
-
 def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -> None:
 	latch_comment = _staged_support_latch_comment()
 	latch_comment["body"] = (
@@ -6025,7 +5915,7 @@ def test_staged_support_release_guard_is_comment_order_independent() -> None:
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
 		# Deliberately newest-first, matching the former REST fallback shape.
-		issue_comments={501: [release_comment, latch_comment, standalone_state_comment]},
+		issue_comments={501: [release_comment, latch_comment, standalone_state_comment, _trusted_plan_comment()]},
 		mock_gh_issue_list_label_filter=True,
 	)
 
@@ -9301,7 +9191,9 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert "ai:validating" in result["tracking_labels"]
 	assert result["tracking_closed"] is False
 	assert len(result["validation_dispatches"]) == 1
-	assert result["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert result["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
+	assert result["validation_dispatches"][0]["tracking_issue"] == "192"
+	assert result["latest_state"]["validation_last_dispatch_workflow_ref"] == "default"
 	assert result["merge_calls"]
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
 	assert result["merge_calls"][0]["head"] == "main"
@@ -9348,7 +9240,7 @@ def test_complete_verdict_dispatches_validation_with_closed_wave_issue_no_pr():
 	# The fix: validation dispatches despite ANY_FAILED=true from the closed
 	# wave issue. Pre-fix this list was empty and the run deferred.
 	assert len(result["validation_dispatches"]) == 1, result["stdout"]
-	assert result["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert result["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert (
 		"deferring validate dispatch" not in result["stdout"]
 	), result["stdout"]
@@ -9625,7 +9517,7 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		"validation must dispatch under integration drift; got "
 		f"{first['validation_dispatches']!r}, stderr=\n{first['stderr']}"
 	)
-	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert first["latest_state"]["validation_last_dispatch_cycle"] == 2
 	first_tracking_comments = [
 		str((c or {}).get("body", ""))
@@ -9706,7 +9598,7 @@ def test_validation_dispatches_under_integration_drift_when_validation_enabled()
 		f"integration drift; got {first['validation_dispatches']!r}, "
 		f"stderr=\n{first['stderr']}"
 	)
-	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert first["latest_state"]["validation_last_dispatch_cycle"] == 1
 	# The old PROJECT_COMPLETE-gated deferral line must be gone.
 	assert "Preflight: PROJECT_COMPLETE=" not in (first["stdout"] + first["stderr"]), (
@@ -9732,7 +9624,7 @@ def test_validation_dispatches_under_integration_drift_when_validation_enabled()
 		f"under integration drift; got {second['validation_dispatches']!r}, "
 		f"stderr=\n{second['stderr']}"
 	)
-	assert second["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert second["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert second["latest_state"]["final_merge_status"] == "pending"
 
 
@@ -14609,6 +14501,7 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 			"status": "completed",
 			"conclusion": "failure",
 			"created_at": "2026-01-01T00:00:00Z",
+			"head_branch": "orchestrator/project-192",
 			"outputs": {"raw_status": "harness_error"},
 		}],
 	)
@@ -14617,6 +14510,10 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 	assert ls["validation_cycle"] == 2
 	assert ls["validation_recovery_count"] == 2
 	assert ls["validation_last_raw_status"] == "harness_error"
+	# Issue #7138: the failing run's workflow branch is kept for the
+	# stale-pin recovery block.
+	assert ls["validation_last_run_head_branch"] == "orchestrator/project-192"
+	assert ls["validation_last_run_id"] == "7001"
 	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
 	assert "ai:validation-failed" in result["tracking_labels"]
 	assert "ai:harness-broken" in result["tracking_labels"]
@@ -17777,6 +17674,193 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 
 
 # ---------------------------------------------------------------------------
+# Tests: one-shot recovery from a stale integration-branch validation pin (#7138)
+# ---------------------------------------------------------------------------
+
+_STALE_PIN_MAIN_SHA = "d" * 40
+
+
+def _stale_pin_state(**overrides) -> dict:
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_failure_reason"] = "Runtime validation harness error"
+	state["validation_last_run_head_branch"] = "orchestrator/project-192"
+	state.update(overrides)
+	return state
+
+
+def _run_stale_pin_poller(state: dict, **kwargs) -> dict:
+	kwargs.setdefault("tracking_labels", ["ai:validation-failed", "ai:harness-broken"])
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={"main": _STALE_PIN_MAIN_SHA},
+		**kwargs,
+	)
+
+
+def _stale_pin_marker_posted(result: dict) -> bool:
+	return any(
+		"<!-- validation-stale-pin-recovery:" in (c.get("body") or "")
+		for c in result["issues"]["192"]["comments"]
+	)
+
+
+def _assert_stale_pin_recovered(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	# Q2 A: counters are kept.
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_stale_pin_recovered_ref"]
+	assert "validation_last_raw_status" not in ls
+	assert "validation_failure_reason" not in ls
+	assert len(result["validation_dispatches"]) == 1, output
+	assert result["validation_dispatches"][0]["ref"] is None
+	assert result["validation_dispatches"][0]["tracking_issue"] == "192"
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	assert _stale_pin_marker_posted(result)
+	assert "VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=recovered" in output
+
+
+def _assert_stale_pin_skipped(result: dict, reason: str) -> None:
+	output = result["stdout"] + result["stderr"]
+	assert result["latest_state"]["status"] == "failed", output
+	assert result["validation_dispatches"] == []
+	assert not _stale_pin_marker_posted(result)
+	assert f"VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=skip reason={reason}" in output, output
+
+
+def test_stale_pin_recovery_redispatches_once_from_recorded_run_branch():
+	result = _run_stale_pin_poller(_stale_pin_state())
+	_assert_stale_pin_recovered(result)
+	assert result["latest_state"]["validation_stale_pin_recovered_ref"] == _STALE_PIN_MAIN_SHA
+	assert result["latest_state"]["validation_last_dispatch_workflow_ref"] == "default"
+
+
+def test_stale_pin_recovery_redispatches_legacy_state_without_run_branch():
+	state = _stale_pin_state()
+	del state["validation_last_run_head_branch"]
+	result = _run_stale_pin_poller(state)
+	_assert_stale_pin_recovered(result)
+	assert "run_head_branch=legacy" in result["stdout"] + result["stderr"]
+
+
+def test_stale_pin_recovery_skips_legacy_shape_written_by_fixed_poller():
+	state = _stale_pin_state(validation_last_dispatch_workflow_ref="default")
+	del state["validation_last_run_head_branch"]
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "no_evidence")
+
+
+def test_stale_pin_recovery_skips_when_already_recovered():
+	state = _stale_pin_state(validation_stale_pin_recovered_ref=_STALE_PIN_MAIN_SHA)
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "already_recovered")
+
+
+def test_stale_pin_recovery_skips_when_trusted_marker_present():
+	marker = {
+		"body": f"<!-- validation-stale-pin-recovery:{_STALE_PIN_MAIN_SHA} -->\n## 🔁 Validation re-dispatched",
+		"user": {"login": "github-actions[bot]"},
+	}
+	result = _run_stale_pin_poller(_stale_pin_state(), tracking_comments=[marker])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+	assert "outcome=skip reason=marker_present" in result["stdout"] + result["stderr"]
+
+
+def test_stale_pin_recovery_ignores_untrusted_marker():
+	marker = {
+		"body": f"<!-- validation-stale-pin-recovery:{_STALE_PIN_MAIN_SHA} -->",
+		"user": {"login": "attacker"},
+		"author_association": "NONE",
+	}
+	_assert_stale_pin_recovered(_run_stale_pin_poller(_stale_pin_state(), tracking_comments=[marker]))
+
+
+def test_stale_pin_recovery_skips_when_not_harness_error():
+	state = _stale_pin_state(validation_last_raw_status="needs_fixes")
+	_assert_stale_pin_skipped(
+		_run_stale_pin_poller(state, tracking_labels=["ai:validation-failed"]),
+		"not_harness_error",
+	)
+
+
+def test_stale_pin_recovery_skips_when_run_used_default_branch():
+	state = _stale_pin_state(validation_last_run_head_branch="main")
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "run_used_default_branch")
+
+
+def test_stale_pin_recovery_skips_when_disabled():
+	result = _run_stale_pin_poller(
+		_stale_pin_state(),
+		env_overrides={"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false"},
+	)
+	_assert_stale_pin_skipped(result, "disabled")
+
+
+def test_stale_pin_recovery_skips_when_validation_disabled():
+	result = _run_stale_pin_poller(
+		_stale_pin_state(),
+		env_overrides={"ENABLE_VALIDATION": "false"},
+	)
+	_assert_stale_pin_skipped(result, "validation_disabled")
+
+
+def test_stale_pin_recovery_skips_when_failure_label_removal_fails():
+	# The failure label must be gone before the once-only flag is persisted;
+	# otherwise the next tick would re-park the project mid-run.
+	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_edit_for=[192])
+	_assert_stale_pin_skipped(result, "label_write_failed")
+	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+	# Every edit fails, so the label restore fails too and must be surfaced.
+	assert "VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=label_restore_failed" in (
+		result["stdout"] + result["stderr"]
+	)
+
+
+def test_stale_pin_recovery_skips_when_state_write_fails():
+	# No dispatch until the guard flag is persisted; retry next tick.
+	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_comment_post_for=[192])
+	_assert_stale_pin_skipped(result, "state_write_failed")
+	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+	# The removed failure labels are restored so /revalidate still matches.
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
+def test_stale_pin_recovery_skips_when_default_branch_unreadable():
+	# A failed default-branch read must not fall back to `main`.
+	result = _run_stale_pin_poller(_stale_pin_state(), default_branch_fail=True)
+	_assert_stale_pin_skipped(result, "default_branch_unavailable")
+
+
+def test_stale_pin_recovery_skips_default_branch_only_project():
+	state = _stale_pin_state(integration_branch="")
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "no_integration_branch")
+
+
+def test_stale_pin_recovery_yields_to_operator_revalidate():
+	result = _run_stale_pin_poller(_stale_pin_state(), tracking_comments=["/revalidate"])
+	ls = result["latest_state"]
+	assert ls["status"] == "validating"
+	# The /revalidate block ran: it resets the counters.
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_recovery_count"] == 0
+	assert "validation_stale_pin_recovered_ref" not in ls
+	assert not _stale_pin_marker_posted(result)
+	assert "VALIDATION_STALE_PIN_RECOVERY" not in result["stdout"] + result["stderr"]
+
+
+# ---------------------------------------------------------------------------
 # Tests: /judge_resume reset controls for non-validation failed projects
 # ---------------------------------------------------------------------------
 
@@ -19406,6 +19490,7 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:awaiting-approval"]},
+		issue_comments={10: [_trusted_plan_comment()]},
 		mock_stall_judge_json={
 			"action": "nonsense",
 			"justification": "bad output",
@@ -19726,12 +19811,15 @@ def test_managed_stall_recovery_skips_destructive_blocked_latch():
 	)
 
 	# Negative control: without the latch the same stall is auto-approved,
-	# proving the skip above is the latch and not some other guard.
+	# proving the skip above is the latch and not some other guard. The
+	# trusted plan comment lists no automation path, so the plan
+	# auto-approval gate (#6769) lets it through.
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment()]},
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
 	assert any("/approved" in body for body in issue_comments), result["stdout"]
@@ -19780,7 +19868,7 @@ def test_standalone_stall_recovery_skips_destructive_blocked_latch():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
-		issue_comments={501: [standalone_state_comment]},
+		issue_comments={501: [_trusted_plan_comment(), standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["501"]["comments"]]
@@ -24413,6 +24501,281 @@ def _extract_bash_function(script: str, signature: str) -> str:
 	return script[start:end]
 
 
+def _judge_checkout_repo(tmp_path: Path) -> tuple[Path, str]:
+	"""A repo whose integration commit changes a tracked 0644 script, checked
+	out at the base with the poll workflow's staging applied (0755 install
+	plus an untracked support-only file). Returns (repo, integration sha)."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+	def git(*args: str) -> str:
+		return subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	(repo / "scripts").mkdir()
+	(repo / "prompts").mkdir()
+	(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+	(repo / "prompts" / "mode-judge.txt").write_text("main prompt\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("checkout", "-q", "-b", "integration")
+	(repo / "scripts" / "pr_checks_lib.sh").write_text("integration copy\n", encoding="utf-8")
+	(repo / "changelog.d").mkdir()
+	(repo / "changelog.d" / "1-fix.md").write_text("- fix\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-q", "-m", "integration work")
+	integration_sha = git("rev-parse", "HEAD")
+	git("checkout", "-q", "main")
+	# Stage workflow support files: install -m 0755 over the tracked 0644
+	# script (same content), plus a support file the repo does not track.
+	(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+	(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+	return repo, integration_sha
+
+
+def _judge_checkout_functions() -> str:
+	"""prepare_tracking_judge_checkout plus the helpers it calls."""
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	return "".join(
+		_extract_bash_function(poller, signature)
+		for signature in (
+			"_judge_support_parents_real() {",
+			"_judge_refresh_trusted_support() {",
+			"prepare_tracking_judge_checkout() {",
+		)
+	)
+
+def test_judge_checkout_fallback_keeps_the_targets_tracked_scripts() -> None:
+	"""Project #7126: the 0755 staging made the plain checkout fail, and the
+	fallback restored the poller's scripts/ over the integration branch, so
+	the judge reviewed main's code and filed #7296, #7306 and #7307. The
+	fallback now keeps the target's tracked files and restores only support
+	files the target does not track."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp_path = Path(td)
+		repo, integration_sha = _judge_checkout_repo(tmp_path)
+		func = _judge_checkout_functions()
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1"\necho "rc=$? ref=${JUDGE_EXECUTION_REF}"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "main prompt\n"
+		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced kept_target=1" in out, out
+
+
+def test_security_pass_judge_checkout_keeps_the_trusted_support_scripts() -> None:
+	"""The security pass runs scripts/security_audit.sh from this checkout with
+	the poller's credentials, so its forced checkout keeps the poller's staged
+	support files instead of the audited branch's copies."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+		func = _judge_checkout_functions()
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "main copy\n", out
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced_overlay_kept kept_target=0 reason=trusted_support" in out, out
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}" "true"' in poller
+	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"' in poller
+
+
+def test_security_pass_judge_checkout_refreshes_support_from_the_verified_checkout() -> None:
+	"""An earlier judge checkout in the same tick can leave another project's
+	tracked scripts in the tree. In keep mode the forced fallback re-copies
+	every backed-up support file from .codex-workflow-src, so the security
+	pass never runs a project-supplied security_audit.sh."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").write_text("project A copy\n", encoding="utf-8")
+		(repo / "scripts" / "security_audit.sh").write_text("project A audit\n", encoding="utf-8")
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
+		(trusted / "security_audit.sh").write_text("trusted audit\n", encoding="utf-8")
+		func = _judge_checkout_functions()
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "trusted copy\n", out
+		assert (repo / "scripts" / "security_audit.sh").read_text(encoding="utf-8") == "trusted audit\n", out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert "reason=trusted_support trusted_refreshed=2" in out, out
+
+
+def _run_judge_checkout(repo: Path, ref: str, keep: str) -> str:
+	func = _judge_checkout_functions()
+	script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "$2"\necho "rc=$?"\n'
+	env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+	result = subprocess.run(["bash", "-c", script, "judge", ref, keep], cwd=repo, env=env,
+		capture_output=True, text=True, check=False)
+	return result.stdout + result.stderr
+
+
+def test_security_pass_plain_checkout_also_refreshes_trusted_support() -> None:
+	"""A non-keep judge checkout leaves the tree clean, so the security pass's
+	plain checkout succeeds and switches tracked scripts to the audited
+	branch's copies. Keep mode must re-copy them from the verified checkout on
+	that path too."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o644)
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, integration_sha, "true")
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "trusted copy\n", out
+		assert "outcome=plain reason=trusted_support trusted_refreshed=1" in out, out
+
+
+def test_security_pass_checkout_refuses_a_symlink_over_trusted_support() -> None:
+	"""A branch-tracked symlink where the verified checkout has a support
+	directory would redirect the copy out of the checkout: fail closed and
+	write nothing through it."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		outside = Path(td) / "outside"
+		outside.mkdir()
+		(outside / "helper.sh").write_text("outside\n", encoding="utf-8")
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "lib").symlink_to(outside)
+		subprocess.run(["git", "add", "scripts/lib"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "link"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		trusted = repo / ".codex-workflow-src" / "scripts" / "lib"
+		trusted.mkdir(parents=True)
+		(trusted / "helper.sh").write_text("trusted\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "true")
+		assert "rc=1" in out, out
+		assert "outcome=trusted_refresh_failed" in out, out
+		assert (outside / "helper.sh").read_text(encoding="utf-8") == "outside\n"
+
+
+def test_judge_checkout_fallback_removes_support_paths_the_target_deleted() -> None:
+	"""The backup restore brings back files the previous checkout tracked and
+	the target deleted; the fallback removes them, as a plain checkout would."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert not (repo / "prompts" / "mode-judge.txt").exists(), out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
+		assert "outcome=forced kept_target=1 removed_stale=1" in out, out
+
+
+def test_security_pass_checkout_fails_closed_without_a_trusted_root() -> None:
+	"""With no usable verified support checkout the security pass must not run
+	support scripts from the audited branch: keep mode fails closed."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		out = _run_judge_checkout(repo, integration_sha, "true")
+		assert "rc=1" in out, out
+		assert "outcome=trusted_refresh_failed" in out and "reason=no_trusted_root" in out, out
+
+
+def test_security_pass_plain_checkout_restores_trusted_files_the_target_deleted() -> None:
+	"""A plain checkout of a branch that lacks a tracked support file deletes
+	it; keep mode copies it back from the verified checkout so the security
+	pass's assets stay present."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		trusted = repo / ".codex-workflow-src" / "prompts"
+		trusted.mkdir(parents=True)
+		(trusted / "mode-judge.txt").write_text("trusted prompt\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "true")
+		assert "rc=0" in out, out
+		assert "outcome=plain" in out, out
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "trusted prompt\n", out
+
+
+def test_judge_checkout_fallback_restore_does_not_write_through_target_symlinks() -> None:
+	"""The backup restore after the forced checkout must not follow a
+	target-tracked symlink out of the checkout."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		outside = Path(td) / "outside.sh"
+		outside.write_text("outside\n", encoding="utf-8")
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").unlink()
+		(repo / "scripts" / "pr_checks_lib.sh").symlink_to(outside)
+		subprocess.run(["git", "add", "scripts/pr_checks_lib.sh"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "link"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert "outcome=forced" in out, out
+		assert outside.read_text(encoding="utf-8") == "outside\n", out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+
+
+def test_judge_checkout_fallback_keeps_staged_support_the_target_deleted() -> None:
+	"""Stale removal keeps a path the verified support checkout also has: it is
+	a staged support file later poller steps run."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		trusted = repo / ".codex-workflow-src" / "prompts"
+		trusted.mkdir(parents=True)
+		(trusted / "mode-judge.txt").write_text("main prompt\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "main prompt\n", out
+		assert "outcome=forced kept_target=1 removed_stale=0" in out, out
+
+
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	"""Regression for PR #3991 / issue #3990: stall recovery closed a
 	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``
@@ -24529,6 +24892,319 @@ def test_linked_pr_is_issue_implementation_predicate_contract():
 		got = {line.rsplit("|", 1)[0]: int(line.rsplit("|", 1)[1]) for line in result.stdout.splitlines() if line}
 		for issue, head, body, expected in cases:
 			assert got[f"{issue}|{head}|{body}"] == expected, (issue, head, body, got)
+
+
+# --------------------------------------------------------------------------
+# Plan auto-approval gate in stall recovery (issue #6769)
+# --------------------------------------------------------------------------
+
+_PLAN_GATE_LOGIN = "github-actions[bot]"
+_ORDINARY_PLAN_FILES = ("src/app.py", "README.md")
+_PROTECTED_PLAN_FILES = ("scripts/security_audit.sh", ".github/workflows/security-audit.yml")
+
+
+def _trusted_plan_comment(files: tuple[str, ...] = _ORDINARY_PLAN_FILES, *, login: str = _PLAN_GATE_LOGIN,
+	created_at: str = "2026-01-01T00:00:00Z") -> dict:
+	listing = "\n".join(f"- `{path}`" for path in files)
+	return {
+		"body": f"Implementation Plan\n\n### 1. Files likely to change\n{listing}\n\nSTATUS: CLEAR\n\n<!-- ai:plan-proposal:v1 -->",
+		"user": {"login": login},
+		"author_association": "OWNER",
+		"created_at": created_at,
+	}
+
+
+def _managed_awaiting_approval_state() -> dict:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue.update({"status": "in_progress", "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1,
+		"stall_recovery_count": 0})
+	return state
+
+
+def _standalone_awaiting_approval_state_comment() -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({"schema_version": 1, "last_seen_phase": "ai:awaiting-approval", "status_since_ts": 1,
+			"stall_recovery_count": 0})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _approved_bodies(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") for c in result["issues"][issue]["comments"] if c.get("body", "").startswith("/approved")]
+
+
+def test_managed_auto_approve_holds_protected_plan_with_flag_off() -> None:
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve "
+		"reason=automation_path_plan_auto_approval_disabled outcome=defer issue=10 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	# The poller hold reaches a human: one hold comment naming the paths.
+	holds = [c.get("body", "") for c in result["issues"]["10"]["comments"]
+		if "<!-- ai:automation-path-plan-hold:v1 issue=10 reason=automation_path_plan_auto_approval_disabled source=poller " in c.get("body", "")]
+	assert len(holds) == 1, log
+	assert "- `scripts/security_audit.sh`" in holds[0]
+
+
+def test_managed_hold_comment_keeps_globs_and_renotifies_on_new_paths() -> None:
+	# The poller hold comment names the plan's raw paths (globs kept), and a
+	# hold note for a different path list does not suppress a new one.
+	old_note = {
+		"body": "**old**\n\n<!-- ai:automation-path-plan-hold:v1 issue=10 "
+			"reason=automation_path_plan_auto_approval_disabled source=poller paths=WyJzY3JpcHRzL29sZC5zaCJd -->",
+		"user": {"login": _PLAN_GATE_LOGIN},
+		"author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(("scripts/**/*.py",)), old_note]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	holds = [c.get("body", "") for c in result["issues"]["10"]["comments"]
+		if "source=poller" in c.get("body", "") and "**old**" not in c.get("body", "")]
+	assert len(holds) == 1, log
+	assert "- `scripts/**/*.py`" in holds[0]
+
+
+def test_managed_auto_approve_posts_for_ordinary_plan() -> None:
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment()]},
+	)
+	assert _approved_bodies(result, "10"), result["stdout"] + result["stderr"]
+	assert "reason=automation_path_plan_hold" not in result["stdout"]
+
+
+def test_managed_auto_approve_holds_without_trusted_plan_comment() -> None:
+	forged = _trusted_plan_comment(login="outsider")
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [forged]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == []
+	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
+
+
+def _pipeline_plan_grant_run(**overrides) -> dict:
+	# Pipeline-authored security finding without files_touched (open grant).
+	kwargs = {
+		"state": _managed_awaiting_approval_state(), "enable_validation": "false", "max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		"issue_comments": {10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		"issue_bodies": {10: "Security finding. No allowlist."},
+		"issue_authors": {10: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
+		"env_overrides": {"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def test_managed_auto_approve_writes_pipeline_plan_grant_then_approves() -> None:
+	# Q108: the open grant never approves on its own; the poller writes an
+	# exact files_touched block from the plan into the issue body first.
+	result = _pipeline_plan_grant_run()
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "PIPELINE_PLAN_GRANT issue=10 source=poller outcome=written" in log
+	patches = result.get("issue_body_patch_calls", [])
+	assert len(patches) == 1, log
+	body = patches[0]["body"]
+	assert body.startswith("Security finding. No allowlist.\n\n---\n**Pipeline plan grant.**")
+	assert "<!-- ai:pipeline-plan-grant:v1 -->\nfiles_touched:\n" in body
+	# `$(cat ...)` drops the body's final newline.
+	assert body.endswith("\n".join(f"  - {p}" for p in (*_PROTECTED_PLAN_FILES, "tests/**", "changelog.d/*", "agents.d/*")))
+
+
+def test_managed_pipeline_plan_grant_write_failure_holds() -> None:
+	result = _pipeline_plan_grant_run(fail_issue_patch_for=[10])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert "PIPELINE_PLAN_GRANT issue=10 source=poller outcome=failed reason=issue_body_write_failed" in log
+	assert "reason=pipeline_plan_grant_write_failed outcome=defer issue=10" in log
+
+
+def test_managed_pipeline_plan_grant_skipped_for_directory_plan() -> None:
+	# A listed directory can never be an exact grant: no body write, hold.
+	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(("scripts/", "scripts/a.sh"))]})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_body_patch_calls", []) == []
+	assert "reason=path_not_granted outcome=defer issue=10 paths=scripts/" in log
+
+
+def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> None:
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		issue_bodies={10: granted_body},
+		issue_authors={10: {"login": "maintainer", "association": "OWNER"}},
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	assert _approved_bodies(granted, "10"), granted["stdout"] + granted["stderr"]
+
+
+def test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts_granted() -> None:
+	# Issue #7181: with AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED unset (the
+	# script default), a member's security finding whose plan lists automation
+	# paths without a files_touched grant is held and the missing paths are
+	# named; the same plan with an exact grant is approved.
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+
+	def _default_tick(body: str) -> dict:
+		return _run_poller(
+			state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+			issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+			issue_bodies={10: body},
+			issue_authors={10: maintainer},
+		)
+
+	held = _default_tick("Security finding in scripts/security_audit.sh. No allowlist.")
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "10") == [], held_log
+	assert "reason=automation_path_plan_auto_approval_disabled" not in held_log
+	assert ("outcome=defer issue=10 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in held_log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+	assert held["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	holds = [c.get("body", "") for c in held["issues"]["10"]["comments"]
+		if "<!-- ai:automation-path-plan-hold:v1 issue=10 " in c.get("body", "")]
+	assert len(holds) == 1, held_log
+	assert "- `scripts/security_audit.sh`" in holds[0]
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _default_tick(granted_body)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "10"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
+def test_managed_auto_approve_default_on_holds_without_plan_comment() -> None:
+	# Issue #7181: with the flag unset, a missing plan comment fails closed.
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: []},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_standalone_auto_approve_default_on_holds_ungranted_plan_and_posts_granted() -> None:
+	# Issue #7181: standalone stall recovery with the flag unset holds a plan
+	# listing ungranted automation paths and approves it once the body carries
+	# an exact trusted files_touched grant.
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+
+	def _default_tick(body: str) -> dict:
+		return _run_poller(
+			state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+			issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+			issue_bodies={501: body},
+			issue_authors={501: maintainer},
+			mock_gh_issue_list_label_filter=True,
+			tracking_issues_override=[],
+			env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+		)
+
+	held = _default_tick("Security finding in scripts/security_audit.sh. No allowlist.")
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "501") == [], held_log
+	assert "reason=automation_path_plan_auto_approval_disabled" not in held_log
+	assert ("outcome=defer issue=501 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in held_log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _default_tick(granted_body)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "501"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
+def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert "reason=automation_path_plan_auto_approval_disabled outcome=defer issue=501" in log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+
+
+def test_standalone_idle_tick_sweep_approves_held_plan_after_grant() -> None:
+	# Issue #7174: with no open tracking issue only the sweep-only mode runs.
+	# A standalone plan held for automation paths is re-checked there and is
+	# approved once its body carries an exact trusted files_touched grant.
+	def _idle_tick(body: str, author: dict) -> dict:
+		return _run_poller(
+			state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+			issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+			issue_bodies={501: body},
+			issue_authors={501: author},
+			mock_gh_issue_list_label_filter=True,
+			tracking_issues_override=[],
+			env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+		)
+
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+	held = _idle_tick("Fix it. No allowlist yet.", maintainer)
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "501") == [], held_log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _idle_tick(granted_body, maintainer)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "501"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
+def test_plan_gate_poller_wiring() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"' in poller
+	# Batched GraphQL carries the issue author (no new API call).
+	assert "          author { login }\n          authorAssociation\n" in poller
+	assert "author_login: (.value.author.login // \"\")," in poller
+	# Both auto_approve arms and both retrigger_implement arms (awaiting-approval only) gate.
+	assert poller.count('_plan_auto_approval_gate "${issue_num}"') == 4
+	assert poller.count('if [ "${phase}" = "ai:awaiting-approval" ]; then') >= 2
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "workflow_failure_heal.py files_touched_scope_guard.py; do" in workflow
+	assert workflow.count(
+		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}") == 5
+	# The staged-support latch release is intentionally not gated (AD-3: B).
+	release = poller.split("release_staged_support_needs_human_latches()", 1)[1].split("\n}\n", 1)[0]
+	assert "_plan_auto_approval_gate" not in release
 
 
 def main() -> int:

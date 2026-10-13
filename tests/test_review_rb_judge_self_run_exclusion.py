@@ -66,6 +66,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 # The check-runs jq filter + self-run exclusion now live in the shared
@@ -90,6 +91,7 @@ def _pr_checks_lib_text() -> str:
 
 
 def _review_autofix_text() -> str:
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
 	return expanded_review_autofix_text()
 
 
