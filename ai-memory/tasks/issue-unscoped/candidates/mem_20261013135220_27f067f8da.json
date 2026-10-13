@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:test_managed_auto_approve_default_on_holds_without_plan_comment | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test may not assert the final resulting state of the wave or issue.\n  WHY: Gemini says the test only verifies log output; openai_gpt-6-luna and qwen_qwen3_7-plus disagree, reporting that a state assertion is present.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add no-grant security-finding and fully granted-plan regressions, including evidence that the no-grant case fails before the fix and passes afterward.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py, regression tests for both managed and standalone paths under the script default.\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: None; the reviewer says the requirement is satisfied by `test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts_granted` and `test_standalone_auto_approve_default_on_holds_ungranted_plan_and_posts_granted`, which assert fail-closed behavior under the script default and pass-through behavior with an exact grant.\n- requirement: \"Replan against the current target branch.\"\n  expected_change_site: Implementation of the plan\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: None; the reviewer says the requirement is fulfilled by the existence of this PR and its tests, as no code change was needed for the re-issue request, which was primarily about verification.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:test_managed_auto_approve_default_on_holds_without_plan_comment | severity=NIT | confidence=3\n  PROBLEM: The test verifies the log output but lacks an explicit assertion for the final resulting state of the wave or issue.\n  WHY: While the log verifies the hold occurred, the test would pass even if the internal state of the orchestrator was updated incorrectly or corrupted. It is less robust as a regression test.\n- TASK_GAP\n  Requirement: \"Add no-grant security-finding and fully granted-plan regressions, including evidence that the no-grant case fails before the fix and passes afterward.\"\n  Expected change site: tests/test_orchestrate_poll_process.py, regression tests for both managed and standalone paths under the script default.\n  Evidence of absence: None. The requirement is satisfied by the tests added in the last run (`test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts_granted` and `test_standalone_auto_approve_default_on_holds_ungranted_plan_and_posts_granted`). These tests successfully assert the fail-closed behavior under the script default (`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` unset/true) and the pass-through behavior with an exact grant.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Replan against the current target branch.\"\n  Expected change site: Implementation of the plan\n  Evidence of absence: None. The PR description is \"Automated implementation\", which implies implementation of the plan, but the last run summary says \"I made no changes this round... No code change is needed\". The requirement is fulfilled by the existence of this PR and its tests, as no code change was required to fulfill the re-issue request which was primarily about verification.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "77e6b34c65376b04780c8c3aa6f2cc24448e1fe177ed474df4c2be2083a6b277",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7182,
+    "run_id": "38395338684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38395338684",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013135220_27f067f8da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7182,
+    "run_id": "38395338684"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T13:52:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
