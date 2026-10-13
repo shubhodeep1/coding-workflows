@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Both release jobs deliberately default to publishing. `.github/workflows/mark-stable.yml:726,771` and `.github/workflows/test-and-mark-stable.yml:6414,6460` resolve `vars.STABLE_RELEASE_ENABLED || 'true'` and `${STABLE_RELEASE_ENABLED:-true}`. `tests/test_mark_stable_release_tag_refspec_contract.py:1188` pins that literal. #7029 and #7272 made this choice on purpose. `agents.d/7272-release-tagging-default-on.md` already gives the reason for the sibling `RELEASE_TAGGING_ENABLED` switch: the safety control is the fail-closed `CI / lint` gate (`scripts/release_ci_gate.sh`), and defaulting the switch off would only stop releases. That fragment says nothing about `STABLE_RELEASE_ENABLED`. That missing note is why activation verification of PR #7207 filed this gap. Option C would bring back the release stall #7029 fixed. Option B leaves the cause in place, so this issue would keep being filed. Option A adds only documentation, keeps all release behaviour, and stops the false gap report.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - agents.d/7272-release-tagging-default-on.md (the wording and target section to copy: `<!-- agents: section=\"Immutable consumer wrapper pins\" -->`)\n    - .github/workflows/mark-stable.yml:721-778 (env default and script fallback for `STABLE_RELEASE_ENABLED`)\n    - .github/workflows/test-and-mark-stable.yml:6409-6467 (the same pair)\n    - README.md:242-243 (current user-facing description of the switch; leave it unchanged)\n    - changelog.d/ (fragment directory; CLAUDE.md \u00a720 format)\n  steps:\n    - Create `agents.d/7298-stable-release-default-on.md` with one block under `<!-- agents: section=\"Immutable consumer wrapper pins\" -->`. It should say:\n      - In the `release` jobs of `mark-stable.yml` and `test-and-mark-stable.yml`, `STABLE_RELEASE_ENABLED` resolves as `vars.STABLE_RELEASE_ENABLED || 'true'` and `${STABLE_RELEASE_ENABLED:-true}`. Unset, empty or `true` (any letter case) publishes. Any other value skips publishing with a `::warning::` and the `STABLE_RELEASE_DISABLED` summary.\n      - This is intentional (#7029, #7272). The safety control is the fail-closed `CI / lint` check-run gate, and the switch is an operator's emergency off switch.\n      - Activation verification should not report the default-on fallback of `STABLE_RELEASE_ENABLED` or `RELEASE_TAGGING_ENABLED` as a gap.\n      - To pause releases, set `STABLE_RELEASE_ENABLED=false` (or `RELEASE_TAGGING_ENABLED=false`) and `AUTO_RELEASE_STABLE_ENABLED=false`.\n    - Add `changelog.d/7298-stable-release-default-on.md`, following the CLAUDE.md \u00a720 fragment format. It records that the default-on stable-release switch is now documented as intentional, so activation verification no longer reports it, and that release behaviour is unchanged.\n    - Do not edit workflow YAML, scripts, tests or README.md. Do not edit agents.md directly (\u00a725).\n  replaces_acceptance_criterion: \"Default STABLE_RELEASE_ENABLED to false in both release-job environments and switch scripts; update the switch contract tests and documentation.\"\n  equivalence_argument: The gap was filed because the intended default had no stated reason that activation verification could see. Documenting the reason, in the same place #7272 used for the sibling switch, closes that gap. Release safety stays with the fail-closed CI gate, which keeps running either way.\n  reversibility: If a person later wants publishing to default off, a follow-up issue can flip both defaults and the contract-test literal, and remove this fragment. Nothing here blocks that.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "13f3f43f6fb876baeab4cf9ffe2f2216e6b3957f64693131b928003acd49c49a",
+  "lineage": {
+    "issue_number": 7298,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38333250961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38333250961",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7298"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013014746_6ab7054b72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7298,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38333250961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7298",
+  "timestamps": {
+    "created_at": "2026-10-13T01:47:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
