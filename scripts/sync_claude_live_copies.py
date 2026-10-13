@@ -74,6 +74,9 @@ PIPELINE_MARKER_RE = re.compile(r"^\[(ai-autofix|judge-fix|ai-merge-resolve|clau
 SQUASHED_PR_RE = re.compile(r"\(#\d+\)\s*$")
 DEFAULT_MAX_PROVENANCE_COMMITS = 30
 TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+SYNC_COMMIT_IDENTITY = ("-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com")
+PUSH_DETAIL_MAX = 300
+URL_CREDENTIALS_RE = re.compile(r"(://)[^/@\s]+@")
 
 
 def log(message: str) -> None:
@@ -503,16 +506,36 @@ def _commit_and_push(root: Path, branch: str, after: str, relatives: list[str], 
 			shutil.copy2(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
 			log(f"copied path={LIVE_PREFIX}{relative}")
 		_git(root, "add", "--", *[LIVE_PREFIX + relative for relative in relatives])
-		_git(root, "-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com", "commit", "-q", "-m", message)
+		_git(root, *SYNC_COMMIT_IDENTITY, "commit", "-q", "-m", message)
+		if previous_sha:
+			# Branch rulesets refuse non-fast-forward pushes and branch deletion
+			# on every branch, so a sync branch rebuilt from `after` could never
+			# replace an existing one (run 38364113936). Keep the tree just
+			# committed but give it two parents, the remote tip and `after`: the
+			# push fast-forwards, and the pull request diff against main (merge
+			# base `after`) still shows only the copied live files.
+			tree = _git(root, "rev-parse", "HEAD^{tree}").stdout.strip()
+			merged = _git(root, *SYNC_COMMIT_IDENTITY, "commit-tree", tree, "-p", previous_sha, "-p", after, "-m", message).stdout.strip()
+			_git(root, "reset", "-q", "--soft", merged)
+			log(f"fast_forward branch={branch} previous={previous_sha[:12]} after={after[:12]}")
 	except (subprocess.CalledProcessError, OSError):
 		log("error reason=git_stage_failed")
 		return False
 	try:
 		_git(root, "push", f"--force-with-lease=refs/heads/{branch}:{previous_sha}", "origin", f"HEAD:refs/heads/{branch}")
-	except subprocess.CalledProcessError:
-		log("error reason=push_failed")
+	except subprocess.CalledProcessError as exc:
+		log(f"error reason=push_failed branch={branch} detail={_push_failure_detail(exc.stderr)}")
 		return False
 	return True
+
+
+def _push_failure_detail(stderr: object) -> str:
+	"""One log-safe line from git's push error: no URL credentials, no spaces, bounded."""
+	text = stderr if isinstance(stderr, str) else ""
+	lines = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("To ")]
+	detail = URL_CREDENTIALS_RE.sub(r"\1", " | ".join(lines))
+	detail = "".join(char if 32 < ord(char) < 127 else "_" for char in detail)
+	return detail[:PUSH_DETAIL_MAX] or "none"
 
 
 def _open_or_refresh_pr(repository: str, owner: str, branch: str, base: str, title: str, body: str, *, draft: bool, relatives: list[str], push: Callable[[], bool]) -> int | None:
