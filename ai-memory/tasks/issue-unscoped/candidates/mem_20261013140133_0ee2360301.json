@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~28286-28328 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Gate C reads only one 100-item branch activity page, so a qualifying pipeline push omitted from a full page can be mistaken for no pipeline push.\n  WHY: The gate can report `C_pusher`, page an operator, and block a legitimate force-merge even though the pipeline push covered the commit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- File: `scripts/orchestrate_poll_process.sh`\n- Location: Gate C activity read (`N_ACTIVITY_JSON`, `per_page=100`)\n  PROBLEM: If the activity page is full (100 entries) and no pipeline push appears on it, Gate C pages `C_pusher` as if no push existed.\n  WHY: That is fail-closed and safe, but the alert text would misstate the cause.\n  Suggested minimal fix: when `jq 'length'` is 100 and `N_PROD_PUSHED` is false, log `reason=activity_page_full` and re-check next sweep without paging.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:~28286-28328 | severity=NIT | confidence=3\n  PROBLEM: The Gate C pusher check requests exactly one page of the branch activity API with `per_page=100`. GitHub returns up to 100 push events newest-first; a branch with more than 100 events (long-running PRs with many autofix runs / force-pushes) silently omits older pushes from the page, so a legitimate pipeline push can be absent from the response.\n  WHY: This is not a security bypass \u2014 the check fails closed and a Telegram alert is sent \u2014 but the alert text (\"no [ai-autofix] / [judge-fix] commit was pushed by the pipeline account\") misreports the cause, and the merge is needlessly delayed by a sweep cycle.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:28298, 28319-28325 | severity=NIT | confidence=4\n  PROBLEM: Gate C reads only one page of up to 100 branch-activity records and does not detect a full page.\n  WHY: If the qualifying pipeline push is older than the 100 returned records, the lookup misses it and treats the readable response as proof that no pipeline push covered the commit. The gate then records `C_pusher` and skips the force-merge on every sweep, even though the push occurred.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:Gate C pusher read (`N_ACTIVITY_JSON`, `per_page=100`) | severity=NIT | confidence=3\n  PROBLEM: The repository activity read fetches only the first 100 activities (`per_page=100`). A branch with 100 or more activities newer than the pipeline push would omit that push from the response, causing Gate C to fail closed with `C_pusher` even though a pipeline push did cover the commit.\n  WHY: The repository activity API returns activities in reverse chronological order. When the first page is full (100 items), older activities \u2014 including the pipeline push \u2014 are on later pages. The jq filter finds no covering push, `N_PROD_PUSHED` is \"false\", and the gate pages once with an alert that says \"no [ai-autofix] / [judge-fix] commit was pushed by the pipeline account\", which misreports the cause.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No actionable task was provided; the reviewer requested the actual task or issue content and the resolved severity-classification reference.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1fb9bf207e8bae77d63747c4dad50aa7374d6eb2df328b991dd771558594a03b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7315,
+    "run_id": "38404434167",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38404434167",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013140133_0ee2360301",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7315,
+    "run_id": "38404434167"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T14:01:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
