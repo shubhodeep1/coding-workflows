@@ -667,3 +667,71 @@ def test_wrapper_without_docker_reports_unverified_and_exits_zero(tmp_path):
 	assert proc.returncode == 0
 	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
 	assert result["status"] == "unverified" and result["reason"] == "docker_unavailable"
+
+
+# --- review fixes -------------------------------------------------------------
+
+def test_resolution_3_pytest_style_file_without_main_uses_pytest(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tassert False\n", "tests/test_b.py": "def test_y():\n\tpass\n\nif __name__ == '__main__':\n\ttest_y()\n"})
+	assert _units(root, "tests/test_a.py")[0]["argv"] == ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_a.py"]
+	assert _units(root, "tests/test_b.py")[0]["argv"] == ["python3", "tests/test_b.py"]
+	monkeypatch.setattr(gate.importlib.util, "find_spec", lambda name: None)
+	units, unverified = gate.plan_units(root, {"affected_tests": [{"path": "tests/test_a.py", "reasons": []}]})
+	assert units == [] and unverified == [{"item": "tests/test_a.py", "reason": "pytest_unavailable"}]
+
+
+def test_hook_checks_the_stamp_of_the_pushed_ref_not_head(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "branch", "other")
+	_commit(root, {"a.txt": "changed\n"})
+	_write(root, tmp_path, "pass")
+	assert _hook(_push(root, "git push origin HEAD"), {"TMPDIR": str(tmp_path)}) == {}
+	out = _hook(_push(root, "git push origin other"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "other" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_asks_when_the_pushed_ref_does_not_resolve(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	out = _hook(_push(root, "git push origin no-such-branch:main"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Could not resolve" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_falls_back_for_a_push_the_guard_does_not_parse(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_push(root, "command git push origin HEAD"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert _hook(_push(root, 'git commit -m "push later"'), {"TMPDIR": str(tmp_path)}) == {}
+
+
+def test_wrapper_rejects_a_result_when_the_container_exits_non_zero(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace('\nfi\nexit 0\n', '\n\texit 1\nfi\nexit 0\n'), encoding="utf-8")
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified" and result["reason"] == "container_rc_1"
+
+
+def test_wrapper_lists_uncommitted_tracked_edits_and_overlays_command_inputs(tmp_path):
+	worktree = _worktree(tmp_path)
+	(worktree / "Makefile").write_text("test:\n\ttrue\n", encoding="utf-8")
+	_commit(worktree, {".ai/validate.yml": "prepush_test_command: make test\n"})
+	(worktree / "tests" / "test_a.py").write_text("# edited, not committed\n", encoding="utf-8")
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	capture = tmp_path / "capture"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\tsrc="${results%/results}/source"; cp "$results/changed.txt" "__CAP__.changed"; ls -a "$src" > "__CAP__.ls"; ls -a "$src/.ai" >> "__CAP__.ls"\n\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	changed = (tmp_path / "capture.changed").read_text(encoding="utf-8").split("\n")
+	assert "M\ttests/test_a.py" in changed
+	listing = (tmp_path / "capture.ls").read_text(encoding="utf-8").split()
+	assert "Makefile" in listing and "validate.yml" in listing

@@ -1345,6 +1345,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Full history: tests/claude_template_drift.py diffs against the PR
+          # base SHA, which a depth-1 checkout does not contain.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v6

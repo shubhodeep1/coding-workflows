@@ -63,6 +63,7 @@ MAX_HOOK_FAILURES_LISTED = 10
 DEFAULT_TIMEOUT_MINUTES = 15
 DEFAULT_SHARDS = 4
 DEFAULT_LARGE_FILE_TESTS = 50
+BASELINE_MIN_SECS = 90
 SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache"})
 CI_WORKFLOW = ".github/workflows/ci.yml"
 # Inverse of scripts/workflow_failure_heal.py HEAL_SCOPE_GUARD_TEST_SUBJECTS for
@@ -545,6 +546,14 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 			elif style == "pytest" or pytest_ok:
 				targets = [f"{path}::{name}" for name in names] or [path]
 				units.append({"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"})
+			elif _python_test_functions(repo / path) and "__main__" not in _read_text(repo / path):
+				# pytest-style test functions with no __main__ runner: `python3 <file>`
+				# would exit 0 without running them, so use pytest or report it.
+				if importlib.util.find_spec("pytest") is None:
+					unverified.append({"item": path, "reason": "pytest_unavailable"})
+				else:
+					targets = [f"{path}::{name}" for name in names] or [path]
+					units.append({"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"})
 			else:
 				units.append({"id": path, "file": path, "argv": ["python3", path], "kind": "test"})
 		elif path.endswith(".sh"):
@@ -712,7 +721,10 @@ def run_gate(
 		elif r.get("status") == "error":
 			unverified.append({"item": r["id"], "reason": r.get("reason", "command_unavailable")})
 	failed = [r for r in results if r.get("status") == "fail"]
-	pr_caused, inherited = classify_baseline(failed, baseline, deadline, shards)
+	# The baseline re-run gets at least BASELINE_MIN_SECS even when the main
+	# run used the whole budget, so a late failure can still be confirmed as
+	# inherited (the container wrapper allows 120 s past the budget).
+	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards)
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	if pr_caused:
 		status = "fail"
@@ -905,24 +917,45 @@ def _load_guard_module():
 
 
 _FALLBACK_PUSH_RE = re.compile(r"(?<![\w-])git\b[^;&|\n]*\bpush\b")
+# Stricter shape for a push the guard parser did not recognise (for example
+# `command git push`): only global options may sit between `git` and `push`,
+# so `git commit -m "push later"` does not match.
+_UNPARSED_PUSH_RE = re.compile(r"(?<![\w-])git(?:\s+-[cC]\s+\S+|\s+-\S+)*\s+push\b")
 
 
-def detect_pushes(command: str, cwd: str) -> tuple[list[str], str]:
-	"""Return (directories of the push invocations, warning)."""
+def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str]], str]:
+	"""Return ((directory, pushed source ref) per push, warning)."""
 	try:
 		guard = _load_guard_module()
 		invocations = guard._guarded_git_invocations(command, cwd)
 	except Exception:  # noqa: BLE001 - fall back to a conservative check
 		if _FALLBACK_PUSH_RE.search(command):
-			return [cwd], "prepush gate: could not load pr_merge_status_guard.py; used a conservative push check."
+			return [(cwd, "HEAD")], "prepush gate: could not load pr_merge_status_guard.py; used a conservative push check."
 		return [], ""
-	dirs = []
+	pushes: list[tuple[str, str]] = []
 	for invocation in invocations:
 		if getattr(invocation, "subcommand", "") != "push":
 			continue
 		directory = getattr(invocation, "cwd", None)
-		dirs.append(directory if isinstance(directory, str) and os.path.isdir(directory) else cwd)
-	return dirs, ""
+		directory = directory if isinstance(directory, str) and os.path.isdir(directory) else cwd
+		try:
+			# The guard's own refspec parser names each pushed source tip;
+			# deletions and tag-only pushes carry no tip and push no commit.
+			tips = [t.tip for t in guard._push_targets(invocation, directory) if isinstance(getattr(t, "tip", None), str) and t.tip]
+		except Exception:  # noqa: BLE001 - unknown refspecs: check HEAD
+			tips = ["HEAD"]
+		pushes.extend((directory, tip) for tip in tips)
+	if not pushes and not any(getattr(i, "subcommand", "") == "push" for i in invocations) and _UNPARSED_PUSH_RE.search(command):
+		return [(cwd, "HEAD")], ""
+	return pushes, ""
+
+
+def _resolve_commit(repo: Path, ref: str) -> str | None:
+	if not ref or ref.startswith("-"):
+		return None
+	proc = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+	value = proc.stdout.strip() if proc.returncode == 0 else ""
+	return value if _SHA_RE.match(value) else None
 
 
 def _emit(ask_reason: str = "", system_message: str = "") -> None:
@@ -952,14 +985,20 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 	cwd = payload.get("cwd")
 	if not isinstance(cwd, str) or not os.path.isdir(cwd):
 		cwd = os.getcwd()
-	directories, warning = detect_pushes(command, cwd)
-	if not directories:
+	pushes, warning = detect_pushes(command, cwd)
+	if not pushes:
 		return "", warning
 	reasons = []
-	for directory in dict.fromkeys(directories):
+	for directory, ref in dict.fromkeys(pushes):
 		toplevel = _toplevel(Path(directory))
-		head = _head(toplevel) if toplevel else None
-		if toplevel is None or head is None:
+		if toplevel is None:
+			continue
+		head = _resolve_commit(toplevel, ref)
+		if head is None:
+			reasons.append(
+				f"Could not resolve the pushed ref `{_sanitize_name(ref)}` in {toplevel} to a commit, so its pre-push "
+				f"test stamp cannot be checked. Check out that commit, run `{STAMP_COMMAND}`, or confirm to push anyway."
+			)
 			continue
 		path = stamp_path(toplevel, head)
 		try:
@@ -968,8 +1007,9 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 			stamp = None
 		if not isinstance(stamp, dict) or stamp.get("head") != head:
 			reasons.append(
-				f"No pre-push test stamp for HEAD {head[:12]} in {toplevel}. Run `{STAMP_COMMAND}` after committing, "
-				"fix failures this change caused, then push. Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
+				f"No pre-push test stamp for {head[:12]} (pushed ref `{_sanitize_name(ref)}`) in {toplevel}. Check out that commit "
+				f"and run `{STAMP_COMMAND}` after committing, fix failures this change caused, then push. "
+				"Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
 			)
 			continue
 		status = stamp.get("status")
@@ -978,7 +1018,7 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 		failures = stamp.get("failures") if isinstance(stamp.get("failures"), list) else []
 		listed = ", ".join(_sanitize_name(str(f.get("test"))) for f in failures[:MAX_HOOK_FAILURES_LISTED] if isinstance(f, dict))
 		reasons.append(
-			f"The pre-push test stamp for HEAD {head[:12]} records {len(failures)} failure(s) this change caused"
+			f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
 			+ (f": {listed}" if listed else "") + ". Fix them and re-run the stamp, or confirm to push anyway."
 		)
 	return "\n\n".join(reasons), warning

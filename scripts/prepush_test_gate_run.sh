@@ -118,7 +118,9 @@ if ! [[ "${merge_base}" =~ ^[0-9a-f]{40}$ ]]; then
 	exit 0
 fi
 (
-	"${git_safe[@]}" diff --name-status -M "${merge_base}...HEAD" || exit 1
+	# Worktree against the merge-base: committed, staged and unstaged edits
+	# (and deletions) of tracked files all drive selection.
+	"${git_safe[@]}" diff --name-status -M "${merge_base}" || exit 1
 	"${git_safe[@]}" ls-files --others --exclude-standard | sed 's/^/A\t/'
 ) > "${root}/results/changed.txt" 2>/dev/null || { synthetic_result git_diff_failed; exit 0; }
 if ! "${git_safe[@]}" archive --format=tar "${merge_base}" | tar -x -C "${root}/baseline" 2>/dev/null; then
@@ -132,6 +134,14 @@ if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py
 	synthetic_result snapshot_failed
 	exit 0
 fi
+# The snapshot filter leaves out Makefile and .ai/, which the gate reads to
+# resolve test commands; copy those two regular files in so the PR tree and
+# the git-archive baseline resolve the same commands.
+for overlay in Makefile .ai/validate.yml; do
+	if [ -f "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/$(dirname "${overlay}")" ]; then
+		mkdir -p "${root}/source/$(dirname "${overlay}")" && install -m 0644 "${worktree_real}/${overlay}" "${root}/source/${overlay}" || { synthetic_result snapshot_failed; exit 0; }
+	fi
+done
 
 mounts=(
 	--mount "type=bind,src=${root}/source,dst=/source"
@@ -161,6 +171,13 @@ if [ -n "$(env -i PATH="${PATH}" docker ps -aq --filter "name=^/${container}$" 2
 	exit 0
 fi
 
+# The gate exits 0 for every outcome it records (fail included). A non-zero
+# exit means it crashed or was killed, for example because a test made
+# /results/result.json unwritable after forging it, so never trust the file.
+if [ "${rc}" -ne 0 ]; then
+	synthetic_result "container_rc_${rc}"
+	exit 0
+fi
 copied=0
 for name in result.json summary.md; do
 	src="${root}/results/${name}"

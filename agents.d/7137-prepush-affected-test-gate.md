@@ -19,6 +19,9 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   inverse of `HEAL_SCOPE_GUARD_TEST_SUBJECTS` for `ci.yml` (`guard_inverse`,
   copied in `CI_GUARD_TESTS` and pinned by a test); `ruff` / ShellCheck on
   changed files (missing tool → `unverified tool_unavailable`). A Python test
+  file with `test_` functions and no `__main__` runner runs under pytest
+  (`unverified pytest_unavailable` without it). A baseline re-run gets at
+  least 90 seconds even after the main budget is spent. A Python test
   file with more than `PREPUSH_TEST_GATE_LARGE_FILE_TESTS` (50) tests keeps only
   the test functions that mention a changed function or file name. Commands:
   `.ai/validate.yml` `prepush_test_command` (`{files}` = quoted selected
@@ -43,8 +46,12 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   (0600, directory 0700, never under the repository or its git dir). The
   `PreToolUse` `Bash` hook (its own settings entry, timeout 30) parses pushes
   with `pr_merge_status_guard._guarded_git_invocations` (conservative regex
-  plus a warning if that module cannot load), and asks when the stamp for
-  `HEAD` is missing or records failures this change caused; a `pass`,
+  plus a warning if that module cannot load; a `git push` that module does
+  not parse, such as `command git push`, is checked as a push of `HEAD`). It
+  resolves each pushed source ref (the guard's `_push_targets` tip, `HEAD`
+  for a bare push) to a commit and asks when that commit's stamp is missing,
+  the ref does not resolve, or the stamp records failures this change
+  caused; a `pass`,
   `unverified` or `skipped` stamp, a non-push command and
   `CLAUDE_PREPUSH_TEST_GATE=off` give no decision. Internal errors and
   malformed payloads fail open with a `systemMessage`. The hook never runs
@@ -58,7 +65,11 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   runs `docker run --network none --read-only --cap-drop ALL --security-opt
   no-new-privileges` with no runner environment (module, baseline and
   dependency roots read-only), and copies back only `result.json` and
-  `summary.md` (regular files, 1 MiB). It always exits 0; wrapper failures
+  `summary.md` (regular files, 1 MiB). The changed-file list is the worktree
+  against the merge-base (uncommitted tracked edits included); `Makefile` and
+  `.ai/validate.yml`, which the snapshot filter leaves out, are copied into the
+  snapshot; a non-zero container exit discards the result
+  (`container_rc_<n>`), since the gate itself exits 0 for every outcome. It always exits 0; wrapper failures
   write a synthetic `unverified` result (`docker_unavailable`,
   `snapshot_failed`, `container_survived`, ...). Unused until P3.
 - **PR-only parity tolerance.** `tests/claude_template_drift.py`
