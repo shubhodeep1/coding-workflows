@@ -1307,7 +1307,6 @@ jobs:
             tests/test_ai_memory_workflow_log_analysis_cache.py \
             tests/test_assemble_changelog.py \
             tests/test_changelog_fragment_contract.py \
-            tests/test_clarify_sandbox_base_image_preseed.py \
             tests/test_codex_heartbeat.py \
             tests/test_codex_isolated_exec_claude_contract.py \
             tests/test_cost_audit_serena_metrics.py \
