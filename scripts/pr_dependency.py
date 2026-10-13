@@ -96,6 +96,8 @@ def pr_dependency_declaration(issue: Any) -> dict[str, Any] | None:
 	body = issue.get("body")
 	if not isinstance(body, str):
 		return None
+	# Issue bodies typed in the GitHub web UI use CRLF line endings.
+	body = body.replace("\r\n", "\n")
 	dep_lines = PR_DEPENDENCY_LINE_RE.findall(body)
 	req_lines = REQUIRES_LINE_RE.findall(body)
 	if not dep_lines and not req_lines:

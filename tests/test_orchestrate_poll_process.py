@@ -5844,7 +5844,9 @@ def test_standalone_pr_dependency_holds_until_pr_merges_and_string_lands() -> No
 def test_standalone_pr_dependency_fails_closed_without_identity_or_trust() -> None:
 	present = {"scripts/ai_engine.sh": "_AI_ENGINE_EXIT_REFUSED\n"}
 	no_identity = _run_pr_dependency_tick(merged=True, files=present, extra={"fail_user_lookup": True})
-	assert "STALL_SKIP issue=700 reason=pr_dependency_identity_unavailable action=none" in no_identity["stdout"] + no_identity["stderr"]
+	# With a tracking issue present, the unreadable pipeline login stops the
+	# whole standalone pass before the candidate loop; either way nothing is released.
+	assert "Pipeline identity unavailable; skipping standalone stall recovery" in no_identity["stdout"] + no_identity["stderr"]
 	assert not _pr_dependency_releases(no_identity)
 
 	untrusted = _run_pr_dependency_tick(
@@ -5859,7 +5861,7 @@ def test_candidate_issue_batch_carries_issue_author_fields() -> None:
 	source = POLLER_SCRIPT.read_text(encoding="utf-8")
 	start = source.index("_fetch_candidate_issue_details_graphql() {")
 	body = source[start:source.index("\n}\n", start)]
-	assert "authorAssociation\n          author { login }" in body
+	assert "author { login }\n          authorAssociation" in body
 	assert 'author_login: (.value.author.login // ""),' in body
 	assert 'author_association: (.value.authorAssociation // ""),' in body
 	assert "user: {login: (.author_login // \"\")}," in source

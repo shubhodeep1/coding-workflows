@@ -74,6 +74,7 @@ def test_declaration_parses_plain_and_backticked_forms():
 	quoted = "- Depends on PR: #8\n- Requires on main: `scripts/ai_engine.sh` contains `_AI_ENGINE_EXIT_REFUSED`\n"
 	assert dep.pr_dependency_declaration(_issue(quoted)) == _decl()
 	assert dep.pr_dependency_declaration(_issue("nothing declared")) is None
+	assert dep.pr_dependency_declaration(_issue(DECLARATION.replace("\n", "\r\n"))) == _decl()
 	assert dep.pr_dependency_declaration(_issue("- Depends on: #8")) is None
 
 
@@ -184,7 +185,7 @@ def test_gates_are_wired_with_trusted_isolated_copies():
 	poller = (ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	for text in (clarify, plan, implement, poll):
 		assert "for f in gh_helpers.sh " in text and " pr_dependency.py " in text
-	assert "pr_dependency.py|load_workflow_overlay.py|security_dependency.py)" in clarify
+	assert "pr_dependency.py|load_workflow_overlay.py|security_dependency.py|" in clarify
 	assert 'python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency' in clarify
 	assert "gate=pr_dependency" in clarify
 	assert '/labels/ai:blocked' in clarify
@@ -201,6 +202,9 @@ def test_gates_are_wired_with_trusted_isolated_copies():
 	assert "reason=pr_dependency_held" in poller
 	assert "reason=pr_dependency_comments_unavailable" in poller
 	assert '((.user.login // "") == $login)' in poller
+	scan = poller[poller.index("run_unblock_scan() {"):poller.index("\n}\n", poller.index("run_unblock_scan() {"))]
+	assert scan.index("reason=pr_dependency_held") < scan.index("gh workflow run unblock_judge_dispatch.yml")
+	assert "python3 -I -B scripts/pr_dependency.py pr-dependency" in scan
 
 
 def test_helper_imports_only_the_standard_library(tmp_path: Path):

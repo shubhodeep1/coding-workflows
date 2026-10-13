@@ -17289,8 +17289,6 @@ _fetch_candidate_issue_details_graphql() {
           author { login }
           authorAssociation
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
-          authorAssociation
-          author { login }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
@@ -18482,6 +18480,9 @@ run_unblock_scan() {
     [[ "${n}" =~ ^[0-9]+$ ]] || continue
     fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
       ... on Issue {
+        body
+        author { login }
+        authorAssociation
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
         comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
@@ -18506,6 +18507,9 @@ run_unblock_scan() {
         labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
         comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
         comment_count: .value.comments.totalCount,
+        body: (.value.body // null),
+        author_login: (.value.author.login // ""),
+        author_association: (.value.authorAssociation // ""),
         history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
       }})
     | from_entries' 2>/dev/null || echo '{}')"
@@ -18560,9 +18564,36 @@ run_unblock_scan() {
       echo "UNBLOCK_SCAN item=${verify_item} outcome=skip reason=full_history_unavailable"
     fi
   fi
-  local dispatched=0 item kind
+  local dispatched=0 item kind _scan_pr_dependency_status
   while IFS=$'\t' read -r item kind; do
     [[ "${item}" =~ ^[0-9]+$ ]] || continue
+    # An issue held by its pull-request dependency (issue #7228) must not
+    # consume unblock rounds, even when clarify could not remove its block
+    # label. The body and author come from the GraphQL batch above; the
+    # helper reads `pulls/<N>` only for an issue that declares a dependency.
+    # A missing helper or any failure keeps the issue out of this tick.
+    if [ "${kind}" = "issue" ] && jq -e --arg id "${item}" \
+      '(.[$id].body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i")' \
+      "${work_dir}/details.json" >/dev/null 2>&1; then
+      _scan_pr_dependency_status="held"
+      if [ -f scripts/pr_dependency.py ] && jq -c --arg id "${item}" --arg repo "${GITHUB_REPOSITORY}" --slurpfile search "${work_dir}/search.json" '
+          .[$id] as $d
+          | {number: ($id | tonumber), body: $d.body,
+             labels: ([$search[0][]? | select(.number == ($id | tonumber)) | .labels[]?] | map({name: .})),
+             user: {login: ($d.author_login // "")},
+             author_association: ($d.author_association // ""),
+             repository_url: ("https://api.github.com/repos/" + $repo)}' \
+          "${work_dir}/details.json" > "${work_dir}/pr_dependency_issue.json" 2>/dev/null; then
+        _scan_pr_dependency_status="$(python3 -I -B scripts/pr_dependency.py pr-dependency \
+          --issue-json "${work_dir}/pr_dependency_issue.json" --repo "${GITHUB_REPOSITORY}" \
+          --issue-number "${item}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" 2>/dev/null \
+          | jq -r '.status // "held"' 2>/dev/null || echo held)"
+      fi
+      if [ "${_scan_pr_dependency_status}" != "none" ] && [ "${_scan_pr_dependency_status}" != "ready" ]; then
+        echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=skip reason=pr_dependency_held"
+        continue
+      fi
+    fi
     if gh_retry gh workflow run unblock_judge_dispatch.yml --repo "${GITHUB_REPOSITORY}" -f item="${item}" >/dev/null 2>&1; then
       dispatched=$((dispatched + 1))
       echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatched"
