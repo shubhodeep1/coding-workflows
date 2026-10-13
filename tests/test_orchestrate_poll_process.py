@@ -3954,8 +3954,10 @@ def test_security_pass_audit_worktree_wiring_contract() -> None:
 	gate = poller.split("ensure_security_pass_before_completion() {", 1)[1].split("\n}", 1)[0]
 	assert gate.index("run_security_pass_inline") < gate.index("security_pass_remove_audit_worktree")
 	judge = poller.split("security_pass_exhaustion_judge() {", 1)[1].split("\nsecurity_pass_", 1)[0]
-	assert 'pushd "${SECURITY_PASS_AUDIT_WORKTREE}"' in judge
-	assert judge.index('pushd "${SECURITY_PASS_AUDIT_WORKTREE}"') < judge.index("poller_claude_judge SECURITY_JUDGE")
+	assert 'security_judge_dir="${SECURITY_PASS_AUDIT_WORKTREE}"' in judge
+	assert judge.index('pushd "${security_judge_dir}"') < judge.index("poller_claude_judge SECURITY_JUDGE")
+	# One call site: an unenterable worktree defers, never judges the poller checkout.
+	assert judge.count("poller_claude_judge SECURITY_JUDGE") == 1
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}" in workflow
 

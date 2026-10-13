@@ -7539,17 +7539,24 @@ security_pass_exhaustion_judge() {
       # (_poller_rb_judge_sandbox_attempt: prepare-ephemeral requires PWD to be
       # the snapshot workspace), so run it in the audit worktree to read the
       # same tree the audit read.  Its trusted support still resolves from
-      # GITHUB_WORKSPACE, kept at the poller root.
-      if [ -n "${SECURITY_PASS_AUDIT_WORKTREE:-}" ] && [ -d "${SECURITY_PASS_AUDIT_WORKTREE}" ] \
-        && pushd "${SECURITY_PASS_AUDIT_WORKTREE}" >/dev/null 2>&1; then
+      # GITHUB_WORKSPACE, kept at the poller root.  One call site: a prepared
+      # worktree that cannot be entered defers the judge rather than letting
+      # it read the poller checkout the audit did not read.
+      local security_judge_dir="${PWD}"
+      local security_judge_support_root="${GITHUB_WORKSPACE:-${SECURITY_PASS_AUDIT_SUPPORT_ROOT:-${PWD}}}"
+      if [ -n "${SECURITY_PASS_AUDIT_WORKTREE:-}" ]; then
+        security_judge_dir="${SECURITY_PASS_AUDIT_WORKTREE}"
         echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${head_sha} judge_workspace=audit_worktree"
-        GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-${SECURITY_PASS_AUDIT_SUPPORT_ROOT}}" \
-          poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
-        if ! popd >/dev/null 2>&1; then
-          cd "${SECURITY_PASS_AUDIT_SUPPORT_ROOT:-${GITHUB_WORKSPACE:-/}}" || { echo '::error::Cannot return to the poller root after the security-pass judge.' >&2; exit 1; }
-        fi
-      else
+      fi
+      if ! pushd "${security_judge_dir}" >/dev/null 2>&1; then
+        echo '::warning::Security-pass judge workspace is unavailable; deferring to the next poll.' >&2
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        return 0
+      fi
+      GITHUB_WORKSPACE="${security_judge_support_root}" \
         poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      if ! popd >/dev/null 2>&1; then
+        cd "${security_judge_support_root}" || { echo '::error::Cannot return to the poller root after the security-pass judge.' >&2; exit 1; }
       fi
       if [ "${security_judge_rc}" -eq 77 ]; then
         _record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
