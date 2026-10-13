@@ -28173,7 +28173,11 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# The snapshot head (read before the comments and commits) must equal
 	# the live head, so Gates B-D and the merge all apply to one commit.
 	if [[ "${N_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] && [ "${N_HEAD_SHA}" != "${N_HEAD_OID}" ]; then
-		echo "  PR #${N_PR}: head moved during sweep (${N_HEAD_OID:-unknown} -> ${N_HEAD_SHA}); re-checking next sweep."
+		if [ -z "${N_HEAD_OID}" ]; then
+			echo "  PR #${N_PR}: open-PR snapshot has no head SHA (live head ${N_HEAD_SHA}); re-checking next sweep."
+		else
+			echo "  PR #${N_PR}: head moved during sweep (${N_HEAD_OID} -> ${N_HEAD_SHA}); re-checking next sweep."
+		fi
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
@@ -28288,6 +28292,29 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		N_BASE_REF="${N_BASE:-}"
 	fi
 	[ "${N_BASE_REF}" != "null" ] || N_BASE_REF=""
+
+	# The latest trusted noop warning must come from a review of this head
+	# (its review-autofix-failure:v1 marker names the reviewed head), so the
+	# audit Gate B validated applies to the commit being merged (issue
+	# #7126). A warning for another head is a push the review has not
+	# finished with yet: re-check next sweep without paging. A warning with
+	# no head marker cannot be bound: fail closed and page once.
+	N_NOOP_WARNING_HEAD="$(echo "${N_COMMENTS_JSON}" | jq -r \
+		--arg lit "${NOOP_WARNING_LITERAL}" \
+		--arg login "${N_TRUSTED_LOGIN}" \
+		'[.[] | select(((.body // "") | contains($lit)) and ((.user.login // "") == $login))] | max_by(.created_at // "") | (.body // "")
+			| [capture("(^|\\n)<!-- review-autofix-failure:v1 head=(?<h>[0-9a-f]{40})[ >]"; "g") | .h] | last // ""' \
+		2>/dev/null || echo "")"
+	if [ -z "${N_NOOP_WARNING_HEAD}" ]; then
+		_noop_gate_failure_alert "B_head" "Noop-suspicious force-merge gate B failed for PR #${N_PR}: the latest noop warning carries no reviewed-head marker. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+	if [ "${N_NOOP_WARNING_HEAD}" != "${N_HEAD_SHA}" ]; then
+		echo "  PR #${N_PR}: latest noop warning reviewed ${N_NOOP_WARNING_HEAD}, not head ${N_HEAD_SHA}; re-checking next sweep."
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
 
 	# Shared gate missing (pr_checks_lib.sh not sourced): fail closed.
 	# Paged once per PR head through _noop_gate_failure_alert, like gates A-C.

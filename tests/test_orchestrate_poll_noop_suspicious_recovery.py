@@ -907,9 +907,14 @@ def _noop_snapshot(**overrides) -> list:
 	return [pr]
 
 
-def _noop_comments(login: str = PIPELINE_LOGIN, summary_login: str | None = None, count: int = 3) -> list:
+def _noop_comments(login: str = PIPELINE_LOGIN, summary_login: str | None = None, count: int = 3,
+		warning_head: str | None = NOOP_HEAD) -> list:
+	# Real warnings end with the review-autofix-failure:v1 marker naming the
+	# reviewed head; warning_head=None drops it.
+	marker = (f"\n\n<!-- review-autofix-failure:v1 head={warning_head} reason=editor_empty_noop "
+		f"fp={'a' * 64} degraded=0 -->") if warning_head else ""
 	rows = [{"id": 100 + i, "created_at": f"2026-10-02T0{i}:00:00Z", "user": {"login": login},
-		"body": "⚠️ **Editor no-op suspicious** retry"} for i in range(count)]
+		"body": "⚠️ **Editor no-op suspicious** retry" + marker} for i in range(count)]
 	rows.append({"id": 200, "created_at": "2026-10-02T09:00:00Z",
 		"user": {"login": summary_login or login},
 		"body": "AI autofix editor summary\ntotal 2; applied 0; already applied 0; ignored 2"})
@@ -1050,6 +1055,29 @@ def test_noop_all_gates_pass_merge_bound_to_head():
 	assert len(out["merges"]) == 1, out
 	assert f"--match-head-commit {NOOP_HEAD}" in out["merges"][0]
 	assert "--squash --auto" in out["merges"][0]
+
+
+def test_noop_warning_for_other_head_waits_without_paging():
+	"""Issue #7126: the audit Gate B validated must come from a review of
+	the head being merged. A newer push the review has not finished with
+	waits for the next sweep without paging."""
+	out = _run_noop_sweep(comments=_noop_comments(warning_head="e" * 40))
+	assert not out["merges"] and not out["alerts"], out
+	assert "latest noop warning reviewed" in out["stdout"]
+
+
+def test_noop_warning_without_head_marker_fails_closed():
+	out = _run_noop_sweep(comments=_noop_comments(warning_head=None))
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "reviewed-head marker" in out["alerts"][0], out
+	assert any("gate=B_head" in line for line in out["log"]), out
+
+
+def test_noop_snapshot_without_head_logs_missing_snapshot():
+	out = _run_noop_sweep(snapshot=_noop_snapshot(headRefOid=""))
+	assert not out["merges"], out
+	assert "open-PR snapshot has no head SHA" in out["stdout"]
+	assert "head moved during sweep" not in out["stdout"]
 
 
 def test_noop_head_moved_during_sweep_skips():
