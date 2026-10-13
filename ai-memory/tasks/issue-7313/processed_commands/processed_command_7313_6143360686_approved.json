@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7313_6143360686_approved",
   "issue_number": 7313,
   "metadata": {
+    "branch": "ai/issue-7313",
+    "changed_files": [
+      "agents.d/7126-noop-force-merge-trusted-evidence.md",
+      "changelog.d/7126-noop-force-merge-trusted-evidence.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_noop_suspicious_recovery.py"
+    ],
+    "issue_number": 7313,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7313",
+    "pr_number": 7315,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7315",
+    "run_attempt": "1",
+    "run_id": "38382364465",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38382364465"
   },
   "run_attempt": 1,
   "run_id": "38382364465",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-13T10:20:07Z",
+  "status": "completed",
+  "timestamp": "2026-10-13T10:42:31Z",
   "workflow": "implement"
 }
