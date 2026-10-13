@@ -62,9 +62,10 @@ EXPECTED_STEP_DECLARATIONS = {
 	# (replace-claude-sessions Phase 8b), whose answer poster's loop guard can
 	# alert. The Claude issue handoff step was retired in Phase 2.
 	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 4,
-	# 5 = four notification steps + "Auto-approve clear plan", whose
-	# automation-path hold (#6838) sends one WARNING.
-	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 5,
+	# 6 = four notification steps + "Auto-approve clear plan", whose
+	# automation-path hold (#6838) sends one WARNING, + "Close superseded
+	# CI-repair issue (merged PR)" (#7216).
+	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 6,
 	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 2,
 	# Issue #6633 adds "Record Claude pool capacity", "Mark outage-caused
 	# review-blocked labels (autofix exhaustion)" and "Record model-provider
@@ -79,9 +80,11 @@ EXPECTED_STEP_DECLARATIONS = {
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 1,
-	# 5 = includes "Alert on Claude pool accounts at the usage gate" (#6951)
-	# and the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630).
-	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 5,
+	# 7 = includes "Alert on Claude pool accounts at the usage gate" (#6951),
+	# the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630),
+	# "Run standalone stall recovery without active projects" (#7174) and
+	# "Run standalone PR sweeps without active projects" (#7177).
+	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 7,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
 	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,

@@ -58,9 +58,11 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
-      # Default off (#6838): when true, a clear plan that lists automation paths
-      # is auto-approved only with a trusted exact files_touched grant for each.
-      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
+      # Issue #6769: while off (the default), plans listing automation paths
+      # (.github/, .claude/, scripts/, prompts/, workflow-templates/) get no
+      # automatic /approved. When on, every listed protected path needs a
+      # trusted, exact files_touched grant in the issue body.
+      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -124,12 +126,14 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
             echo "::notice::No issue number available for integration ref resolution; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -172,29 +176,64 @@ jobs:
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [ ! -f "${resolver_script}" ]; then
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           chmod +x "${resolver_script}"
-          if integration_branch="$({
+          # Exit 3 means CI-triage PR-branch routing was required but could
+          # not be verified; never fall back to the default branch then.
+          resolver_rc=0
+          # Resolver stderr is captured (then replayed) so a branch that came
+          # from CI-triage PR-head routing, not from an explicit body line,
+          # can be told apart for the check-triage branch guard (#7064).
+          resolver_err_file="${resolver_stage_root}/resolver.err"
+          integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
-            bash "${resolver_script}"
-          })"; then
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
+            bash "${resolver_script}" 2>"${resolver_err_file}"
+          })" || resolver_rc=$?
+          if [ -s "${resolver_err_file}" ]; then
+            cat "${resolver_err_file}" >&2
+          fi
+          if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
             if [ -n "${integration_branch}" ]; then
               echo "integration_branch_meta=${integration_branch}" >> "$GITHUB_OUTPUT"
+              # resolver_status (#7064) feeds the check-triage branch guard:
+              # resolved / routed / none / failed / unavailable. "routed"
+              # means the branch is a verified PR head from CI-triage routing
+              # and the issue body declared no branch line.
+              triage_routed=false
+              while IFS= read -r resolver_err_line; do
+                case "${resolver_err_line}" in
+                  "CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} pr="*" outcome=routed branch=${integration_branch}") triage_routed=true ;;
+                esac
+              done < "${resolver_err_file}"
+              if [ "${triage_routed}" = "true" ]; then
+                echo "resolver_status=routed" >> "$GITHUB_OUTPUT"
+              else
+                echo "resolver_status=resolved" >> "$GITHUB_OUTPUT"
+              fi
+            else
+              echo "resolver_status=none" >> "$GITHUB_OUTPUT"
             fi
+          elif [ "${resolver_rc}" -eq 3 ]; then
+            echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout repository
@@ -298,7 +337,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_isolated_run.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -773,6 +812,187 @@ jobs:
             exit 0
           fi
 
+      - name: Close superseded CI-repair issue (merged PR)
+        id: superseded_merged_pr
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO_SLUG: ${{ github.repository }}
+          PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
+          PLAN_SUPERSEDE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # Issue #7216: a check-failure triage issue (or a re-issue of one)
+          # whose pull request already merged with the failing check green on
+          # its final head is superseded. Close it before the /answer claim so
+          # the model never plans edits to the merged PR's former head branch
+          # (#7185). Every unverifiable state plans as usual (fail open).
+          set -uo pipefail
+          log() { echo "PLAN_SUPERSEDED_MERGED_PR issue=${ISSUE_NUMBER} $*"; }
+          case "$(printf '%s' "${PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+            false|0|no|off)
+              log "outcome=skip reason=disabled"
+              exit 0
+              ;;
+          esac
+          # API-free pre-filter (a superset of the helper's own): only a
+          # triage issue or a body with a re-issue reference costs API calls.
+          if ! python3 -I -B -c '
+          import json, re, sys
+          meta = json.load(open(sys.argv[1], encoding="utf-8"))
+          labels = {(label.get("name") if isinstance(label, dict) else label) for label in meta.get("labels") or []}
+          body = meta.get("body") if isinstance(meta.get("body"), str) else ""
+          ok = "ai:check-triage" in labels or re.search(r"Re-issued (by the unblock judge )?from\s*#|^-\s*Replaces:\s*#", body, re.M)
+          sys.exit(0 if ok else 1)
+          ' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            log "outcome=plan reason=not_candidate"
+            exit 0
+          fi
+          # Run only the verified support copy, never the checkout's scripts/ (#7159).
+          helper=""
+          for candidate in "$(pwd)/.codex-workflow-src/scripts/plan_superseded_merged_pr.py" \
+            "$(pwd)/.codex-workflow-src-main/scripts/plan_superseded_merged_pr.py"; do
+            if [ -f "${candidate}" ] && [ ! -L "${candidate}" ]; then
+              helper="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${helper}" ]; then
+            echo "::warning::Superseded-issue check helper is unavailable; planning as usual."
+            log "outcome=plan reason=helper_missing"
+            exit 0
+          fi
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          # §14: the issue and comment reads above carry no PR or check state;
+          # the helper's PR, check-run and source-issue reads are new and run
+          # only for candidates. This identity read binds trust to the pipeline account.
+          login="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+          result_file="${RUNTIME_DIR}/plan_superseded.json"
+          if ! python3 -I -B "${helper}" classify --issue-meta-file "${ISSUE_META_FILE}" \
+            --repo "${REPO_SLUG}" --pipeline-login "${login}" --out "${result_file}"; then
+            log "outcome=plan reason=classifier_failed"
+            exit 0
+          fi
+          # Read one string field of the classifier JSON ("" when absent).
+          field() {
+            python3 -I -B -c 'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2]); sys.stdout.write("" if value is None else str(value))' "${result_file}" "$1"
+          }
+          if ! outcome="$(field outcome 2>/dev/null)" || [ -z "${outcome}" ]; then
+            log "outcome=plan reason=classifier_failed"
+            exit 0
+          fi
+          reason="$(field reason | tr -cd 'a-z_')"
+          source_issue="$(field source_issue | tr -cd '0-9')"
+          pr_number="$(field pr | tr -cd '0-9')"
+          head_sha="$(field final_head_sha | tr -cd '0-9a-f' | cut -c1-40)"
+          base_ref="$(field base_ref)"
+          head_ref="$(field head_ref)"
+          check_label="$(field check_name | tr -cd 'A-Za-z0-9._/:()+-' | cut -c1-120)"
+          case "${outcome}" in
+            superseded)
+              marker="<!-- ai:plan-superseded:v1 pr=${pr_number} head=${head_sha} -->"
+              comment="present"
+              # Dedupe on a marker the pipeline login wrote (the paginated
+              # comments file may hold several JSON arrays back to back).
+              if ! python3 -I -B -c '
+          import json, sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          decoder, pos, comments = json.JSONDecoder(), 0, []
+          while True:
+              while pos < len(text) and text[pos].isspace():
+                  pos += 1
+              if pos >= len(text):
+                  break
+              page, pos = decoder.raw_decode(text, pos)
+              comments.extend(page if isinstance(page, list) else [])
+          found = any(isinstance(c, dict) and (c.get("user") or {}).get("login") == sys.argv[2]
+              and sys.argv[3] in (c.get("body") or "") for c in comments)
+          sys.exit(0 if found else 1)
+          ' "${ISSUE_COMMENTS_FILE}" "${login}" "${marker}" >/dev/null 2>&1; then
+                comment_file="${RUNTIME_DIR}/plan_superseded_comment.md"
+                field comment_body > "${comment_file}"
+                if ! grep -qF -- "${marker}" "${comment_file}" || \
+                  ! gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="$(cat "${comment_file}")" >/dev/null; then
+                  echo "::warning::Could not post the superseded-issue comment; planning as usual."
+                  log "source=${source_issue} pr=${pr_number} outcome=plan reason=comment_failed"
+                  exit 0
+                fi
+                comment="posted"
+              fi
+              # The marker exists from here on: never run the model, even if
+              # a label or close write fails (a rerun finds the marker).
+              echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+              label_state="applied"
+              close_state="done"
+              source scripts/label_helpers.sh 2>/dev/null || true
+              if type ensure_label_exists >/dev/null 2>&1; then
+                ensure_label_exists "ai:closed" "${REPO_SLUG}" || true
+              fi
+              if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" \
+                --add-label 'ai:closed' \
+                --remove-label 'ai:planning' \
+                --remove-label 'ai:clarification' \
+                --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+                label_state="failed"
+              fi
+              if ! gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --reason "not planned" >/dev/null 2>&1; then
+                close_state="failed"
+              fi
+              log "source=${source_issue} pr=${pr_number} head=${head_sha:0:12} check=${check_label} outcome=superseded label=${label_state} close=${close_state} comment=${comment}"
+              source scripts/tg_helpers.sh 2>/dev/null || true
+              if [ "${label_state}" = "failed" ] || [ "${close_state}" = "failed" ]; then
+                echo "::warning::Superseded issue #${ISSUE_NUMBER} could not be fully closed (label=${label_state} close=${close_state})."
+                if type tg_send_tracked >/dev/null 2>&1; then
+                  tg_send_tracked "${ISSUE_NUMBER}" "Superseded CI-repair issue #${ISSUE_NUMBER} (merged PR #${pr_number}) could not be closed: label=${label_state} close=${close_state}."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+                fi
+              elif type tg_send_tracked >/dev/null 2>&1; then
+                tg_send_tracked "${ISSUE_NUMBER}" "Closed superseded CI-repair issue #${ISSUE_NUMBER}: PR #${pr_number} merged with ${check_label} passing." "DEBUG" || true
+              fi
+              ;;
+            merged_check_not_passed)
+              facts_file="${RUNTIME_DIR}/merged_pr_facts.txt"
+              field facts > "${facts_file}"
+              echo "PLAN_MERGED_PR_FACTS_FILE=${facts_file}" >> "$GITHUB_ENV"
+              branch_ok() { [[ "$1" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] && [[ "$1" != *..* ]]; }
+              if [ -n "${head_ref}" ] && [ "${PLAN_SUPERSEDE_RESOLVED_REF}" = "${head_ref}" ] && branch_ok "${base_ref}"; then
+                # "Stage workflow support files" installed support copies over
+                # tracked scripts/ and prompts/ files, so a plain checkout
+                # refuses when they differ between head and base. Save them,
+                # force the checkout, then put the staged copies back. Ignored
+                # files count too: consumer runs list staged helpers in
+                # scripts/.gitignore, and checkout overwrites ignored files.
+                staged_tar="${RUNTIME_DIR}/plan_reroute_staged_support.tar"
+                if git fetch --quiet --depth 1 origin "refs/heads/${base_ref}" && \
+                  { git diff -z --name-only HEAD; git ls-files -z --others -- scripts prompts ai-memory; } | \
+                    tar --null --ignore-failed-read -cf "${staged_tar}" -T - 2>/dev/null && \
+                  git checkout --quiet -f -B "${base_ref}" FETCH_HEAD && \
+                  tar -xf "${staged_tar}"; then
+                  echo "PLAN_REROUTED_REF=${base_ref}" >> "$GITHUB_ENV"
+                  log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref} to=${base_ref}"
+                else
+                  # Never plan on the merged PR's former head (#7185): skip
+                  # this run and let stall recovery retry it.
+                  echo "::warning::Could not check out ${base_ref} for planning; skipping planning this run."
+                  echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  log "source=${source_issue} pr=${pr_number} outcome=skip reason=reroute_failed"
+                  source scripts/tg_helpers.sh 2>/dev/null || true
+                  if type tg_send_tracked >/dev/null 2>&1; then
+                    tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: could not check out ${base_ref} after PR #${pr_number} merged."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+                  fi
+                fi
+              else
+                log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed"
+              fi
+              ;;
+            *)
+              log "outcome=plan reason=${reason:-unknown}"
+              ;;
+          esac
+
       - name: Check and claim /answer command
         if: env.SKIP_PLAN != 'true'
         env:
@@ -990,6 +1210,11 @@ jobs:
           fi
 
           HEAD_BRANCH="${RESOLVED_REF}"
+          if [ -n "${PLAN_REROUTED_REF:-}" ]; then
+            # Issue #7216: the merged PR's former head was the resolved ref;
+            # the superseded-issue step checked out its base branch instead.
+            HEAD_BRANCH="${PLAN_REROUTED_REF}"
+          fi
           if [ -z "${HEAD_BRANCH}" ]; then
             HEAD_BRANCH="${HEAD_SYMBOLIC_BRANCH}"
           fi
@@ -1002,8 +1227,12 @@ jobs:
               REF_MISMATCH="true"
             fi
           fi
+          if [ -n "${PLAN_REROUTED_REF:-}" ]; then
+            REF_MISMATCH="false"
+          fi
 
           {
+            echo "PLANNING_REF_REROUTED_FROM_MERGED_PR=${PLAN_REROUTED_REF:-}"
             echo "PLANNING_REF_HEAD_SHA=${HEAD_SHA}"
             echo "PLANNING_REF_HEAD_BRANCH=${HEAD_BRANCH}"
             echo "PLANNING_REF_SYMBOLIC_BRANCH=${HEAD_SYMBOLIC_BRANCH}"
@@ -1027,7 +1256,15 @@ jobs:
             printf 'Resolved checkout ref: %s\n' "${PLANNING_REF_HEAD_BRANCH}"
             printf 'git symbolic-ref --short -q HEAD: %s\n' "${PLANNING_REF_SYMBOLIC_BRANCH}"
             printf 'Integration branch metadata: %s\n' "${PLANNING_REF_INTEGRATION_BRANCH_META}"
+            if [ -n "${PLANNING_REF_REROUTED_FROM_MERGED_PR:-}" ]; then
+              printf 'Rerouted from merged PR head to base: %s\n' "${PLANNING_REF_REROUTED_FROM_MERGED_PR}"
+            fi
             printf 'Integration branch mismatch: %s\n\n' "${PLANNING_REF_MISMATCH}"
+            if [ -n "${PLAN_MERGED_PR_FACTS_FILE:-}" ] && [ -s "${PLAN_MERGED_PR_FACTS_FILE}" ]; then
+              echo "MERGED PULL REQUEST FACTS (host-verified)"
+              cat "${PLAN_MERGED_PR_FACTS_FILE}"
+              printf '\n'
+            fi
             echo "ALL COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${PLANNING_CONTEXT_FILE}"
@@ -1120,6 +1357,81 @@ jobs:
               output_path.write_text("", encoding="utf-8")
           PY
 
+      # Check-triage target-branch guard (#7064, default off): when
+      # CHECK_TRIAGE_BRANCH_GUARD_ENABLED is on, an ai:check-triage issue whose
+      # body declares no verified "Target branch:" / "Integration branch:" line
+      # is blocked instead of being planned on the default branch. The guard
+      # reads only the resolver's status token and the GitHub-reported labels;
+      # it never infers a branch from issue prose. The synthetic BLOCKED line
+      # reuses the existing parse -> blocked-handler path.
+      - name: Check-triage target-branch guard
+        id: check_triage_branch_guard
+        if: env.SKIP_PLAN != 'true'
+        env:
+          CHECK_TRIAGE_BRANCH_GUARD_ENABLED: ${{ vars.CHECK_TRIAGE_BRANCH_GUARD_ENABLED || 'false' }}
+          CHECK_TRIAGE_RESOLVER_STATUS: ${{ steps.refctx.outputs.resolver_status }}
+        run: |
+          set -euo pipefail
+          guard_enabled=false
+          case "$(printf '%s' "${CHECK_TRIAGE_BRANCH_GUARD_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+            true|1|yes|on) guard_enabled=true ;;
+          esac
+          # Closed vocabulary; anything else counts as "could not verify".
+          resolver_status="${CHECK_TRIAGE_RESOLVER_STATUS:-}"
+          case "${resolver_status}" in
+            resolved|routed|none|failed|unavailable) ;;
+            *) resolver_status="unknown" ;;
+          esac
+          issue_ref="${ISSUE_NUMBER:-}"
+          [[ "${issue_ref}" =~ ^[0-9]+$ ]] || issue_ref="unknown"
+          guard_log() {
+            echo "CHECK_TRIAGE_BRANCH_GUARD issue=${issue_ref} enabled=${guard_enabled} check_triage=$1 resolver_status=${resolver_status} outcome=$2 reason=$3"
+          }
+          guard_block() {
+            # The message follows the block reason, so an unreadable label
+            # list is never reported as missing branch metadata.
+            if [ "$2" = "labels_unavailable" ]; then
+              printf '%s\n' "BLOCKED: ai:check-triage target-branch guard could not be verified because the issue labels were unreadable (resolver_status=${resolver_status}); re-run planning with /answer" > "${CODEX_OUTPUT_FILE}"
+            elif [ "$2" = "no_target_branch_metadata" ]; then
+              printf '%s\n' 'BLOCKED: ai:check-triage issue has no explicit target-branch metadata; add a standalone `Target branch: BRANCH_NAME` or `Integration branch: BRANCH_NAME` line to the issue body, then reply /answer' > "${CODEX_OUTPUT_FILE}"
+            else
+              printf '%s\n' "BLOCKED: ai:check-triage issue target branch could not be verified (resolver_status=${resolver_status}); correct the issue's branch metadata, then reply /answer" > "${CODEX_OUTPUT_FILE}"
+            fi
+            echo "CHECK_TRIAGE_BRANCH_GUARD_BLOCKED=true" >> "$GITHUB_ENV"
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            guard_log "$1" blocked "$2"
+          }
+
+          if [ "${guard_enabled}" != "true" ]; then
+            guard_log unknown skip disabled
+            exit 0
+          fi
+
+          if ! labels_json="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null)" || [ -z "${labels_json}" ]; then
+            guard_block unknown labels_unavailable
+            exit 0
+          fi
+          if ! jq -e 'any(.[]; . == "ai:check-triage")' >/dev/null 2>&1 <<<"${labels_json}"; then
+            guard_log false pass not_check_triage
+            exit 0
+          fi
+          if [ "${resolver_status}" = "resolved" ]; then
+            guard_log true pass metadata_present
+            exit 0
+          fi
+          # A verified PR head from CI-triage routing (exit 3 on any failed
+          # check) is not a default-branch fallback, so it passes with its
+          # own reason rather than being reported as body metadata.
+          if [ "${resolver_status}" = "routed" ]; then
+            guard_log true pass pr_head_routed
+            exit 0
+          fi
+          if [ "${resolver_status}" = "none" ]; then
+            guard_block true no_target_branch_metadata
+          else
+            guard_block true target_branch_unverified
+          fi
+
       - name: Capture pre-Codex plan write-guard snapshot
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -1174,21 +1486,21 @@ jobs:
           echo "engine=${engine}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
-        if: env.SKIP_PLAN != 'true' && steps.ai_engine.outputs.engine == 'claude'
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true' && steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Resolve Claude credential
-        if: env.SKIP_PLAN != 'true' && steps.ai_engine.outputs.engine == 'claude'
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true' && steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Run Codex planning
-        if: env.SKIP_PLAN != 'true'
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -2162,168 +2474,12 @@ jobs:
             exit 0
           fi
 
-          # Default-off automation-path gate (#6838). Unless
-          # AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is truthy these functions are
-          # never called, so the step behaves and calls the API exactly as before.
-          # When on, a plan whose "Files ... change" section lists automation paths
-          # (.github/, .claude/, scripts/, prompts/, workflow-templates/) is
-          # auto-approved only when the issue body carries a trusted exact
-          # files_touched grant for every one of them. The unchanged
-          # scripts/files_touched_scope_guard.py from the verified support checkout
-          # decides the grant; the PR/integration checkout copy is never used. Any
-          # failure withholds the automatic /approved only: a human /approved and the
-          # implement commit-time automation-path guard are unchanged.
+          # Hold reporting for the automation-path plan gate (issue #6769, see
+          # below). The gate sets these before calling automation_path_plan_hold.
           AUTOMATION_PATH_GATE_REASON=""
           AUTOMATION_PATH_GATE_DETAIL=""
           AUTOMATION_PATH_GATE_PATHS_FILE=""
-          automation_path_plan_gate() {
-            local gate_dir="$1" guard="" login="" check_rc=0 allow_edits="false"
-            AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
-            AUTOMATION_PATH_GATE_DETAIL="extractor"
-            AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/plan_paths.txt"
-            : > "${AUTOMATION_PATH_GATE_PATHS_FILE}" || return 1
-            if [ -z "${CODEX_OUTPUT_FILE:-}" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
-              return 1
-            fi
-            if ! python3 -I -B - "${CODEX_OUTPUT_FILE}" "${AUTOMATION_PATH_GATE_PATHS_FILE}" <<'AUTOMATION_PATH_PLAN_EXTRACTOR_PY'
-          # BEGIN automation-path-plan-extractor v1
-          # Reads an implementation plan (argv[1]) and writes the automation paths its
-          # "Files ... change" section lists to argv[2], sorted, one per line. Exit 0
-          # when a Files section exists (even with no paths); exit 3 when none exists
-          # or the section lists more than 200 path tokens. This block is kept
-          # byte-identical in .github/workflows/plan.yml and
-          # scripts/orchestrate_poll_process.sh (#6838); a parity test pins it.
-          import re
-          import sys
-
-          MAX_TOKENS = 200
-          FILES_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchang", re.IGNORECASE)
-          HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
-          NEXT_LABEL_RE = re.compile(
-              r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?`?\s*"
-              r"(?:Functions|Data structures|API|Decisions|Security considerations|Data flow|"
-              r"State machines|Failure modes|Risks|Testing|Pre-execution|Scope-mode|Reuse-audit|"
-              r"Implementation-time|Diagrams)\b",
-              re.IGNORECASE,
-          )
-          LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-          NEGATIVE_RE = re.compile(r"^(?:no|not|none|nothing|unchanged)\b", re.IGNORECASE)
-          NEGATIVE_VERB_RE = re.compile(r"chang|modif|edit|touch|affect|updat", re.IGNORECASE)
-          TOKEN_RE = re.compile(
-              r"(?<![A-Za-z0-9_./-])(?:\./)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`,;:()\"'<>]*)",
-              re.IGNORECASE,
-          )
-
-
-          def line_tokens(line):
-              found = []
-              for match in TOKEN_RE.finditer(line):
-                  # A bare directory such as `scripts/` is kept: it names an automation
-                  # path no exact grant can cover, so the gate holds (fail closed).
-                  found.append(match.group(1).rstrip(".!?}]"))
-              return found
-
-
-          def main(argv):
-              if len(argv) != 3:
-                  return 2
-              with open(argv[1], encoding="utf-8", errors="replace") as handle:
-                  lines = handle.read().splitlines()
-              found_section = False
-              in_section = False
-              suppress = None
-              tokens = []
-              for line in lines:
-                  if FILES_RE.match(line):
-                      found_section = True
-                      in_section = True
-                      suppress = None
-                      tokens.extend(line_tokens(line))
-                      continue
-                  if not in_section:
-                      continue
-                  # A numbered file entry does not end the section; only a heading or
-                  # the next known plan label does (fail closed on unknown layouts).
-                  if HEADING_RE.match(line) or NEXT_LABEL_RE.match(line):
-                      in_section = False
-                      suppress = None
-                      continue
-                  stripped = line.strip()
-                  if not stripped:
-                      continue
-                  indent = len(line) - len(line.lstrip())
-                  list_match = LIST_RE.match(line)
-                  text = line[list_match.end():].strip() if list_match else stripped
-                  text = text.lstrip("*_` ")
-                  if NEGATIVE_RE.match(text) and NEGATIVE_VERB_RE.search(text):
-                      suppress = ("item" if list_match else "leadin", indent)
-                      continue
-                  if suppress is not None:
-                      mode, base = suppress
-                      if indent > base or (mode == "leadin" and list_match):
-                          continue
-                      suppress = None
-                  tokens.extend(line_tokens(line))
-              if not found_section or len(tokens) > MAX_TOKENS:
-                  return 3
-              with open(argv[2], "w", encoding="utf-8") as handle:
-                  for token in sorted(set(tokens)):
-                      handle.write(token + "\n")
-              return 0
-
-
-          sys.exit(main(sys.argv))
-          # END automation-path-plan-extractor v1
-          AUTOMATION_PATH_PLAN_EXTRACTOR_PY
-            then
-              : > "${AUTOMATION_PATH_GATE_PATHS_FILE}"
-              return 1
-            fi
-            if [ ! -s "${AUTOMATION_PATH_GATE_PATHS_FILE}" ]; then
-              return 0
-            fi
-            AUTOMATION_PATH_GATE_DETAIL="guard_unavailable"
-            for guard in "$(pwd)/.codex-workflow-src/scripts/files_touched_scope_guard.py" \
-              "$(pwd)/.codex-workflow-src-main/scripts/files_touched_scope_guard.py"; do
-              if [ -f "${guard}" ]; then
-                break
-              fi
-              guard=""
-            done
-            [ -n "${guard}" ] || return 1
-            printf '%s' "${CURRENT_ISSUE_JSON}" > "${gate_dir}/issue.json" || return 1
-            login="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
-            if ! python3 -I -B "${guard}" --emit-automation-grant "${gate_dir}/grant.json" \
-              --issue-meta-file "${gate_dir}/issue.json" --pipeline-login "${login}" >/dev/null 2>&1; then
-              AUTOMATION_PATH_GATE_DETAIL="grant_error"
-              return 1
-            fi
-            case "$(printf '%s' "${ALLOW_WORKFLOW_EDITS:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
-              1|true|yes|on) allow_edits="true" ;;
-            esac
-            python3 -I -B "${guard}" --check-automation-paths \
-              --automation-grant-file "${gate_dir}/grant.json" \
-              --staged-file "${AUTOMATION_PATH_GATE_PATHS_FILE}" \
-              --allow-workflow-edits "${allow_edits}" --issue-number "${ISSUE_NUMBER}" \
-              > "${gate_dir}/denied.txt" 2> "${gate_dir}/check.err" || check_rc=$?
-            if [ "${check_rc}" -eq 0 ]; then
-              return 0
-            fi
-            AUTOMATION_PATH_GATE_DETAIL="$(sed -n 's/^reason=\([a-z_]*\)$/\1/p' "${gate_dir}/check.err" 2>/dev/null | head -n 1)"
-            if [ "${check_rc}" -eq 30 ]; then
-              case "${AUTOMATION_PATH_GATE_DETAIL}" in
-                path_not_granted|no_allowlist|malformed_allowlist|untrusted_author|workflow_edits_disabled)
-                  AUTOMATION_PATH_GATE_REASON="automation_path_ungranted"
-                  if [ -s "${gate_dir}/denied.txt" ]; then
-                    AUTOMATION_PATH_GATE_PATHS_FILE="${gate_dir}/denied.txt"
-                  fi
-                  ;;
-              esac
-            fi
-            [ -n "${AUTOMATION_PATH_GATE_DETAIL}" ] || AUTOMATION_PATH_GATE_DETAIL="guard_exit_${check_rc}"
-            return 1
-          }
-          # Records a hold: step output, gate log line, then one deduplicated marker
+          # Records a hold: step output, then one deduplicated marker
           # comment and one WARNING. Comment/alert failures only warn; a hold never
           # turns into an approval.
           automation_path_plan_hold() {
@@ -2333,7 +2489,6 @@ jobs:
             path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
             paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
             echo "automation_path_hold=true" >> "$GITHUB_OUTPUT"
-            echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=${AUTOMATION_PATH_GATE_REASON} outcome=defer issue=${ISSUE_NUMBER} paths=${path_count} detail=${AUTOMATION_PATH_GATE_DETAIL}"
             if comments_json="$(gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
               duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${ISSUE_NUMBER}" --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" '
                 def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
@@ -2357,9 +2512,11 @@ jobs:
                 ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
                 | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
                 | [
-                    (if $reason == "automation_path_ungranted"
-                      then "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**"
-                      else "**Automatic approval withheld: the automation-path grant check could not run.**" end),
+                    (if $reason == "automation_path_plan_auto_approval_disabled"
+                      then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
+                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "pipeline_plan_grant_write_failed"))
+                      then "**Automatic approval withheld: the automation-path grant check could not run.**"
+                      else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
                     "",
                     "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
                     "",
@@ -2368,7 +2525,7 @@ jobs:
                     (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
                     (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
                     "",
-                    "To proceed, a trusted OWNER/MEMBER/COLLABORATOR adds these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant), or replies `/approved`. The implement commit-time automation-path guard still applies either way.",
+                    "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way.",
                     "",
                     "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=\($source) paths=\($b64) -->"
                   ] | join("\n")
@@ -2392,25 +2549,101 @@ jobs:
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
-              automation_path_gate_flag="$(printf '%s' "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
-              case "${automation_path_gate_flag}" in
-                1|true|yes|on)
-                  automation_path_gate_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/automation_path_gate.XXXXXX" 2>/dev/null)" || automation_path_gate_dir=""
-                  if [ -z "${automation_path_gate_dir}" ]; then
-                    AUTOMATION_PATH_GATE_REASON="automation_path_check_unavailable"
-                    AUTOMATION_PATH_GATE_DETAIL="tempdir"
-                    AUTOMATION_PATH_GATE_PATHS_FILE="/dev/null"
-                    automation_path_plan_hold || true
-                    exit 0
-                  fi
-                  if ! automation_path_plan_gate "${automation_path_gate_dir}"; then
-                    automation_path_plan_hold || true
-                    rm -rf "${automation_path_gate_dir}"
-                    exit 0
-                  fi
-                  rm -rf "${automation_path_gate_dir}"
-                  ;;
+              # Automation-path plan gate (issue #6769). Plans listing
+              # .github/, .claude/, scripts/, prompts/ or workflow-templates/
+              # paths are held while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED
+              # is false (it defaults to true); when it is on, every such path needs a trusted, exact
+              # issue-body grant. The open pipeline-author grant does not
+              # count; instead the pipeline writes an exact grant from the
+              # plan (Q108, below). Every error holds. A held plan keeps ai:awaiting-approval
+              # for a human /approved; the implement-time guard still applies.
+              plan_gate_file="${CODEX_OUTPUT_FILE:-}"
+              plan_gate_guard="scripts/files_touched_scope_guard.py"
+              plan_gate_login=""
+              plan_gate_result=""
+              plan_gate_allow_edits="false"
+              case "$(printf '%s' "${ALLOW_WORKFLOW_EDITS:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+                1|true|yes|on) plan_gate_allow_edits="true" ;;
               esac
+              if [ -f "${plan_gate_guard}" ]; then
+                plan_gate_meta_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX")"
+                plan_gate_grant_body_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_grant_body.XXXXXX")"
+                printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_gate_meta_file}"
+                run_plan_gate() {
+                  PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate \
+                    --plan-file "${plan_gate_file}" \
+                    --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" \
+                    --issue-meta-file "${plan_gate_meta_file}" \
+                    --pipeline-login "${plan_gate_login}" \
+                    --allow-workflow-edits "${plan_gate_allow_edits}" \
+                    --origin-repo "${GITHUB_REPOSITORY:-}" \
+                    --pipeline-grant-body-out "${plan_gate_grant_body_file}" \
+                    --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true
+                }
+                plan_gate_result="$(run_plan_gate)"
+                # The pipeline login is read only when the flag is on and the
+                # plan lists protected paths (the guard then reports
+                # identity_unavailable without one).
+                if printf '%s' "${plan_gate_result}" | jq -e '.decision == "hold" and .reason == "identity_unavailable"' >/dev/null 2>&1; then
+                  plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+                  if [ -n "${plan_gate_login}" ]; then
+                    plan_gate_result="$(run_plan_gate)"
+                  fi
+                fi
+                rm -f "${plan_gate_meta_file}"
+                plan_gate_decision="$(printf '%s' "${plan_gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+                plan_gate_reason="$(printf '%s' "${plan_gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+                plan_gate_paths="$(printf '%s' "${plan_gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+                # Q108: a pipeline-authored issue without files_touched is
+                # approved only after the guard's exact block (the plan's
+                # files plus tests/changelog/agents fragments) is in the issue
+                # body; it is then the issue's implement-time scope. A failed
+                # write holds.
+                if [ "${plan_gate_decision}" = "approve" ] && printf '%s' "${plan_gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
+                  if [ -s "${plan_gate_grant_body_file}" ] \
+                    && gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" -f body="$(cat "${plan_gate_grant_body_file}")" >/dev/null 2>&1; then
+                    echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=written"
+                  else
+                    echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=failed reason=issue_body_write_failed"
+                    plan_gate_decision="hold"
+                    plan_gate_reason="pipeline_plan_grant_write_failed"
+                  fi
+                fi
+                rm -f "${plan_gate_grant_body_file}"
+              else
+                plan_gate_decision="hold"
+                plan_gate_reason="plan_gate_helper_unavailable"
+                plan_gate_paths="none"
+              fi
+              # Reason and paths are sanitized so model-written plan text
+              # cannot inject workflow commands or forge gate log lines.
+              plan_gate_reason="$(printf '%s' "${plan_gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+              plan_gate_paths="$(printf '%s' "${plan_gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+              if [ "${plan_gate_decision}" != "approve" ]; then
+                echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=${plan_gate_reason:-plan_gate_error} outcome=defer issue=${ISSUE_NUMBER} paths=${plan_gate_paths:-none}"
+                echo "auto_approve_hold_reason=${plan_gate_reason:-plan_gate_error}" >> "$GITHUB_OUTPUT"
+                {
+                  echo "### Automatic plan approval held"
+                  echo ""
+                  echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
+                  echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"
+                  echo "A maintainer can review the plan and reply \`/approved\`."
+                } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                # One deduplicated hold comment plus a WARNING, so a held plan
+                # reaches a human. Failures only warn; a hold never approves.
+                AUTOMATION_PATH_GATE_REASON="${plan_gate_reason:-plan_gate_error}"
+                AUTOMATION_PATH_GATE_DETAIL="${AUTOMATION_PATH_GATE_REASON}"
+                AUTOMATION_PATH_GATE_PATHS_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_paths.XXXXXX" 2>/dev/null)" || AUTOMATION_PATH_GATE_PATHS_FILE=""
+                if [ -n "${AUTOMATION_PATH_GATE_PATHS_FILE}" ]; then
+                  printf '%s' "${plan_gate_result}" | jq -r '(if ((.denied_paths // []) | length) > 0 then .denied_paths else (.protected_paths // []) end)[]? | strings' \
+                    > "${AUTOMATION_PATH_GATE_PATHS_FILE}" 2>/dev/null || : > "${AUTOMATION_PATH_GATE_PATHS_FILE}"
+                else
+                  AUTOMATION_PATH_GATE_PATHS_FILE="/dev/null"
+                fi
+                automation_path_plan_hold || true
+                [ "${AUTOMATION_PATH_GATE_PATHS_FILE}" = "/dev/null" ] || rm -f "${AUTOMATION_PATH_GATE_PATHS_FILE}"
+                exit 0
+              fi
               # Brief pause so the plan comment is fully indexed by GitHub before
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.

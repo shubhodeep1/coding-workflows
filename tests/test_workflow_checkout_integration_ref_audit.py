@@ -40,6 +40,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"comprehensive-test-and-release.yml": "Comprehensive release conductor dispatches downstream workflows and does not execute tracking-issue integration-ref checkout.",
 	"drift-audit.yml": "Scheduled maintenance workflow audits review-autofix logs and is not an orchestrator issue-phase checkout path.",
 	"check_failure_triage.yml": "Check-run triage operates on failing PR-check metadata and PR head refs, not orchestrator issue-phase integration refs.",
+	"check-failure-triage-historical.yml": "Single-use historical triage checks out one closed PR's failing head (or merge commit) by SHA in a credential-free reproduction job, not orchestrator issue-phase integration refs.",
 	"update_workflows.yml": "Workflow-template sync job is repository maintenance, not issue-phase execution.",
 	"validation-improvements-intake.yml": "Validation prompt intake workflow is repository_dispatch PR automation.",
 	"validation-refresh.yml": "Validation refresh workflow iterates consumer repos and is not an orchestrator issue-phase checkout path.",
@@ -56,6 +57,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"claude-engine-smoke.yml": "Dispatch-only Claude engine self-test checks out the dispatched ref to exercise its own scripts; it executes no orchestrator issue phase.",
 	"publish-sandbox-images.yml": "Push-to-main/stable and weekly maintenance builds and pushes the sandbox images from a fixed branch ref; it reads no tracking-issue metadata.",
 	"propagate-consumer-secrets.yml": "Push-to-main / dispatch maintenance copies the library's Actions secrets into registered consumers; it reads the consumer registry on main and no tracking-issue metadata.",
+	"pr6576-shard-followup.yml": "One-time default-branch follow-up for PR #6576 reads CI job logs and posts one result through the API; it executes no orchestrator issue phase.",
 }
 
 
@@ -170,10 +172,38 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			)
 
 
+def _refctx_step(wf: str) -> str:
+	start = wf.index("- name: Resolve integration ref")
+	end = wf.find("\n      - name:", start + 1)
+	return wf[start:] if end == -1 else wf[start:end]
+
+
+def test_required_workflows_fail_closed_on_ci_triage_routing_refusal() -> None:
+	"""Resolver exit 3 (CI-triage routing refused) must never fall back to main."""
+	env_line = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}"
+	forward = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \\'
+	capture = '})" || resolver_rc=$?'
+	refused_branch = 'elif [ "${resolver_rc}" -eq 3 ]; then'
+	fallback = 'echo "::warning::Canonical integration resolver failed; falling back to default branch."'
+	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
+		step = _refctx_step(_workflow_text(workflow_name))
+		assert env_line in step, f"{workflow_name} refctx missing routing flag env"
+		assert forward in step, f"{workflow_name} refctx does not forward the routing flag"
+		assert "resolver_rc=0" in step and capture in step, f"{workflow_name} refctx missing resolver rc capture"
+		assert 'if [ "${resolver_rc}" -eq 0 ]; then' in step, f"{workflow_name} refctx missing rc 0 branch"
+		assert refused_branch in step, f"{workflow_name} refctx missing exit-3 branch"
+		refused = step[step.index(refused_branch):step.index(fallback)]
+		assert "exit 1" in refused, f"{workflow_name} exit-3 branch must fail the step"
+		assert "GITHUB_OUTPUT" not in refused, f"{workflow_name} exit-3 branch must not write a ref"
+		assert fallback in step, f"{workflow_name} non-3 failure lost its default-branch fallback"
+		assert "${{ steps.refctx" not in step, f"{workflow_name} refctx interpolates its own output"
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
 	test_required_workflows_enforce_integration_ref_contract()
+	test_required_workflows_fail_closed_on_ci_triage_routing_refusal()
 	return 0
 
 

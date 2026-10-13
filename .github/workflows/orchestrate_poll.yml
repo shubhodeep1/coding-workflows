@@ -215,6 +215,7 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -237,11 +238,21 @@ jobs:
             echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
             echo "has_work=false" >> "$GITHUB_OUTPUT"
+            # Standalone stall recovery still runs on ticks with no active
+            # project (issue #7183); the full poller runs it after its loop
+            # otherwise. Same truthy test as is_truthy in the poller.
+            case "$(printf '%s' "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) standalone_recovery=true ;;
+              *) standalone_recovery=false ;;
+            esac
+            echo "Standalone stall recovery without active projects: standalone_recovery=${standalone_recovery}"
+            echo "standalone_recovery=${standalone_recovery}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "standalone_recovery=false" >> "$GITHUB_OUTPUT"
 
           # If every active tracking issue is the test-and-mark-stable
           # smoke fixture, suppress per-phase Telegram alerts; the gate
@@ -274,34 +285,36 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Setup Node.js
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Setup Python
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         # Intentionally use the released action ref as the rollout boundary.
         # Consumers pick this up when test-and-mark-stable retags @stable.
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
+      # Idle ticks also install it while standalone stall recovery and its
+      # stall judge are on, because that judge can run on OpenCode (#7174).
       - name: Install OpenCode CLI for isolated review-blocked judge
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' || (vars.ENABLE_STANDALONE_STALL_RECOVERY != 'false' && vars.ENABLE_STALL_JUDGE != 'false')
         continue-on-error: true
         uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:
           opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
 
       - name: Install OS-level core tools
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -335,7 +348,9 @@ jobs:
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
-        if: steps.find_tracking.outputs.has_work == 'true'
+        id: validate_env
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
+        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -400,6 +415,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
@@ -407,7 +423,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py workflow_failure_heal.py; do
+          for f in gh_helpers.sh pr_dependency.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py workflow_failure_heal.py files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -450,6 +466,21 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; retired-conflict re-issue stays off."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          # Issue #7177: the noop-suspicious recovery sweep's force-merge gate B
+          # sources this audit helper. Optional: when absent, gate B fails closed.
+          for f in validate_editor_audit.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the no-op force-merge fallback stays closed."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -672,6 +703,7 @@ jobs:
           RECLARIFY_UNROUTED_DETECT_ENABLED: ${{ vars.RECLARIFY_UNROUTED_DETECT_ENABLED || 'true' }}
           RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
@@ -771,16 +803,18 @@ jobs:
       # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
       # judges resolve their engine per tracking issue inside the poller
       # (scripts/orchestrate_poll_process.sh poller_claude_judge). The CLI
-      # and the account pool are fetched only when a tick has work and at
-      # least one judge role resolves to Claude, or an active project label
-      # selects Claude. The per-project judge still resolves its own labels.
+      # and the account pool are fetched only when at least one judge role
+      # resolves to Claude, or an active project label selects Claude. The
+      # step runs on every tick: on a tick with no tracking issue the
+      # tracking checks see an empty list and only the standalone check
+      # below can select Claude, for the idle-tick standalone recovery step
+      # (#7174). The per-project judge still resolves its own labels.
       # A standalone stall judge (run_standalone_stall_recovery) resolves
       # STALL_JUDGE from its own issue's labels, not the tracking labels, so
       # when no tracking issue selected Claude the step also checks the
       # STALL_JUDGE default and open non-tracking `ai:engine-claude` issues.
       - name: Resolve AI engine
         id: ai_engine
-        if: steps.find_tracking.outputs.has_work == 'true'
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
@@ -874,7 +908,7 @@ jobs:
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
@@ -882,7 +916,7 @@ jobs:
 
       - name: Resolve Claude credential
         id: claude_pool
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
@@ -892,7 +926,7 @@ jobs:
       # tokens or failed probes; silent while every account is below the gate
       # and no token or probe failed (#6951).
       - name: Alert on Claude pool accounts at the usage gate
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true
         env:
           CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
@@ -947,8 +981,11 @@ jobs:
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
           SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          # One-shot re-dispatch of projects parked by a stale integration-branch
+          # validation wrapper pin (issue #7138).
+          VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
-          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -993,6 +1030,10 @@ jobs:
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          # Standalone conflict / no-op sweeps page for real standalone PRs even
+          # when every tracking issue is a smoke fixture (find_tracking's SILENT
+          # override, issue #7177), so read vars, not env.
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           # Phase-specific override for ai:done — defaults to a high cap (99)
           # that effectively avoids `skip` in normal operation windows, though
           # `skip` can still occur if the cap is eventually reached.  This
@@ -1070,10 +1111,137 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-        run: bash scripts/orchestrate_poll_process.sh
+        run: |
+          set -euo pipefail
+          bash scripts/orchestrate_poll_process.sh
+
+      # Cron ticks with no open tracking issue skip the full poller above, so
+      # this is the only place standalone stall recovery (including the
+      # automation-path plan-hold recheck) runs on those ticks (#7174). Its
+      # has_work gate is the complement of "Process each tracking issue", so
+      # exactly one of the two runs per tick. The env is the full poller
+      # step's env plus the sweep flag (tests/test_orchestrate_poll_workflow_contract.py
+      # checks the two stay equal); ENABLE_STANDALONE_STALL_RECOVERY=false
+      # turns it off. continue-on-error keeps a recovery failure from skipping
+      # the latch-release and unblock-scan sweeps that follow on idle ticks.
+      - name: Run standalone stall recovery without active projects
+        # validate_env and stage_support are continue-on-error on idle ticks;
+        # a missing key or a staging failure skips recovery (issue #7183).
+        # validate_env is skipped when ENABLE_STANDALONE_STALL_RECOVERY is off.
+        if: steps.find_tracking.outputs.has_work != 'true' && steps.validate_env.outcome == 'success' && steps.stage_support.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
+          UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
+          RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
+          ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
+          ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
+          SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
+          AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
+          AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
+          AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
+          ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
+          ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
+          MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
+          SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
+          SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
+          VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+          APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
+          COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
+          MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
+          ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
+          MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
+          RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
+          JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
+          STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
+          STALL_THRESHOLD_NO_LABELS_MINUTES: ${{ vars.STALL_THRESHOLD_NO_LABELS_MINUTES || '' }}
+          STALL_THRESHOLD_CLARIFICATION_MINUTES: ${{ vars.STALL_THRESHOLD_CLARIFICATION_MINUTES || '' }}
+          STALL_THRESHOLD_PLANNING_MINUTES: ${{ vars.STALL_THRESHOLD_PLANNING_MINUTES || '' }}
+          STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
+          STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
+          STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
+          MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
+          STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
+          ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
+          ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
+          ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
+          CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
+          CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
+          CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
+          MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
+          JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          JUDGE_OUTPUT_FAILURE_MAX: ${{ vars.JUDGE_OUTPUT_FAILURE_MAX || '3' }}
+          JUDGE_PR_DIFF_MAX_BYTES: ${{ vars.JUDGE_PR_DIFF_MAX_BYTES || '65536' }}
+          JUDGE_PR_DIFFS_TOTAL_MAX_BYTES: ${{ vars.JUDGE_PR_DIFFS_TOTAL_MAX_BYTES || '524288' }}
+          RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}
+          MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
+          MAX_VALIDATION_DISPATCHES_PER_CYCLE: ${{ vars.MAX_VALIDATION_DISPATCHES_PER_CYCLE || '3' }}
+          MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
+          BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
+          BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
+          BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
+          ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN: ${{ vars.ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN || '20' }}
+          ORCH_INTEGRATION_STALE_ALERT_HOURS: ${{ vars.ORCH_INTEGRATION_STALE_ALERT_HOURS || '0' }}
+          MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          STANDALONE_RECOVERY_SWEEP_ONLY: "true"
+        run: |
+          set -euo pipefail
+          # Consumers pinned to older support commits may not have this
+          # sweep-only mode yet; never launch the full poller from here.
+          if ! grep -qF 'if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone recovery sweep support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
-        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1081,10 +1249,11 @@ jobs:
           STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run unblock scan without active projects
-        if: steps.find_tracking.outputs.has_work != 'true'
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1096,11 +1265,124 @@ jobs:
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
           UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
 
+      # Standalone PR conflict and noop-suspicious recovery sweeps (issue
+      # #7177). With a tracking issue they run inline at the end of "Process
+      # each tracking issue"; without one this step runs only those sweeps.
+      - name: Run standalone PR sweeps without active projects
+        if: steps.find_tracking.outputs.has_work != 'true'
+        # Staging is continue-on-error on idle ticks; a sweep failure must not
+        # skip the worktree registry GC that follows.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_PR_SWEEP_ONLY: "true"
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          # Conflict dispatches forward this to review; keep a repository's
+          # opt-out on idle ticks too.
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # Staging is continue-on-error on these ticks, and a poller from an
+          # older support commit would ignore the flag and run every post-loop
+          # sweep; never launch the full poller from here.
+          if [ ! -f scripts/orchestrate_poll_process.sh ] \
+            || ! grep -q 'STANDALONE_PR_SWEEP_ONLY' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone PR sweep-only support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
+
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
+
+      # Q99: GitHub runs the */5 cron every 25-60 minutes, so a project that
+      # could take its next step now (a merged wave, a new phase) waited for
+      # the next cron run. When this tick moved a project forward
+      # (scripts/orchestrate_poll_process.sh record_poll_progress_if_advanced),
+      # dispatch the caller workflow once more. The poll job's concurrency
+      # group keeps at most one pending run, so this queues one run behind
+      # this one. The 300-second force-tick cooldown per tracking issue stops
+      # a chain from polling faster than the cron's nominal */5 cadence.
+      - name: Queue a follow-up poll after progress
+        if: success() && steps.find_tracking.outputs.has_work == 'true'
+        # Best effort: the tick's work is already persisted, and cron remains the fallback.
+        continue-on-error: true
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Honour the memory kill switch inside the force-tick helper's cooldown ledger.
+          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
+          POLL_FOLLOW_UP_ON_PROGRESS_ENABLED: ${{ vars.POLL_FOLLOW_UP_ON_PROGRESS_ENABLED || 'true' }}
+          POLL_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          FORCE_TICK_COOLDOWN_SECONDS: '300'
+        run: |
+          set -euo pipefail
+          progress_file="${RUNTIME_DIR}/poll_progress_tracking_issues"
+          if [ ! -s "${progress_file}" ]; then
+            echo "POLL_FOLLOW_UP outcome=skip reason=no_progress"
+            exit 0
+          fi
+          case "$(printf '%s' "${POLL_FOLLOW_UP_ON_PROGRESS_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            ''|true) ;;
+            false)
+              echo "POLL_FOLLOW_UP outcome=skip reason=disabled"
+              exit 0
+              ;;
+            *)
+              echo "::warning::POLL_FOLLOW_UP_ON_PROGRESS_ENABLED has an unrecognised value; no follow-up poll is queued. Use true or false."
+              echo "POLL_FOLLOW_UP outcome=skip reason=invalid_switch"
+              exit 0
+              ;;
+          esac
+          # The 300-second cooldown lives in the AI-memory ledger; with memory
+          # off the helper would dispatch without it, so skip (cron remains).
+          case "$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ;;
+            *)
+              echo "POLL_FOLLOW_UP outcome=skip reason=cooldown_unavailable"
+              exit 0
+              ;;
+          esac
+          tracking_issue="$(head -n 1 "${progress_file}")"
+          if ! [[ "${tracking_issue}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "POLL_FOLLOW_UP outcome=skip reason=invalid_tracking_issue"
+            exit 0
+          fi
+          helper=".codex-workflow-src/scripts/orchestrate_force_tick.sh"
+          if [ ! -f "${helper}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; no follow-up poll is queued, cron remains the fallback."
+            echo "POLL_FOLLOW_UP outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          # The poll wrapper's file name differs per repository
+          # (internal-orchestrate-poll.yml here, ai-orchestrate-poll.yml in
+          # consumer repos); github.workflow_ref names the caller.
+          caller_path="${POLL_CALLER_WORKFLOW_REF%%@*}"
+          caller_file="${caller_path##*/}"
+          if ! [[ "${caller_file}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+            caller_file="internal-orchestrate-poll.yml"
+          fi
+          echo "POLL_FOLLOW_UP outcome=request tracking_issue=${tracking_issue} workflow=${caller_file}"
+          ORCHESTRATE_POLL_WORKFLOW_FILE="${caller_file}" bash "${helper}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tracking-issue "${tracking_issue}" \
+            --reason "poll-progress" \
+            --source-workflow "orchestrate_poll" \
+            --run-id "${GITHUB_RUN_ID}"
 
       - name: Build state snapshot
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
