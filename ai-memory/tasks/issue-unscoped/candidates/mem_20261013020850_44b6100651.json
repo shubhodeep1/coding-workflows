@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:107-119, 304 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `_run_id` uses `capture` without safely handling a nonmatching `details_url`, which reviewers say can make the jq filter fail and cause `_pr_checks_completed` to refuse a merge.\n  WHY: Reviewers reporting the issue describe a `query_failed` merge refusal; anthropic_claude-sonnet-5_5 and qwen_qwen3_7-plus dispute the diagnosis, stating that a nonmatching `capture` produces empty output and is handled downstream.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh: def _run_id: [(.details_url // \"\") | capture(\"/actions/runs/(?<id>[0-9]+)(/|$)\") | .id] | first; | confidence=[5]\n  PROBLEM: `capture` returns null if the pattern does not match, and accessing `.id` on null causes a runtime jq error.\n  WHY: For check-runs without a matching details_url (e.g., third-party or non-Actions checks), _run_id will cause jq to abort, causing the entire _pr_checks_completed function to fail, likely resulting in _pr_checks_completed reporting \"unknown\" or failing closed, which blocks the merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/pr_checks_lib.sh: 107 (in PR_CHECKS_JQ_SUPERSEDE_DEFS), and the CI side channel at 304 | severity=high | confidence=[5]\n  PROBLEM: `capture` errors on no match; a check-run with the configured CI name and a null, empty, or non-Actions `details_url` can make `_run_id` error when called from `_mark_superseded` or `_is_bound_run`.\n  WHY: The reported error propagates through the filter, causing `_pr_checks_completed` to set `PR_CHECKS_LAST_REASON=\"query_failed\"` and return 1, refusing the merge; `_summarize_final_merge_blockers` shares the same definitions, and the cited tests use Actions-shaped URLs rather than covering this failure path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh: Lines 107, 113-119 (`_run_id` and its calls from `_mark_superseded`) | severity=high | confidence=[4]\n  PROBLEM: `_run_id` uses `capture` without checking whether `details_url` contains an Actions run ID.\n  WHY: A configured check-run with a non-Actions `details_url` makes `capture` fail, and the jq filter produces no numeric result, causing `_pr_checks_completed` to return `query_failed` and block the merge.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "65a85ff3a339c6a9c3e8ddd43a1a7ccac150a1e1f1c270da22e601264d011f4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38332771012",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38332771012",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013020850_44b6100651",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38332771012"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T02:08:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
