@@ -42,6 +42,40 @@ command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error
 # without the helper, build locally as before. Arguments: docker build args.
 clarify_image_build()
 {
+	local clarify_prebuilt_ref="" clarify_prebuilt_secs="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-60}"
+	# Try the prebuilt image first: it does not need the Dockerfile's FROM
+	# image, so slow or unreachable mirrors must not delay it (#7215 review).
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		[[ "${clarify_prebuilt_secs}" =~ ^[1-9][0-9]{0,3}$ ]] || clarify_prebuilt_secs=60
+		clarify_prebuilt_ref="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" ref --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox" 2>/dev/null)" || {
+			clarify_prebuilt_ref=""
+			# `ref` exits 1 on purpose when the registry is off, or invalid (which
+			# sandbox_image.sh treats as off with its own warning); not a failure.
+			local clarify_registry="${SANDBOX_IMAGE_REGISTRY:-}"
+			if [ "${clarify_registry}" != off ] && { [ -z "${clarify_registry}" ] || [[ "${clarify_registry}" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]]; }; then
+				echo "SANDBOX_IMAGE family=clarify outcome=ref_failed" >&2
+			fi
+		}
+		if [ -n "${clarify_prebuilt_ref}" ] && env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${clarify_prebuilt_secs}s" docker pull -q "${clarify_prebuilt_ref}" >/dev/null 2>&1; then
+			# sandbox_image.sh build re-pulls and checks the input label; on a
+			# label mismatch or a failed re-pull it builds locally without the
+			# pre-seed. If that fails, fall through to pre-seed and build again.
+			local clarify_prebuilt_id=""
+			if clarify_prebuilt_id="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")" && [ -n "${clarify_prebuilt_id}" ]; then
+				printf '%s\n' "${clarify_prebuilt_id}"
+				return
+			fi
+		fi
+	fi
+	# A local build follows: seed the Dockerfile's FROM image from a Docker
+	# Official Images mirror first, so the build (no --pull) avoids Docker
+	# Hub's anonymous-pull 429 (#6985, #7215). Best effort; stdout is the
+	# image ID, so log to stderr.
+	if [ -f "${support}/clarify_base_image_preseed.sh" ] && [ ! -L "${support}/clarify_base_image_preseed.sh" ]; then
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/clarify_base_image_preseed.sh" "${support}/clarify_sandbox/Dockerfile" >&2 || true
+	else
+		echo "CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing" >&2
+	fi
 	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
 		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
 	else
