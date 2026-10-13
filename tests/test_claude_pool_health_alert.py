@@ -150,7 +150,7 @@ def test_orchestrate_poll_runs_the_alert_right_after_the_pool_step() -> None:
 	process = text.index("      - name: Process each tracking issue\n")
 	assert pool < alert < process
 	step = text[alert:process]
-	assert "if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'" in step
+	assert "if: steps.ai_engine.outputs.any_claude == 'true'" in step
 	assert "continue-on-error: true" in step
 	assert "CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}" in step
 	assert "CLAUDE_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CLAUDE_POOL_HEALTH_ALERT_ENABLED || 'true' }}" in step
