@@ -27,10 +27,22 @@ Inputs:
   --allowlist-out PATH    Optional: write the normalized allowlist (one entry
                           per line) so the caller can surface it in the alert.
   --emit-automation-grant PATH --issue-meta-file PATH --pipeline-login LOGIN
-                          Snapshot trusted-author exact automation paths.
+                          [--origin-repo OWNER/NAME]
+                          Snapshot trusted-author exact automation paths. A
+                          pipeline-authored issue derived from another issue
+                          (re-issue, unblock fix-up) is granted only when its
+                          whole source chain is trusted; --origin-repo lets
+                          the guard read those source issues (Q82).
   --check-automation-paths --automation-grant-file PATH --staged-file PATH
                           --allow-workflow-edits VALUE --issue-number NUMBER
                           Verify staged automation paths against the snapshot.
+  --plan-auto-approval-gate --plan-file PATH --flag-enabled VALUE
+                          [--issue-meta-file PATH --pipeline-login LOGIN
+                          --allow-workflow-edits VALUE --issue-number NUMBER
+                          --origin-repo OWNER/NAME]
+                          Decide whether an automatic `/approved` may be posted
+                          for a plan that lists automation paths (issue #6769).
+                          Prints one JSON line; exit 0 approves, 30 holds.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
@@ -65,7 +77,9 @@ from functools import lru_cache
 import json
 from pathlib import PurePosixPath
 import re
+import subprocess
 import sys
+import time
 
 
 EXIT_IN_SCOPE = 0
@@ -80,6 +94,35 @@ TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 PIPELINE_AUTHOR_OPEN_REASON = "pipeline_author_no_allowlist"
 AUTOMATION_GRANT_SCHEMA = "automation_path_grant.v1"
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
+
+# Source-issue references the pipeline writes into issues it derives from
+# another issue (Q82). Only a pipeline-authored issue is walked: a person's
+# own issue is trusted on its author alone. Every reference counts, so text
+# copied from the source can only add checks, never remove one.
+ORIGIN_REFERENCE_PATTERNS = (
+	re.compile(r"Re-issued from\s+#([1-9][0-9]{0,9})\b"),  # stall recovery, no-op / validation re-issues
+	re.compile(r"Re-issued by the unblock judge from #([1-9][0-9]{0,9})\b"),  # unblock reissue
+	re.compile(r"<!--\s*ai:unblock-fixup:v1\s+item=([1-9][0-9]{0,9})\b"),  # unblock descope / operator_step
+	re.compile(r"^-\s*Replaces:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked re-issue footer
+	re.compile(r"^-\s*Source issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # implement-diagnose fix-up
+	re.compile(r"Accepted with this follow-up by the unblock judge \(#([1-9][0-9]{0,9})\)"),  # unblock accept_with_followup
+	re.compile(r"^-\s*Parent issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked merge_with_followup
+)
+# A review-blocked re-issue or follow-up whose metadata footer names no issue
+# names only its PR, so its source cannot be checked: it gets no automation
+# paths. The named-source line must sit in the same `---`-delimited block as
+# the last `- Type:` line of that kind (the pipeline-written footer); a match
+# in the model-written prose above it only adds a check, never names a source.
+ORIGIN_UNNAMED_PATTERN = re.compile(r"^-\s*Type:\s*review-blocked-reissue\s*$", re.MULTILINE)
+ORIGIN_FOOTER_KINDS = (
+	(ORIGIN_UNNAMED_PATTERN, re.compile(r"^-\s*Replaces:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+	(re.compile(r"^-\s*Type:\s*review-blocked-followup\b.*$", re.MULTILINE),
+		re.compile(r"^-\s*Parent issue:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+)
+ORIGIN_FOOTER_RULE = re.compile(r"^---\s*$", re.MULTILINE)
+ORIGIN_MAX_DEPTH = 4
+ORIGIN_MAX_ISSUES = 8
+ORIGIN_REASONS = ("untrusted_origin", "origin_unverified")
 
 STATUS_IN_SCOPE = "in-scope"
 STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
@@ -175,8 +218,110 @@ def files_touched_block_state(text: str) -> tuple[str, list[str]]:
 	return "missing", []
 
 
-def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
-	"""Snapshot the author's authority and exact automation files in the issue."""
+def origin_references(body: str) -> tuple[list[int], bool]:
+	"""Source issue numbers a pipeline-authored body names, and whether it
+	also claims a source it does not name (an unverifiable review-blocked
+	re-issue)."""
+	numbers: list[int] = []
+	for pattern in ORIGIN_REFERENCE_PATTERNS:
+		for match in pattern.finditer(body):
+			number = int(match.group(1))
+			if number not in numbers:
+				numbers.append(number)
+	unnamed = False
+	for type_pattern, named_pattern in ORIGIN_FOOTER_KINDS:
+		type_matches = list(type_pattern.finditer(body))
+		if not type_matches:
+			continue
+		last = type_matches[-1]
+		rules_before = [rule.end() for rule in ORIGIN_FOOTER_RULE.finditer(body, 0, last.start())]
+		block_start = rules_before[-1] if rules_before else 0
+		rule_after = ORIGIN_FOOTER_RULE.search(body, last.end())
+		block_end = rule_after.start() if rule_after else len(body)
+		if not named_pattern.search(body[block_start:block_end]):
+			unnamed = True
+	return numbers, unnamed
+
+
+def fetch_issue_with_gh(repo: str, number: int) -> dict | None:
+	"""One `gh api` read of a source issue; two attempts, None on failure."""
+	for attempt in range(2):
+		try:
+			completed = subprocess.run(["gh", "api", f"repos/{repo}/issues/{number}"],
+				capture_output=True, text=True, timeout=60, check=False)
+		except (OSError, subprocess.SubprocessError):
+			completed = None
+		if completed is not None and completed.returncode == 0:
+			try:
+				data = json.loads(completed.stdout)
+			except ValueError:
+				data = None
+			if isinstance(data, dict):
+				return data
+		if completed is not None and "HTTP 404" in (completed.stderr or ""):
+			break  # a missing source will not appear on retry; fail closed now
+		if attempt == 0:
+			time.sleep(2)
+	return None
+
+
+def _origin_author_trusted(meta: dict, pipeline_login: str) -> tuple[bool, bool]:
+	"""(trusted, pipeline_authored) for a source issue's author."""
+	user = meta.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	login = login if isinstance(login, str) else ""
+	association = meta.get("author_association")
+	association = association.upper() if isinstance(association, str) else ""
+	if not LOGIN_RE.fullmatch(login):
+		return False, False
+	if login == pipeline_login:
+		return True, True
+	return association in TRUSTED_AUTHOR_ASSOCIATIONS, False
+
+
+def check_origin_chain(body: str, pipeline_login: str, fetch) -> tuple[str, list[int]]:
+	"""Walk the source chain of a pipeline-authored issue body.
+
+	Returns ("ok" | "untrusted_origin" | "origin_unverified", issues read).
+	A source written by a trusted person ends its branch; one written by the
+	pipeline is walked in turn. At most ORIGIN_MAX_DEPTH hops and
+	ORIGIN_MAX_ISSUES issue reads (one `gh api` call each, §15); anything
+	that cannot be read or exceeds the bounds fails closed.
+	"""
+	pending, unnamed = origin_references(body)
+	if unnamed:
+		return "origin_unverified", []
+	frontier = [(number, 1) for number in pending]
+	seen: list[int] = []
+	while frontier:
+		number, depth = frontier.pop(0)
+		if number in seen:
+			continue
+		if depth > ORIGIN_MAX_DEPTH or len(seen) >= ORIGIN_MAX_ISSUES or fetch is None:
+			return "origin_unverified", seen
+		seen.append(number)
+		meta = fetch(number)
+		if not isinstance(meta, dict):
+			return "origin_unverified", seen
+		trusted, pipeline_authored = _origin_author_trusted(meta, pipeline_login)
+		if not trusted:
+			return "untrusted_origin", seen
+		if pipeline_authored:
+			source_body = meta.get("body") if isinstance(meta.get("body"), str) else ""
+			numbers, source_unnamed = origin_references(source_body)
+			if source_unnamed:
+				return "origin_unverified", seen
+			frontier.extend((source, depth + 1) for source in numbers)
+	return "ok", seen
+
+
+def build_automation_grant(issue_meta: dict, pipeline_login: str, fetch_origin=None) -> dict:
+	"""Snapshot the author's authority and exact automation files in the issue.
+
+	``fetch_origin(number) -> dict | None`` reads a source issue for the
+	origin-chain check of a pipeline-authored issue; without it, a
+	pipeline-authored issue that names a source gets no automation paths.
+	"""
 	if not isinstance(issue_meta, dict):
 		raise ValueError("invalid issue metadata")
 	user = issue_meta.get("user")
@@ -198,7 +343,16 @@ def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
 		if not isinstance(body, str):
 			body = ""
 		state, entries = files_touched_block_state(body)
-		if state == "missing" and author_login == pipeline_login:
+		origin_status = "ok"
+		if author_login == pipeline_login:
+			origin_status, origin_issues = check_origin_chain(body, pipeline_login, fetch_origin)
+			record["origin_issues"] = origin_issues
+		if origin_status != "ok":
+			# Q82: a re-issue or fix-up the pipeline filed from an issue that an
+			# untrusted author wrote must not turn that author's request into
+			# an automation-path grant.
+			record["reason"] = origin_status
+		elif state == "missing" and author_login == pipeline_login:
 			# Pipeline-generated issues (security-pass fixes, re-issues, heal
 			# issues) carry no files_touched block; Q24: A grants them every
 			# automation path. A declared block still grants exact entries
@@ -242,7 +396,8 @@ def check_automation_paths(staged: list[str], grant: object, allow_workflow_edit
 		reason = "grant_issue_mismatch"
 	elif not grant["trusted"]:
 		reason = grant.get("reason") if grant.get("reason") in {
-			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error"
+			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error",
+			*ORIGIN_REASONS,
 		} else "grant_unavailable"
 	elif grant.get("open", False) is True:
 		return STATUS_IN_SCOPE, [], PIPELINE_AUTHOR_OPEN_REASON
@@ -354,6 +509,174 @@ def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: lis
 	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles)
 
 
+# --- Plan auto-approval gate (issue #6769) ---------------------------------
+# Automatic `/approved` posts (plan.yml "Auto-approve clear plan" and the
+# poller's stall-recovery arms) are held for plans that list automation
+# paths. While AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is false (it defaults to true)
+# every such plan is held; when it is on, every protected path the plan lists
+# needs a trusted, exact issue-body grant. The open pipeline-author grant
+# (PIPELINE_AUTHOR_OPEN_REASON) never counts as exact here, although the
+# implement-time guard (check_automation_paths) still accepts it.
+
+PLAN_DECISION_APPROVE = "approve"
+PLAN_DECISION_HOLD = "hold"
+PLAN_LOG_PATHS_MAX_ENTRIES = 20
+PLAN_LOG_PATH_MAX_CHARS = 200
+_PLAN_FILES_LEADIN_RE = re.compile(
+	r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchange\b", re.IGNORECASE)
+_PLAN_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+\S")
+# A lead-in that is not itself a heading has no known level; only a top-level
+# (`#` or `##`) heading ends its section, so nested headings never truncate it.
+_PLAN_PLAIN_LEADIN_LEVEL = 2
+# A protected path token: optional "./" or "/" prefix, an automation prefix in
+# any letter case, a slash, then everything up to whitespace, a backtick, a
+# quote or `<>|` (globs kept so they hold). The token is never cut at an
+# unusual filename character: `scripts/a+b.py` must stay whole, or a grant for
+# `scripts/a` would approve it. `_` is not a boundary character, so
+# `_scripts/x.sh_` or `my_scripts/x.sh` still holds (fail closed).
+_PLAN_PATH_TOKEN_RE = re.compile(
+	r"(?:^|[^A-Za-z0-9./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`'\"<>|]*)",
+	re.IGNORECASE)
+_PLAN_PATH_TRAILING_PUNCT = ".,;:!)]}"
+_PLAN_PATH_LINE_SUFFIX_RE = re.compile(r":\d+(?::\d+)?$")
+_PLAN_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]")
+
+
+def _plan_files_section(plan_text: str) -> str | None:
+	"""Text of a plan's "Files ... change" section; None when no section exists.
+
+	A heading or numbered lead-in naming "Files ... change" opens the section.
+	Only a heading at the lead-in's level or shallower ends it (a plain lead-in
+	ends at a `#`/`##` heading), so a nested sub-heading cannot cut the list
+	short. Negated wording ("No changes to:") does not suppress any line: every
+	protected path in the section counts, so the gate fails closed (#6769).
+	"""
+	found = False
+	inside = False
+	level = 0
+	kept: list[str] = []
+	for line in plan_text.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			found = True
+			inside = True
+			heading = _PLAN_HEADING_RE.match(line)
+			level = len(heading.group(1)) if heading else _PLAN_PLAIN_LEADIN_LEVEL
+			# Paths on the lead-in line itself ("Files to change: `scripts/x.sh`") count.
+			kept.append(line)
+			continue
+		heading = _PLAN_HEADING_RE.match(line)
+		if inside and heading and len(heading.group(1)) <= level:
+			inside = False
+		if inside:
+			kept.append(line)
+	return "\n".join(kept) if found else None
+
+
+def _plan_path_token(raw: str) -> str:
+	"""Strip prose punctuation, a `:line[:col]` suffix and markdown bold from a token."""
+	token = raw
+	while True:
+		previous = token
+		token = _PLAN_PATH_LINE_SUFFIX_RE.sub("", token.rstrip(_PLAN_PATH_TRAILING_PUNCT))
+		if token.endswith("**") and not token.endswith("/**"):
+			token = token.rstrip("*")
+		if token == previous:
+			return token
+
+
+def extract_plan_automation_paths(plan_text: str) -> list[str]:
+	"""Protected paths a plan lists, scanning its Files section.
+
+	Falls back to the whole plan text when no Files section exists, so a plan
+	without the section errs toward holding. Directory and glob entries are
+	kept: they can never be granted exactly, so they hold the plan.
+	"""
+	section = _plan_files_section(plan_text or "")
+	text = section if section is not None else (plan_text or "")
+	seen: set[str] = set()
+	paths: list[str] = []
+	for line in text.splitlines():
+		for match in _PLAN_PATH_TOKEN_RE.finditer(line):
+			path = normalize_path(_plan_path_token(match.group(1)))
+			if not path or not is_automation_path(path) or path in seen:
+				continue
+			seen.add(path)
+			paths.append(path)
+	return paths
+
+
+def evaluate_plan_auto_approval(plan_paths: list[str], grant: object, *, flag_enabled: bool,
+	allow_workflow_edits: str, issue_number: str) -> tuple[str, str, list[str]]:
+	"""Decide whether an automatic `/approved` may be posted for a plan."""
+	protected = [path for path in (normalize_path(p) for p in plan_paths) if path and is_automation_path(path)]
+	if not protected:
+		return PLAN_DECISION_APPROVE, "none", []
+	if not flag_enabled:
+		return PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+	if isinstance(grant, dict) and grant.get("open") is True:
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	status, denied, reason = check_automation_paths(protected, grant, allow_workflow_edits, issue_number)
+	if status == STATUS_IN_SCOPE and reason == "granted":
+		return PLAN_DECISION_APPROVE, "granted", []
+	if status == STATUS_IN_SCOPE:
+		# Any other in-scope reason (the open pipeline-author grant) is not an
+		# exact grant for auto-approval.
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	return PLAN_DECISION_HOLD, reason, denied or protected
+
+
+def plan_gate_log_paths(paths: list[str]) -> str:
+	"""Log-safe, comma-joined rendering of untrusted plan paths."""
+	rendered: list[str] = []
+	for path in paths[:PLAN_LOG_PATHS_MAX_ENTRIES]:
+		safe = _PLAN_LOG_UNSAFE_RE.sub("", path)[:PLAN_LOG_PATH_MAX_CHARS]
+		if safe:
+			rendered.append(safe)
+	return ",".join(rendered) if rendered else "none"
+
+
+def _flag_enabled(value: str) -> bool:
+	# On by default: an unset or empty value is on, like the workflow defaults.
+	return (value or "").strip().lower() in {"", "1", "true", "yes", "on"}
+
+
+def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
+	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "") -> tuple[dict, int]:
+	"""CLI body: returns (decision record, exit code). Errors always hold.
+
+	``origin_repo`` (owner/name) lets a pipeline-authored issue that names a
+	source issue pass the Q82 origin-chain check, as the implement-time grant
+	does; without it such an issue holds with ``origin_unverified``.
+	"""
+	protected: list[str] = []
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		flag_on = _flag_enabled(flag_value)
+		grant: object = None
+		if protected and flag_on:
+			if not issue_meta_file:
+				record = {"decision": PLAN_DECISION_HOLD, "reason": "issue_meta_unavailable",
+					"protected_paths": protected, "denied_paths": protected}
+				record["log_paths"] = plan_gate_log_paths(protected)
+				return record, EXIT_AUTOMATION_UNGRANTED
+			with open(issue_meta_file, encoding="utf-8") as handle:
+				metadata = json.load(handle)
+			repo = origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", origin_repo or "") else ""
+			fetch_origin = (lambda number: fetch_issue_with_gh(repo, number)) if repo else None
+			grant = build_automation_grant(metadata, pipeline_login, fetch_origin)
+		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
+			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
 def _read_text_file(path: str) -> str:
 	try:
 		with open(path, encoding="utf-8") as handle:
@@ -384,15 +707,26 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--emit-automation-grant", default="")
 	parser.add_argument("--issue-meta-file", default="")
 	parser.add_argument("--pipeline-login", default="")
+	parser.add_argument("--origin-repo", default="", help="owner/name to read source issues from (Q82)")
 	parser.add_argument("--check-automation-paths", action="store_true")
 	parser.add_argument("--automation-grant-file", default="")
 	parser.add_argument("--allow-workflow-edits", default="false")
 	parser.add_argument("--issue-number", default="")
+	parser.add_argument("--plan-auto-approval-gate", action="store_true")
+	parser.add_argument("--plan-file", default="")
+	parser.add_argument("--flag-enabled", default="true")
 	args = parser.parse_args(argv)
+	if args.plan_auto_approval_gate:
+		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
+			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
 	if args.emit_automation_grant:
 		try:
 			metadata = json.loads(_read_text_file(args.issue_meta_file))
-			record = build_automation_grant(metadata, args.pipeline_login)
+			origin_repo = args.origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.origin_repo or "") else ""
+			fetch_origin = (lambda number: fetch_issue_with_gh(origin_repo, number)) if origin_repo else None
+			record = build_automation_grant(metadata, args.pipeline_login, fetch_origin)
 		except (ValueError, TypeError, KeyError):
 			record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": None,
 				"trusted": False, "open": False, "reason": "grant_error", "author_login": "", "author_association": "", "paths": []}

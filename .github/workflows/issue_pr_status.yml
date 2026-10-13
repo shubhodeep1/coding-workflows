@@ -198,10 +198,33 @@ jobs:
           PR_MERGED: ${{ github.event.pull_request.merged }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
+          # Issue #7160: binding facts for an unmerged close (event payload, no API call).
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login || '' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # Issue #7160 (decision Q1: A): the GH_PAT login, read lazily at most
+          # once per step and only for an unmerged close whose issue already
+          # passed the head-repository and branch checks. Fails closed.
+          UNMERGED_CLOSE_LOGIN=""
+          UNMERGED_CLOSE_LOGIN_STATE="unresolved"
+          resolve_unmerged_close_login() {
+            if [ "${UNMERGED_CLOSE_LOGIN_STATE}" = "unresolved" ]; then
+              local resolved_login=""
+              resolved_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+              resolved_login="$(printf '%s' "${resolved_login}" | tr -d '[:space:]')"
+              if [ -n "${resolved_login}" ]; then
+                UNMERGED_CLOSE_LOGIN="${resolved_login}"
+                UNMERGED_CLOSE_LOGIN_STATE="ok"
+              else
+                UNMERGED_CLOSE_LOGIN_STATE="failed"
+              fi
+            fi
+            [ "${UNMERGED_CLOSE_LOGIN_STATE}" = "ok" ]
+          }
 
           # The default branch comes from the event payload (consumer repos
           # do not all use `main`); fall back to `main` only when the payload
@@ -553,6 +576,26 @@ jobs:
             fi
             target_merge_reason=""
             if [ "${PR_MERGED}" != "true" ]; then
+              # Issue #7160 (decision Q1: A): an unmerged close only completes
+              # the issue its own pipeline PR is bound to: same-repository
+              # head, head branch ai/issue-<this issue>, and a PR author equal
+              # to the GH_PAT login. Any other referenced issue is left
+              # unchanged (labels, state and lineage); the poller's stall and
+              # unblock sweeps remain the backstop.
+              unmerged_skip_reason=""
+              if [ -z "${PR_HEAD_REPO:-}" ] || [ "${PR_HEAD_REPO}" != "${REPOSITORY}" ]; then
+                unmerged_skip_reason="foreign_head"
+              elif [ -z "${BRANCH_ISSUE_NUMBER}" ] || [ "${BRANCH_ISSUE_NUMBER}" != "${issue_number}" ]; then
+                unmerged_skip_reason="unbound_issue"
+              elif ! resolve_unmerged_close_login; then
+                unmerged_skip_reason="identity_unavailable"
+              elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN}" != "${UNMERGED_CLOSE_LOGIN}" ]; then
+                unmerged_skip_reason="author_mismatch"
+              fi
+              if [ -n "${unmerged_skip_reason}" ]; then
+                echo "Unmerged close of PR #${PR_NUMBER} left issue #${issue_number} unchanged (reason=${unmerged_skip_reason})."
+                continue
+              fi
               target_merge_reason="closed_unmerged"
             elif [ -n "${PR_BASE_REF}" ] && [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ]; then
               target_merge_reason="default_branch"
@@ -962,7 +1005,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PYTHONDONTWRITEBYTECODE: "1"
           REPOSITORY: ${{ github.repository }}
           GITHUB_REPOSITORY: ${{ github.repository }}

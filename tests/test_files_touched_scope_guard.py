@@ -711,6 +711,479 @@ def test_label_contract_and_helper_have_scope_blocked() -> None:
 		assert "ai:scope-blocked" not in group.get("members", [])
 
 
+# --------------------------------------------------------------------------
+# Plan auto-approval gate (issue #6769)
+# --------------------------------------------------------------------------
+
+_PROTECTED_PLAN = """Implementation Plan
+
+### 1. Files likely to change
+
+- `scripts/security_audit.sh`: fix the finding.
+- `./.GitHub/workflows/plan.yml`
+- `README.md`
+- `prompts/` and `scripts/**/*.py`
+
+No changes to:
+- `scripts/hidden_negated.sh`
+
+### 2. Functions
+Mention `scripts/outside_section.sh` in prose.
+"""
+
+
+def test_plan_extractor_reads_files_section() -> None:
+	# Negated wording never hides a listed path (fail closed); the next
+	# same-level heading ends the section.
+	assert guard.extract_plan_automation_paths(_PROTECTED_PLAN) == [
+		"scripts/security_audit.sh", ".GitHub/workflows/plan.yml", "prompts/", "scripts/**/*.py",
+		"scripts/hidden_negated.sh"]
+
+
+def test_plan_extractor_heading_lead_in_and_bullet_negatives() -> None:
+	plan = ("## Files to change\n- `scripts/a.sh`\n- No changes to `scripts/b.sh`\n"
+		"## Other\n- `scripts/c.sh`\n")
+	# A bullet-prefixed negative is scanned normally (it cannot hide siblings).
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/a.sh", "scripts/b.sh"]
+
+
+def test_plan_extractor_nested_heading_does_not_end_section() -> None:
+	# Regression: a nested heading ended the section, the extraction came back
+	# empty, and the plan was auto-approved.
+	plan = ("### 1. Files likely to change\n#### Existing files\n- `scripts/security_audit.sh`\n"
+		"### 2. Functions\n- `scripts/outside.sh`\n")
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/security_audit.sh"]
+	plain = "1. Files likely to change\n#### Scripts\n- `scripts/a.sh`\n## Decisions\n- `scripts/b.sh`\n"
+	assert guard.extract_plan_automation_paths(plain) == ["scripts/a.sh"]
+	bold = "**1. Files likely to change**\n- `scripts/a.sh`\n## Decisions\n- `scripts/b.sh`\n"
+	assert guard.extract_plan_automation_paths(bold) == ["scripts/a.sh"]
+
+
+def test_plan_extractor_negated_lead_in_cannot_hide_paths() -> None:
+	# Regression: a positive lead-in containing negation words suppressed the
+	# protected bullets below it.
+	plan = ("### 1. Files likely to change\nNot a new module; these existing files are modified:\n"
+		"- `scripts/security_audit.sh`\n")
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/security_audit.sh"]
+	assert guard.evaluate_plan_auto_approval(guard.extract_plan_automation_paths(plan), None,
+		flag_enabled=False, allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def test_plan_extractor_reads_lead_in_line_paths() -> None:
+	# Regression: a path on the lead-in line was dropped, so the plan was
+	# auto-approved even with the flag off.
+	for plan in ("### Files to change: `scripts/security_audit.sh`\n### Functions\n",
+		"Files likely to change: `scripts/security_audit.sh`\n"):
+		paths = guard.extract_plan_automation_paths(plan)
+		assert paths == ["scripts/security_audit.sh"], plan
+		assert guard.evaluate_plan_auto_approval(paths, None, flag_enabled=False,
+			allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def test_plan_extractor_underscore_does_not_hide_paths() -> None:
+	# Regression: `_` counted as a boundary character, so underscore emphasis
+	# hid a protected path.
+	plan = "### Files likely to change\n- _scripts/security_audit.sh_\n- my_scripts/x.sh\n"
+	paths = guard.extract_plan_automation_paths(plan)
+	assert paths == ["scripts/security_audit.sh_", "scripts/x.sh"]
+	assert guard.evaluate_plan_auto_approval(paths, None, flag_enabled=False,
+		allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def test_plan_extractor_falls_back_to_whole_text() -> None:
+	plan = "Edit /scripts/x.sh, keep src/scripts/y.sh, and update scripts/z.py:12.\nAlso README.md."
+	assert guard.extract_plan_automation_paths(plan) == ["scripts/x.sh", "scripts/z.py"]
+	assert guard.extract_plan_automation_paths("### Files to change\n- `src/app.py`\n") == []
+
+
+def test_plan_extractor_never_truncates_unusual_filenames() -> None:
+	# Regression: `scripts/a+b.py` was cut to `scripts/a`, so a grant for the
+	# prefix approved a plan that lists a different, ungranted path.
+	plan = "### Files likely to change\n- scripts/a+b.py\n- **scripts/c.sh**\n- (scripts/d(1).sh:3).\n"
+	paths = guard.extract_plan_automation_paths(plan)
+	assert paths == ["scripts/a+b.py", "scripts/c.sh", "scripts/d(1).sh"]
+	prefix_grant = guard.build_automation_grant(_owner_meta("scripts/a"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(["scripts/a+b.py"], prefix_grant, flag_enabled=True,
+		allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def _owner_meta(*entries: str, number: int = 42) -> dict:
+	return {"number": number, "user": {"login": "maintainer"}, "author_association": "OWNER",
+		"body": _body(*entries) if entries else "no block"}
+
+
+def _pipeline_meta(number: int = 42) -> dict:
+	return {"number": number, "user": {"login": "pipeline[bot]"}, "author_association": "NONE",
+		"body": "Security finding fix. No files_touched block."}
+
+
+def test_plan_gate_flag_off_holds_protected_and_approves_ordinary() -> None:
+	assert guard.evaluate_plan_auto_approval([], None, flag_enabled=False, allow_workflow_edits="true",
+		issue_number="42") == ("approve", "none", [])
+	assert guard.evaluate_plan_auto_approval(["README.md"], None, flag_enabled=False,
+		allow_workflow_edits="true", issue_number="42") == ("approve", "none", [])
+	granted = guard.build_automation_grant(_owner_meta("scripts/a.sh"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(["scripts/a.sh"], granted, flag_enabled=False,
+		allow_workflow_edits="true", issue_number="42") == (
+		"hold", "automation_path_plan_auto_approval_disabled", ["scripts/a.sh"])
+
+
+def test_plan_gate_flag_on_requires_exact_trusted_grants() -> None:
+	paths = ["scripts/a.sh", ".github/workflows/x.yml"]
+	open_grant = guard.build_automation_grant(_pipeline_meta(), "pipeline[bot]")
+	assert open_grant["open"] is True
+	assert guard.evaluate_plan_auto_approval(paths, open_grant, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42") == ("hold", "open_grant_not_exact", paths)
+	full = guard.build_automation_grant(_owner_meta(*paths), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(paths, full, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42") == ("approve", "granted", [])
+	partial = guard.build_automation_grant(_owner_meta("scripts/a.sh"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(paths, partial, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42") == ("hold", "path_not_granted", [".github/workflows/x.yml"])
+	untrusted = guard.build_automation_grant(dict(_owner_meta(*paths), author_association="NONE"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(paths, untrusted, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="42")[1] == "untrusted_author"
+	assert guard.evaluate_plan_auto_approval(paths, full, flag_enabled=True, allow_workflow_edits="false",
+		issue_number="42")[1] == "workflow_edits_disabled"
+	assert guard.evaluate_plan_auto_approval(paths, full, flag_enabled=True, allow_workflow_edits="true",
+		issue_number="43")[1] == "grant_issue_mismatch"
+	# Directory and glob entries can never be granted exactly.
+	dir_grant = guard.build_automation_grant(_owner_meta("prompts/"), "pipeline[bot]")
+	assert guard.evaluate_plan_auto_approval(["prompts/"], dir_grant, flag_enabled=True,
+		allow_workflow_edits="true", issue_number="42")[0] == "hold"
+
+
+def test_plan_gate_preserves_implement_guard_open_grant() -> None:
+	# Regression: the implement-time guard still accepts the open grant.
+	open_grant = guard.build_automation_grant(_pipeline_meta(), "pipeline[bot]")
+	assert guard.check_automation_paths(["scripts/security_audit.sh"], open_grant, "true", "42") == (
+		"in-scope", [], "pipeline_author_no_allowlist")
+
+
+def _run_plan_gate_cli(plan: str | None, flag: str, meta: dict | str | None, *,
+	login: str = "pipeline[bot]") -> tuple[int, dict]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		plan_file = tdp / "plan.md"
+		if plan is not None:
+			plan_file.write_text(plan, encoding="utf-8")
+		args = [sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate", "--plan-file", str(plan_file),
+			"--flag-enabled", flag, "--pipeline-login", login, "--allow-workflow-edits", "true",
+			"--issue-number", "42"]
+		if meta is not None:
+			meta_file = tdp / "meta.json"
+			meta_file.write_text(meta if isinstance(meta, str) else json.dumps(meta), encoding="utf-8")
+			args += ["--issue-meta-file", str(meta_file)]
+		proc = subprocess.run(args, capture_output=True, text=True, check=False)
+		return proc.returncode, json.loads(proc.stdout)
+
+
+def test_plan_gate_cli_ungranted_security_finding_held() -> None:
+	plan = "### Files likely to change\n- `scripts/security_audit.sh`\n"
+	for flag, reason in (("false", "automation_path_plan_auto_approval_disabled"), ("true", "open_grant_not_exact")):
+		code, record = _run_plan_gate_cli(plan, flag, _pipeline_meta())
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED, (flag, record)
+		assert record["decision"] == "hold" and record["reason"] == reason
+		assert record["protected_paths"] == ["scripts/security_audit.sh"]
+		assert record["log_paths"] == "scripts/security_audit.sh"
+
+
+def test_plan_gate_cli_granted_and_ordinary_plans() -> None:
+	plan = "### Files likely to change\n- `scripts/a.sh`\n- `.github/workflows/x.yml`\n"
+	meta = _owner_meta("scripts/a.sh", ".github/workflows/x.yml")
+	code, record = _run_plan_gate_cli(plan, "true", meta)
+	assert code == 0 and record["decision"] == "approve" and record["reason"] == "granted"
+	code, record = _run_plan_gate_cli(plan, "off", meta)
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "automation_path_plan_auto_approval_disabled"
+	code, record = _run_plan_gate_cli("### Files likely to change\n- `src/app.py`\n", "false", None)
+	assert code == 0 and record == {"decision": "approve", "reason": "none", "protected_paths": [],
+		"denied_paths": [], "log_paths": "none"}
+
+
+def test_plan_gate_flag_defaults_on() -> None:
+	# An empty value is on, like the `|| 'true'` workflow defaults; only an
+	# explicit off value holds every automation-path plan.
+	plan = "## Files likely to change\n- `scripts/a.sh`\n\n## Functions or modules to implement\n- `scripts/b.sh`\n"
+	meta = _owner_meta("scripts/a.sh")
+	code, record = _run_plan_gate_cli(plan, "", meta)
+	assert code == 0 and record["reason"] == "granted" and record["protected_paths"] == ["scripts/a.sh"]
+	for off in ("false", "FALSE", "0", "no", "maybe"):
+		assert _run_plan_gate_cli(plan, off, meta)[1]["reason"] == "automation_path_plan_auto_approval_disabled", off
+
+
+def test_plan_gate_cli_fails_closed() -> None:
+	plan = "### Files likely to change\n- `scripts/a.sh`\n"
+	assert _run_plan_gate_cli(None, "false", None)[1]["reason"] == "plan_gate_error"
+	assert _run_plan_gate_cli("   \n", "false", None)[1]["reason"] == "plan_gate_error"
+	assert _run_plan_gate_cli(plan, "true", None)[1]["reason"] == "issue_meta_unavailable"
+	assert _run_plan_gate_cli(plan, "true", "{not json")[1]["reason"] == "plan_gate_error"
+	assert _run_plan_gate_cli(plan, "true", _owner_meta("scripts/a.sh"), login="")[1]["reason"] == \
+		"identity_unavailable"
+
+
+def test_plan_gate_log_paths_are_sanitized() -> None:
+	rendered = guard.plan_gate_log_paths(["scripts/a\n::error::x.sh", "scripts/" + "b" * 300] + [
+		f"scripts/{i}.sh" for i in range(30)])
+	assert "\n" not in rendered and "::" not in rendered and " " not in rendered
+	assert len(rendered.split(",")) == guard.PLAN_LOG_PATHS_MAX_ENTRIES
+	assert all(len(item) <= guard.PLAN_LOG_PATH_MAX_CHARS for item in rendered.split(","))
+	assert guard.plan_gate_log_paths([]) == "none"
+
+
+def test_plan_gate_origin_repo_verifies_pipeline_source_chain() -> None:
+	# Regression: the plan gate built the grant without an origin fetcher, so
+	# an exact grant on a pipeline-authored derived issue always held with
+	# origin_unverified, unlike the implement-time guard (--origin-repo).
+	body = _body("scripts/a.sh") + ("\n---\n**Orchestrator metadata** (do not edit)\n"
+		"- Type: implement-fix-up (post-codex-validation)\n- Source issue: #41\n")
+	meta = {"number": 42, "user": {"login": "pipeline[bot]"}, "author_association": "NONE", "body": body}
+	plan = "### Files likely to change\n- `scripts/a.sh`\n"
+	reads: list[tuple[str, int]] = []
+
+	def fake_fetch(repo: str, number: int):
+		reads.append((repo, number))
+		return {"number": number, "user": {"login": "maintainer"}, "author_association": "OWNER", "body": "x"}
+
+	original = guard.fetch_issue_with_gh
+	guard.fetch_issue_with_gh = fake_fetch
+	try:
+		with tempfile.TemporaryDirectory() as td:
+			plan_file = Path(td) / "plan.md"
+			plan_file.write_text(plan, encoding="utf-8")
+			meta_file = Path(td) / "meta.json"
+			meta_file.write_text(json.dumps(meta), encoding="utf-8")
+			held, code = guard.run_plan_auto_approval_gate(str(plan_file), "true", str(meta_file),
+				"pipeline[bot]", "true", "42")
+			assert code == guard.EXIT_AUTOMATION_UNGRANTED and held["reason"] == "origin_unverified"
+			assert reads == []
+			record, code = guard.run_plan_auto_approval_gate(str(plan_file), "true", str(meta_file),
+				"pipeline[bot]", "true", "42", "owner/repo")
+			assert code == 0 and record["decision"] == "approve" and record["reason"] == "granted", record
+			assert reads == [("owner/repo", 41)]
+			bad, _ = guard.run_plan_auto_approval_gate(str(plan_file), "true", str(meta_file),
+				"pipeline[bot]", "true", "42", "not a repo")
+			assert bad["reason"] == "origin_unverified"
+	finally:
+		guard.fetch_issue_with_gh = original
+
+
+# --- Q82: a pipeline-authored derived issue inherits its source's trust ---
+
+PIPELINE = "pipeline[bot]"
+
+
+def _origin_issues(**issues):
+	"""Fake source issues keyed n<number>: (login, association, body)."""
+	reads: list[int] = []
+
+	def fetch(number: int):
+		reads.append(number)
+		entry = issues.get(f"n{number}")
+		if entry is None:
+			return None
+		login, association, body = entry
+		return {"number": number, "user": {"login": login}, "author_association": association, "body": body}
+
+	return fetch, reads
+
+
+def test_origin_references_cover_every_reissue_marker() -> None:
+	body = (
+		"<!-- ai:unblock-fixup:v1 item=72 round=1 -->\n"
+		"Re-issued by the unblock judge from #73.\n"
+		"**⚠️ Re-issued from #74** — the previous issue stalled\n"
+		"---\n**Review-blocked reissue metadata**\n- Replaces: #75 (PR #80 closed — approach rework)\n- Type: review-blocked-reissue\n"
+	)
+	assert guard.origin_references(body) == ([74, 73, 72, 75], False)
+	# A review-blocked re-issue that names no issue cannot be checked.
+	assert guard.origin_references("- Replaces: (PR #80 closed — approach rework)\n- Type: review-blocked-reissue\n") == ([], True)
+	assert guard.origin_references("A plain body that mentions #12.") == ([], False)
+
+
+def test_origin_references_cover_followup_and_fixup_markers() -> None:
+	# implement-diagnose fix-up, unblock accept_with_followup, review-blocked merge_with_followup.
+	assert guard.origin_references("---\n**Orchestrator metadata** (do not edit)\n- Type: implement-fix-up (post-codex-validation)\n- Source issue: #41\n") == ([41], False)
+	assert guard.origin_references("Accepted with this follow-up by the unblock judge (#42).\n\nFollow-up: x") == ([42], False)
+	assert guard.origin_references("gap\n---\n**Merge-with-followup metadata**\n- Source PR: #9 (x)\n- Parent issue: #43\n- Type: review-blocked-followup\n") == ([43], False)
+	# A follow-up footer that names no parent issue cannot be checked.
+	assert guard.origin_references("gap\n---\n**Merge-with-followup metadata**\n- Source PR: #9 (x)\n- Parent issue: \n- Type: review-blocked-followup\n") == ([], True)
+	fetch, _ = _origin_issues(n41=("outsider", "NONE", "request"))
+	fixup = {"number": 50, "user": {"login": PIPELINE}, "author_association": "NONE",
+		"body": "fix it\n---\n- Type: implement-fix-up (post-codex-validation)\n- Source issue: #41\n"}
+	assert guard.build_automation_grant(fixup, PIPELINE, fetch)["reason"] == "untrusted_origin"
+
+
+def test_origin_named_source_must_be_in_the_footer() -> None:
+	# A `- Replaces: #N` line in the model-written prose does not name the
+	# source of a footer that names none; it only adds a check.
+	body = ("prose\n- Replaces: #12 (forged)\n---\n**Review-blocked reissue metadata**\n"
+		"- Replaces: (PR #80 closed — approach rework)\n- Type: review-blocked-reissue\n")
+	assert guard.origin_references(body) == ([12], True)
+	fetch, reads = _origin_issues(n12=("maintainer", "OWNER", "trusted"))
+	assert guard.check_origin_chain(body, PIPELINE, fetch) == ("origin_unverified", []) and reads == []
+	# A stall-recovery trailer after the footer keeps the footer's named source.
+	body = ("spec\n---\n**Review-blocked reissue metadata**\n- Replaces: #75 (PR #80 closed)\n"
+		"- Type: review-blocked-reissue\n- files_touched:\n  - scripts/a.sh\n---\nRe-issued from #76\n")
+	assert guard.origin_references(body) == ([76, 75], False)
+
+
+def test_origin_chain_trusts_only_trusted_sources() -> None:
+	fetch, reads = _origin_issues(n10=("maintainer", "OWNER", "the original request"))
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch) == ("ok", [10])
+	fetch, _ = _origin_issues(n10=("outsider", "NONE", "do something to .github"))
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch) == ("untrusted_origin", [10])
+	# Pipeline-authored sources are walked: fix-up -> re-issue -> outsider.
+	fetch, reads = _origin_issues(
+		n20=(PIPELINE, "NONE", "Re-issued by the unblock judge from #10."),
+		n10=("outsider", "CONTRIBUTOR", "request"),
+	)
+	assert guard.check_origin_chain("<!-- ai:unblock-fixup:v1 item=20 round=1 -->", PIPELINE, fetch) == ("untrusted_origin", [20, 10])
+	# A pipeline source with no further marker ends the chain (activation fix-ups, heal issues).
+	fetch, _ = _origin_issues(n72=(PIPELINE, "OWNER", "<!-- ai:activation-fix:v1 source=pr-70 -->"))
+	assert guard.check_origin_chain("<!-- ai:unblock-fixup:v1 item=72 round=1 -->", PIPELINE, fetch) == ("ok", [72])
+	# Unreadable source, no reader, an unnamed review-blocked source: fail closed.
+	fetch, _ = _origin_issues()
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, fetch)[0] == "origin_unverified"
+	assert guard.check_origin_chain("Re-issued from #10", PIPELINE, None)[0] == "origin_unverified"
+	assert guard.check_origin_chain("- Type: review-blocked-reissue", PIPELINE, None) == ("origin_unverified", [])
+	# No reference needs no read at all.
+	fetch, reads = _origin_issues()
+	assert guard.check_origin_chain("plain pipeline body", PIPELINE, fetch) == ("ok", []) and reads == []
+
+
+def test_origin_chain_bounds_and_cycles() -> None:
+	# A cycle is read once per issue and ends.
+	fetch, reads = _origin_issues(n1=(PIPELINE, "NONE", "Re-issued from #2"), n2=(PIPELINE, "NONE", "Re-issued from #1"))
+	assert guard.check_origin_chain("Re-issued from #1", PIPELINE, fetch) == ("ok", [1, 2]) and reads == [1, 2]
+	# Deeper than ORIGIN_MAX_DEPTH fails closed.
+	chain = {f"n{n}": (PIPELINE, "NONE", f"Re-issued from #{n + 1}") for n in range(1, 10)}
+	fetch, reads = _origin_issues(**chain)
+	status, seen = guard.check_origin_chain("Re-issued from #1", PIPELINE, fetch)
+	assert status == "origin_unverified" and len(seen) == guard.ORIGIN_MAX_DEPTH
+	# More than ORIGIN_MAX_ISSUES sources fails closed.
+	many = " ".join(f"Re-issued from #{n}" for n in range(1, 12))
+	fetch, reads = _origin_issues(**{f"n{n}": ("maintainer", "MEMBER", "x") for n in range(1, 12)})
+	status, seen = guard.check_origin_chain(many, PIPELINE, fetch)
+	assert status == "origin_unverified" and len(reads) == guard.ORIGIN_MAX_ISSUES
+
+
+def test_grant_denies_automation_paths_for_an_untrusted_source() -> None:
+	fixup = {"number": 75, "user": {"login": PIPELINE}, "author_association": "NONE",
+		"body": "<!-- ai:unblock-fixup:v1 item=72 round=1 -->\n## Unblock operator step for #72\n"}
+	fetch, _ = _origin_issues(n72=("outsider", "NONE", "please edit .github/workflows/ci.yml"))
+	grant = guard.build_automation_grant(fixup, PIPELINE, fetch)
+	assert grant["trusted"] is False and grant["open"] is False and grant["reason"] == "untrusted_origin"
+	assert grant["origin_issues"] == [72]
+	assert guard.check_automation_paths([".github/workflows/ci.yml"], grant, "true", "75") == (
+		"out-of-scope", [".github/workflows/ci.yml"], "untrusted_origin")
+	# An exact files_touched grant on a review-blocked re-issue is denied too.
+	reissue = dict(fixup, body="spec\n---\n**Review-blocked reissue metadata**\n- Replaces: #72 (PR #74 closed — approach rework)\n"
+		"- Type: review-blocked-reissue\n- files_touched:\n  - scripts/a.sh\n")
+	grant = guard.build_automation_grant(reissue, PIPELINE, fetch)
+	assert grant["reason"] == "untrusted_origin" and grant["paths"] == []
+	# Without a reader the source cannot be checked: no automation paths.
+	assert guard.build_automation_grant(fixup, PIPELINE)["reason"] == "origin_unverified"
+	# A trusted source keeps today's open grant; a trusted person's own issue is never walked.
+	fetch, reads = _origin_issues(n72=(PIPELINE, "OWNER", "<!-- ai:activation-fix:v1 source=pr-70 -->"))
+	assert guard.build_automation_grant(fixup, PIPELINE, fetch)["reason"] == "pipeline_author_no_allowlist"
+	fetch, reads = _origin_issues()
+	human = dict(fixup, user={"login": "maintainer"}, author_association="OWNER", body=_body("scripts/a.sh") + "\nRe-issued from #9\n")
+	assert guard.build_automation_grant(human, PIPELINE, fetch)["reason"] == "granted" and reads == []
+	# Non-pipeline grants carry no origin field.
+	assert "origin_issues" not in guard.build_automation_grant(human, PIPELINE, fetch)
+
+
+def test_origin_chain_cli_reads_sources_with_gh() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		bin_dir = tdp / "bin"
+		bin_dir.mkdir()
+		calls = tdp / "calls.txt"
+		fake_gh = bin_dir / "gh"
+		fake_gh.write_text(
+			"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n"
+			"case \"$*\" in\n"
+			"  'api repos/o/r/issues/72') printf '{\"number\":72,\"user\":{\"login\":\"outsider\"},\"author_association\":\"NONE\",\"body\":\"x\"}' ;;\n"
+			"  *) exit 1 ;;\nesac\n", encoding="utf-8")
+		fake_gh.chmod(0o755)
+		meta = tdp / "meta.json"
+		meta.write_text(json.dumps({"number": 75, "user": {"login": "bot"}, "author_association": "NONE",
+			"body": "<!-- ai:unblock-fixup:v1 item=72 round=1 -->\nspec"}), encoding="utf-8")
+		grant_file = tdp / "grant.json"
+		env = dict(os.environ, PATH=f"{bin_dir}:{os.environ.get('PATH', '')}", GH_CALLS=str(calls))
+		base = [sys.executable, str(GUARD_SCRIPT), "--emit-automation-grant", str(grant_file),
+			"--issue-meta-file", str(meta), "--pipeline-login", "bot"]
+		assert subprocess.run(base + ["--origin-repo", "o/r"], env=env, check=False).returncode == 0
+		record = json.loads(grant_file.read_text(encoding="utf-8"))
+		assert record["reason"] == "untrusted_origin" and record["origin_issues"] == [72]
+		assert calls.read_text(encoding="utf-8").splitlines() == ["api repos/o/r/issues/72"]
+		# An invalid repo is ignored, so the source cannot be read: fail closed, no gh call.
+		calls.write_text("", encoding="utf-8")
+		assert subprocess.run(base + ["--origin-repo", "o/r; rm -rf /"], env=env, check=False).returncode == 0
+		assert json.loads(grant_file.read_text(encoding="utf-8"))["reason"] == "origin_unverified"
+		assert calls.read_text(encoding="utf-8") == ""
+
+
+def test_origin_repo_is_passed_at_both_grant_call_sites() -> None:
+	metadata = _implement_text().split("- name: Fetch issue metadata", 1)[1].split("- name: Detect smoke test", 1)[0]
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" || true' in metadata
+	assert 'origin_issues=\\((.origin_issues // [])' in metadata
+	unblock = (REPO_ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then' in unblock
+
+
+# --- #7209: unblock-judge re-issue that edits automation paths ---
+
+_REISSUE_7209_FILES = (
+	"workflow-templates/ai-review.yml",
+	"scripts/workflow_wrapper_refs.py",
+	"scripts/review_security_hold_sweep.py",
+	"tests/test_update_workflows_guardrails.py",
+	"tests/test_review_security_hold_sweep.py",
+	"tests/test_files_touched_scope_guard.py",
+	"changelog.d/*.md",
+)
+
+
+def _reissue_7209(body_tail: str) -> dict:
+	return {"number": 7209, "user": {"login": PIPELINE}, "author_association": "NONE",
+		"body": "Re-issued by the unblock judge from #7161.\n\nSpecification: fix the sweep.\n\n" + body_tail}
+
+
+def test_unblock_reissue_with_block_grants_exactly_its_automation_paths() -> None:
+	fetch, _ = _origin_issues(n7161=(PIPELINE, "NONE", "<!-- ai:workflow-heal-scope:v1 paths=tests/** -->"))
+	grant = guard.build_automation_grant(_reissue_7209(_body(*_REISSUE_7209_FILES)), PIPELINE, fetch)
+	assert grant["reason"] == "granted" and grant["trusted"] is True and grant["open"] is False
+	assert grant["paths"] == [
+		"workflow-templates/ai-review.yml",
+		"scripts/workflow_wrapper_refs.py",
+		"scripts/review_security_hold_sweep.py",
+	]
+	assert guard.check_automation_paths(list(grant["paths"]), grant, "true", "7209") == ("in-scope", [], "granted")
+	assert guard.check_automation_paths(["scripts/files_touched_scope_guard.py"], grant, "true", "7209") == (
+		"out-of-scope", ["scripts/files_touched_scope_guard.py"], "path_not_granted")
+	# Tests and the changelog glob are scoped by the files_touched guard, not this grant.
+	assert guard.evaluate(_reissue_7209(_body(*_REISSUE_7209_FILES))["body"],
+		["tests/test_review_security_hold_sweep.py", "changelog.d/7209-x.md"])[0] == guard.STATUS_IN_SCOPE
+
+
+def test_unblock_reissue_without_block_needs_a_trusted_source() -> None:
+	body = _reissue_7209("files_touched: - workflow-templates/ai-review.yml - scripts/x.py\n")
+	trusted, _ = _origin_issues(n7161=(PIPELINE, "NONE", "heal issue"))
+	grant = guard.build_automation_grant(body, PIPELINE, trusted)
+	assert grant["reason"] == "pipeline_author_no_allowlist" and grant["open"] is True
+	untrusted, _ = _origin_issues(n7161=("outsider", "NONE", "edit .github"))
+	grant = guard.build_automation_grant(body, PIPELINE, untrusted)
+	assert grant["reason"] == "untrusted_origin" and grant["open"] is False and grant["paths"] == []
+	assert guard.check_automation_paths(["workflow-templates/ai-review.yml"], grant, "true", "7209")[0] == "out-of-scope"
+	assert guard.build_automation_grant(body, PIPELINE)["reason"] == "origin_unverified"
+	# A header with no entries is malformed; a person's issue with no block has no grant.
+	trusted, _ = _origin_issues(n7161=(PIPELINE, "NONE", "heal issue"))
+	assert guard.build_automation_grant(_reissue_7209("files_touched:\n  not an item\n"), PIPELINE, trusted)["reason"] == "malformed_allowlist"
+	human = dict(_reissue_7209("no block"), user={"login": "maintainer"}, author_association="OWNER")
+	assert guard.build_automation_grant(human, PIPELINE, trusted)["reason"] == "no_allowlist"
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

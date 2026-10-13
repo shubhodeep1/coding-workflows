@@ -7315,13 +7315,19 @@ def _run_dependency_install_step(
 	repo_files: dict[str, str],
 	*,
 	pytest_importable: bool,
+	extra_env: dict[str, str] | None = None,
+	pip_stub_body: str | None = None,
+	extra_stubs: dict[str, str] | None = None,
 ) -> dict[str, str]:
 	"""Execute the container's dependency-install body against a synthetic repo.
 
 	`pip` and `python3` are stubbed on PATH so nothing is really installed:
 	the `python3` stub reports pytest importability from `pytest_importable`
 	and records every invocation.  Returns the step's stdout/stderr under
-	"output" and the recorded stub invocations under "calls".
+	"output", the recorded stub invocations under "calls" and the wall time
+	in seconds under "elapsed". `extra_env` reaches the body the way the
+	helper's `--env` flags do inside the container; `pip_stub_body` replaces
+	the `pip` stub and `extra_stubs` adds further PATH stubs.
 	"""
 	workflow_step = _step_run_script("Install project dependencies (best-effort)")
 	assert 'review_untrusted_sandbox.sh" prepare' in workflow_step
@@ -7344,7 +7350,9 @@ def _run_dependency_install_step(
 		script_path = root / "step.sh"
 		script_path.write_text(script)
 		(bin_dir / "pip").write_text(
-			'#!/bin/sh\necho "pip $*" >> "$STUB_CALL_LOG"\nexit 0\n'
+			pip_stub_body
+			if pip_stub_body is not None
+			else '#!/bin/sh\necho "pip $*" >> "$STUB_CALL_LOG"\nexit 0\n'
 		)
 		(bin_dir / "python3").write_text(
 			"#!/bin/sh\n"
@@ -7355,11 +7363,17 @@ def _run_dependency_install_step(
 			"esac\n"
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
-		for stub in ("pip", "python3"):
+		for stub_name, stub_body in (extra_stubs or {}).items():
+			(bin_dir / stub_name).write_text(stub_body)
+		for stub in ("pip", "python3", *(extra_stubs or {})):
 			(bin_dir / stub).chmod(0o755)
 		env = _git_clean_env()
+		env.pop("REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED", None)
+		env.pop("REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS", None)
+		env.update(extra_env or {})
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 		env["STUB_CALL_LOG"] = str(log_path)
+		started = time.monotonic()
 		completed = subprocess.run(
 			["bash", str(script_path)],
 			cwd=str(repo),
@@ -7372,6 +7386,7 @@ def _run_dependency_install_step(
 			"output": completed.stdout + completed.stderr,
 			"calls": log_path.read_text() if log_path.exists() else "",
 			"returncode": str(completed.returncode),
+			"elapsed": str(time.monotonic() - started),
 		}
 
 
@@ -7426,6 +7441,147 @@ def test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos() -> Non
 		pytest_importable=False,
 	)
 	assert "-m pip install pytest" not in result["calls"], result["calls"]
+
+
+# Issue #6835: a pip stub that stalls on `-r requirements.txt` stands in for a
+# registry hang through the dependency proxy.
+_STALLING_PIP_STUB = (
+	"#!/bin/sh\n"
+	'echo "pip $*" >> "$STUB_CALL_LOG"\n'
+	'case "$*" in *-r*) exec sleep 120 ;; esac\n'
+	"exit 0\n"
+)
+
+
+def test_dependency_install_stalled_optional_install_times_out_when_bounded() -> None:
+	"""A stalled optional install warns and continues instead of eating the
+	outer 900s container budget (whose expiry ends every pending install with
+	a warning) when the flag is on."""
+	result = _run_dependency_install_step(
+		{
+			"requirements.txt": "requests\n",
+			"pyproject.toml": "[tool.pytest.ini_options]\n",
+		},
+		pytest_importable=False,
+		extra_env={
+			"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "true",
+			"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "3",
+		},
+		pip_stub_body=_STALLING_PIP_STUB,
+	)
+	assert result["returncode"] == "0", result["output"]
+	assert float(result["elapsed"]) < 30, result
+	assert "Review dependency install timed out (step=pip_requirements" in result["output"], result["output"]
+	assert "Some project dependencies could not be installed" in result["output"], result["output"]
+	assert (
+		"-m pip install pytest" in result["calls"]
+		or "skipped (step=pytest_bootstrap" in result["output"]
+	), result
+
+
+def test_dependency_install_unbounded_when_flag_disabled() -> None:
+	"""Off by default: only the existing per-command `timeout` (unchanged 600s
+	limit, no shared deadline) and the same stub calls as before."""
+	# Records the call, then runs the command like `timeout` would.
+	timeout_stub = (
+		'#!/bin/sh\necho "timeout $*" >> "$STUB_CALL_LOG"\n'
+		"shift 3\nexec \"$@\"\n"
+	)
+	repo = {"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"}
+	for extra_env in ({}, {"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}):
+		result = _run_dependency_install_step(
+			repo,
+			pytest_importable=False,
+			extra_env=extra_env,
+			extra_stubs={"timeout": timeout_stub},
+		)
+		assert result["returncode"] == "0", result["output"]
+		assert (
+			"timeout --signal=TERM --kill-after=10s 600 pip install -r requirements.txt"
+			in result["calls"]
+		), result["calls"]
+		assert "(step=" not in result["output"], result["output"]
+		assert "dependency install budget" not in result["output"], result["output"]
+		assert "pip install -r requirements.txt" in result["calls"], result["calls"]
+		assert "python3 -m pip install pytest" in result["calls"], result["calls"]
+		assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
+		assert "Review dependency install" not in result["output"], result["output"]
+
+
+def test_dependency_install_budget_exhausted_skips_remaining_steps() -> None:
+	result = _run_dependency_install_step(
+		{"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=False,
+		extra_env={
+			"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "true",
+			"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "1",
+		},
+		pip_stub_body=_STALLING_PIP_STUB,
+	)
+	assert result["returncode"] == "0", result["output"]
+	assert "skipped (step=pytest_bootstrap" in result["output"], result["output"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "pytest is declared by this repository but could not be installed" in result["output"], result["output"]
+
+
+def test_review_sandbox_bounded_install_flag_contract() -> None:
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '"${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-true}"' in helper
+	assert 'bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"' in helper
+	assert '--env "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=${bounded_deps_enabled}"' in helper
+	assert '--env "REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=${bounded_deps_budget}"' in helper
+	# Isolation failures stay fatal.
+	assert "python3 -m venv --system-site-packages /source/.review-venv || exit 1" in helper
+	assert "timeout --signal=TERM --kill-after=10s 900s env -i" in helper
+	assert "\t\t*)\n\t\t\techo '::error::Review dependency isolation failed' >&2\n\t\t\texit 1\n" in helper
+	assert 'review_untrusted_workspace.py" refresh "${workspace}"' in helper
+	block = _step_block("Install project dependencies (best-effort)")
+	assert (
+		"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'true' }}"
+		in block
+	)
+	assert (
+		"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS: ${{ vars.REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS || '600' }}"
+		in block
+	)
+
+
+def test_review_sandbox_bounded_install_host_normalization() -> None:
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	start = helper.index("\tbounded_deps_enabled=true\n")
+	end_marker = '\tbounded_deps_budget="$((10#${bounded_deps_budget}))"\n'
+	snippet = helper[start:helper.index(end_marker) + len(end_marker)]
+	snippet += 'printf "%s %s\\n" "${bounded_deps_enabled}" "${bounded_deps_budget}"\n'
+	# On by default since #6793; `false`/0/no/off turn it off and an
+	# unrecognised value turns it off with a warning.
+	cases = [
+		({}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": ""}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "TRUE"}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "OFF"}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "maybe"}, "false 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0300"}, "true 300", False),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "abc"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "9999"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "99999999999999999999"}, "true 600", True),
+	]
+	for extra, expected, warns in cases:
+		env = _git_clean_env()
+		env.pop("REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED", None)
+		env.pop("REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS", None)
+		env.update(extra)
+		completed = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + snippet],
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert completed.returncode == 0, (extra, completed.stderr)
+		assert completed.stdout.strip() == expected, (extra, completed.stdout)
+		assert ("::warning::" in completed.stderr) == warns, (extra, completed.stderr)
 
 
 def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
@@ -7769,6 +7925,29 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
 
 
+def test_fingerprint_cap_support_sha_rearm_wiring() -> None:
+	"""#6911: the verified support SHA reaches the cap decision and every marker."""
+	verify = _step_block("Verify fingerprint cap support identity")
+	assert 'echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"' in verify
+	assert verify.index("FINGERPRINT_CAP_SUPPORT_VERIFIED=true") < verify.index("FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}")
+	gate = _step_block("Evaluate review gate")
+	assert "if grep -q 'current-support-sha' \"${fingerprint_cap_helper}\"; then" in gate
+	assert 'fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")' in gate
+	assert '"${fingerprint_cap_extra_args[@]}"' in gate
+	assert '[[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in gate
+	rearm = gate.index("AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER}")
+	assert rearm < gate.index('SKIP_REASON="fingerprint_cap"')
+	assert "prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}" in gate
+	assert """awk -F= '$1 == "prior_support" { print $2 }'""" in gate
+	agent = _job_block("codex-agent")
+	assert "AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in agent
+	cap_job = _job_block("fingerprint-cap-block")
+	assert "REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in cap_job
+	assert 'if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in cap_job
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in cap_job
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in _job_block("gate")
+
+
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	job = _job_block("fingerprint-cap-block")
 	assert "needs: gate" in job
@@ -7802,7 +7981,8 @@ def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	# intake reads their logs instead of this gate-stopped run's (§15: no new call).
 	assert 'PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}"' in job
 	assert 'AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}"' in job
-	assert 'tg_send_msg "${MSG}" "WARNING"' in job
+	# DEBUG: the ai:review-blocked label hands the PR to the judge, which pages.
+	assert 'tg_send_msg "${MSG}" "DEBUG"' in job
 	assert "head_moved" in job
 
 
@@ -8251,6 +8431,11 @@ def main() -> int:
 	test_dependency_install_bootstraps_pytest_for_nested_conftest()
 	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
+	test_dependency_install_stalled_optional_install_times_out_when_bounded()
+	test_dependency_install_unbounded_when_flag_disabled()
+	test_dependency_install_budget_exhausted_skips_remaining_steps()
+	test_review_sandbox_bounded_install_flag_contract()
+	test_review_sandbox_bounded_install_host_normalization()
 	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
 	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
@@ -8280,6 +8465,7 @@ def main() -> int:
 	test_review_relay_main_preserves_invoked_mode()
 	test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost()
 	test_review_sandbox_cleanup_reports_path_free_reason()
+	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -9596,6 +9782,47 @@ def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
 	# The run path keeps its original single-line output.
 	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert 'if [ "${action}" = cleanup ]; then\n\t\techo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2' in helper
+
+
+def _step_if_line(step_name: str) -> str:
+	return next(line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:"))
+
+
+def test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge() -> None:
+	"""Issue #6743 (#6733): the gate's trusted same-head host-only decision
+	skips conflict detection and both resolver halves; the judge and the
+	review-blocked handoff keep their conditions."""
+	text = _workflow_text()
+	gate = _job_block("gate")
+	assert "force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}" in gate
+	assert "REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}" in gate
+	assert 'echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"' in gate
+	assert '[ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]' in gate
+	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=" in gate
+	# A newer trusted marker of any reason (provider_unavailable included) keeps the conflict steps.
+	assert '[ "${frj_newest_reason}" != "conflict_resolver_sandbox_path_host_only" ]' in gate
+	# The helper checkout and support verification must also run on
+	# force_rb_judge dispatches when the fingerprint cap is disabled.
+	for setup_step in ("Checkout fingerprint cap helper", "Verify fingerprint cap support identity"):
+		assert "|| inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true'" in _step_if_line(setup_step), setup_step
+	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}" in _job_block("codex-agent")
+	skip_condition = "env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'"
+	for step_name in (
+		"Detect merge conflicts",
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+	):
+		assert skip_condition in _step_if_line(step_name), step_name
+	assert _step_if_line("Prepare merge-conflict resolver prompt and pre-snapshot") == _step_if_line("Run Codex resolver, validate, stage, commit")
+	for step_name in (
+		"Review-blocked judge decision",
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+	):
+		assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP" not in _step_block(step_name), step_name
+	# The sandbox refusal itself is unchanged.
+	assert "_resolver_fail_closed sandbox_path_host_only" in (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert text.count(skip_condition) == 3
 
 
 if __name__ == "__main__":

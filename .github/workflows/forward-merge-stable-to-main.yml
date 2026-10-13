@@ -366,7 +366,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PR_URL: ${{ steps.fallback.outputs.pr_url }}
           REASON: ${{ steps.fallback.outputs.reason }}
         shell: bash
@@ -461,7 +461,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         shell: bash
         run: |
@@ -470,7 +470,8 @@ jobs:
           # failure, etc.). Without this, a red run only surfaces via
           # GitHub's default email — and forward-merge silently failing
           # means stable bug fixes don't reach main, which the next
-          # main-source release would then re-introduce. Fire CRITICAL.
+          # main-source release would then re-introduce. Sent at DEBUG:
+          # the heal intake files an issue for this failure (see below).
           # Best-effort: missing tg_helpers.sh (e.g. an early checkout
           # failure) degrades to a warning rather than masking the
           # original failure.
@@ -509,4 +510,6 @@ jobs:
           msg+=$'\n'"Run: ${run_url}"
           msg+=$'\n'"Bug fixes on stable may not propagate to main until resolved."
 
-          tg_send_msg "${msg}" "CRITICAL" >/dev/null || true
+          # DEBUG: Workflow Failure Heal Intake listens for this workflow's
+          # failures and files a heal issue; its escalations page a human.
+          tg_send_msg "${msg}" "DEBUG" >/dev/null || true
