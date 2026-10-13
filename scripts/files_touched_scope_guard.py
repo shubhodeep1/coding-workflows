@@ -666,18 +666,27 @@ PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
+# A root file is any name with a letter-led extension (the same rule as a
+# nested last segment), so a planned `main.c` or `app.php` is never left out of
+# the grant; a harmless extra entry beats an approved plan whose implement
+# scope then blocks a listed file. A root dotfile needs an extension
+# (`.gitlab-ci.yml`) or one of the names below: an extensionless dot name
+# (`.vscode`, `.devcontainer`) is often a directory. `.env*` files, which can
+# hold credentials, are never written.
 _PLAN_GRANT_ROOT_FILE_RE = re.compile(
-	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:md|markdown|txt|json|ya?ml|toml|cfg|ini|py|sh|js|mjs|cjs|ts|tsx|jsx|lock|sql|html|css"
-	# Root manifests and sources of other ecosystems (go.mod, go.sum, main.go,
-	# build.rs, build.gradle, pom.xml): a dropped file would be left out of the grant.
-	r"|mod|sum|go|rs|rb|java|kt|gradle|xml|properties)"
-	r"|\.(?:gitignore|gitattributes|editorconfig)|Makefile|Dockerfile)$")
+	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*"
+	r"|\.(?!env(?:\.|$))[A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*"
+	r"|\.(?:gitignore|gitattributes|gitmodules|editorconfig|dockerignore|npmignore|prettierrc|prettierignore"
+	r"|eslintrc|eslintignore|stylelintrc|nvmrc|node-version|python-version|ruby-version|tool-versions|flake8"
+	r"|pylintrc|yamllint|shellcheckrc|mailmap|markdownlint)"
+	r"|Makefile|Dockerfile)$")
 # Extensionless file names accepted as the last segment of a grant path. Any
 # other extensionless (or `.d`) last segment may be a directory, and a
 # files_touched entry without a trailing slash covers everything beneath it
 # (entry_matches), so it is never written as an "exact" grant.
 _PLAN_GRANT_BARE_FILE_RE = re.compile(
-	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile)$")
+	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile"
+	r"|Pipfile|Jenkinsfile|Containerfile|Brewfile|Podfile|Tiltfile)$")
 # The extension must start with a letter: a digit-led suffix (`v1.0`,
 # `2024.01.15`) is usually a versioned directory, which would cover its subtree.
 _PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")

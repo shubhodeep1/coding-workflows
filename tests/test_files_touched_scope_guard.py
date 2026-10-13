@@ -1193,7 +1193,7 @@ _GRANT_PLAN = """Implementation Plan
 - `.github/workflows/security-audit.yml`
 - tests/test_security_audit.py
 - `README.md`
-- `json.load`
+- `json.load()`
 - `../etc/passwd`
 - `docs/*.md`
 
@@ -1211,12 +1211,20 @@ def test_extract_plan_file_paths_keeps_exact_files_from_the_files_section() -> N
 	assert guard.extract_plan_file_paths(
 		"## Files likely to change\n- README.md — update using `parse()`\n- Makefile: add `--strict`\n") == [
 		"README.md", "Makefile"]
-	for bad in ("scripts/", "/etc/x", "a//b.py", "scripts/../x.sh", "scripts/a b.sh", "-rf/x", "x.y",
-			"https://example.com/a.py", "scripts/*.sh", "`"):
+	for bad in ("scripts/", "/etc/x", "a//b.py", "scripts/../x.sh", "scripts/a b.sh", "-rf/x", "x.1",
+			"https://example.com/a.py", "scripts/*.sh", "`", "json.load()", "v1.0"):
 		assert guard._plan_grant_path(bad) == "", bad
 	for good in ("Makefile", ".gitignore", "agents.md", "src/pkg/__init__.py", "scripts/a+b.py",
 			"go.mod", "go.sum", "main.go", "build.rs", "pom.xml", "build.gradle"):
 		assert guard._plan_grant_path(good) == good, good
+	# Any letter-led extension marks a root file, so no planned root file is
+	# left out of the grant; listed extensionless names and dotfiles count too.
+	for good in ("main.c", "util.h", "app.php", "Pipfile", "Jenkinsfile", ".dockerignore", ".prettierrc",
+			".gitlab-ci.yml", ".eslintrc.json", ".pre-commit-config.yaml"):
+		assert guard._plan_grant_path(good) == good, good
+	# Credential dotfiles and extensionless dot names (often directories) never are.
+	for bad in (".env", ".env.local", ".env.production", ".npmrc", ".netrc", ".vscode", ".devcontainer"):
+		assert guard._plan_grant_path(bad) == "", bad
 	# Underscores are part of a name, never stripped as markdown emphasis.
 	for good in ("__init__.py", "__main__.py", "_config.yml", "LICENSE", "scripts/LICENSE", "scripts/.hidden"):
 		assert guard._plan_grant_path(good) == good, good
