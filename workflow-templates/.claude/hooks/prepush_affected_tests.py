@@ -543,12 +543,11 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 			if style == "script":
 				short = [name.split("::")[-1] for name in names]
 				units.append({"id": path, "file": path, "argv": ["python3", path, *short], "kind": "test"})
-			elif style == "pytest" or pytest_ok:
-				targets = [f"{path}::{name}" for name in names] or [path]
-				units.append({"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"})
-			elif _python_test_functions(repo / path) and "__main__" not in _read_text(repo / path):
-				# pytest-style test functions with no __main__ runner: `python3 <file>`
-				# would exit 0 without running them, so use pytest or report it.
+			elif style == "pytest" or pytest_ok or (_python_test_functions(repo / path) and "__main__" not in _read_text(repo / path)):
+				# pytest is configured, or the file has test functions and no
+				# __main__ runner (`python3 <file>` would exit 0 without running
+				# them). A missing pytest fails on the baseline too and would be
+				# classified as inherited, so report it as unverified instead.
 				if importlib.util.find_spec("pytest") is None:
 					unverified.append({"item": path, "reason": "pytest_unavailable"})
 				else:
@@ -921,32 +920,48 @@ _FALLBACK_PUSH_RE = re.compile(r"(?<![\w-])git\b[^;&|\n]*\bpush\b")
 # `command git push`): only global options may sit between `git` and `push`,
 # so `git commit -m "push later"` does not match.
 _UNPARSED_PUSH_RE = re.compile(r"(?<![\w-])git(?:\s+-[cC]\s+\S+|\s+-\S+)*\s+push\b")
+# Quoted shell words (commit messages, PR bodies) are removed before the
+# unparsed-push check, so `git commit -m "explain git push"` does not match.
+_QUOTED_WORD_RE = re.compile("'[^']*'|\"(?:\\\\.|[^\"\\\\])*\"")
 
 
-def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str]], str]:
-	"""Return ((directory, pushed source ref) per push, warning)."""
+def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str, str]], str]:
+	"""Return ((directory, pushed source ref, note) per push, warning).
+
+	``note`` is empty for a single commit tip, ``bulk:<option>`` for a push
+	that publishes several branch tips, and ``non_branch`` for a push that
+	publishes only tags or other non-branch refs; both notes ask.
+	"""
 	try:
 		guard = _load_guard_module()
 		invocations = guard._guarded_git_invocations(command, cwd)
 	except Exception:  # noqa: BLE001 - fall back to a conservative check
 		if _FALLBACK_PUSH_RE.search(command):
-			return [(cwd, "HEAD")], "prepush gate: could not load pr_merge_status_guard.py; used a conservative push check."
+			return [(cwd, "HEAD", "")], "prepush gate: could not load pr_merge_status_guard.py; used a conservative push check."
 		return [], ""
-	pushes: list[tuple[str, str]] = []
+	pushes: list[tuple[str, str, str]] = []
 	for invocation in invocations:
 		if getattr(invocation, "subcommand", "") != "push":
 			continue
 		directory = getattr(invocation, "cwd", None)
 		directory = directory if isinstance(directory, str) and os.path.isdir(directory) else cwd
 		try:
-			# The guard's own refspec parser names each pushed source tip;
-			# deletions and tag-only pushes carry no tip and push no commit.
-			tips = [t.tip for t in guard._push_targets(invocation, directory) if isinstance(getattr(t, "tip", None), str) and t.tip]
+			# The guard's own refspec parser names each pushed source tip. A
+			# bulk target (`--all`, `--mirror`, `--branches`, a pattern) stands
+			# for several tips; a push with no tip that deletes nothing
+			# publishes tags or other non-branch refs.
+			targets = guard._push_targets(invocation, directory)
+			bulk = sorted({t.bulk for t in targets if isinstance(getattr(t, "bulk", ""), str) and t.bulk})
+			tips = [t.tip for t in targets if isinstance(getattr(t, "tip", None), str) and t.tip and not getattr(t, "bulk", "")]
+			deletes = any(getattr(t, "deletes", "") for t in targets)
 		except Exception:  # noqa: BLE001 - unknown refspecs: check HEAD
-			tips = ["HEAD"]
-		pushes.extend((directory, tip) for tip in tips)
-	if not pushes and not any(getattr(i, "subcommand", "") == "push" for i in invocations) and _UNPARSED_PUSH_RE.search(command):
-		return [(cwd, "HEAD")], ""
+			bulk, tips, deletes = [], ["HEAD"], False
+		pushes.extend((directory, tip, "") for tip in tips)
+		pushes.extend((directory, "HEAD", f"bulk:{option}") for option in bulk)
+		if not tips and not bulk and not deletes:
+			pushes.append((directory, "", "non_branch"))
+	if not pushes and not any(getattr(i, "subcommand", "") == "push" for i in invocations) and _UNPARSED_PUSH_RE.search(_QUOTED_WORD_RE.sub("''", command)):
+		return [(cwd, "HEAD", "")], ""
 	return pushes, ""
 
 
@@ -989,9 +1004,21 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 	if not pushes:
 		return "", warning
 	reasons = []
-	for directory, ref in dict.fromkeys(pushes):
+	for directory, ref, note in dict.fromkeys(pushes):
 		toplevel = _toplevel(Path(directory))
 		if toplevel is None:
+			continue
+		if note.startswith("bulk:"):
+			reasons.append(
+				f"This push ({_sanitize_name(note[5:])}) publishes several branch tips in {toplevel}; a pre-push test "
+				f"stamp covers one commit. Push each branch by name after running `{STAMP_COMMAND}` on it, or confirm to push anyway."
+			)
+			continue
+		if note == "non_branch":
+			reasons.append(
+				f"This push publishes tags or other non-branch refs in {toplevel}, whose commits the pre-push test "
+				f"stamp check cannot map. Check out the tagged commit and run `{STAMP_COMMAND}`, or confirm to push anyway."
+			)
 			continue
 		head = _resolve_commit(toplevel, ref)
 		if head is None:

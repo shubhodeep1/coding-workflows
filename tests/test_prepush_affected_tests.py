@@ -735,3 +735,33 @@ def test_wrapper_lists_uncommitted_tracked_edits_and_overlays_command_inputs(tmp
 	assert "M\ttests/test_a.py" in changed
 	listing = (tmp_path / "capture.ls").read_text(encoding="utf-8").split()
 	assert "Makefile" in listing and "validate.yml" in listing
+
+
+def test_resolution_configured_pytest_without_pytest_is_unverified(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_a.py": "", "pytest.ini": "[pytest]\n"})
+	monkeypatch.setattr(gate.importlib.util, "find_spec", lambda name: None)
+	units, unverified = gate.plan_units(root, {"affected_tests": [{"path": "tests/test_a.py", "reasons": []}]})
+	assert units == [] and unverified == [{"item": "tests/test_a.py", "reason": "pytest_unavailable"}]
+
+
+def test_hook_asks_for_bulk_pushes_even_with_a_passing_head_stamp(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	out = _hook(_push(root, "git push --all origin"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "--all" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_asks_for_tag_only_pushes(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "tag", "v1")
+	_write(root, tmp_path, "pass")
+	out = _hook(_push(root, "git push origin refs/tags/v1"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "tags" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_ignores_git_push_inside_quoted_text(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_push(root, 'git commit -m "document git push behaviour"'), {"TMPDIR": str(tmp_path)}) == {}
+	assert _hook(_push(root, "echo 'git push'"), {"TMPDIR": str(tmp_path)}) == {}

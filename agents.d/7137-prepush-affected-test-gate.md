@@ -19,8 +19,9 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   inverse of `HEAL_SCOPE_GUARD_TEST_SUBJECTS` for `ci.yml` (`guard_inverse`,
   copied in `CI_GUARD_TESTS` and pinned by a test); `ruff` / ShellCheck on
   changed files (missing tool → `unverified tool_unavailable`). A Python test
-  file with `test_` functions and no `__main__` runner runs under pytest
-  (`unverified pytest_unavailable` without it). A baseline re-run gets at
+  file run under pytest (configured, or `test_` functions with no
+  `__main__` runner) is `unverified pytest_unavailable` when pytest is not
+  installed. A baseline re-run gets at
   least 90 seconds even after the main budget is spent. A Python test
   file with more than `PREPUSH_TEST_GATE_LARGE_FILE_TESTS` (50) tests keeps only
   the test functions that mention a changed function or file name. Commands:
@@ -47,11 +48,13 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   `PreToolUse` `Bash` hook (its own settings entry, timeout 30) parses pushes
   with `pr_merge_status_guard._guarded_git_invocations` (conservative regex
   plus a warning if that module cannot load; a `git push` that module does
-  not parse, such as `command git push`, is checked as a push of `HEAD`). It
+  not parse, such as `command git push`, is checked as a push of `HEAD`;
+  quoted words are ignored for that check). It
   resolves each pushed source ref (the guard's `_push_targets` tip, `HEAD`
   for a bare push) to a commit and asks when that commit's stamp is missing,
   the ref does not resolve, or the stamp records failures this change
-  caused; a `pass`,
+  caused. A bulk push (`--all`, `--mirror`, `--branches`, a pattern) and a
+  push of only tags or other non-branch refs always ask. A `pass`,
   `unverified` or `skipped` stamp, a non-push command and
   `CLAUDE_PREPUSH_TEST_GATE=off` give no decision. Internal errors and
   malformed payloads fail open with a `systemMessage`. The hook never runs
