@@ -328,3 +328,34 @@ def test_reroute_keeps_staged_support_copies_that_differ_between_head_and_base(t
 	assert "SKIP_PLAN" not in github_env
 	assert (work / "README.md").read_text() == "base\n"
 	assert (work / "scripts" / "helper.sh").read_text() == "staged helper\n"
+
+
+def test_reroute_keeps_ignored_staged_helpers_the_base_tracks(tmp_path):
+	# Consumer runs list staged helpers in scripts/.gitignore; checkout
+	# overwrites an ignored file when the target commit tracks that path.
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", "main", str(seed), cwd=tmp_path)
+	(seed / "scripts").mkdir()
+	(seed / "README.md").write_text("base\n")
+	(seed / "scripts" / "helper.sh").write_text("base helper\n")
+	_git("add", "README.md", "scripts/helper.sh", cwd=seed)
+	_git("commit", "-q", "-m", "base", cwd=seed)
+	_git("push", "-q", str(origin), "main", cwd=seed)
+	_git("checkout", "-q", "-b", HEAD_BRANCH, cwd=seed)
+	_git("rm", "-q", "scripts/helper.sh", cwd=seed)
+	(seed / "README.md").write_text("head\n")
+	_git("commit", "-q", "-am", "head", cwd=seed)
+	_git("push", "-q", str(origin), HEAD_BRANCH, cwd=seed)
+	_git("clone", "-q", "-b", HEAD_BRANCH, str(origin), str(work), cwd=tmp_path)
+	(work / "scripts").mkdir(exist_ok=True)
+	(work / "scripts" / "helper.sh").write_text("staged helper\n")
+	(work / "scripts" / ".gitignore").write_text("helper.sh\n.gitignore\n")
+	proc, _, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={"PLAN_SUPERSEDE_RESOLVED_REF": HEAD_BRANCH})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PLAN_REROUTED_REF=main" in github_env, proc.stdout + proc.stderr
+	assert (work / "README.md").read_text() == "base\n"
+	assert (work / "scripts" / "helper.sh").read_text() == "staged helper\n"

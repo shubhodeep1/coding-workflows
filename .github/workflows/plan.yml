@@ -949,10 +949,12 @@ jobs:
                 # "Stage workflow support files" installed support copies over
                 # tracked scripts/ and prompts/ files, so a plain checkout
                 # refuses when they differ between head and base. Save them,
-                # force the checkout, then put the staged copies back.
+                # force the checkout, then put the staged copies back. Ignored
+                # files count too: consumer runs list staged helpers in
+                # scripts/.gitignore, and checkout overwrites ignored files.
                 staged_tar="${RUNTIME_DIR}/plan_reroute_staged_support.tar"
                 if git fetch --quiet --depth 1 origin "refs/heads/${base_ref}" && \
-                  { git diff -z --name-only HEAD; git ls-files -z --others --exclude-standard -- scripts prompts ai-memory; } | \
+                  { git diff -z --name-only HEAD; git ls-files -z --others -- scripts prompts ai-memory; } | \
                     tar --null --ignore-failed-read -cf "${staged_tar}" -T - 2>/dev/null && \
                   git checkout --quiet -f -B "${base_ref}" FETCH_HEAD && \
                   tar -xf "${staged_tar}"; then
