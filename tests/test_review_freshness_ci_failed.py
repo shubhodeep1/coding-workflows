@@ -129,6 +129,7 @@ def test_deterministic_skip_merge_job_runs_it_only_for_a_failed_freshness_head()
 	assert "            scripts/review_freshness_ci_failed.sh\n" in job
 	assert "FRESHNESS_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FRESHNESS_CI_FAILED_REDISPATCH_ENABLED || 'true' }}" in job
 	assert "REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}" in job
+	assert "FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS: ${{ vars.FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS || '5' }}" in job
 	call = job.index('if [ "${DET_SKIP_REASON:-}" = "freshness_sync" ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ]; then')
 	guarded = job[call: call + 600]
 	assert 'if [ "${freshness_helper_verified}" = "true" ] && [ -f .codex-freshness-src/scripts/review_freshness_ci_failed.sh ]; then' in guarded

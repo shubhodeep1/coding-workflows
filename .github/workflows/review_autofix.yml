@@ -1084,6 +1084,7 @@ jobs:
           # Q103: a freshness-update head whose CI failed goes back to review
           # (scripts/review_freshness_ci_failed.sh). `false` turns it off.
           FRESHNESS_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FRESHNESS_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+          FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS: ${{ vars.FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS || '5' }}
           REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits }}
         run: |
