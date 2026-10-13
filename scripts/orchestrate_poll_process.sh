@@ -5604,14 +5604,114 @@ resolve_branch_analysis_ref() {
   return 1
 }
 
+# True when no leading directory of the repo-relative path is a symlink, so
+# rm/cp on it cannot follow a branch-supplied link out of the checkout.
+_judge_support_parents_real() {
+  local _judge_parent_path="$1"
+  while [ "${_judge_parent_path}" != "${_judge_parent_path%/*}" ]; do
+    _judge_parent_path="${_judge_parent_path%/*}"
+    [ -L "${_judge_parent_path}" ] && return 1
+  done
+  return 0
+}
+
+# Security-pass checkouts (keep_trusted_support=true): replace every scripts/
+# and prompts/ entry that the verified support checkout (.codex-workflow-src,
+# fallback .codex-workflow-src-main) also has with that trusted copy, after a
+# plain or a forced checkout alike. Sets JUDGE_TRUSTED_REFRESHED. Returns 1
+# (fail closed) when a path the trusted checkout covers cannot be replaced: a
+# failed copy, a symlinked parent, or a symlink where the trusted checkout has
+# a directory. A support root the checked-out ref tracks is branch-supplied
+# and is not used; with no usable root it also fails closed (the poll
+# workflow always checks out .codex-workflow-src before a security pass).
+# Optional $1: the commit checked out before a plain checkout; trusted
+# scripts/ and prompts/ files that checkout deleted (tracked there, absent on
+# the target) are copied back so the security pass's assets stay present.
+_judge_refresh_trusted_support() {
+  local _judge_prev_head="${1:-}"
+  local _judge_entry _judge_root _judge_dir _judge_failed=0
+  local -a _judge_roots=()
+  JUDGE_TRUSTED_REFRESHED=0
+  for _judge_root in .codex-workflow-src .codex-workflow-src-main; do
+    if [ -d "${_judge_root}" ] && [ ! -L "${_judge_root}" ] \
+      && [ -z "$(git ls-files -- "${_judge_root}" 2>/dev/null | head -n 1)" ]; then
+      _judge_roots+=("${_judge_root}")
+    fi
+  done
+  if [ "${#_judge_roots[@]}" -eq 0 ]; then
+    echo "::error::Security-pass checkout for tracking #${TRACKING_NUM:-unknown}: no usable verified support checkout (.codex-workflow-src missing, symlinked or tracked by the audited ref); refusing to run support scripts from the audited branch." >&2
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=trusted_refresh_failed failed=0 trusted_refreshed=0 reason=no_trusted_root"
+    return 1
+  fi
+  for _judge_dir in scripts prompts; do
+    if [ -L "${_judge_dir}" ]; then
+      for _judge_root in "${_judge_roots[@]}"; do
+        if [ -e "${_judge_root}/${_judge_dir}" ]; then
+          _judge_failed=$((_judge_failed + 1))
+          break
+        fi
+      done
+    fi
+  done
+  while IFS= read -r -d '' _judge_entry; do
+    for _judge_root in "${_judge_roots[@]}"; do
+      if [ -f "${_judge_root}/${_judge_entry}" ] && [ ! -L "${_judge_root}/${_judge_entry}" ]; then
+        if _judge_support_parents_real "${_judge_entry}" && rm -f -- "${_judge_entry}" \
+          && cp -- "${_judge_root}/${_judge_entry}" "${_judge_entry}"; then
+          JUDGE_TRUSTED_REFRESHED=$((JUDGE_TRUSTED_REFRESHED + 1))
+        else
+          _judge_failed=$((_judge_failed + 1))
+        fi
+        break
+      elif [ -e "${_judge_root}/${_judge_entry}" ]; then
+        _judge_failed=$((_judge_failed + 1))
+        break
+      fi
+    done
+  done < <(find scripts prompts \( -type f -o -type l \) -print0 2>/dev/null)
+  if [ -n "${_judge_prev_head}" ]; then
+    while IFS= read -r -d '' _judge_entry; do
+      if [ -e "${_judge_entry}" ] || [ -L "${_judge_entry}" ]; then
+        continue
+      fi
+      for _judge_root in "${_judge_roots[@]}"; do
+        if [ -f "${_judge_root}/${_judge_entry}" ] && [ ! -L "${_judge_root}/${_judge_entry}" ]; then
+          if _judge_support_parents_real "${_judge_entry}" && mkdir -p -- "${_judge_entry%/*}" \
+            && cp -- "${_judge_root}/${_judge_entry}" "${_judge_entry}"; then
+            JUDGE_TRUSTED_REFRESHED=$((JUDGE_TRUSTED_REFRESHED + 1))
+          else
+            _judge_failed=$((_judge_failed + 1))
+          fi
+          break
+        fi
+      done
+    done < <(git diff --name-only -z --no-renames --diff-filter=D "${_judge_prev_head}" HEAD -- scripts prompts 2>/dev/null)
+  fi
+  if [ "${_judge_failed}" -gt 0 ]; then
+    echo "::error::Security-pass checkout for tracking #${TRACKING_NUM:-unknown}: ${_judge_failed} support path(s) could not be replaced with the verified support copy; refusing to run support scripts from the audited branch." >&2
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=trusted_refresh_failed failed=${_judge_failed} trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
+    return 1
+  fi
+  return 0
+}
+
 prepare_tracking_judge_checkout() {
   local integration_branch="$1"
   local default_branch="$2"
   local checkout_mode="${3:-api-verified}"
   local target_ref_override="${4:-}"
+  # Optional 5th argument: "true" keeps the poller's trusted support files
+  # after a plain or forced checkout, re-copied from the verified
+  # .codex-workflow-src checkout. The security pass passes it because it executes
+  # scripts/security_audit.sh and its helpers from this checkout with the
+  # poller's credentials, so the audited branch must not supply them.
+  local keep_trusted_support="${5:-false}"
   local target_branch="${default_branch:-main}"
   local target_ref=""
   local checkout_succeeded="false"
+  local _judge_overlaid=""
+  local _judge_prev_tracked="" _judge_stale_removed=0 _judge_stale_path
+  local _judge_prev_head=""
 
   JUDGE_EXECUTION_SOURCE="default_branch"
   JUDGE_EXECUTION_REF=""
@@ -5629,6 +5729,10 @@ prepare_tracking_judge_checkout() {
       return 1
     fi
   fi
+
+  # Commit before the checkout: keep mode restores trusted support files a
+  # plain checkout deletes (tracked here, absent on the target).
+  _judge_prev_head="$(git rev-parse -q --verify HEAD 2>/dev/null || true)"
 
   if [ -n "${target_ref_override}" ]; then
     if git rev-parse --verify -q "${target_ref}^{commit}" >/dev/null 2>&1 \
@@ -5662,16 +5766,66 @@ prepare_tracking_judge_checkout() {
         [ -d "${_d}" ] && cp -a "${_d}" "${_wf_backup}/${_d}" 2>/dev/null || true
       done
       [ -d ".github/ai" ] && { mkdir -p "${_wf_backup}/github_ai"; cp -a ".github/ai/." "${_wf_backup}/github_ai/" 2>/dev/null || true; }
+      # Paths the current checkout tracks: the restore below brings back the
+      # ones the target deleted, which a plain checkout would have removed.
+      _judge_prev_tracked="$(mktemp)"
+      git ls-files -z -- scripts prompts .github/ai > "${_judge_prev_tracked}" 2>/dev/null || : > "${_judge_prev_tracked}"
 
       if git checkout --detach -f -q "${target_ref}" >/dev/null 2>&1; then
-        # Force checkout succeeded — restore workflow support files
+        # Force checkout succeeded — restore workflow support files. A
+        # target-tracked symlink at a restore root is skipped and
+        # --remove-destination replaces file symlinks instead of writing
+        # through them, so the restore never writes outside the checkout.
         for _d in scripts prompts; do
-          [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
+          [ -d "${_wf_backup}/${_d}" ] && [ ! -L "${_d}" ] && { mkdir -p "${_d}"; cp -a --remove-destination "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
         done
-        [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
+        [ -d "${_wf_backup}/github_ai" ] && [ ! -L ".github/ai" ] && _judge_support_parents_real ".github/ai" \
+          && { mkdir -p ".github/ai"; cp -a --remove-destination "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
         rm -rf "${_wf_backup}"
+        # Files the target ref tracks keep the target's version, as on the
+        # plain checkout path: only support files it does not track stay
+        # restored. Staging installs every support script 0755, so a
+        # tracked 0644 script (scripts/pr_checks_lib.sh) that differs on the
+        # target makes the plain checkout fail on every tick; restoring
+        # all of scripts/ then showed the judge the poller's own copies
+        # beside the target's tests, and project #7126's judge filed
+        # restore issues #7296, #7306 and #7307 for code the branch had.
+        if [ "${keep_trusted_support}" = "true" ]; then
+          # Keep mode: the backup is the live tree, which an earlier judge
+          # checkout in this tick may have left holding another project's
+          # tracked scripts, so re-copy support files from the verified
+          # support checkout and fail closed when that is not possible.
+          if ! _judge_refresh_trusted_support; then
+            rm -f "${_judge_prev_tracked}"
+            return 1
+          fi
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=trusted_support trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
+        elif _judge_overlaid="$(git diff --name-only -- scripts prompts .github/ai 2>/dev/null | wc -l | tr -d ' ')" \
+          && git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
+          # Remove restored paths the previous checkout tracked and the
+          # target does not, as a plain checkout would.
+          # A path the verified support checkout also has is a staged
+          # support file later poller steps run (render_prompt.sh, judge
+          # prompts), so it stays.
+          while IFS= read -r -d '' _judge_stale_path; do
+            if [ -e ".codex-workflow-src/${_judge_stale_path}" ] || [ -e ".codex-workflow-src-main/${_judge_stale_path}" ]; then
+              continue
+            fi
+            if { [ -e "${_judge_stale_path}" ] || [ -L "${_judge_stale_path}" ]; } \
+              && _judge_support_parents_real "${_judge_stale_path}" && rm -f -- "${_judge_stale_path}"; then
+              _judge_stale_removed=$((_judge_stale_removed + 1))
+            fi
+          done < <(LC_ALL=C comm -z -23 <(LC_ALL=C sort -z -u "${_judge_prev_tracked}") \
+            <(git ls-files -z -- scripts prompts .github/ai 2>/dev/null | LC_ALL=C sort -z -u))
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced kept_target=${_judge_overlaid:-0} removed_stale=${_judge_stale_removed}"
+        else
+          echo "::warning::Judge context for tracking #${TRACKING_NUM:-unknown}: could not put back the target's tracked scripts/prompts after the forced checkout; the judge may see the poller's copies."
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=checkout_failed"
+        fi
+        rm -f "${_judge_prev_tracked}"
       else
         rm -rf "${_wf_backup}"
+        rm -f "${_judge_prev_tracked}"
         if [ -n "${target_ref_override}" ]; then
           echo "::error::Verified final-PR analysis ref '${target_ref}' could not be checked out for security-pass context." >&2
         elif [ -n "${integration_branch}" ]; then
@@ -5681,6 +5835,13 @@ prepare_tracking_judge_checkout() {
         fi
         return 1
       fi
+  elif [ "${keep_trusted_support}" = "true" ]; then
+    # A plain checkout switches tracked support scripts to the target's
+    # copies too (an earlier non-keep judge checkout in this tick leaves the
+    # tree clean, so this path is common): re-copy them from the verified
+    # support checkout before the security pass executes them.
+    _judge_refresh_trusted_support "${_judge_prev_head}" || return 1
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=plain reason=trusted_support trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
   fi
 
   JUDGE_EXECUTION_REF="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -7736,11 +7897,11 @@ run_security_pass_inline() {
   done
 
   if [ -n "${verified_analysis_ref}" ]; then
-    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
+    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}" "true"; then
       security_pass_fail_closed "engine_unavailable" "The verified final-PR checkout could not be prepared for read-only analysis." "${prior_security_status}"
       return 1
     fi
-  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only"; then
+  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"; then
     security_pass_fail_closed "engine_unavailable" "The composed project checkout could not be prepared for read-only analysis." "${prior_security_status}"
     return 1
   fi
