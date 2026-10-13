@@ -218,6 +218,87 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 		executor.assert_consumed()
 
 
+_GRAPHQL_FLAKE = "GraphQL: Something went wrong while executing your query on 2026-10-12T13:31:47Z."
+
+
+def _without_sleep(test: Callable[[list[float]], None]) -> None:
+	sleeps: list[float] = []
+	original = refresh_runner.time.sleep
+	refresh_runner.time.sleep = sleeps.append  # type: ignore[assignment]
+	try:
+		test(sleeps)
+	finally:
+		refresh_runner.time.sleep = original  # type: ignore[assignment]
+
+
+def test_process_repository_retries_a_transient_clone_failure() -> None:
+	def run(sleeps: list[float]) -> None:
+		with tempfile.TemporaryDirectory(prefix="validation-refresh-clone-retry-") as td:
+			workspace = Path(td) / "work"
+			workspace.mkdir(parents=True, exist_ok=True)
+			repository = "octo/demo-repo"
+			repo_dir = workspace / "octo__demo-repo"
+			branch = "ai/validation-refresh"
+
+			def on_failed_clone(_command: list[str], _cwd: Path | None) -> None:
+				# A failed clone can leave a partial directory behind.
+				repo_dir.mkdir(parents=True, exist_ok=True)
+				(repo_dir / "partial").write_text("x", encoding="utf-8")
+
+			def on_clone(_command: list[str], _cwd: Path | None) -> None:
+				assert not (repo_dir / "partial").exists()
+				_write_manifest(repo_dir)
+
+			executor = FakeExecutor(
+				[
+					PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+					PlannedCall(("gh", "repo", "clone"), returncode=1, stderr=_GRAPHQL_FLAKE, callback=on_failed_clone),
+					PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+					PlannedCall(("git", "fetch", "origin", "main")),
+					PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+					PlannedCall(SANDBOX_PROVISION_PREFIX),
+					PlannedCall(SANDBOX_SELF_TEST_PREFIX),
+					PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+				]
+			)
+
+			result = _make_runner(executor, branch).process_repository(repository, workspace)
+
+			assert result.outcome == "green", result
+			assert not any(d.startswith("checkout_failed") for d in result.diagnostics)
+			assert sleeps == [refresh_runner.CLONE_RETRY_DELAYS_SECS[0]]
+			executor.assert_consumed()
+
+	_without_sleep(run)
+
+
+def test_process_repository_reports_error_when_every_clone_attempt_fails() -> None:
+	def run(sleeps: list[float]) -> None:
+		with tempfile.TemporaryDirectory(prefix="validation-refresh-clone-fail-") as td:
+			workspace = Path(td) / "work"
+			workspace.mkdir(parents=True, exist_ok=True)
+			branch = "ai/validation-refresh"
+			executor = FakeExecutor(
+				[PlannedCall(("gh", "repo", "view"), stdout="main\n")]
+				+ [
+					PlannedCall(("gh", "repo", "clone"), returncode=1, stderr=_GRAPHQL_FLAKE)
+					for _ in range(refresh_runner.CLONE_ATTEMPTS)
+				]
+			)
+
+			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+
+			assert result.outcome == "error", result
+			assert any(d.startswith("checkout_failed(exit=1)") for d in result.diagnostics), result.diagnostics
+			assert sleeps == list(refresh_runner.CLONE_RETRY_DELAYS_SECS)
+			assert refresh_runner.summarize_results([result])["totals"]["error"] == 1
+			executor.assert_consumed()
+
+	_without_sleep(run)
+
+
 def test_process_repository_red_pipeline_failure_with_drift_records_no_push() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-refresh-red-") as td:
 		workspace = Path(td) / "work"

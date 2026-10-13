@@ -6,8 +6,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -22,7 +27,6 @@ TARGET_STEPS = (
 	(".github/workflows/clarify.yml", "Post clarification questions"),
 	(".github/workflows/clarify.yml", "Comment on issue failure"),
 	(".github/workflows/cancel_on_pr_close.yml", "Cancel queued/in-progress runs for closed PR branch"),
-	(".github/workflows/mark-stable.yml", "Verify CI passed on stable"),
 	(".github/workflows/mark-stable.yml", "Notify consumer repos via repository_dispatch"),
 	(".github/workflows/orchestrate_poll.yml", "Find active tracking issues"),
 	(".github/workflows/plan.yml", "Fetch issue metadata"),
@@ -32,7 +36,6 @@ TARGET_STEPS = (
 	(".github/workflows/orchestrate.yml", "Create tracking issue"),
 	(".github/workflows/orchestrate_clarify_respond.yml", "Fetch issue and tracking context"),
 	(".github/workflows/orchestrate_clarify_respond.yml", "Comment on issue failure"),
-	(".github/workflows/test-and-mark-stable.yml", "Verify CI passed on source branch"),
 )
 SAFE_FETCH_STEPS = (
 	(".github/workflows/orchestrate.yml", "Create integration branch"),
@@ -423,6 +426,9 @@ def _gh_api_retry_step(text: str, name: str) -> str:
 
 
 def _gh_api_retry_workflow(name: str) -> str:
+	# review_autofix.yml step bodies moved to scripts/ are read inlined again (#6972).
+	if name == "review_autofix.yml":
+		return expanded_review_autofix_text()
 	return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
