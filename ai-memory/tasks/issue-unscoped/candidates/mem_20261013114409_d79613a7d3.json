@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:5892-5895, 19469-19477 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Both opt-out blocks say there is no plan comment even though each fixture includes `_trusted_plan_comment()`, and their environment overrides do not affect the gate because those comments use ordinary paths.\n  WHY: This is not a current runtime failure, but the misleading comments and ineffective overrides may prompt wasted maintenance work.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Make the existing automation-path approval gate default-on for plan approvals and managed and standalone poller stall recovery. Withhold automatic `/approved` when planned automation paths lack trusted exact-path grants; report missing paths and fail closed when required checks are unavailable.\"\n  expected_change_site: `.github/workflows/plan.yml` (currently line 65), `.github/workflows/orchestrate_poll.yml` (currently lines 677, 959, 1134, 1213, 1229), and `scripts/orchestrate_poll_process.sh` (currently line 2435)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff contains no hunk in any of those three files; current code at `plan.yml:65`, `orchestrate_poll.yml:677/959/1134/1213/1229`, and `scripts/orchestrate_poll_process.sh:2435` already reads `|| 'true'` / `:-true`; `agents.d/6838-automation-path-plan-auto-approval.md` line 2 credits this PR with the flip, while `changelog.d/7293-plan-auto-approval-default-on.md` says \"`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` now defaults to `true`\".\n- requirement: \"Add no-grant security-finding and fully granted-plan regressions; record that the former fails before the fix and passes after it.\"\n  expected_change_site: `tests/test_files_touched_scope_guard.py` (home of the gate's `--plan-auto-approval-gate` decision) or `tests/test_plan_auto_approve_safe_state_fetch.py` (the `plan.yml`/orchestrator pipeline contract tests)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No new regression in the PR diff targets the default-flip; the only test-file changes described are a passive parent-process scrub and two no-op opt-outs, and no `_managed_auto_approve_automation_path_gate_off_by_default` test referenced by the PR description's AD-1 exists anywhere in `tests/test_orchestrate_poll_process.py`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py: lines 5892-5895 and 19469-19477 | severity=NIT | confidence=5\n  PROBLEM: Both new opt-out blocks carry the comment \"No plan comment: opt out of the default-on automation-path gate (#7181)\" but the test data on the preceding lines does include a trusted plan comment.\n  WHY IT FAILS AT RUNTIME: Not a runtime failure today \u2014 both blocks pass regardless of the env value \u2014 but the wrong comment causes future maintainers to either delete the env_overrides (no-op) or expect them to disable a gate that would otherwise fire (it would not).\n\nRequirement: \"Make the existing automation-path approval gate default-on for plan approvals and managed and standalone poller stall recovery. Withhold automatic `/approved` when planned automation paths lack trusted exact-path grants; report missing paths and fail closed when required checks are unavailable.\"\nExpected change site: `.github/workflows/plan.yml` (currently line 65), `.github/workflows/orchestrate_poll.yml` (currently lines 677, 959, 1134, 1213, 1229), and `scripts/orchestrate_poll_process.sh` (currently line 2435).\nEvidence of absence: The PR description's auto-decision AD-1 names these three sites as the flips the PR must make (`plan.yml:63`, `orchestrate_poll.yml:936`, `scripts/orchestrate_poll_process.sh:15323`), but the PR diff contains no hunk in any of those three files. The current code at all three locations already reads `|| 'true'` / `:-true` (confirmed: `plan.yml:65`, `orchestrate_poll.yml:677/959/1134/1213/1229`, `scripts/orchestrate_poll_process.sh:2435`, plus the matching `--flag-enabled \"${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}\"` callsites at `plan.yml:2364` and `orchestrate_poll_process.sh:15528`). `agents.d/6838-automation-path-plan-auto-approval.md` line 2 credits this PR with the flip (\"default `true` since #7181\"), but the credit belongs to PR #7293, whose changelog fragment `changelog.d/7293-plan-auto-approval-default-on.md` already in the tree says \"`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` now defaults to `true`\". The PR as committed therefore either re-attributes a change already shipped by #7293 or omits the code change the spec actually calls for.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\nRequirement: \"Add no-grant security-finding and fully granted-plan regressions; record that the former fails before the fix and passes after it.\"\nExpected change site: `tests/test_files_touched_scope_guard.py` (home of the gate's `--plan-auto-approval-gate` decision) or `tests/test_plan_auto_approve_safe_state_fetch.py` (the `plan.yml`/orchestrator pipeline contract tests).\nEvidence of absence: No new regression in the PR diff targets the default-flip. The only test-file changes are: (1) `_save_store` line 3606 (`env.pop(\"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED\", None)`) which is a passive parent-process scrub, not an assertion; (2) the two misleading opt-outs above (no-ops for ordinary-path plans); and (3) no `_managed_auto_approve_automation_path_gate_off_by_default` test referenced by the PR description's AD-1 exists anywhere in `tests/test_orchestrate_poll_process.py`. The spec line \"record that the former fails before the fix and passes after it\" is unmet; no test asserts the no-grant case fails with the variable `false` and passes with the variable `true` for the same fixture.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "5c9628d2be17fbc679ea6767e6d8de834a77e83f143cfc60c8a82899357b1809",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7182,
+    "run_id": "38389595292",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38389595292",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013114409_d79613a7d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7182,
+    "run_id": "38389595292"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T11:44:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
