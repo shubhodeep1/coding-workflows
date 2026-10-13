@@ -8,15 +8,15 @@
 #   - Compares each template against the local wrapper in .github/workflows/
 #     and renders the changed wrappers with the release commit SHA.
 #   - Delivers the changes as a pull request from the branch
-#     auto/update-workflows-<release-sha-12> when the
-#     UPDATER_PR_DELIVERY_ENABLED repository variable is 'true'. A separate
+#     auto/update-workflows-<release-sha-12> unless the
+#     UPDATER_PR_DELIVERY_ENABLED repository variable is 'false'. A separate
 #     verify job then checks every file the pull request changes against the
 #     attested release manifest and posts the ai-update-workflows/verify
 #     commit status. Auto-merge is enabled only after that check passes, and
 #     only for a release whose manifest verification reported verified=true;
 #     otherwise the pull request waits for a human.
-#   - While UPDATER_PR_DELIVERY_ENABLED is unset (the default), the changes
-#     are still pushed straight to the default branch.
+#   - With UPDATER_PR_DELIVERY_ENABLED set to 'false', the changes are
+#     pushed straight to the default branch.
 #   - Sends a Telegram alert listing which wrappers were updated.
 #
 # Permissions: contents (push the update branch), pull-requests (open and
