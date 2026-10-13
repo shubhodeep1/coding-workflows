@@ -887,6 +887,7 @@ unblock_main()
 					followup_verdict="$(jq -r '.prior_handoff_verdict // ""' "${RUNTIME_DIR}/protected_rejection.json")"
 					# A grant the current guard already accepts resumes the item
 					# (as the deterministic exit below would) instead of a handoff.
+					rm -f "${RUNTIME_DIR}/automation_rejection.json"
 					if unblock_try_regrant; then
 						if [ "${UNBLOCK_REGRANT_RESULT:-}" != "regranted" ]; then
 							# A failed resume keeps the fix-up wait open, so the next
@@ -907,7 +908,13 @@ unblock_main()
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=skip reason=operator_handoff_pending run=${followup_run}"
 						return 0
 					fi
-					if [[ "${followup_verdict}" =~ ^(descope|operator_step)$ ]]; then
+					if jq -e --arg run "${followup_run}" '.status == "none" and .reason == "already_regranted" and .run == $run' \
+						"${RUNTIME_DIR}/automation_rejection.json" >/dev/null 2>&1; then
+						# An earlier re-grant of this run posted its marker but its resume
+						# failed: the guard already granted these paths, so retry the
+						# resume below instead of asking an operator to grant them.
+						unblock_log "item=${ITEM} fixup=${wait_fixup} op=regrant run=${followup_run} outcome=resume_retry reason=already_regranted"
+					elif [[ "${followup_verdict}" =~ ^(descope|operator_step)$ ]]; then
 						if ! unblock_protected_context_merge; then
 							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_handoff_failed"
 							return 0

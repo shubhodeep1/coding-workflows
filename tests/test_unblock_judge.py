@@ -3061,3 +3061,19 @@ def test_judge_merged_fixup_failed_regrant_keeps_the_wait_open(tmp_path: Path) -
 	assert "fixup=50 outcome=skip reason=followup_regrant_failed run=555" in result.stdout, result.stdout
 	assert "outcome=followup_regrant " not in result.stdout + " "
 	assert not any("fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
+
+
+def test_judge_merged_fixup_retries_a_failed_regrant_resume(tmp_path: Path) -> None:
+	# The re-grant marker was posted but its resume failed; the next run must
+	# retry the resume, not hand the item to an operator to grant granted paths.
+	regranted = {"id": 6, "user": {"login": BOT}, "body": "resumed\n\n<!-- ai:unblock-regrant:v1 item=7 run=555 -->",
+		"created_at": "2026-10-04T10:30:00Z"}
+	comments = [PLAN_COMMENT, _rejection_comment(), regranted] + _followup_comments()[1:]
+	result, state = _judge(tmp_path, _scope_blocked_issue(), comments, issues=MERGED_FIXUP,
+		UNBLOCK_PROTECTED_HANDOFF_ENABLED="true", ALLOW_WORKFLOW_EDITS="true")
+	assert "op=regrant outcome=skip reason=already_regranted" in result.stdout, result.stdout
+	assert "op=regrant run=555 outcome=resume_retry reason=already_regranted" in result.stdout, result.stdout
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout
+	assert "outcome=followup_handoff" not in result.stdout
+	assert not any("reason=operator_handoff" in comment["body"] for comment in state["comments"])
+	assert state["comments"][-1]["body"] == "/approved"

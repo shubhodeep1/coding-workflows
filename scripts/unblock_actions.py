@@ -576,8 +576,10 @@ def _protected_handoff_ops(ctx: dict, verdict: dict, retryable: bool = False) ->
 		step["dormant_until"] = verdict["placeholder"]
 	# The operator step goes first: unblock_run_ops skips later writes after a
 	# failure, so the hold marker (which stops later judge runs) is posted only
-	# once the operator step is recorded. The verdict is already recorded, so a
-	# failed handoff is not retried; unblock_run_ops still sends a WARNING.
+	# once the operator step is recorded. For a verdict handoff the verdict is
+	# already recorded, so a failed handoff is not retried; unblock_run_ops still
+	# sends a WARNING. A `retryable` handoff (#7287) keeps its fix-up wait open,
+	# so the next judge run retries it.
 	warning = {
 		"op": "telegram", "level": "WARNING",
 		"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",
