@@ -1125,7 +1125,10 @@ jobs:
       # turns it off. continue-on-error keeps a recovery failure from skipping
       # the latch-release and unblock-scan sweeps that follow on idle ticks.
       - name: Run standalone stall recovery without active projects
-        if: steps.find_tracking.outputs.has_work != 'true'
+        # validate_env and stage_support are continue-on-error on idle ticks;
+        # a missing key or a staging failure skips recovery (issue #7183).
+        # validate_env is skipped when ENABLE_STANDALONE_STALL_RECOVERY is off.
+        if: steps.find_tracking.outputs.has_work != 'true' && steps.validate_env.outcome == 'success' && steps.stage_support.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1238,7 +1241,7 @@ jobs:
           bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
-        if: ${{ !cancelled() && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1250,7 +1253,7 @@ jobs:
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run unblock scan without active projects
-        if: ${{ !cancelled() && steps.find_tracking.outputs.has_work != 'true' }}
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

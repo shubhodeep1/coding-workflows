@@ -163,7 +163,8 @@ def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	step_end = wf.index("- name: Run worktree registry GC", step_start)
 	step = wf[step_start:step_end]
 	assert (
-		"if: ${{ !cancelled() && steps.find_tracking.outputs.has_work != 'true' "
+		"if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' "
+		"&& steps.find_tracking.outputs.has_work != 'true' "
 		"&& github.repository == 'shubhodeep1/coding-workflows' }}"
 	) in step
 	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
@@ -181,7 +182,10 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 	step_end = wf.index("- name: Run worktree registry GC", step_start)
 	step = wf[step_start:step_end]
 	assert latch_start < step_start < step_end
-	assert "if: ${{ !cancelled() && steps.find_tracking.outputs.has_work != 'true' }}" in step
+	assert (
+		"if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' "
+		"&& steps.find_tracking.outputs.has_work != 'true' }}"
+	) in step
 	assert "github.repository ==" not in step
 	assert 'UNBLOCK_SCAN_SWEEP_ONLY: "true"' in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
@@ -242,6 +246,16 @@ def test_standalone_stall_recovery_runs_without_tracking_issues() -> None:
 	assert f"if: {WIDENED_GATE}\n" in validate
 	assert "continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}" in validate
 	assert "id: stage_support\n" in _step_block(wf, "Stage workflow support files")
+
+	# The recovery step runs only after both idle-tick prerequisites succeeded.
+	recovery = _step_block(wf, STANDALONE_SWEEP_STEP)
+	assert (
+		"if: steps.find_tracking.outputs.has_work != 'true' "
+		"&& steps.validate_env.outcome == 'success' "
+		"&& steps.stage_support.outcome == 'success'\n"
+	) in recovery
+	assert 'STANDALONE_RECOVERY_SWEEP_ONLY: "true"' in recovery
+	assert "bash scripts/orchestrate_poll_process.sh" in recovery
 	yaml.safe_load(wf)
 
 
@@ -306,7 +320,11 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	full = steps[names.index("Process each tracking issue")]
 	# Exactly one of the two runs per tick, in every repository.
 	assert full["if"] == "steps.find_tracking.outputs.has_work == 'true'"
-	assert sweep["if"] == "steps.find_tracking.outputs.has_work != 'true'"
+	assert sweep["if"] == (
+		"steps.find_tracking.outputs.has_work != 'true' "
+		"&& steps.validate_env.outcome == 'success' "
+		"&& steps.stage_support.outcome == 'success'"
+	)
 	assert "github.repository" not in sweep["if"]
 	# A recovery failure must not skip the later idle-tick sweeps.
 	assert sweep.get("continue-on-error") is True
