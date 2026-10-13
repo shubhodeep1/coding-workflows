@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \u201cDocs corrected in place: README (2 rows), `agents.md`,\u201d and the agents.md documentation should consistently reflect the new `true` default for `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`.\n  expected_change_site: `agents.md`, in the plan auto-approval gate paragraph around lines 1170-1173\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The paragraph says the setting defaults to `true` at line 1159/1160, but still says `orchestrate_poll.yml` forwards it with a `false` default at line 1171/1172-1173; all four corresponding poller workflow defaults are `true`; no diff hunk corrects the sentence in agents.md.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The PR description states \"Docs corrected in place: README (2 rows), agents.md\" \u2014 the agents.md documentation should consistently reflect the new true default for AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED.\n  Expected change site: agents.md around lines 1172-1173, in the paragraph describing the plan auto-approval gate behavior.\n  Evidence of absence: The paragraph's opening line (1160) was updated to \"default true\", but line 1172-1173 still reads \"orchestrate_poll.yml forwards the flag to the poller with a false default\". The PR diff changed all four AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED exports in orchestrate_poll.yml from || 'false' to || 'true', making this sentence factually incorrect. No diff hunk in agents.md updates this later sentence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description says, \u201cDocs corrected in place: README (2 rows), `agents.md`,\u201d and documents the new `true` default.\n  Expected change site: `agents.md`, in the plan auto-approval gate paragraph around lines 1170-1171.\n  Evidence of absence: The paragraph now says the setting defaults to `true` at line 1159, but still says `orchestrate_poll.yml` forwards it \u201cwith a `false` default\u201d at line 1171. All four corresponding poller workflow defaults are `true`; no diff hunk corrects this sentence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR description states \"Docs corrected in place: README (2 rows), `agents.md`\" \u2014 the agents.md documentation should consistently reflect the new `true` default for `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`.\n  Expected change site: agents.md, approximately lines 1172-1173, in the paragraph describing the plan auto-approval gate behavior.\n  Evidence of absence: The paragraph's opening line (1160) was updated to \"default `true`\" in the PR diff, but a later sentence in the same paragraph still reads \"`orchestrate_poll.yml` forwards the flag to the poller with a `false` default\". The PR diff changed all four `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` exports in `orchestrate_poll.yml` from `|| 'false'` to `|| 'true'`, making this sentence factually incorrect. No diff hunk in agents.md updates this later sentence. The LAST RUN DIFF did not touch agents.md.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No actionable task was provided \u2014 the message contains only a template header (\"UNATTENDED SYSTEM INSTRUCTIONS\") with an unresolved placeholder `{{REFERENCE_SEVERITY_CLASSIFICATION}}` and no task, issue, or command to execute.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aef196a276d0b5c5ef701999b7b06cfbffdfd8a870d469d7dfbcfa471b6a09a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7293,
+    "run_id": "38323873405",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38323873405",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013004118_f13e6e79ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7293,
+    "run_id": "38323873405"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T00:41:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
