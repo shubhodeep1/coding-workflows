@@ -312,7 +312,56 @@ def test_actions_check_run_traceback_uses_job_log(tmp_path, monkeypatch):
 	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
 	result, _, fake = _gate(tmp_path, monkeypatch, issue=issue, routes=_check_run_triage_routes(check_run))
 	assert result["traceback_posted"] == [FAILED_JOB_ID]
-	assert any(call[-1] == f"repos/{REPO}/actions/jobs/{FAILED_JOB_ID}/logs" for call in fake.calls)
+	log_calls = [call for call in fake.calls if call[-1] == f"repos/{REPO}/actions/jobs/{FAILED_JOB_ID}/logs"]
+	assert log_calls and all("--allow-escape-sequences" in call for call in log_calls)
+
+
+ANSI_LOG = "\n".join([
+	"2026-10-10T10:00:00.0000000Z ##[group]Run tests",
+	"2026-10-10T10:00:01.0000000Z ##[endgroup]",
+	"2026-10-10T10:00:02.0000000Z \x1b[31mTraceback (most recent call last):\x1b[0m",
+	'2026-10-10T10:00:02.0000000Z \x1b[31m  File "/w/tests/test_x.py", line 7, in test_y\x1b[0m',
+	"2026-10-10T10:00:02.0000000Z \x1b[31mAssertionError\x1b[0m",
+	"2026-10-10T10:00:03.0000000Z \x1b[31mFAILED tests/test_x.py::test_y - AssertionError\x1b[0m",
+	"2026-10-10T10:00:04.0000000Z ##[error]Process completed with exit code 1.",
+])
+
+
+def test_job_log_reads_allow_escape_sequences(tmp_path, monkeypatch):
+	# Issue #7302: gh refuses ANSI-coloured job logs without
+	# --allow-escape-sequences, which silently dropped the traceback.
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _pr(merged=False),
+		rf"repos/{REPO}/actions/jobs/\d+/logs": ANSI_LOG,
+	})
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "unverified"
+	log_calls = [call for call in fake.calls if call[-1].endswith("/logs")]
+	assert log_calls and all("--allow-escape-sequences" in call for call in log_calls)
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	body = result["writes"][0]["payload"]["body"]
+	assert "test_y" in body
+	assert "\x1b" not in body
+
+
+def test_actions_job_log_passes_escape_flag_to_gh(monkeypatch):
+	calls = []
+
+	class _Done:
+		def __init__(self, returncode, stdout="", stderr=""):
+			self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+	def fake_run(command, **kwargs):
+		calls.append(command)
+		if "--allow-escape-sequences" not in command:
+			return _Done(1, stderr="use `--allow-escape-sequences` to show the response")
+		return _Done(0, stdout=ANSI_LOG)
+
+	monkeypatch.setattr(mod.subprocess, "run", fake_run)
+	assert mod._actions_job_log(REPO, 1) == ANSI_LOG
+	assert calls[-1] == ["gh", "api", "--allow-escape-sequences", f"repos/{REPO}/actions/jobs/1/logs"]
+	with pytest.raises(mod.GhApiError):
+		mod._gh_api([f"repos/{REPO}/actions/jobs/1/logs"], raw=True)
 
 
 # --- idempotency and marker trust -------------------------------------------
