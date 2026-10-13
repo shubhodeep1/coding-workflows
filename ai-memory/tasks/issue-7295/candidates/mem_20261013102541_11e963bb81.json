@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7295,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7295\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7314\",\"pr_number\":7314,\"branch\":\"ai/issue-7295\",\"run_id\":\"38378599199\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38378599199\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/7295-security-pass-audit-clean-worktree.md\",\"changelog.d/7295-security-pass-audit-clean-worktree.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_security_audit_workflow_contract.py\"]}",
+  "fingerprint": "8f61d6ebf4c20eb83f26cae88eaa9e920cd98e04dfb8f75fc11e5205111e7ff4",
+  "lineage": {
+    "issue_number": 7295,
+    "parent_ids": [],
+    "pr_number": 7314,
+    "run_id": "38378599199",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38378599199",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7314"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261013102541_11e963bb81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7295,
+    "level": "run",
+    "pr_number": 7314,
+    "run_id": "38378599199"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7295: https://github.com/shubhodeep1/coding-workflows/pull/7314",
+  "timestamps": {
+    "created_at": "2026-10-13T10:25:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
