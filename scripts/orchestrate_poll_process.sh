@@ -5622,8 +5622,13 @@ _judge_support_parents_real() {
 # (fail closed) when a path the trusted checkout covers cannot be replaced: a
 # failed copy, a symlinked parent, or a symlink where the trusted checkout has
 # a directory. A support root the checked-out ref tracks is branch-supplied
-# and is not used.
+# and is not used; with no usable root it also fails closed (the poll
+# workflow always checks out .codex-workflow-src before a security pass).
+# Optional $1: the commit checked out before a plain checkout; trusted
+# scripts/ and prompts/ files that checkout deleted (tracked there, absent on
+# the target) are copied back so the security pass's assets stay present.
 _judge_refresh_trusted_support() {
+  local _judge_prev_head="${1:-}"
   local _judge_entry _judge_root _judge_dir _judge_failed=0
   local -a _judge_roots=()
   JUDGE_TRUSTED_REFRESHED=0
@@ -5633,7 +5638,11 @@ _judge_refresh_trusted_support() {
       _judge_roots+=("${_judge_root}")
     fi
   done
-  [ "${#_judge_roots[@]}" -gt 0 ] || return 0
+  if [ "${#_judge_roots[@]}" -eq 0 ]; then
+    echo "::error::Security-pass checkout for tracking #${TRACKING_NUM:-unknown}: no usable verified support checkout (.codex-workflow-src missing, symlinked or tracked by the audited ref); refusing to run support scripts from the audited branch." >&2
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=trusted_refresh_failed failed=0 trusted_refreshed=0 reason=no_trusted_root"
+    return 1
+  fi
   for _judge_dir in scripts prompts; do
     if [ -L "${_judge_dir}" ]; then
       for _judge_root in "${_judge_roots[@]}"; do
@@ -5660,6 +5669,24 @@ _judge_refresh_trusted_support() {
       fi
     done
   done < <(find scripts prompts \( -type f -o -type l \) -print0 2>/dev/null)
+  if [ -n "${_judge_prev_head}" ]; then
+    while IFS= read -r -d '' _judge_entry; do
+      if [ -e "${_judge_entry}" ] || [ -L "${_judge_entry}" ]; then
+        continue
+      fi
+      for _judge_root in "${_judge_roots[@]}"; do
+        if [ -f "${_judge_root}/${_judge_entry}" ] && [ ! -L "${_judge_root}/${_judge_entry}" ]; then
+          if _judge_support_parents_real "${_judge_entry}" && mkdir -p -- "${_judge_entry%/*}" \
+            && cp -- "${_judge_root}/${_judge_entry}" "${_judge_entry}"; then
+            JUDGE_TRUSTED_REFRESHED=$((JUDGE_TRUSTED_REFRESHED + 1))
+          else
+            _judge_failed=$((_judge_failed + 1))
+          fi
+          break
+        fi
+      done
+    done < <(git diff --name-only -z --no-renames --diff-filter=D "${_judge_prev_head}" HEAD -- scripts prompts 2>/dev/null)
+  fi
   if [ "${_judge_failed}" -gt 0 ]; then
     echo "::error::Security-pass checkout for tracking #${TRACKING_NUM:-unknown}: ${_judge_failed} support path(s) could not be replaced with the verified support copy; refusing to run support scripts from the audited branch." >&2
     echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=trusted_refresh_failed failed=${_judge_failed} trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
@@ -5684,6 +5711,7 @@ prepare_tracking_judge_checkout() {
   local checkout_succeeded="false"
   local _judge_overlaid=""
   local _judge_prev_tracked="" _judge_stale_removed=0 _judge_stale_path
+  local _judge_prev_head=""
 
   JUDGE_EXECUTION_SOURCE="default_branch"
   JUDGE_EXECUTION_REF=""
@@ -5701,6 +5729,10 @@ prepare_tracking_judge_checkout() {
       return 1
     fi
   fi
+
+  # Commit before the checkout: keep mode restores trusted support files a
+  # plain checkout deletes (tracked here, absent on the target).
+  _judge_prev_head="$(git rev-parse -q --verify HEAD 2>/dev/null || true)"
 
   if [ -n "${target_ref_override}" ]; then
     if git rev-parse --verify -q "${target_ref}^{commit}" >/dev/null 2>&1 \
@@ -5768,7 +5800,13 @@ prepare_tracking_judge_checkout() {
           && git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
           # Remove restored paths the previous checkout tracked and the
           # target does not, as a plain checkout would.
+          # A path the verified support checkout also has is a staged
+          # support file later poller steps run (render_prompt.sh, judge
+          # prompts), so it stays.
           while IFS= read -r -d '' _judge_stale_path; do
+            if [ -e ".codex-workflow-src/${_judge_stale_path}" ] || [ -e ".codex-workflow-src-main/${_judge_stale_path}" ]; then
+              continue
+            fi
             if { [ -e "${_judge_stale_path}" ] || [ -L "${_judge_stale_path}" ]; } \
               && _judge_support_parents_real "${_judge_stale_path}" && rm -f -- "${_judge_stale_path}"; then
               _judge_stale_removed=$((_judge_stale_removed + 1))
@@ -5798,7 +5836,7 @@ prepare_tracking_judge_checkout() {
     # copies too (an earlier non-keep judge checkout in this tick leaves the
     # tree clean, so this path is common): re-copy them from the verified
     # support checkout before the security pass executes them.
-    _judge_refresh_trusted_support || return 1
+    _judge_refresh_trusted_support "${_judge_prev_head}" || return 1
     echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=plain reason=trusted_support trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
   fi
 

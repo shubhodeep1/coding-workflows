@@ -24528,6 +24528,9 @@ def test_security_pass_judge_checkout_keeps_the_trusted_support_scripts() -> Non
 	with tempfile.TemporaryDirectory() as td:
 		repo, integration_sha = _judge_checkout_repo(Path(td))
 		(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
 		func = _judge_checkout_functions()
 		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
 		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
@@ -24642,6 +24645,60 @@ def test_judge_checkout_fallback_removes_support_paths_the_target_deleted() -> N
 		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
 		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
 		assert "outcome=forced kept_target=1 removed_stale=1" in out, out
+
+
+def test_security_pass_checkout_fails_closed_without_a_trusted_root() -> None:
+	"""With no usable verified support checkout the security pass must not run
+	support scripts from the audited branch: keep mode fails closed."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		out = _run_judge_checkout(repo, integration_sha, "true")
+		assert "rc=1" in out, out
+		assert "outcome=trusted_refresh_failed" in out and "reason=no_trusted_root" in out, out
+
+
+def test_security_pass_plain_checkout_restores_trusted_files_the_target_deleted() -> None:
+	"""A plain checkout of a branch that lacks a tracked support file deletes
+	it; keep mode copies it back from the verified checkout so the security
+	pass's assets stay present."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		trusted = repo / ".codex-workflow-src" / "prompts"
+		trusted.mkdir(parents=True)
+		(trusted / "mode-judge.txt").write_text("trusted prompt\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "true")
+		assert "rc=0" in out, out
+		assert "outcome=plain" in out, out
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "trusted prompt\n", out
+
+
+def test_judge_checkout_fallback_keeps_staged_support_the_target_deleted() -> None:
+	"""Stale removal keeps a path the verified support checkout also has: it is
+	a staged support file later poller steps run."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		trusted = repo / ".codex-workflow-src" / "prompts"
+		trusted.mkdir(parents=True)
+		(trusted / "mode-judge.txt").write_text("main prompt\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "main prompt\n", out
+		assert "outcome=forced kept_target=1 removed_stale=0" in out, out
 
 
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
