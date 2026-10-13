@@ -261,6 +261,27 @@ Copy this block when adding a new entry:
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
 
+### `workflow-templates/.claude/hooks/prepush_affected_tests.py`
+
+- **Introduced in:** PR for #7137 (2026-10-11)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the pre-push affected-test gate: the interactive `PreToolUse` hook and stamp, and (from plan phases P3-P5) every AI push path run it. Removing it drops the only pre-push test run.
+- **Removal preflight checks:**
+  - `grep -rn prepush_affected_tests .github/workflows scripts workflow-templates` returns no callers other than this file and `scripts/prepush_test_gate_run.sh`.
+  - `workflow-templates/.claude/settings.json` and `.claude/settings.json` no longer register the `prepush_affected_tests.py hook` command, in this repo and in every repo in `.github/ai/consumer_repos.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_prepush_affected_tests.py` is removed or migrated with the module.
+- **Owner:** @shubhodeep1
+
+### `scripts/prepush_test_gate_run.sh`
+
+- **Introduced in:** PR for #7137 (2026-10-11)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only credential-free container path for running PR tests before an AI push (plan phases P3-P5 call it).
+- **Removal preflight checks:**
+  - `grep -rn prepush_test_gate_run .github/workflows scripts workflow-templates` returns no callers.
+  - `docs/INVENTORY.md` row and the `tests/test_prepush_affected_tests.py` wrapper tests are removed in the same PR.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/pr6576-shard-followup.yml` + `scripts/pr6576_shard_followup.py` + `tests/test_pr6576_shard_followup.py`
 
 - **Introduced in:** issue #7072 (2026-10-10); PR number assigned when the implementation PR opens.
