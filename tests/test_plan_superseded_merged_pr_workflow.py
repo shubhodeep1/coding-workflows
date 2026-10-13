@@ -277,3 +277,24 @@ def test_merged_check_failed_reroutes_to_base(tmp_path):
 	assert "plan against main" in facts and HEAD_BRANCH not in facts
 	assert f"outcome=rerouted from={HEAD_BRANCH} to=main" in proc.stdout
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_failed_reroute_skips_planning_instead_of_using_the_former_head(tmp_path):
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", HEAD_BRANCH, str(seed), cwd=tmp_path)
+	(seed / "README.md").write_text("head\n")
+	_git("add", "README.md", cwd=seed)
+	_git("commit", "-q", "-m", "head", cwd=seed)
+	# The base branch "main" is absent on origin, so the fetch fails.
+	_git("push", "-q", str(origin), HEAD_BRANCH, cwd=seed)
+	_git("clone", "-q", "-b", HEAD_BRANCH, str(origin), str(work), cwd=tmp_path)
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={"PLAN_SUPERSEDE_RESOLVED_REF": HEAD_BRANCH})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "PLAN_REROUTED_REF" not in github_env
+	assert "outcome=skip reason=reroute_failed" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)

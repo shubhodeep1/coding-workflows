@@ -951,8 +951,15 @@ jobs:
                   echo "PLAN_REROUTED_REF=${base_ref}" >> "$GITHUB_ENV"
                   log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref} to=${base_ref}"
                 else
-                  echo "::warning::Could not check out ${base_ref} for planning; planning on the resolved ref."
-                  log "source=${source_issue} pr=${pr_number} outcome=plan reason=reroute_failed"
+                  # Never plan on the merged PR's former head (#7185): skip
+                  # this run and let stall recovery retry it.
+                  echo "::warning::Could not check out ${base_ref} for planning; skipping planning this run."
+                  echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  log "source=${source_issue} pr=${pr_number} outcome=skip reason=reroute_failed"
+                  source scripts/tg_helpers.sh 2>/dev/null || true
+                  if type tg_send_tracked >/dev/null 2>&1; then
+                    tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: could not check out ${base_ref} after PR #${pr_number} merged."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+                  fi
                 fi
               else
                 log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed"

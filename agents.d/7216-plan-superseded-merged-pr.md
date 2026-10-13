@@ -18,7 +18,9 @@ head gets one `<!-- ai:plan-superseded:v1 pr=<N> head=<sha> -->` comment
 removed, a "not planned" close and `SKIP_PLAN=true`. Merged with the check
 failed or pending: planning continues with a "MERGED PULL REQUEST FACTS"
 block, and when the resolved ref is the PR's former head the step checks out
-its base branch (`PLAN_REROUTED_REF`, mismatch forced `false`). Every other
+its base branch (`PLAN_REROUTED_REF`, mismatch forced `false`); if that
+checkout fails, the run skips planning (`SKIP_PLAN=true`, WARNING) rather than
+planning on the former head. Every other
 case, including read failures, plans as usual. Kill switch
 `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` (default `true`). Implement's own
 branch resolution is unchanged.
