@@ -6948,10 +6948,13 @@ def test_heal_scope_recovery_second_budget_must_open() -> None:
 	other = _heal_issue(32, state="open", fp=_recovery_fp(), created=datetime(2026, 8, 1, tzinfo=timezone.utc))
 	other["author"] = "workflow-bot"
 	other["body"] += "\n" + _SCOPE_MARKER_OK
-	result, state, _ = _run_recovery([_markerless_heal_issue(), other])
+	# The markerless original carries the higher number, so the first budget
+	# matches it (the higher-numbered open duplicate wins) and recovery reaches
+	# the second budget, which must then find #32 and decline.
+	result, state, _ = _run_recovery([_markerless_heal_issue(33), other])
 	assert result.returncode == 0, result.stderr + result.stdout
-	# Whichever open issue the budget matched, recovery declines.
-	assert "heal_scope_recovery outcome=skip reason=budget_duplicate issue=31" in result.stdout or "heal_scope_recovery outcome=skip reason=scope_verified issue=32" in result.stdout
+	assert "heal_scope_recovery outcome=skip reason=budget_duplicate issue=33" in result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=33" in result.stdout
 	assert "heal_scope_recovery outcome=eligible" not in result.stdout
 	assert "issues_created" not in state and "issues_closed" not in state
 
