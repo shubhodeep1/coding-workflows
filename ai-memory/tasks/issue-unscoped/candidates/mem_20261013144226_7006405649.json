@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:28315 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Gate C pusher check can miss a qualifying pipeline push outside the first 100 activity records and consequently fail closed on a legitimate force-merge.\n  WHY: The check relies on the newest 100 activity records, which might not include the push covering the commit range.\n\n- scripts/orchestrate_poll_process.sh:28315 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pusher check depends on `jq` being installed in the execution environment.\n  WHY: If `jq` is unavailable, the pusher check can fail and block legitimate force-merges.\n\n- scripts/orchestrate_poll_process.sh:28298, 28328-28329 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The body-length check treats any 100-record activity response as evidence that older activity was not read, although it cannot distinguish a complete 100-record history from a truncated page.\n  WHY: The request sets a page size of 100 but the response body alone does not establish that another page exists; reviewers characterized this as NIT.\n\n- scripts/orchestrate_poll_process.sh:12463-12470 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `finalize_merge_head_sha` is null or missing, the final merge path can leave `final_pr` in orchestrator status and retry indefinitely.\n  WHY: If the SHA remains unavailable across ticks, the path continues retrying the merge attempt and logging warnings.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace the inline query with `_pr_checks_completed \"${N_PR}\" \"${N_HEAD_SHA}\" \"${N_BASE_REF}\"`, as the changelog and agents fragment describe.\n  expected_change_site: scripts/orchestrate_poll_process.sh\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `scripts/orchestrate_poll_process.sh` uses `_pr_wait_for_required_checks \"${N_PR}\" \"${N_HEAD_SHA}\" \"${N_BASE_REF}\" 0` instead of `_pr_checks_completed`; the reviewer says the wrapper may be inconsistent with the stated requirement.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:28315 | confidence=2\n  PROBLEM: The pusher check relies on parsing activity API JSON where the activity list order might not ensure the newest 100 entries cover the pushed commit.\n  WHY: If the covering push is older than the newest 100 activities, the check returns false and a legitimate force-merge fails closed.\n\n- scripts/orchestrate_poll_process.sh:28315 | confidence=4\n  PROBLEM: The pusher check depends on the `jq` utility being installed in the execution environment.\n  WHY: If the script runs without `jq`, the pusher check can fail and block legitimate force-merges.\n\n- scripts/orchestrate_poll_process.sh:28298, 28328-28329 | confidence=4\n  PROBLEM: The activity API request asks for up to 100 records but does not check for further pages.\n  WHY: When the repository has more than 100 activity records, the current logic reports `activity_page_full` and skips the PR merge rather than checking whether another page contains coverage.\n\n- scripts/orchestrate_poll_process.sh:12463-12470 | confidence=3\n  PROBLEM: If `finalize_merge_head_sha` is null or missing, the final merge path warns but leaves `final_pr` in orchestrator status.\n  WHY: If the SHA remains unavailable across multiple ticks, it will continue to retry the merge attempt and log warnings indefinitely.\n\n- Requirement: Replace the inline query with `_pr_checks_completed \"${N_PR}\" \"${N_HEAD_SHA}\" \"${N_BASE_REF}\"`, as the changelog and agents fragment describe.\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: The code in `scripts/orchestrate_poll_process.sh` (as seen in `pr_diff.patch`) uses `_pr_wait_for_required_checks \"${N_PR}\" \"${N_HEAD_SHA}\" \"${N_BASE_REF}\" 0` instead of `_pr_checks_completed`. While `_pr_wait_for_required_checks` wraps `_pr_checks_completed`, the requirement specifically asked to use `_pr_checks_completed` for the check-runs filter, not the wait wrapper, or the description of what Gate D does (using the wait wrapper) is inconsistent with the requirement to just use the check.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:The new Gate C branch at the bottom of hunk 28322 (`if [ \"$(printf '%s' \"${N_ACTIVITY_JSON}\" | jq 'length' 2>/dev/null || echo 0)\" -ge 100 ]`) | severity=low | confidence=4\n  PROBLEM: The `activity_page_full` alert can fire when the response is actually complete.\n  WHY: The body-only length check cannot distinguish exactly 100 matching records from a truncated page, and a covering push present on that page may be treated as missing.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:28328-28329 | severity=low | confidence=4\n  PROBLEM: The alert labels every 100-record activity response as truncated, although the request at line 28298 only establishes a page size.\n  WHY: When the repository has exactly 100 activity records and none contains a qualifying push, the gate reports \u201colder activity was not read,\u201d which the response does not establish.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:28328-28329 | severity=low | confidence=3\n  PROBLEM: The gate reports \u201colder activity was not read (reason=activity_page_full)\u201d whenever the activity response contains 100 records, even when the repository has exactly 100 activity records total.\n  WHY: The request uses `per_page=100`; when the branch has exactly 100 activity records, the response is complete, but the code checks `length >= 100` and reports that older activity was not read. The runtime behavior (fail closed, page once) is correct; only the alert text is misleading in this edge case.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "384a903954061b235782eabf13f029a31b5139e34f04aaf4fe5400962919bc97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7315,
+    "run_id": "38410144614",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38410144614",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013144226_7006405649",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7315,
+    "run_id": "38410144614"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T14:42:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
