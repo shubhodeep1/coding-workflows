@@ -413,11 +413,35 @@ def test_unreadable_pr_check_run_triage_still_posts_traceback(tmp_path, monkeypa
 	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
 
 
+def _bound_jobs(run_id=RUN_ID, workflow_name="CI", head_sha=PR_HEAD_SHA):
+	payload = _jobs(PR_JOBS)
+	for job in payload["jobs"]:
+		job.update({"run_id": run_id, "workflow_name": workflow_name, "head_sha": head_sha})
+	return payload
+
+
 def test_unreadable_run_still_posts_traceback_from_jobs(tmp_path, monkeypatch):
-	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1")}))
+	jobs_path = rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100"
+	routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"), jobs_path: _bound_jobs()})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
 	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "run_unreadable"
 	assert result["traceback_posted"] == [FAILED_JOB_ID]
 	assert [(w["method"], w["path"]) for w in result["writes"]] == [("POST", f"repos/{REPO}/issues/{ISSUE}/comments")]
+
+	# Jobs whose own fields do not bind them to this run, workflow and PR head
+	# (or carry no such fields) are not posted as this issue's traceback.
+	for jobs in (_jobs(PR_JOBS), _bound_jobs(run_id=1), _bound_jobs(workflow_name="Other"), _bound_jobs(head_sha="1" * 40)):
+		routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"), jobs_path: jobs})
+		result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+		assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
+
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"),
+		rf"repos/{REPO}/pulls/{PR}": mod.GhApiError("rc=1"),
+		jobs_path: _bound_jobs(),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
 
 	routes = _routes(**{
 		rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"),

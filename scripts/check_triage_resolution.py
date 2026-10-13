@@ -313,13 +313,20 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		except GhApiError:
 			run = None
 		if not isinstance(run, dict):
-			# The run id comes from the trusted triage header (bound to this
-			# repository), so still list its failed jobs for the traceback;
-			# the result stays unverified either way.
+			# Without run metadata, list the run's jobs for the traceback only
+			# when every job's own fields bind it to this run, workflow and PR
+			# head (the readable path's identity check); else post nothing.
+			# The result stays unverified either way.
 			try:
-				verdict["failed_jobs"] = _failed_jobs(_jobs_of(_gh_api([f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"])))
+				fallback_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"]))
 			except GhApiError:
-				pass
+				fallback_jobs = []
+			pr_head_sha = head.get("sha") if isinstance(head.get("sha"), str) and SHA_RE.match(head.get("sha")) else None
+			if fallback_jobs and pr_head_sha and all(
+				job.get("run_id") == run_id and job.get("workflow_name") == triage["check_name"] and job.get("head_sha") == pr_head_sha
+				for job in fallback_jobs
+			):
+				verdict["failed_jobs"] = _failed_jobs(fallback_jobs)
 			return _fail("run_unreadable")
 		run_repo = (run.get("repository") or {}).get("full_name") if isinstance(run.get("repository"), dict) else None
 		run_prs = [item.get("number") for item in run.get("pull_requests") or [] if isinstance(item, dict)]
