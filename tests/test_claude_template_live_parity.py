@@ -32,8 +32,20 @@ sys.modules[_spec.name] = sync_mod
 _spec.loader.exec_module(sync_mod)
 
 
+_drift_spec = importlib.util.spec_from_file_location("claude_template_drift", REPO_ROOT / "tests" / "claude_template_drift.py")
+assert _drift_spec is not None and _drift_spec.loader is not None
+claude_template_drift = importlib.util.module_from_spec(_drift_spec)
+_drift_spec.loader.exec_module(claude_template_drift)
+
+
 def test_live_copies_match_their_templates() -> None:
-	drift = sync_mod.mismatched(REPO_ROOT)
+	# PR CI only (CLAUDE_PARITY_PR_BASE_SHA set): drift this PR caused, or that
+	# its base already carries, waits for the post-merge sync PR. Pushes to
+	# main and the release gates leave the variable unset and stay strict.
+	pending = claude_template_drift.pending_template_paths(REPO_ROOT)
+	for relative in sorted(pending):
+		print(f"pending sync: {relative}")
+	drift = [relative for relative in sync_mod.mismatched(REPO_ROOT) if relative not in pending]
 	assert drift == [], (
 		"Live .claude/ copies differ from workflow-templates/.claude/ for: "
 		+ ", ".join(drift)
@@ -77,6 +89,49 @@ def _commit(root: Path, path: str, text: str) -> tuple[str, str]:
 	_git(root, "add", "-A")
 	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "change")
 	return before, _git(root, "rev-parse", "HEAD")
+
+
+def test_pending_drift_tolerates_template_changed_by_the_pr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _scratch_repo(tmp_path)
+	base, _ = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", base)
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert claude_template_drift.pending_template_paths(root) == {"hooks/guard.py"}
+
+
+def test_pending_drift_tolerates_drift_inherited_from_the_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _scratch_repo(tmp_path)
+	_, base = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	_commit(root, "unrelated.txt", "x\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", base)
+	assert claude_template_drift.pending_template_paths(root) == {"hooks/guard.py"}
+
+
+@pytest.mark.parametrize("value", [None, "", "abc123", "Z" * 40, "a" * 39])
+def test_pending_drift_is_strict_without_a_valid_pr_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+	root = _scratch_repo(tmp_path)
+	_commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	if value is None:
+		monkeypatch.delenv("CLAUDE_PARITY_PR_BASE_SHA", raising=False)
+	else:
+		monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", value)
+	assert claude_template_drift.pending_template_paths(root) == set()
+
+
+def test_pending_drift_keeps_unrelated_drift_failing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	# The PR edited the live copy, not the template, and the base was clean.
+	root = _scratch_repo(tmp_path)
+	base, _ = _commit(root, ".claude/hooks/guard.py", "live-only edit\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", base)
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert claude_template_drift.pending_template_paths(root) == set()
+
+
+def test_pending_drift_is_strict_when_the_base_is_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _scratch_repo(tmp_path)
+	_commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", "0123456789abcdef0123456789abcdef01234567")
+	assert claude_template_drift.pending_template_paths(root) == set()
 
 
 def _merged_pr(head_ref="feature/approved", **overrides):
