@@ -2207,7 +2207,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `tests/test_release_manifest_workflow_contract.py`.
 - Fail-closed verification (#6957). The `Verify attested release manifest`
   step (`id: verify_release_manifest`) of `update_workflows.yml` acts only when
-  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `false`; off it logs
+  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `true`; set to `false` it logs
   `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` and makes no API
   call). It resolves the `vX.Y.Z` release whose tag points at the `stable`
   commit, downloads the asset, runs `gh attestation verify` with a
@@ -2227,7 +2227,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   inline because in consumer runs the only `scripts/` copy is the release tree
   under verification. Tests `tests/test_verify_release_manifest.py` and
   `tests/test_update_workflows_manifest_verify.py`.
-- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) its `Commit and push
+- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `true`) its `Commit and push
   updates` step (`id: commit_push`) never pushes to the default branch: it
   commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
   the merge train ignores it) with a `Updater-Release-SHA:` trailer, pushes
@@ -3063,8 +3063,8 @@ and shipped:
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
-- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
-- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
+- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `true`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
+- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `true`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
 - `UPDATER_PR_VERIFY` (`update_workflows.yml` job `verify`, runs only after the PR path opened or refreshed a pull request: `outcome=passed reason=ok pr= head= auto_merge=enabled|failed|skipped_unverified`, `outcome=rejected reason= stage=`)
 - `VALIDATE_CHANGED_FILES_SYNTAX`
 - `VALIDATION_DISPATCH_CAP` (`scripts/orchestrate_poll_process.sh`: `outcome=redispatch|phase_cap_blocked|exhausted`, `issue=`, `cycle=`, `dispatches=`, `max=`; `exhausted` adds `last_conclusion=`)

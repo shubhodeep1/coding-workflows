@@ -72,6 +72,8 @@ verdict, 2 unreadable input):
       hold marker (<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff
       run=<r> -->) already follows it. Read-only: it never makes
       `override_guard` available (UNBLOCK_PROTECTED_HANDOFF_ENABLED, #7060).
+      `prior_handoff_verdict` names a trusted descope / operator_step verdict
+      recorded after the rejection (#7287), else null.
   automation-rejection --item <n> --comments-file <path> --trusted-login <login>
       The newest trusted guard rejection on the item when it is an
       automation-path one not yet re-granted: `{status: ok, run, paths}`;
@@ -428,12 +430,16 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 	Unlike latest_rejection, a later verdict marker does not make the rejection
 	stale: the handoff only removes the automatic fix-up. `handoff_pending` is
 	true when a trusted operator-handoff hold marker follows the rejection.
+	`prior_handoff_verdict` is the newest trusted `scope-blocked` verdict marker
+	for the item when it follows the rejection and is `descope` or
+	`operator_step`; otherwise null.
 	"""
 	if not isinstance(comments, list):
 		raise InputError("comments must be a JSON array")
 	newest_guard = None
 	newest_handoff_index = -1
 	newest_handoff_id = None
+	newest_verdict = (-1, "")
 	untrusted = False
 	for index, comment in enumerate(comments):
 		if not isinstance(comment, dict):
@@ -449,6 +455,10 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 			if rejection_item and int(rejection_item.group(1)) == item:
 				untrusted = True
 			continue
+		verdict_marker = MARKER_RE.fullmatch(line)
+		if verdict_marker and int(verdict_marker.group("item")) == item \
+			and verdict_marker.group("stop") == "scope-blocked" and verdict_marker.group("verdict") in VERDICTS:
+			newest_verdict = (index, verdict_marker.group("verdict"))
 		handoff = OPERATOR_HANDOFF_RE.fullmatch(line)
 		if handoff and int(handoff.group("item")) == item:
 			newest_handoff_index = index
@@ -476,6 +486,11 @@ def latest_protected_rejection(comments: object, trusted_login: str, item: int) 
 		"comment_id": comment.get("id"), "created_at": comment.get("created_at", ""),
 		"handoff_pending": newest_handoff_index > index,
 		"handoff_comment_id": newest_handoff_id if newest_handoff_index > index else None,
+		# The newest trusted scope-blocked verdict after the rejection, when it
+		# would have been a handoff: a fix-up filed for it must not resume the
+		# item into the same guard (#7287).
+		"prior_handoff_verdict": newest_verdict[1]
+		if newest_verdict[0] > index and newest_verdict[1] in ("descope", "operator_step") else None,
 	}
 
 

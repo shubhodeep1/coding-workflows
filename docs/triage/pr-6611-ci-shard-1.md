@@ -89,21 +89,45 @@ is not sharded.
 
 ## Conclusion
 
-**Inconclusive. Nothing reproduced, but most of the shard was never
-exercised.** No failure appeared in any shard of any group. However, 439 of
-the 540 sharded tests (81%) skipped for lack of `jq`, so a failure in a
-`jq`-dependent test would not have shown up here. The failing head
-`bef70791b7c6` was not available either, so a failure that existed only at
-that head could not be checked.
+**Cause identified; it does not reproduce on `main`. No code or test change
+is needed.** (Updated for #7300, which supersedes the earlier "inconclusive"
+conclusion.)
 
-Following the approved plan, there are no code, test or workflow changes.
-Nothing was demonstrated, so any fix would be speculative. The `lint`
-aggregate, the shard-failure tally and the isolation safeguards are
-untouched.
-
-To reproduce the original failure, the run needs a host or runner with `jq`
-and PyYAML, either reading the job 113792812346 log (sign-in required) or
-running the same two step bodies with `CI_POLL_TEST_GROUP_INDEX=0..3`.
+- **Cause.** CI run 37922279826 (job 113792812346) failed
+  `test_security_pass_cap_converts_low_keep_fixing_to_advisory` at PR #6611's
+  head `bef70791b7c6`. That head still carried #6539's rule, which turned a
+  capped low or medium `keep_fixing` decision into `fail` and ended the
+  security pass as `ai:security-pass-failed`. The test expects #6729's rule,
+  so the branch code and the test disagreed. The head itself could not be
+  checked out here (see Target); this finding rests on the documented
+  #6539 to #6729 history and the clarify-respond analysis on #7300, not on
+  a local run of that head.
+- **Current `main`.** `main` carries #6729's advisory conversion in
+  `security_pass_exhaustion_judge` in `scripts/orchestrate_poll_process.sh`:
+  once `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` is reached, low and medium
+  `keep_fixing` decisions are rewritten to `accept_with_followup` with the
+  note `[keep_fixing capped after <c> judge round(s); converted to advisory
+  follow-up]` (the `jq --arg note` rewrite, about line 7411). The cap still
+  never waives a high, critical or unrated finding.
+- **Regression coverage.** These existing tests in
+  `tests/test_orchestrate_poll_process.py` guard against #6539's rule coming
+  back (line numbers approximate):
+  - `test_security_pass_cap_converts_low_keep_fixing_to_advisory` (about
+    line 6490): fails under #6539's rule, passes under #6729's.
+  - `test_security_pass_cap_never_waives_a_high_finding` (about 6426).
+  - `test_security_pass_cap_does_not_record_advisories_before_terminal_failure`
+    (about 6469).
+  - `test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing`
+    (about 6551).
+- **Rejected suggestion.** The triage issue's suggested fix (change the test
+  to expect `ai:security-pass-failed` with no waiver) is rejected. It would
+  reverse #6729 and the documented agents.md contract, and would end
+  projects whose remaining findings are all low or medium. The issue's cited
+  line numbers and its claim that the poller converts capped findings to
+  `fail` describe head `bef70791b7c6`, not `main`.
+- **Earlier analysis.** The Results section above (no `jq`, head not
+  resolvable, 81% of the shard skipped) still describes that earlier sandbox
+  run and is kept as a record of what was tried.
 
 ## CI confirmation
 

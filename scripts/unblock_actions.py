@@ -50,6 +50,11 @@ the network; the shell only executes.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
+  followup-handoff --context-file PATH --fixup N --verdict descope|operator_step
+      Instead of that reset, when the context carries a `protected_rejection`
+      (the item is still held by an automation-path rejection that the
+      verdict followed, #7287): the operator handoff ops with
+      `handoff_retry: true` on the WARNING, so a failed write is retried.
   ci-owner --item-file PATH --repo R
       Reads the already-fetched item JSON and prints
       `{"pr": n|null, "reason": s, "declared_branch": s|null}`: the pull
@@ -521,8 +526,12 @@ def _fixup_ops(ctx: dict, verdict: dict, kind_word: str) -> list[dict]:
 	return [{"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": ctx["item"]}]
 
 
-def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
-	"""Operator handoff for a protected-path rejection: no fix-up, the item stays blocked."""
+def _protected_handoff_ops(ctx: dict, verdict: dict, retryable: bool = False) -> list[dict]:
+	"""Operator handoff for a protected-path rejection: no fix-up, the item stays blocked.
+
+	`retryable` marks the WARNING op `handoff_retry: true` for a handoff the
+	next judge run retries when a write fails (followup-handoff, #7287).
+	"""
 	item = ctx["item"]
 	rejection = ctx["protected_rejection"]
 	run = rejection["run"]
@@ -533,11 +542,18 @@ def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
 	if rejection["truncated"]:
 		paths_line += " (the rejection listed only the first 100 paths)"
 	name = verdict["verdict"]
+	# A retryable handoff follows a fix-up that already merged (#7287), so its
+	# text must not claim no fix-up exists.
+	lead = (
+		f"The unblock judge's earlier `{name}` fix-up merged, but implementation run {run} was rejected by the automation-path grant guard"
+		" and that is still the newest guard result, so no resume command was posted. "
+		if retryable else
+		f"The unblock judge chose `{name}`, but implementation run {run} was rejected by the automation-path grant guard. "
+		"A fix-up issue would hit the same guard, so none was created. "
+	)
 	body = "\n".join(
 		[
-			f"The unblock judge chose `{name}`, but implementation run {run} was rejected by the automation-path grant guard. "
-			"A fix-up issue would hit the same guard, so none was created. "
-			"This issue stays blocked until a person grants or makes the change.",
+			lead + "This issue stays blocked until a person grants or makes the change.",
 			"",
 			paths_line,
 			"",
@@ -566,16 +582,52 @@ def _protected_handoff_ops(ctx: dict, verdict: dict) -> list[dict]:
 		step["dormant_until"] = verdict["placeholder"]
 	# The operator step goes first: unblock_run_ops skips later writes after a
 	# failure, so the hold marker (which stops later judge runs) is posted only
-	# once the operator step is recorded. The verdict is already recorded, so a
-	# failed handoff is not retried; unblock_run_ops still sends a WARNING.
+	# once the operator step is recorded. For a verdict handoff the verdict is
+	# already recorded, so a failed handoff is not retried; unblock_run_ops still
+	# sends a WARNING. A `retryable` handoff (#7287) keeps its fix-up wait open,
+	# so the next judge run retries it.
+	warning = {
+		"op": "telegram", "level": "WARNING",
+		"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",
+	}
+	if retryable:
+		warning["text"] = f"Operator handoff for #{item}: automation-path guard rejected run {run}; merged fix-up not resumed, the item stays blocked"
+		warning["handoff_retry"] = True
 	return [
 		{"op": "operator_step", "key": f"unblock-{item}", "source": f"Unblock judge, #{item}", "steps": [step]},
 		{"op": "comment", "issue": item, "body": body},
-		{
-			"op": "telegram", "level": "WARNING",
-			"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",
-		},
+		warning,
 	]
+
+
+def followup_handoff_ops(ctx: dict, fixup: int, verdict_name: str) -> list[dict]:
+	"""The handoff for a merged fix-up whose item is still held by an automation-path rejection (#7287).
+
+	The fix-up was filed for a `descope` / `operator_step` verdict recorded
+	after the rejection; resuming the item would hit the same guard, so it is
+	handed to an operator instead. The verdict text is fixed, never model text.
+	"""
+	if fixup < 1:
+		raise UsageError("--fixup must be an issue number")
+	if verdict_name not in PROTECTED_HANDOFF_VERDICTS:
+		raise UsageError(f"--verdict must be one of {list(PROTECTED_HANDOFF_VERDICTS)}")
+	rejection = ctx.get("protected_rejection")
+	if not rejection:
+		raise UsageError("followup-handoff needs a valid protected_rejection in the context")
+	synthetic = {
+		"verdict": verdict_name,
+		"reason": (
+			f"Fix-up #{fixup} merged, but the newest guard result on this issue is still the automation-path grant guard's"
+			f" rejection of run {rejection['run']}; resuming would hit the same guard."
+		),
+		"instructions": "Grant the listed paths in the issue's files_touched block or make the change by hand, then clear ai:scope-blocked.",
+	}
+	ops = _protected_handoff_ops(ctx, synthetic, retryable=True)
+	# Its own key: the newest comment for a key supersedes earlier ones, so
+	# reusing `unblock-<item>` would replace the original operator_step entry
+	# (its instructions and dormant_until placeholder) with this generic one.
+	ops[0]["key"] = f"unblock-handoff-{ctx['item']}"
+	return ops
 
 
 def plan(verdict: dict, ctx: dict) -> list[dict]:
@@ -833,6 +885,10 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	followup_handoff_cmd = sub.add_parser("followup-handoff")
+	followup_handoff_cmd.add_argument("--context-file", required=True)
+	followup_handoff_cmd.add_argument("--fixup", required=True, type=int)
+	followup_handoff_cmd.add_argument("--verdict", required=True)
 	owner_cmd = sub.add_parser("ci-owner")
 	owner_cmd.add_argument("--item-file", required=True)
 	owner_cmd.add_argument("--repo", required=True)
@@ -861,6 +917,8 @@ def run(argv: list[str] | None = None) -> dict:
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
 		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	if args.command == "followup-handoff":
+		return {"ops": followup_handoff_ops(ctx, args.fixup, args.verdict)}
 	if args.command == "regrant":
 		rejection = _read_json(args.rejection_file, "--rejection-file")
 		if not isinstance(rejection, dict) or rejection.get("status") != "ok":
