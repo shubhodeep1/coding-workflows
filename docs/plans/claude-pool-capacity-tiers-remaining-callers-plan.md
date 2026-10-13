@@ -2,8 +2,8 @@
 
 ## Summary
 
-Add per-role capacity tiers to the Claude account pool (core 0.9, standard 0.8,
-utility 0.7), so low-priority roles stop drawing on accounts that are nearly
+Add per-role capacity tiers to the Claude account pool (core 0.95, standard 0.85,
+utility 0.75), so low-priority roles stop drawing on accounts that are nearly
 full. Move the three OpenRouter callers that project #6664 does not cover onto
 the pool: the memory learnings extractor, the release-gate soft-error analyzer
 and the review interim judge.
@@ -35,7 +35,7 @@ Memory keyword extraction (`ai_memory_lib.py`, `gpt-6-luna`) and embeddings stay
 on OpenRouter (answer Q24, option D not selected).
 
 **How the pool gate works on #6667.** `scripts/claude_pool_token.sh` (run by
-`.github/actions/claude-pool-token`) reads `gate_utilization` (0.9) once per
+`.github/actions/claude-pool-token`) reads `gate_utilization` (0.95 since PR #7176) once per
 job.
 - It probes each account with one Haiku call and calls `claude_engine.py
   choose --gate` (`choose_account()`). An account is gated when
@@ -63,11 +63,14 @@ Constraints that bind this plan:
 
 - **G1.** Each pool role belongs to one tier: `core`, `standard` or `utility`.
   A role is offered only the accounts whose probed peak utilization is below
-  its tier's gate. Defaults are core 0.9, standard 0.8, utility 0.7.
+  its tier's gate. Defaults are core 0.95, standard 0.85, utility 0.75.
 - **G2.** When every account is above a role's tier gate, the role falls back
   as a capacity fallback (`all_gated`, exit 75). It runs codex/OpenRouter, or
   skips for a skip-on-unavailable role such as `PANEL_REVIEWER`. Core roles
-  keep the accounts between 0.7 and 0.9.
+  keep the accounts between 0.75 and 0.95.
+  If `docs/plans/claude-capacity-wait-plan.md` lands first, a capacity reason
+  makes the role wait and resume (`CLAUDE_POOL_CAPACITY_WAIT_ENABLED`) instead
+  of running codex. Tiers only decide when each role reaches that point.
 - **G3.** `MEMORY_LEARNINGS` (the extractor) runs on the pool, using Claude
   Sonnet 5.5 through the isolated `claude_run`: a read-only container with an
   empty workdir.
@@ -125,7 +128,7 @@ Each goal is verified by the tests listed under "Tests".
     `JUDGE_INTERIM` as noted. `MEMORY_LEARNINGS` appears only as a prefix of
     `MEMORY_LEARNINGS_EXTRACT_ENABLED`, which stays unchanged.
 - **§4 defaults.**
-  - `tier_gates` defaults to `{core: 0.9, standard: 0.8, utility: 0.7}`.
+  - `tier_gates` defaults to `{core: 0.95, standard: 0.85, utility: 0.75}`.
   - `SOFT_ERROR_CLAUDE_CHAR_BUDGET` defaults to `3000000`.
   - A role without a tier is `core`.
 - **§14 consumers.** Phases 1 and 4 change scripts that reach consumers through
@@ -162,9 +165,9 @@ Each goal is verified by the tests listed under "Tests".
 
 | Tier | Roles |
 |---|---|
-| core (0.9) | `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`, `IMPLEMENT`, `IMPLEMENT_REPAIR`, `IMPLEMENT_DIAGNOSE`, `ORCHESTRATE`, `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE`, `SECURITY_AUDIT` |
-| standard (0.8) | `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `ACTIVATION_VERIFY`, `UNBLOCK_JUDGE`, `LOG_ANALYSIS`, `LOG_AUDIT` |
-| utility (0.7) | `LOG_SUMMARY`, `RETRO`, `MATERIALITY`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER`, `MEMORY_LEARNINGS`, `SOFT_ERROR_ANALYZER`, `JUDGE_INTERIM` |
+| core (0.95) | `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`, `IMPLEMENT`, `IMPLEMENT_REPAIR`, `IMPLEMENT_DIAGNOSE`, `ORCHESTRATE`, `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE`, `SECURITY_AUDIT` |
+| standard (0.85) | `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `ACTIVATION_VERIFY`, `UNBLOCK_JUDGE`, `LOG_ANALYSIS`, `LOG_AUDIT` |
+| utility (0.75) | `LOG_SUMMARY`, `RETRO`, `MATERIALITY`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER`, `MEMORY_LEARNINGS`, `SOFT_ERROR_ANALYZER`, `JUDGE_INTERIM` |
 
 - The table may name roles that are not yet in `ROLES`, such as
   `PANEL_REVIEWER` (PR #7024) and the three new roles. Unknown names are inert
@@ -315,9 +318,11 @@ The `JUDGE_INTERIM_TIMEOUT_S` default (120 s) applies to the Claude run too.
 
 ### D3 — Capacity tiers
 
-- **Chosen:** core 0.9 / standard 0.8 / utility 0.7, with the role mapping in
+- **Chosen:** core 0.95 / standard 0.85 / utility 0.75, with the role mapping in
   the Approach section (Q26 A).
-- **Alternatives considered:** keep the single 0.9 gate (Q26 B).
+- **Alternatives considered:** keep the single `gate_utilization` gate (Q26 B).
+- **Revision:** the values were first core 0.9 / standard 0.8 / utility 0.7.
+  All three moved up 5 points when `gate_utilization` became 0.95 (PR #7176).
 - **Why:** core roles keep the pool when it is busy, while utility work yields
   first.
 
@@ -472,7 +477,7 @@ There are four phases, one PR each (answer Q34 A). Each phase:
 ### Phase 1: capacity tiers
 
 1. `scripts/claude_engine.py`:
-   - Add `DEFAULT_TIER_GATES = {"core": 0.9, "standard": 0.8, "utility": 0.7}`
+   - Add `DEFAULT_TIER_GATES = {"core": 0.95, "standard": 0.85, "utility": 0.75}`
      and the `ROLE_TIERS` table from the Approach section. Add `tier_gates` to
      `DEFAULT_CONFIG` (lines 126–138).
    - Validate `tier_gates` and the optional per-role `tier` field in
@@ -482,8 +487,8 @@ There are four phases, one PR each (answer Q34 A). Each phase:
      output (lines 369–431).
    - Add a `tier-gates` CLI command that prints `core=<g> standard=<g>
      utility=<g>`, plus `--tier` to the `resolve` output.
-2. `.github/ai/claude_engine.json`: add `"tier_gates": {"core": 0.9,
-   "standard": 0.8, "utility": 0.7}` next to `gate_utilization` (line 5).
+2. `.github/ai/claude_engine.json`: add `"tier_gates": {"core": 0.95,
+   "standard": 0.85, "utility": 0.75}` next to `gate_utilization` (line 5).
 3. `scripts/claude_pool_token.sh`:
    - After the probes (lines 210–233), run `engine_py choose --gate <g>` once
      for each tier gate.
@@ -740,7 +745,7 @@ All new tests are unit or contract tests with fakes, and each gets its own
 - **Phase 1** takes effect on the next job in every repo: in this repo through
   `main` and the `@stable` promotion, in consumers through `@stable`.
   Rollback: revert the PR, or, without a code change, set all three
-  `tier_gates` to 0.9 in `.github/ai/claude_engine.json`.
+  `tier_gates` to 0.95 (the `gate_utilization` value) in `.github/ai/claude_engine.json`.
 - **Phase 2** reaches consumers in two steps. The reusable workflow change
   ships with `@stable`; the wrapper's `id-token: write` arrives with the next
   `update_workflows.yml` sync (daily 04:00 UTC cron, or the `@stable`

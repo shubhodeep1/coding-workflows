@@ -33,15 +33,17 @@ def run(sha=SHA, number=11, conclusion="cancelled", attempt=1, run_id=123, **ext
 	}
 
 
-def exercise(prs=None, completed=None, active=None, enabled=True, dry_run=False, head_filter=""):
+def exercise(prs=None, completed=None, active=None, enabled=True, dry_run=False, head_filter="", classify="genuine"):
 	prs = [pr()] if prs is None else prs
 	completed = [run()] if completed is None else completed
 	active = [] if active is None else active
 	output = io.StringIO()
 	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: completed if status == "completed" else active) as listing, \
 		mock.patch.object(HELPER, "current_pr_heads", return_value={item["number"]: item["head_sha"] for item in prs if isinstance(item, dict) and type(item.get("number")) is int}), \
+		mock.patch.object(HELPER, "classify_runner_shutdown", return_value=classify) as classifier, \
 		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=True) as post, contextlib.redirect_stdout(output):
 		HELPER.process(prs, HELPER.SOURCE_REPO, enabled, dry_run, head_filter)
+	exercise.classifier = classifier
 	return output.getvalue().splitlines(), listing, post
 
 
@@ -373,4 +375,215 @@ def test_workflow_trusted_checkout_snapshot_and_permissions():
 	assert "persist-credentials: false" in text
 	assert "python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py" in text
 	assert "actions: write" in text
+	assert "checks: read" in text
 	assert "CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}" in text
+
+
+# --- Runner-shutdown recovery (issue #7109) -------------------------------
+
+def job(name, job_id, conclusion="failure"):
+	return {"id": job_id, "name": name, "status": "completed", "conclusion": conclusion,
+		"check_run_url": f"https://api.github.com/repos/{HELPER.SOURCE_REPO}/check-runs/{job_id + 1000}"}
+
+
+SHUTDOWN = "The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled."
+
+
+def annotation(message, level="failure"):
+	return {"message": message, "annotation_level": level}
+
+
+def classify(jobs, annotations):
+	"""Run the real classifier against stubbed jobs/annotations reads."""
+	def fake_annotations(repo, check_run_id):
+		value = annotations[check_run_id - 1000]
+		if isinstance(value, Exception):
+			raise value
+		return [item for item in value if item["annotation_level"] == "failure"]
+	jobs_mock = mock.Mock(side_effect=jobs) if isinstance(jobs, Exception) else mock.Mock(return_value=jobs)
+	with mock.patch.object(HELPER, "list_run_jobs", jobs_mock), \
+		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads:
+		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123), reads
+
+
+def test_shutdown_failure_with_lint_aggregate_is_classified_shutdown():
+	jobs = [job("static-checks", 1), job("tests-hooks-and-orchestrator", 2, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		3: [annotation("CI jobs that did not succeed: static-checks"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_shutdown_classification_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=runner_shutdown"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def test_failure_without_signal_is_other_conclusion():
+	verdict, _ = classify([job("static-checks", 1)], {1: [annotation("Process completed with exit code 1.")]})
+	assert verdict == "genuine"
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="genuine")
+	assert "action=skip reason=other_conclusion" in lines[0]
+	post.assert_not_called()
+
+
+def test_mixed_shutdown_and_genuine_failure_is_genuine():
+	jobs = [job("static-checks", 1), job("tests-heal-plan-and-validation", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN)],
+		2: [annotation("Process completed with exit code 1.")],
+		3: [annotation("CI jobs that did not succeed: static-checks, tests-heal-plan-and-validation")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_naming_a_genuinely_failed_job_is_genuine():
+	jobs = [job("static-checks", 1), job("orchestrate-poll (1)", 2, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN)],
+		3: [annotation("CI jobs that did not succeed: static-checks, orchestrate-poll")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_with_unparseable_message_is_unverified_or_genuine():
+	jobs = [job("static-checks", 1), job("lint", 3)]
+	verdict, _ = classify(jobs, {1: [annotation(SHUTDOWN)], 3: [annotation("Process completed with exit code 1.")]})
+	assert verdict == "unverified"
+	verdict, _ = classify(jobs, {1: [annotation(SHUTDOWN)], 3: [annotation("something else")]})
+	assert verdict == "genuine"
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="unverified")
+	assert "action=skip reason=runner_shutdown_unverified" in lines[0]
+	post.assert_not_called()
+
+
+def test_matrix_key_matches_matrix_job_names():
+	jobs = [job("orchestrate-poll (0)", 1, "cancelled"), job("orchestrate-poll (2)", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(SHUTDOWN)],
+		3: [annotation("CI jobs that did not succeed: orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_successful_matrix_sibling_does_not_block_shutdown():
+	jobs = [job("orchestrate-poll (0)", 1, "success"), job("orchestrate-poll (2)", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		3: [annotation("CI jobs that did not succeed: orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_shutdown_text_next_to_a_real_failure_is_genuine():
+	jobs = [job("static-checks", 1), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("Process completed with exit code 1.")],
+		3: [annotation("CI jobs that did not succeed: static-checks")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_alone_without_shutdown_job_is_unverified_or_genuine():
+	jobs = [job("static-checks", 1, "cancelled"), job("lint", 3)]
+	verdict, _ = classify(jobs, {3: [annotation("CI jobs that did not succeed: static-checks")]})
+	assert verdict == "unverified"
+
+
+def test_second_attempt_never_classifies():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="shutdown")
+	assert "reason=already_retried" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["jobs", "annotations"])
+def test_unreadable_reads_are_unverified(failure):
+	jobs = [job("static-checks", 1)]
+	if failure == "jobs":
+		verdict, reads = classify(ValueError("jobs_unreadable"), {})
+		reads.assert_not_called()
+	else:
+		verdict, _ = classify(jobs, {1: ValueError("annotations_unreadable")})
+	assert verdict == "unverified"
+
+
+def test_too_many_failed_jobs_is_unverified():
+	jobs = [job(f"job-{index}", index + 1) for index in range(HELPER.MAX_FAILED_JOBS_CLASSIFIED + 1)]
+	verdict, reads = classify(jobs, {})
+	assert verdict == "unverified"
+	reads.assert_not_called()
+
+
+def test_timed_out_job_is_genuine():
+	verdict, reads = classify([job("static-checks", 1), job("tests-hooks-and-orchestrator", 2, "timed_out")], {})
+	assert verdict == "genuine"
+	reads.assert_not_called()
+
+
+def test_per_tick_classification_budget():
+	count = HELPER.MAX_FAILURE_CLASSIFICATIONS_PER_TICK + 1
+	shas = [f"{index:040x}" for index in range(1, count + 1)]
+	prs = [pr(sha=sha, number=20 + index) for index, sha in enumerate(shas)]
+	completed = [run(sha=sha, number=20 + index, run_id=200 + index, conclusion="failure")
+		for index, sha in enumerate(shas)]
+	lines, _, post = exercise(prs=prs, completed=completed, classify="shutdown")
+	assert exercise.classifier.call_count == HELPER.MAX_FAILURE_CLASSIFICATIONS_PER_TICK
+	assert post.call_count == HELPER.MAX_FAILURE_CLASSIFICATIONS_PER_TICK
+	assert "action=skip reason=runner_shutdown_unverified" in lines[-1]
+
+
+def test_dry_run_and_active_run_short_circuit_classification():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], dry_run=True, classify="shutdown")
+	assert "reason=dry_run" in lines[0]
+	exercise.classifier.assert_not_called()
+	lines, _, post = exercise(completed=[run(conclusion="failure")], active=[run(status="queued")], classify="shutdown")
+	assert "reason=active_run" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "startup_failure"])
+def test_cancelled_path_never_classifies(conclusion):
+	lines, _, post = exercise(completed=[run(conclusion=conclusion)], classify="genuine")
+	assert "reason=cancelled_ci" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_called_once()
+
+
+def test_list_run_jobs_parser():
+	good = {"total_count": 1, "jobs": [job("static-checks", 1)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(good))) as gh:
+		assert HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123) == good["jobs"]
+		assert gh.call_args.args[0][4] == f"repos/{HELPER.SOURCE_REPO}/actions/runs/123/attempts/1/jobs"
+	bad_payloads = [
+		"not json", "[]",
+		json.dumps({"total_count": 2, "jobs": [job("a", 1)]}),
+		json.dumps({"total_count": 100, "jobs": [job("a", index + 1) for index in range(100)]}),
+		json.dumps({"total_count": 1, "jobs": [dict(job("a", 1), status="in_progress")]}),
+		json.dumps({"total_count": 1, "jobs": [dict(job("a", 1), check_run_url="https://x/checks")]}),
+	]
+	for stdout in bad_payloads:
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout)):
+			with pytest.raises(ValueError, match="jobs_unreadable"):
+				HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123)
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+		with pytest.raises(ValueError, match="jobs_unreadable"):
+			HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123)
+
+
+def test_failure_annotations_parser():
+	payload = [annotation(SHUTDOWN), annotation("note", "notice")]
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))) as gh:
+		assert HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001) == [annotation(SHUTDOWN)]
+		assert gh.call_args.args[0][4] == f"repos/{HELPER.SOURCE_REPO}/check-runs/1001/annotations"
+	for stdout in ("not json", "{}", json.dumps([annotation("x")] * 100), json.dumps([{"message": 1}])):
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout)):
+			with pytest.raises(ValueError, match="annotations_unreadable"):
+				HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001)
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+		with pytest.raises(ValueError, match="annotations_unreadable"):
+			HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001)

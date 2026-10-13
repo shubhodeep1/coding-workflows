@@ -9,6 +9,11 @@ name: Update Workflow Wrappers
         required: false
         default: true
         type: boolean
+      update_via_pull_request:
+        description: "When UPDATER_PR_DELIVERY_ENABLED is false, deliver updates through an ai-sync/stable pull request (true) or push directly to the default branch (false); ignored while that variable selects the auto/update-workflows-* pull request"
+        required: false
+        default: true
+        type: boolean
     secrets:
       GH_PAT:
         required: true
@@ -21,6 +26,11 @@ name: Update Workflow Wrappers
     inputs:
       allow_workflow_edits:
         description: "Allow automatic workflow wrapper updates"
+        required: false
+        default: true
+        type: boolean
+      update_via_pull_request:
+        description: "When UPDATER_PR_DELIVERY_ENABLED is false, deliver updates through an ai-sync/stable pull request (true) or push directly to the default branch (false); ignored while that variable selects the auto/update-workflows-* pull request"
         required: false
         default: true
         type: boolean
@@ -116,11 +126,203 @@ jobs:
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
           echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
 
+      # Signed sync manifest verification (#7128). Runs before any fetched
+      # upstream code: the stable tag is mutable, so trust comes only from
+      # the attestation identity (the two release workflows on
+      # refs/heads/stable, GitHub-hosted runners) and from the manifest's
+      # commit and file hashes matching the fetched sparse checkout exactly.
+      # The verifier lives in this file, which consumers pin by SHA, so it
+      # never imports code from the tree it verifies.
+      - name: Verify signed sync manifest
+        id: verify_manifest
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          SYNC_UPSTREAM_REPO: shubhodeep1/coding-workflows
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_ROOT="$(dirname "${UPSTREAM_DIR}")"
+          SYNC_VERIFIER="${RUNNER_TEMP}/sync_manifest_verify.py"
+          SYNC_ALLOWED_FILE="${RUNNER_TEMP}/sync_allowed_consumer_paths.txt"
+          rm -f "${SYNC_ALLOWED_FILE}"
+
+          reject() {
+            echo "failure_reason_code=$1" >> "$GITHUB_OUTPUT"
+            echo "::error::SYNC_MANIFEST outcome=rejected reason=$1${2:+ $2}"
+            exit 1
+          }
+
+          cat > "${SYNC_VERIFIER}" <<'SYNC_VERIFY_PY'
+          """Inline sync-manifest verifier and staged-path policy (#7128).
+
+          Kept in update_workflows.yml on purpose: it must not import code from
+          the upstream tree it verifies. The glob matcher mirrors
+          scripts/build_sync_manifest.py::glob_to_regex (a test pins both).
+          """
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          import sys
+
+          SCHEMA = "coding-workflows.sync-manifest.v1"
+          REPOSITORY = "shubhodeep1/coding-workflows"
+
+
+          def glob_to_regex(pattern):
+              parts = [("[^/]*" if char == "*" else re.escape(char)) for char in pattern]
+              return re.compile("^" + "".join(parts) + "$")
+
+
+          def fail(code, path=None):
+              print(code if path is None else f"{code} path={path}")
+              sys.exit(1)
+
+
+          def walk_tree(root):
+              found = {}
+              for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                  rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+                  if rel_dir == ".":
+                      dirnames[:] = [name for name in dirnames if name != ".git"]
+                  names = list(filenames)
+                  for name in list(dirnames):
+                      if os.path.islink(os.path.join(dirpath, name)):
+                          dirnames.remove(name)
+                          names.append(name)
+                  for name in names:
+                      full = os.path.join(dirpath, name)
+                      rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+                      mode = os.lstat(full).st_mode
+                      if stat.S_ISLNK(mode):
+                          found[rel] = "symlink:" + os.readlink(full)
+                      elif stat.S_ISREG(mode):
+                          digest = hashlib.sha256()
+                          with open(full, "rb") as handle:
+                              for chunk in iter(lambda: handle.read(1 << 20), b""):
+                                  digest.update(chunk)
+                          found[rel] = digest.hexdigest()
+                      else:
+                          fail("ERR_SYNC_MANIFEST_FILE_MISMATCH", rel)
+              return found
+
+
+          def verify():
+              try:
+                  with open(os.environ["MANIFEST_FILE"], encoding="utf-8") as handle:
+                      manifest = json.load(handle)
+              except (OSError, KeyError, ValueError):
+                  fail("ERR_SYNC_MANIFEST_MISSING")
+              if not isinstance(manifest, dict):
+                  fail("ERR_SYNC_MANIFEST_MISSING")
+              if manifest.get("schema") != SCHEMA or manifest.get("repository") != REPOSITORY:
+                  fail("ERR_SYNC_MANIFEST_COMMIT_MISMATCH")
+              if manifest.get("commit") != os.environ.get("EXPECTED_COMMIT", "").lower():
+                  fail("ERR_SYNC_MANIFEST_COMMIT_MISMATCH")
+              if manifest.get("version") != os.environ.get("EXPECTED_VERSION", ""):
+                  fail("ERR_SYNC_MANIFEST_COMMIT_MISMATCH")
+              files = manifest.get("files")
+              allowed = manifest.get("allowed_consumer_paths")
+              if not isinstance(files, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+                  fail("ERR_SYNC_MANIFEST_FILE_MISMATCH")
+              if not isinstance(allowed, list) or not allowed or not all(isinstance(item, str) and item for item in allowed):
+                  fail("ERR_SYNC_MANIFEST_FILE_MISMATCH")
+              found = walk_tree(os.environ["UPSTREAM_ROOT"])
+              for path in sorted(set(found) | set(files)):
+                  if found.get(path) != files.get(path):
+                      fail("ERR_SYNC_MANIFEST_FILE_MISMATCH", path)
+              with open(os.environ["ALLOWED_OUT"], "w", encoding="utf-8") as handle:
+                  handle.write("\n".join(allowed) + "\n")
+              print(len(files))
+
+
+          def check_paths(allowed_file, paths_file):
+              with open(allowed_file, encoding="utf-8") as handle:
+                  compiled = [glob_to_regex(line) for line in handle.read().splitlines() if line]
+              if not compiled:
+                  sys.exit(1)
+              with open(paths_file, "rb") as handle:
+                  paths = [item.decode("utf-8", "replace") for item in handle.read().split(b"\0") if item]
+              for path in paths:
+                  if not any(regex.match(path) for regex in compiled):
+                      print(path)
+                      sys.exit(3)
+
+
+          if __name__ == "__main__":
+              if len(sys.argv) == 2 and sys.argv[1] == "verify":
+                  verify()
+              elif len(sys.argv) == 4 and sys.argv[1] == "check-paths":
+                  check_paths(sys.argv[2], sys.argv[3])
+              else:
+                  sys.exit(2)
+          SYNC_VERIFY_PY
+
+          # 1. The release version tag whose peeled commit is the fetched one.
+          TAG_LIST="$(git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*')" \
+            || reject ERR_SYNC_MANIFEST_NO_VERSION_TAG "detail=ls_remote_failed"
+          SYNC_VERSION="$(printf '%s\n' "${TAG_LIST}" | while read -r tag_sha tag_ref; do
+              [ "${tag_sha,,}" = "${UPSTREAM_SHA}" ] || continue
+              [[ "${tag_ref}" =~ ^refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)\^\{\}$ ]] || continue
+              echo "${BASH_REMATCH[1]}"
+            done | sort -V | tail -n 1)"
+          [ -n "${SYNC_VERSION}" ] || reject ERR_SYNC_MANIFEST_NO_VERSION_TAG
+          echo "version=${SYNC_VERSION}" >> "$GITHUB_OUTPUT"
+
+          # 2. The manifest asset of that release.
+          MANIFEST_DIR="${RUNNER_TEMP}/sync-manifest"
+          rm -rf "${MANIFEST_DIR}"
+          mkdir -p "${MANIFEST_DIR}"
+          gh release download "${SYNC_VERSION}" --repo "${SYNC_UPSTREAM_REPO}" \
+            --pattern sync-manifest.json --dir "${MANIFEST_DIR}" >/dev/null 2>&1 \
+            || reject ERR_SYNC_MANIFEST_MISSING
+          MANIFEST_FILE="${MANIFEST_DIR}/sync-manifest.json"
+          { [ -f "${MANIFEST_FILE}" ] && [ ! -L "${MANIFEST_FILE}" ]; } || reject ERR_SYNC_MANIFEST_MISSING
+
+          # 3. Its Sigstore attestation. No --source-digest: the signing run's
+          # source is the tested commit, which can differ from the release
+          # commit by the changelog fold; step 4 binds the release commit.
+          VERIFY_HELP="$(gh attestation verify --help 2>&1 || true)"
+          if ! grep -q -- '--cert-identity-regex' <<<"${VERIFY_HELP}" || ! grep -q -- '--deny-self-hosted-runners' <<<"${VERIFY_HELP}"; then
+            reject ERR_SYNC_MANIFEST_SIGNATURE "reason=gh_flags_missing"
+          fi
+          if ! gh attestation verify "${MANIFEST_FILE}" \
+            --repo "${SYNC_UPSTREAM_REPO}" \
+            --cert-identity-regex '^https://github\.com/shubhodeep1/coding-workflows/\.github/workflows/(test-and-mark-stable|mark-stable)\.yml@refs/heads/stable$' \
+            --deny-self-hosted-runners >/dev/null; then
+            reject ERR_SYNC_MANIFEST_SIGNATURE
+          fi
+
+          # 4. Commit, version and the exact file set of the sparse checkout.
+          set +e
+          VERIFY_RESULT="$(MANIFEST_FILE="${MANIFEST_FILE}" UPSTREAM_ROOT="${UPSTREAM_ROOT}" \
+            EXPECTED_COMMIT="${UPSTREAM_SHA}" EXPECTED_VERSION="${SYNC_VERSION}" \
+            ALLOWED_OUT="${SYNC_ALLOWED_FILE}" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -I "${SYNC_VERIFIER}" verify)"
+          VERIFY_RC=$?
+          set -e
+          if [ "${VERIFY_RC}" -ne 0 ]; then
+            VERIFY_CODE="${VERIFY_RESULT%% *}"
+            VERIFY_DETAIL=""
+            if [[ "${VERIFY_RESULT}" == *" "* ]]; then
+              VERIFY_DETAIL="${VERIFY_RESULT#* }"
+            fi
+            [[ "${VERIFY_CODE}" =~ ^ERR_SYNC_MANIFEST_[A-Z_]+$ ]] || VERIFY_CODE="ERR_SYNC_MANIFEST_FILE_MISMATCH"
+            reject "${VERIFY_CODE}" "${VERIFY_DETAIL}"
+          fi
+
+          echo "allowed_file=${SYNC_ALLOWED_FILE}" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_code=" >> "$GITHUB_OUTPUT"
+          echo "SYNC_MANIFEST outcome=verified version=${SYNC_VERSION} commit=${UPSTREAM_SHA} files=${VERIFY_RESULT}"
+
       # Fail-closed release-manifest verification (orchestrator project #6902,
       # issue #6960). Runs before every step that writes the consumer
       # checkout; any failure stops the job, so "Commit and push updates"
-      # never runs. Off unless the repo variable
-      # UPDATER_VERIFY_RELEASE_MANIFEST is "true".
+      # never runs. On unless the repo variable
+      # UPDATER_VERIFY_RELEASE_MANIFEST is "false" (unset or empty is on).
       # Assumption: the authoritative plan
       # (docs/plans/safeguarded-consumer-updater-plan.md on branch
       # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be
@@ -136,7 +338,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
           UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
-          UPDATER_VERIFY_RELEASE_MANIFEST: ${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'false' }}
+          UPDATER_VERIFY_RELEASE_MANIFEST: ${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'true' }}
           RELEASE_MANIFEST_ASSET_NAME: release-manifest.v1.json
         run: |
           set -euo pipefail
@@ -147,7 +349,7 @@ jobs:
           RELEASE_REPO="shubhodeep1/coding-workflows"
           MANIFEST_MAX_BYTES=16777216
 
-          verify_flag="${UPDATER_VERIFY_RELEASE_MANIFEST:-false}"
+          verify_flag="${UPDATER_VERIFY_RELEASE_MANIFEST:-true}"
           verify_flag="${verify_flag//[[:space:]]/}"
           verify_flag="${verify_flag,,}"
           if [ "${verify_flag}" != "true" ]; then
@@ -809,10 +1011,10 @@ jobs:
       # Assumption: the authoritative plan
       # (docs/plans/safeguarded-consumer-updater-plan.md on branch
       # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be
-      # read, so UPDATER_PR_DELIVERY_ENABLED (default false), the branch
+      # read, so UPDATER_PR_DELIVERY_ENABLED (default true), the branch
       # prefix auto/update-workflows- and the log prefix UPDATER_PR_DELIVERY
-      # are the provisional names from the issue. With the flag off this step
-      # still pushes straight to the default branch. With it on, nothing is
+      # are the provisional names from the issue. With the flag set to false
+      # this step still pushes straight to the default branch. With it on, nothing is
       # pushed to the default branch: the commit goes to
       # auto/update-workflows-<release-sha-12> with a lease-checked push and
       # one pull request is opened or refreshed. This step never enables
@@ -828,18 +1030,28 @@ jobs:
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPDATE_VIA_PR: ${{ inputs.update_via_pull_request != false }}
+          SYNC_VERSION: ${{ steps.verify_manifest.outputs.version }}
+          SYNC_UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          SYNC_ALLOWED_FILE: ${{ steps.verify_manifest.outputs.allowed_file }}
           UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
           UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
           VERIFIED: ${{ steps.verify_release_manifest.outputs.verified }}
           RELEASE_TAG: ${{ steps.verify_release_manifest.outputs.tag }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          UPDATER_PR_DELIVERY_ENABLED: ${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'false' }}
+          UPDATER_PR_DELIVERY_ENABLED: ${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'true' }}
+          CHANGELOG_ASSEMBLED: ${{ steps.changelog_assemble.outputs.changelog_assembled }}
+          CHANGELOG_FRAGMENT_COUNT: ${{ steps.changelog_assemble.outputs.changelog_fragment_count }}
+          CHANGELOG_LAYOUT: ${{ steps.changelog_assemble.outputs.changelog_layout }}
+          AGENTS_ASSEMBLED: ${{ steps.agents_assemble.outputs.agents_assembled }}
+          AGENTS_FRAGMENT_COUNT: ${{ steps.agents_assemble.outputs.agents_fragment_count }}
+          AGENTS_FILE: ${{ steps.agents_assemble.outputs.agents_file }}
         run: |
           set -euo pipefail
 
           PR_OUT="${GITHUB_OUTPUT:-/dev/null}"
           PR_DELIVERY="false"
-          pr_delivery_flag="${UPDATER_PR_DELIVERY_ENABLED:-false}"
+          pr_delivery_flag="${UPDATER_PR_DELIVERY_ENABLED:-true}"
           pr_delivery_flag="${pr_delivery_flag//[[:space:]]/}"
           pr_delivery_flag="${pr_delivery_flag,,}"
           if [ "${pr_delivery_flag}" = "true" ]; then
@@ -884,12 +1096,36 @@ jobs:
           fi
           # Assembly both rewrites CHANGELOG.md and deletes the folded
           # fragments, so stage with -A to pick up the removals.
-          if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
+          if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
             git add -A -- CHANGELOG.md changelog.d
           fi
           # Same for agents.d/: the agents file is rewritten and fragments deleted.
-          if [ "${{ steps.agents_assemble.outputs.agents_assembled }}" = "true" ]; then
-            git add -A -- "${{ steps.agents_assemble.outputs.agents_file }}" agents.d
+          if [ "${AGENTS_ASSEMBLED}" = "true" ]; then
+            git add -A -- "${AGENTS_FILE}" agents.d
+          fi
+
+          # Signed path policy (#7128): every staged path must match the
+          # allowlist of the verified sync manifest, or nothing is committed.
+          SYNC_VERIFIER="${RUNNER_TEMP}/sync_manifest_verify.py"
+          if [ -z "${SYNC_ALLOWED_FILE:-}" ] || [ ! -s "${SYNC_ALLOWED_FILE}" ] || [ ! -f "${SYNC_VERIFIER}" ]; then
+            echo "::error::ERR_SYNC_PATH_NOT_ALLOWED reason=allowlist_missing"
+            git reset -q
+            exit 1
+          fi
+          SYNC_STAGED_PATHS_FILE="$(mktemp)"
+          git diff --cached --name-only --no-renames -z > "${SYNC_STAGED_PATHS_FILE}"
+          set +e
+          SYNC_DENIED_PATH="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${SYNC_VERIFIER}" check-paths "${SYNC_ALLOWED_FILE}" "${SYNC_STAGED_PATHS_FILE}")"
+          SYNC_POLICY_RC=$?
+          set -e
+          if [ "${SYNC_POLICY_RC}" -ne 0 ]; then
+            if [ "${SYNC_POLICY_RC}" -eq 3 ]; then
+              echo "::error::ERR_SYNC_PATH_NOT_ALLOWED path=${SYNC_DENIED_PATH}"
+            else
+              echo "::error::ERR_SYNC_PATH_NOT_ALLOWED reason=policy_check_failed"
+            fi
+            git reset -q
+            exit 1
           fi
 
           COMMIT_BODY=""
@@ -951,11 +1187,11 @@ jobs:
           if [ -n "$CHANGELOG_ASSET_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragment assets:\n${CHANGELOG_ASSET_LIST}\n"
           fi
-          if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
-            COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${{ steps.changelog_assemble.outputs.changelog_fragment_count }} fragment(s), layout ${{ steps.changelog_assemble.outputs.changelog_layout }}).\n"
+          if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${CHANGELOG_FRAGMENT_COUNT} fragment(s), layout ${CHANGELOG_LAYOUT}).\n"
           fi
-          if [ "${{ steps.agents_assemble.outputs.agents_assembled }}" = "true" ]; then
-            COMMIT_BODY="${COMMIT_BODY}agents.d fragments assembled into ${{ steps.agents_assemble.outputs.agents_file }} (${{ steps.agents_assemble.outputs.agents_fragment_count }} fragment(s)).\n"
+          if [ "${AGENTS_ASSEMBLED}" = "true" ]; then
+            COMMIT_BODY="${COMMIT_BODY}agents.d fragments assembled into ${AGENTS_FILE} (${AGENTS_FRAGMENT_COUNT} fragment(s)).\n"
           fi
 
           if git diff --cached --quiet; then
@@ -971,9 +1207,104 @@ jobs:
 
           git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.' "$COMMIT_BODY")"
 
-          if [ "${PR_DELIVERY}" != "true" ]; then
+          # Delivery selection. UPDATER_PR_DELIVERY_ENABLED=true (#6989/#7004)
+          # selects the auto/update-workflows-<release-sha-12> pull request at
+          # the end of this step, which the `verify` job checks before enabling
+          # auto-merge. Otherwise the update_via_pull_request input (#7128,
+          # default true) selects the ai-sync/stable pull request, and false
+          # keeps the direct push to the default branch.
+          if [ "${PR_DELIVERY}" != "true" ] && [ "${UPDATE_VIA_PR:-true}" != "true" ]; then
             echo "delivery=direct" >> "${PR_OUT}"
             git push
+            echo "sync_pr_state=pushed" >> "$GITHUB_OUTPUT"
+            echo "sync_pr_url=" >> "$GITHUB_OUTPUT"
+            echo "SYNC_DELIVERY outcome=pushed branch=default version=${SYNC_VERSION:-unknown}"
+            exit 0
+          fi
+
+          if [ "${PR_DELIVERY}" != "true" ]; then
+            # Delivery through a pull request on ai-sync/stable (#7128). API
+            # calls per run with changes: 1 repo GET, 1 open-PR list GET, at most
+            # 1 PR close, at most 1 PR create and 1-2 merge calls; none in a
+            # loop. Audited: no earlier step of this job reads repository or
+            # pull-request data, so there is no existing call to extend.
+            SYNC_BRANCH="ai-sync/stable"
+            REPO="${GITHUB_REPOSITORY}"
+            OWNER="${GITHUB_REPOSITORY_OWNER}"
+            REPO_JSON="$(gh api "repos/${REPO}")"
+            DEFAULT_BRANCH="$(jq -r '.default_branch // empty' <<<"${REPO_JSON}")"
+            if [ -z "${DEFAULT_BRANCH}" ]; then
+              echo "::error::SYNC_DELIVERY outcome=failed reason=default_branch_unavailable"
+              exit 1
+            fi
+            MERGE_METHOD="$(jq -r 'if .allow_squash_merge == true then "squash" elif .allow_merge_commit == true then "merge" elif .allow_rebase_merge == true then "rebase" else "squash" end' <<<"${REPO_JSON}")"
+            OPEN_PRS="$(gh api "repos/${REPO}/pulls?head=${OWNER}:${SYNC_BRANCH}&base=${DEFAULT_BRANCH}&state=open")"
+            OPEN_PR_NUMBER="$(jq -r --arg b "${SYNC_BRANCH}" '[.[] | select(.head.ref == $b)] | .[0].number // empty' <<<"${OPEN_PRS}")"
+            OPEN_PR_URL="$(jq -r --arg b "${SYNC_BRANCH}" '[.[] | select(.head.ref == $b)] | .[0].html_url // empty' <<<"${OPEN_PRS}")"
+
+            SYNC_PR_NUMBER=""
+            SYNC_PR_URL=""
+            SYNC_PR_REUSED=false
+            MERGE_HEAD_SHA=""
+            # Reuse an open sync PR only when its tree already matches: pushing
+            # to an open PR fires synchronize, and the review head gate then
+            # withdraws auto-merge, racing with the merge below.
+            if [ -n "${OPEN_PR_NUMBER}" ] \
+              && git fetch --quiet --depth 1 origin "refs/heads/${SYNC_BRANCH}" 2>/dev/null \
+              && [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
+              SYNC_PR_NUMBER="${OPEN_PR_NUMBER}"
+              SYNC_PR_URL="${OPEN_PR_URL}"
+              SYNC_PR_REUSED=true
+              MERGE_HEAD_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+            else
+              if [ -n "${OPEN_PR_NUMBER}" ]; then
+                gh api -X PATCH "repos/${REPO}/pulls/${OPEN_PR_NUMBER}" -f state=closed >/dev/null
+                echo "SYNC_DELIVERY outcome=replaced_stale_pr pr=${OPEN_PR_NUMBER} branch=${SYNC_BRANCH}"
+              fi
+              # The updater owns this branch. The lease binds the replacement
+              # to the tip read just before it, so a concurrent updater run
+              # that moved the branch fails this push instead of being
+              # silently overwritten (an empty tip means "must not exist").
+              SYNC_REMOTE_SHA="$(git ls-remote origin "refs/heads/${SYNC_BRANCH}" | awk 'NR == 1 { print $1 }')"
+              if ! git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_REMOTE_SHA}" origin "HEAD:refs/heads/${SYNC_BRANCH}"; then
+                echo "::error::SYNC_DELIVERY outcome=failed reason=lease_mismatch_or_push_rejected branch=${SYNC_BRANCH}"
+                exit 1
+              fi
+              MERGE_HEAD_SHA="$(git rev-parse HEAD)"
+              SYNC_PR_BODY="$(printf '%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.\n\n<!-- ai-sync:v1 version=%s commit=%s -->' "${COMMIT_BODY}" "${SYNC_VERSION:-unknown}" "${SYNC_UPSTREAM_SHA:-unknown}")"
+              CREATED_PR="$(gh api -X POST "repos/${REPO}/pulls" \
+                -f title="chore: sync AI workflow wrappers from coding-workflows ${SYNC_VERSION:-stable}" \
+                -f head="${SYNC_BRANCH}" \
+                -f base="${DEFAULT_BRANCH}" \
+                -f body="${SYNC_PR_BODY}")"
+              SYNC_PR_NUMBER="$(jq -r '.number // empty' <<<"${CREATED_PR}")"
+              SYNC_PR_URL="$(jq -r '.html_url // empty' <<<"${CREATED_PR}")"
+              if [ -z "${SYNC_PR_NUMBER}" ]; then
+                echo "::error::SYNC_DELIVERY outcome=failed reason=pr_create_failed branch=${SYNC_BRANCH}"
+                exit 1
+              fi
+            fi
+
+            # Merge refusals (required reviews, statuses, protection rules) leave
+            # the PR open for a human; they do not fail the job.
+            SYNC_PR_STATE="awaiting_merge"
+            set +e
+            MERGE_ERR="$(gh pr merge "${SYNC_PR_NUMBER}" --repo "${REPO}" --auto "--${MERGE_METHOD}" --match-head-commit "${MERGE_HEAD_SHA}" 2>&1 >/dev/null)"
+            MERGE_RC=$?
+            set -e
+            if [ "${MERGE_RC}" -eq 0 ]; then
+              SYNC_PR_STATE="auto_merge_enabled"
+            elif grep -qiE 'clean status|auto.?merge (is )?not allowed|not allowed for this repository|enablePullRequestAutoMerge' <<<"${MERGE_ERR}"; then
+              if gh pr merge "${SYNC_PR_NUMBER}" --repo "${REPO}" "--${MERGE_METHOD}" --match-head-commit "${MERGE_HEAD_SHA}" >/dev/null 2>&1; then
+                SYNC_PR_STATE="merged"
+              fi
+            fi
+            if [ "${SYNC_PR_STATE}" = "awaiting_merge" ]; then
+              echo "::warning::SYNC_DELIVERY pull request ${SYNC_PR_URL} was not merged automatically: $(head -n 1 <<<"${MERGE_ERR}" | cut -c1-200)"
+            fi
+            echo "sync_pr_state=${SYNC_PR_STATE}" >> "$GITHUB_OUTPUT"
+            echo "sync_pr_url=${SYNC_PR_URL}" >> "$GITHUB_OUTPUT"
+            echo "SYNC_DELIVERY outcome=${SYNC_PR_STATE} pr=${SYNC_PR_NUMBER} branch=${SYNC_BRANCH} version=${SYNC_VERSION:-unknown} reused=${SYNC_PR_REUSED}"
             exit 0
           fi
 
@@ -1266,6 +1597,8 @@ jobs:
           COMMIT_PR_ACTION: ${{ steps.commit_push.outputs.pr_action }}
           COMMIT_AUTO_MERGE: ${{ steps.commit_push.outputs.auto_merge }}
           UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          SYNC_PR_URL: ${{ steps.commit_push.outputs.sync_pr_url }}
+          SYNC_PR_STATE: ${{ steps.commit_push.outputs.sync_pr_state }}
         run: |
           set -euo pipefail
 
@@ -1274,29 +1607,17 @@ jobs:
             exit 0
           fi
 
-          # Inline-fetch tg_helpers.sh for alert level support
-          wf_source="${{ github.repository_owner }}/coding-workflows"
-          mkdir -p scripts
-          helpers_tmp="$(mktemp)"
-          # Load it from the release checkout this run fetched (attested in the
-          # release manifest and, with UPDATER_VERIFY_RELEASE_MANIFEST=true,
-          # hash-checked by "Verify attested release manifest"), never via a
-          # separate contents-API fetch whose bytes nothing verifies.
+          # Source tg_helpers.sh from the verified upstream checkout (#7128)
+          # rather than fetching a second, unverified copy from stable or a
+          # separate contents-API fetch whose bytes nothing verifies. It
+          # sources scripts/gh_helpers.sh by a relative path, so run it from
+          # the upstream root. Falls back to a raw curl send below.
+          UPSTREAM_ROOT="$(dirname "${UPSTREAM_DIR:-/nonexistent}")"
           helpers_src="${UPSTREAM_DIR:-/nonexistent}/../scripts/tg_helpers.sh"
-          if [ -f "${helpers_src}" ] && [ ! -L "${helpers_src}" ] && cp -- "${helpers_src}" "${helpers_tmp}" && [ -s "${helpers_tmp}" ]; then
-            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
-            # Block fetched scripts from being committed in consumer repos.
-            if [ "${{ github.repository }}" != "${wf_source}" ]; then
-              {
-                echo "# Auto-generated by coding-workflows — DO NOT EDIT"
-                echo "# Prevents runtime-fetched support scripts from being committed."
-                echo "tg_helpers.sh"
-                echo ".gitignore"
-              } > scripts/.gitignore
-            fi
-            source scripts/tg_helpers.sh
-          else
-            rm -f "${helpers_tmp}"
+          if [ -f "${helpers_src}" ] && [ ! -L "${helpers_src}" ]; then
+            pushd "${UPSTREAM_ROOT}" >/dev/null
+            source scripts/tg_helpers.sh || true
+            popd >/dev/null
           fi
 
           REPO="${{ github.repository }}"
@@ -1371,9 +1692,18 @@ jobs:
             MSG="${MSG}
           agents.d fragments assembled into ${AGENTS_FILE}: ${AGENTS_FRAGMENT_COUNT} fragment(s)."
           fi
+          if [ -n "${SYNC_PR_URL:-}" ]; then
+            MSG="${MSG}
+          Delivery: ${SYNC_PR_STATE:-unknown} (${SYNC_PR_URL})"
+          fi
           # Pull-request delivery reports the PR instead of a pushed commit.
           # A PR left for a human (auto-merge not enabled) is a WARNING.
           TG_LEVEL="DEBUG"
+          # An ai-sync/stable PR that was not merged or enrolled in
+          # auto-merge waits for a person to merge it (#7128).
+          if [ "${SYNC_PR_STATE:-}" = "awaiting_merge" ]; then
+            TG_LEVEL="WARNING"
+          fi
           if [ "${COMMIT_DELIVERY:-}" = "pr" ]; then
             MSG="${MSG}
           Delivered as a pull request (${COMMIT_PR_ACTION:-unknown}): ${COMMIT_PR_URL:-none}
@@ -1395,6 +1725,36 @@ jobs:
               --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
           fi
 
+      - name: Alert on sync manifest verification failure
+        if: ${{ failure() && steps.verify_manifest.outcome == 'failure' }}
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          SYNC_REASON_CODE: ${{ steps.verify_manifest.outputs.failure_reason_code }}
+          SYNC_REPO: ${{ github.repository }}
+          SYNC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Verification failed, so no upstream script may run here: fixed
+          # text through a raw Telegram call only.
+          sync_alert_level="${ALERT_MSG_LEVEL:-SILENT}"
+          case "${sync_alert_level^^}" in
+            DEBUG|WARNING|ERROR) ;;
+            *) echo "Alert level ${sync_alert_level} suppresses the verification alert."; exit 0 ;;
+          esac
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured — skipping verification alert."
+            exit 0
+          fi
+          MSG="ERROR: workflow sync verification failed in ${SYNC_REPO}
+          Reason: ${SYNC_REASON_CODE:-unknown}
+          Nothing was changed.
+          Run: ${SYNC_RUN_URL}"
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+
       - name: Summary
         if: always()
         env:
@@ -1407,6 +1767,12 @@ jobs:
           set -euo pipefail
 
           FETCH_OUTCOME="${{ steps.fetch.outcome }}"
+          # VERIFY_OUTCOME (env) stays the flag-gated release-manifest step;
+          # the signed sync manifest step (#7128) has its own names.
+          SYNC_VERIFY_OUTCOME="${{ steps.verify_manifest.outcome }}"
+          SYNC_VERIFY_REASON_CODE="${{ steps.verify_manifest.outputs.failure_reason_code }}"
+          SYNC_PR_STATE="${{ steps.commit_push.outputs.sync_pr_state }}"
+          SYNC_PR_URL="${{ steps.commit_push.outputs.sync_pr_url }}"
           RENDER_OUTCOME="${{ steps.render_wrappers.outcome }}"
           UPDATE_OUTCOME="${{ steps.update.outcome }}"
           HAS_UPDATES="${{ steps.update.outputs.has_updates }}"
@@ -1449,6 +1815,13 @@ jobs:
             if [ -f "${FAILURE_REASON_FILE}" ]; then
               echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
             fi
+            exit 1
+          fi
+
+          if [ "${SYNC_VERIFY_OUTCOME}" = "failure" ]; then
+            echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \`${SYNC_VERIFY_REASON_CODE:-ERR_SYNC_MANIFEST_SIGNATURE}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason detail:** The signed sync manifest could not be verified; no upstream code ran and nothing was changed." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
@@ -1505,7 +1878,14 @@ jobs:
           echo "- **Top-level CLAUDE.md synced:** ${CLAUDE_MD_CHANGED:-false}" >> "$GITHUB_STEP_SUMMARY"
           RETIRED_REMOVED_COUNT="${{ steps.retired_files.outputs.retired_removed }}"
           echo "- **Retired files removed:** ${RETIRED_REMOVED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Delivery:** ${COMMIT_DELIVERY:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Sync manifest verification:** ${SYNC_VERIFY_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          # The ai-sync/stable and direct-push paths report sync_pr_state;
+          # the auto/update-workflows-* path reports delivery.
+          if [ -n "${SYNC_PR_STATE}" ]; then
+            echo "- **Delivery:** ${SYNC_PR_STATE}${SYNC_PR_URL:+ (${SYNC_PR_URL})}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **Delivery:** ${COMMIT_DELIVERY:-none}" >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "${COMMIT_OUTCOME:-}" = "failure" ]; then
             echo "- **Delivery status:** failed (see the UPDATER_PR_DELIVERY log line)" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1580,8 +1960,9 @@ jobs:
   # a permission its caller did not grant fails the whole run at startup with
   # zero jobs, which would also stop this updater from refreshing an older
   # caller wrapper. The job inherits the caller's grant; the consumer template
-  # grants `statuses: write`, and without it the status post fails and the job
-  # fails closed. The attestation and bootstrap-hash logic stays inline for
+  # grants `statuses: write`. With an older wrapper that lacks it, each status
+  # post retries once with GH_PAT, and the job fails closed only when both are
+  # refused. The attestation and bootstrap-hash logic stays inline for
   # the same reason as in "Verify attested release manifest".
   verify:
     needs: update-wrappers
@@ -1602,6 +1983,7 @@ jobs:
         id: verify_inputs
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1623,12 +2005,22 @@ jobs:
           echo "sha_ok=true" >> "${VERIFY_OUT}"
 
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
-          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
-            -f state=pending \
-            -f "context=${VERIFY_STATUS_CONTEXT}" \
-            -f "description=Verifying updater PR tree against the attested release manifest" \
-            -f "target_url=${RUN_URL}" >/dev/null; then
-            reject status status_post_failed
+          post_pending_status() {
+            GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+              -f state=pending \
+              -f "context=${VERIFY_STATUS_CONTEXT}" \
+              -f "description=Verifying updater PR tree against the attested release manifest" \
+              -f "target_url=${RUN_URL}" >/dev/null
+          }
+          # Same GH_PAT fallback as "Publish verify result and enable
+          # auto-merge": a caller wrapper rendered before it granted
+          # `statuses: write` must still reach that step.
+          if ! post_pending_status "${GH_TOKEN:-}"; then
+            if [ -n "${MERGE_TOKEN:-}" ] && post_pending_status "${MERGE_TOKEN}"; then
+              echo "::warning::UPDATER_PR_VERIFY posted the status with GH_PAT because github.token was refused; the caller wrapper should grant statuses: write."
+            else
+              reject status status_post_failed
+            fi
           fi
 
       - name: Check out updater pull request head (data only)
@@ -1958,13 +2350,24 @@ jobs:
 
           VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
-          if ! GH_TOKEN="${STATUS_TOKEN:-}" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
-            -f state=success \
-            -f "context=${VERIFY_STATUS_CONTEXT}" \
-            -f "description=Updater PR tree matches the attested release manifest" \
-            -f "target_url=${RUN_URL}" >/dev/null; then
-            echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=status_post_failed stage=publish"
-            exit 1
+          post_verify_status() {
+            GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+              -f state=success \
+              -f "context=${VERIFY_STATUS_CONTEXT}" \
+              -f "description=Updater PR tree matches the attested release manifest" \
+              -f "target_url=${RUN_URL}" >/dev/null
+          }
+          # A caller wrapper rendered before it granted `statuses: write`
+          # leaves github.token without that permission. The PR that fixes
+          # the wrapper would then wait for a human, so retry once with
+          # GH_PAT, which already enables the merge below.
+          if ! post_verify_status "${STATUS_TOKEN:-}"; then
+            if [ -n "${MERGE_TOKEN:-}" ] && post_verify_status "${MERGE_TOKEN}"; then
+              echo "::warning::UPDATER_PR_VERIFY posted the status with GH_PAT because github.token was refused; the caller wrapper should grant statuses: write."
+            else
+              echo "::error::UPDATER_PR_VERIFY outcome=rejected reason=status_post_failed stage=publish"
+              exit 1
+            fi
           fi
 
           # Merge policy (moved here from "Commit and push updates"): only a
@@ -1988,6 +2391,7 @@ jobs:
         if: ${{ always() && steps.verify_inputs.outputs.sha_ok == 'true' && steps.verify_publish.outcome != 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.GH_PAT }}
           JOB_STATUS: ${{ job.status }}
         run: |
           set -uo pipefail
@@ -1997,12 +2401,18 @@ jobs:
             VERIFY_STATE="error"
           fi
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
-          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
-            -f "state=${VERIFY_STATE}" \
-            -f "context=${VERIFY_STATUS_CONTEXT}" \
-            -f "description=Updater PR tree did not pass verification; auto-merge stays off" \
-            -f "target_url=${RUN_URL}" >/dev/null; then
-            echo "::warning::UPDATER_PR_VERIFY could not post the ${VERIFY_STATE} status."
+          post_failure_status() {
+            GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+              -f "state=${VERIFY_STATE}" \
+              -f "context=${VERIFY_STATUS_CONTEXT}" \
+              -f "description=Updater PR tree did not pass verification; auto-merge stays off" \
+              -f "target_url=${RUN_URL}" >/dev/null
+          }
+          # Same GH_PAT fallback as the other status posts in this job.
+          if ! post_failure_status "${GH_TOKEN:-}"; then
+            if [ -z "${MERGE_TOKEN:-}" ] || ! post_failure_status "${MERGE_TOKEN}"; then
+              echo "::warning::UPDATER_PR_VERIFY could not post the ${VERIFY_STATE} status."
+            fi
           fi
           echo "UPDATER_PR_VERIFY outcome=rejected reason=verify_failed stage=final pr=${PR_NUMBER} head=${PUSHED_SHA} auto_merge=none"
 
