@@ -379,6 +379,15 @@ def _run_poller_subprocess(
 			os.killpg(proc.pid, signal.SIGKILL)
 		except (ProcessLookupError, PermissionError):
 			pass
+		# killpg only queues the signal; wait (bounded, ~1s) until the group
+		# is gone so the tempdir removal cannot race a dying writer.
+		_reap_deadline = time.monotonic() + 1.0
+		while time.monotonic() < _reap_deadline:
+			try:
+				os.killpg(proc.pid, 0)
+			except (ProcessLookupError, PermissionError):
+				break
+			time.sleep(0.02)
 		return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 	finally:
 		if owns_sandbox:
