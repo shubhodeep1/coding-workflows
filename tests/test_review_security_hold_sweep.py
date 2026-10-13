@@ -193,3 +193,165 @@ def test_marker_post_is_retried_once(monkeypatch) -> None:
 
 def test_script_syntax() -> None:
 	ast.parse(SCRIPT.read_text(encoding="utf-8"))
+
+
+# --- Issue #7209: github.token for operations, PAT only names the findings author ---
+
+def _bot_comment(body: str, *, login: str = "github-actions", typename: str = "Bot") -> dict:
+	return {"author": {"login": login, "__typename": typename}, "body": body, "createdAt": NOW.isoformat()}
+
+
+def _dispatch_marker(cycle: int = 2) -> str:
+	return f"sent\n\n<!-- ai:security-followup-stale-dispatch:v1 head={HEAD} cycle={cycle} -->"
+
+
+def _graphql(*comments: dict) -> dict:
+	return {"data": {"repository": {
+		"defaultBranchRef": {"name": "main"},
+		"pullRequests": {"nodes": [_pr(*comments)], "pageInfo": {"hasNextPage": False}},
+	}}}
+
+
+def _run_main(monkeypatch, graphql_payload, *, mode: str, pat: str | None, identity: str = "bot"):
+	calls: list[list[str]] = []
+	json_calls: list[list[str]] = []
+	identity_tokens: list[str] = []
+	environ_during_ops: list[str | None] = []
+
+	def fake_run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+		calls.append(arguments)
+		environ_during_ops.append(SWEEP.os.environ.get("SECURITY_HOLD_FINDING_AUTHOR_TOKEN"))
+		stdout = "bot\n" if arguments[:2] == ["api", "user"] else "{}"
+		return subprocess.CompletedProcess(arguments, 0, stdout, "")
+
+	def fake_json(arguments: list[str]):
+		json_calls.append(arguments)
+		environ_during_ops.append(SWEEP.os.environ.get("SECURITY_HOLD_FINDING_AUTHOR_TOKEN"))
+		return graphql_payload
+
+	def fake_identity(token: str) -> str:
+		identity_tokens.append(token)
+		return identity
+
+	monkeypatch.setattr(SWEEP, "_run_gh", fake_run)
+	monkeypatch.setattr(SWEEP, "_gh_json", fake_json)
+	monkeypatch.setattr(SWEEP, "_gh_identity", fake_identity)
+	monkeypatch.setattr(SWEEP.dt, "datetime", type("FixedDateTime", (dt.datetime,), {
+		"now": classmethod(lambda cls, tz=None: NOW),
+	}))
+	monkeypatch.setenv("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "true")
+	monkeypatch.setenv("REPOSITORY", "o/r")
+	monkeypatch.setenv("SECURITY_HOLD_REVIEW_WORKFLOW", "ai-review.yml")
+	monkeypatch.setenv("SECURITY_HOLD_SWEEP_TOKEN_MODE", mode)
+	if pat is None:
+		monkeypatch.delenv("SECURITY_HOLD_FINDING_AUTHOR_TOKEN", raising=False)
+	else:
+		monkeypatch.setenv("SECURITY_HOLD_FINDING_AUTHOR_TOKEN", pat)
+	assert SWEEP.main() == 0
+	return calls, json_calls, identity_tokens, environ_during_ops
+
+
+def _dispatched(calls: list[list[str]]) -> bool:
+	return any(call[:3] == ["workflow", "run", "ai-review.yml"] for call in calls)
+
+
+def test_actions_token_mode_uses_pat_only_for_identity(monkeypatch) -> None:
+	calls, json_calls, identity_tokens, environ_during_ops = _run_main(
+		monkeypatch, _graphql(_comment("findings", 25)), mode="actions_token", pat="pat-secret")
+	assert identity_tokens == ["pat-secret"]
+	assert not any(call[:2] == ["api", "user"] for call in calls)
+	assert "SECURITY_HOLD_FINDING_AUTHOR_TOKEN" not in SWEEP.os.environ
+	assert environ_during_ops and all(value is None for value in environ_during_ops)
+	assert _dispatched(calls)
+	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_actions_token_mode_fails_closed_without_finding_identity(monkeypatch, capsys) -> None:
+	calls, json_calls, _, _ = _run_main(
+		monkeypatch, _graphql(_comment("findings", 25)), mode="actions_token", pat="pat-secret", identity="")
+	assert json_calls == [] and calls == []
+	assert "reason=finding_identity_unavailable" in capsys.readouterr().out
+
+
+def test_invalid_token_mode_skips_without_api_calls(monkeypatch, capsys) -> None:
+	calls, json_calls, identity_tokens, _ = _run_main(
+		monkeypatch, _graphql(_comment("findings", 25)), mode="bogus", pat="pat-secret")
+	assert calls == [] and json_calls == [] and identity_tokens == []
+	assert "reason=invalid_token_mode" in capsys.readouterr().out
+
+
+def test_no_pat_trusts_bot_authored_findings_only_from_a_bot(monkeypatch) -> None:
+	findings = _comment("findings", 25)
+	bot_findings = {**findings, "author": {"login": "github-actions", "__typename": "Bot"}}
+	calls, _, identity_tokens, _ = _run_main(monkeypatch, _graphql(bot_findings), mode="actions_token", pat="")
+	assert identity_tokens == [] and _dispatched(calls)
+	impostor = {**findings, "author": {"login": "github-actions", "__typename": "User"}}
+	calls, _, _, _ = _run_main(monkeypatch, _graphql(impostor), mode="actions_token", pat="")
+	assert not _dispatched(calls)
+
+
+def test_with_pat_bot_authored_findings_are_rejected(monkeypatch) -> None:
+	bot_findings = {**_comment("findings", 25), "author": {"login": "github-actions", "__typename": "Bot"}}
+	calls, _, _, _ = _run_main(monkeypatch, _graphql(bot_findings), mode="actions_token", pat="pat-secret")
+	assert not _dispatched(calls)
+
+
+def test_sweep_marker_authors_are_verified_separately() -> None:
+	markers = frozenset({"github-actions[bot]", "bot"})
+	findings = _comment("findings", 25)
+	# A Bot-authored dispatch marker (GraphQL or REST login) deduplicates.
+	for login in ("github-actions", "github-actions[bot]"):
+		assert SWEEP.stale_candidate(_pr(findings, _bot_comment(_dispatch_marker(), login=login)), "bot", 24, NOW, markers) is None
+	# A user account named like the bot does not.
+	assert SWEEP.stale_candidate(_pr(findings, _bot_comment(_dispatch_marker(), typename="User")), "bot", 24, NOW, markers) == (42, HEAD, 2)
+	# A legacy PAT-authored marker still deduplicates.
+	legacy = {"author": {"login": "bot"}, "body": _dispatch_marker(), "createdAt": NOW.isoformat()}
+	assert SWEEP.stale_candidate(_pr(findings, legacy), "bot", 24, NOW, markers) is None
+	# A Bot-authored marker does not deduplicate when the bot is not a marker author.
+	assert SWEEP.stale_candidate(_pr(findings, _bot_comment(_dispatch_marker())), "bot", 24, NOW) == (42, HEAD, 2)
+	# Dispatch markers never count as findings.
+	assert SWEEP._has_current_head_result(_pr(_bot_comment(_dispatch_marker(), typename="User")), "bot", markers) is False
+	assert SWEEP._has_current_head_result(_pr(_bot_comment(_dispatch_marker())), "bot", markers) is True
+
+
+def test_rest_history_mapping_carries_author_type(monkeypatch) -> None:
+	pages = [[{"user": {"login": "github-actions[bot]", "type": "Bot"}, "body": "x", "created_at": NOW.isoformat()}]]
+	monkeypatch.setattr(SWEEP, "_gh_json", lambda arguments: pages)
+	nodes = SWEEP._full_comment_nodes("o/r", 42)
+	assert nodes == [{"author": {"login": "github-actions[bot]", "__typename": "Bot"}, "body": "x", "createdAt": NOW.isoformat()}]
+	assert "author{login __typename}" in SWEEP.GRAPHQL_QUERY
+
+
+def test_gh_identity_passes_token_only_to_its_subprocess(monkeypatch) -> None:
+	seen: list[dict] = []
+
+	def fake_subprocess_run(arguments, **kwargs):
+		seen.append({"arguments": arguments, "token": kwargs["env"]["GH_TOKEN"]})
+		return subprocess.CompletedProcess(arguments, 0, "pipeline-bot\n", "")
+
+	monkeypatch.setattr(SWEEP.subprocess, "run", fake_subprocess_run)
+	monkeypatch.setenv("GH_TOKEN", "actions-token")
+	assert SWEEP._gh_identity("pat-secret") == "pipeline-bot"
+	assert seen[0]["arguments"][:3] == ["gh", "api", "user"] and seen[0]["token"] == "pat-secret"
+	assert SWEEP.os.environ["GH_TOKEN"] == "actions-token"
+	monkeypatch.setattr(SWEEP.subprocess, "run", lambda arguments, **kwargs: subprocess.CompletedProcess(arguments, 0, "bad login!\n", ""))
+	assert SWEEP._gh_identity("pat-secret") == ""
+	assert SWEEP._gh_identity("") == ""
+
+
+def test_consumer_sweep_job_uses_github_token_for_operations() -> None:
+	template = (ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
+	job_text = template.split("  security-hold-sweep:\n", 1)[1].split("\n  provider-outage-resume:\n", 1)[0]
+	assert "GH_TOKEN: ${{ github.token }}" in job_text
+	assert job_text.count("secrets.GH_PAT") == 1
+	assert "SECURITY_HOLD_FINDING_AUTHOR_TOKEN: ${{ secrets.GH_PAT }}" in job_text
+	assert "SECURITY_HOLD_SWEEP_TOKEN_MODE: actions_token" in job_text
+	assert "persist-credentials: false" in job_text
+	assert "path: .security-hold-support" in job_text
+	yaml = pytest.importorskip("yaml")
+	job = yaml.safe_load(template)["jobs"]["security-hold-sweep"]
+	assert job["permissions"] == {"actions": "write", "contents": "read", "pull-requests": "read", "issues": "write"}
+	assert job["steps"][0]["with"]["persist-credentials"] is False
+	env = job["steps"][1]["env"]
+	assert env["GH_TOKEN"] == "${{ github.token }}"
+	assert env["SECURITY_HOLD_SWEEP_TOKEN_MODE"] == "actions_token"

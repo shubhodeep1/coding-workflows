@@ -48,6 +48,21 @@
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, or diagnose
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
+#   CHECK_TRIAGE_HISTORICAL_RUN_ID            historical mode (#7093): failed CI run id of a
+#   CHECK_TRIAGE_HISTORICAL_JOB_ID            closed PR plus its failed job id; set both or
+#                                             neither. Empty (default) keeps the normal path.
+#   CHECK_TRIAGE_HISTORICAL_REPRO_DIR         downloaded reproduction artifacts, used only when
+#                                             the job log is gone (404/410); default empty
+#   CHECK_TRIAGE_HISTORICAL_EXPECTED_GROUPS   reproduction groups required for a complete
+#                                             non-reproduction (default 4)
+#   CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED    "true" adds a "Target branch: <head ref>"
+#                                            line for a verified open same-repo PR
+#                                            head (default false: no routing line)
+#   CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED     "true" adds a verified
+#                                            "Integration branch" line naming
+#                                            the failing PR's head ref
+#                                            (default "false"; off until an
+#                                            operator enables it)
 #   TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED    "true" adds an "Integration branch:" line
 #                                            when the failing PR's head is an existing
 #                                            orchestrator/project-<N> branch of this
@@ -97,6 +112,94 @@ print(value[:200] or "(unnamed check)")
 ' "$1"
 }
 
+# Strict branch-name check for the trusted "Target branch:" routing line.
+# Fails closed: anything outside a conservative charset, or anything
+# git rejects, is not routed. The same rule is enforced again in the final
+# body validator below.
+triage_routing_ref_is_safe()
+{
+	local candidate_ref="${1-}"
+	[[ "${candidate_ref}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || return 1
+	case "${candidate_ref}" in
+		*..*|*//*|*/|*.|*.lock|*@\{*)
+			return 1
+			;;
+	esac
+	if command -v git >/dev/null 2>&1; then
+		git check-ref-format --branch "${candidate_ref}" >/dev/null 2>&1 || return 1
+	fi
+	return 0
+}
+
+# Verify that the PR payload names an open, same-repository PR whose head SHA
+# equals the failing check's SHA and whose head ref is a safe branch name.
+# Prints the verified ref and returns 0, or prints a fixed reason token and
+# returns 1. Used only when CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED is on.
+triage_verify_pr_head_route()
+{
+	local _route_payload="$1"
+	local _route_check_sha="$2"
+	local _route_state _route_head_repo _route_base_repo _route_pr_sha _route_ref
+	if ! jq -e 'type == "object"' "${_route_payload}" >/dev/null 2>&1; then
+		echo "pr_not_open"
+		return 1
+	fi
+	_route_state="$(jq -r '.state | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_state=""
+	if [ "${_route_state}" != "open" ]; then
+		echo "pr_not_open"
+		return 1
+	fi
+	_route_head_repo="$(jq -r '.head.repo.full_name | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_head_repo=""
+	_route_base_repo="$(jq -r '.base.repo.full_name | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_base_repo=""
+	# Both sides must name this repository; a payload missing either fails closed.
+	if [ -z "${_route_head_repo}" ] || [ "${_route_head_repo}" != "${REPO}" ] ||
+		[ "${_route_base_repo}" != "${REPO}" ]; then
+		echo "not_same_repo"
+		return 1
+	fi
+	if ! [[ "${_route_check_sha}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+		echo "check_sha_missing"
+		return 1
+	fi
+	_route_pr_sha="$(jq -r '.head.sha | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_pr_sha=""
+	if ! [[ "${_route_pr_sha}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+		echo "pr_sha_missing"
+		return 1
+	fi
+	if [ "${_route_pr_sha}" != "${_route_check_sha}" ]; then
+		echo "sha_mismatch"
+		return 1
+	fi
+	_route_ref="$(jq -r '.head.ref | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_ref=""
+	# The character set excludes backticks, whitespace and newlines, so the
+	# ref can never leave the routing line's backtick span.
+	if ! [[ "${_route_ref}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]]; then
+		echo "invalid_head_ref"
+		return 1
+	fi
+	case "${_route_ref}" in
+		*..*|*//*|*@\{*|*/|*.|*.lock)
+			echo "invalid_head_ref"
+			return 1
+			;;
+	esac
+	if ! command -v git >/dev/null 2>&1 || ! git check-ref-format --branch "${_route_ref}" >/dev/null 2>&1; then
+		echo "invalid_head_ref"
+		return 1
+	fi
+	printf '%s\n' "${_route_ref}"
+	return 0
+}
+
+# Every exit that skips an unverified route (early closed/fork exits and
+# base-gate skips included) reports it, so the operator always gets the
+# routing_unverified log and WARNING. Callers set routing_result first.
+triage_report_routing_unverified()
+{
+	log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: PR-head routing could not be verified (detail: ${routing_result}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+}
+
 # --- Helpers (fail open if unavailable) ------------------------------------
 
 source scripts/gh_helpers.sh 2>/dev/null || true
@@ -138,6 +241,18 @@ TRIAGE_LABEL="ai:check-triage"
 ESCALATED_LABEL="ai:check-triage-escalated"
 MARKER_PREFIX="check-failure-triage:"
 SELF_FRAGMENT="${CHECK_TRIAGE_SELF_CHECK_NAME_FRAGMENT:-Check Failure Triage}"
+# PR-head routing stays off unless an operator enables it explicitly.
+PR_HEAD_ROUTING_ENABLED="${CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED:-false}"
+case "${PR_HEAD_ROUTING_ENABLED,,}" in
+	true|1|yes|on)
+		PR_HEAD_ROUTING_ENABLED="true"
+		;;
+	*)
+		PR_HEAD_ROUTING_ENABLED="false"
+		;;
+esac
+ROUTING_REF=""
+ROUTING_LINE=""
 # Issue #6726: on by default. `false` (any case) turns it off; any other value
 # also turns it off and warns, so a typo never routes a fix to a branch.
 PR_HEAD_BRANCH_METADATA_ENABLED="${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-true}"
@@ -165,6 +280,38 @@ TRUSTED_SUPPORT_DIR="${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:-}"
 TRIAGE_STAGE="${CHECK_TRIAGE_STAGE:-all}"
 TRIAGE_METADATA_FILE="${RUNTIME_DIR}/triage_metadata.json"
 PR_CHECK_RUNS_CONTEXT_FILE="${RUNTIME_DIR}/pr_check_runs_context.txt"
+# Historical mode (#7093): triage one already-finished CI run of a PR that is
+# no longer open. Only the pr_not_open skip (closed PRs), the dedup scope
+# (closed issues count too) and the base-branch gate change; the fork guard and
+# every other rule stay. Empty ids keep the normal path unchanged.
+HIST_RUN_ID="${CHECK_TRIAGE_HISTORICAL_RUN_ID:-}"
+HIST_JOB_ID="${CHECK_TRIAGE_HISTORICAL_JOB_ID:-}"
+HIST_REPRO_DIR="${CHECK_TRIAGE_HISTORICAL_REPRO_DIR:-}"
+HIST_EXPECTED_GROUPS="${CHECK_TRIAGE_HISTORICAL_EXPECTED_GROUPS:-4}"
+case "${HIST_EXPECTED_GROUPS}" in
+	''|*[!0-9]*|0) HIST_EXPECTED_GROUPS=4 ;;
+esac
+HIST_EVIDENCE_SOURCE=""
+HIST_EVIDENCE_OUTCOME=""
+HIST_TESTED_TREE=""
+HIST_TESTED_SHA=""
+HIST_SKIP_COUNT="0"
+HIST_DEP_SKIP_COUNT="0"
+HIST_MISSING=""
+HIST_META_JSON='{}'
+HEAL_HELPER="scripts/workflow_failure_heal.py"
+HISTORICAL_MODE=false
+if [ -n "${HIST_RUN_ID}${HIST_JOB_ID}" ]; then
+	if [[ "${HIST_RUN_ID}" =~ ^[1-9][0-9]*$ ]] && [[ "${HIST_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		HISTORICAL_MODE=true
+	else
+		log "error historical_inputs_incomplete"
+		exit 1
+	fi
+fi
+# Verified PR head branch for the trusted "Target branch:" line; empty means
+# no routing line (the default, and whenever verification fails).
+ROUTING_TARGET_BRANCH=""
 if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	[ ! -f "${TRUSTED_SUPPORT_DIR}/unattended_system_instructions.md" ] ||
 	[ ! -f "${TRUSTED_SUPPORT_DIR}/prompts/mode-check-failure-triage.txt" ]; then
@@ -189,7 +336,53 @@ if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 	HEAD_REF="$(jq -r '.head_ref' "${TRIAGE_METADATA_FILE}")"
 	PR_TITLE="$(jq -r '.title' "${TRIAGE_METADATA_FILE}")"
 	PR_URL="$(jq -er '.url' "${TRIAGE_METADATA_FILE}")"
+	# Older metadata files have no routing field: no routing line.
+	ROUTING_TARGET_BRANCH="$(jq -r 'if (.routing_target_branch | type) == "string" then .routing_target_branch else "" end' "${TRIAGE_METADATA_FILE}")"
 	FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
+	# The collect stage's metadata is authoritative for historical mode here.
+	HISTORICAL_MODE=false
+	if [ "$(jq -r 'has("historical_run_id")' "${TRIAGE_METADATA_FILE}" 2>/dev/null)" = "true" ]; then
+		HISTORICAL_MODE=true
+		HIST_RUN_ID="$(jq -r '.historical_run_id // ""' "${TRIAGE_METADATA_FILE}")"
+		HIST_JOB_ID="$(jq -r '.historical_job_id // ""' "${TRIAGE_METADATA_FILE}")"
+		HIST_EVIDENCE_SOURCE="$(jq -r '.evidence_source // ""' "${TRIAGE_METADATA_FILE}")"
+		HIST_EVIDENCE_OUTCOME="$(jq -r '.evidence_outcome // ""' "${TRIAGE_METADATA_FILE}")"
+		HIST_TESTED_TREE="$(jq -r '.tested_tree // ""' "${TRIAGE_METADATA_FILE}")"
+		HIST_TESTED_SHA="$(jq -r '.tested_sha // ""' "${TRIAGE_METADATA_FILE}")"
+		HIST_SKIP_COUNT="$(jq -r '.skip_count // 0 | tostring' "${TRIAGE_METADATA_FILE}")"
+		HIST_DEP_SKIP_COUNT="$(jq -r '.dependency_skip_count // 0 | tostring' "${TRIAGE_METADATA_FILE}")"
+		HIST_MISSING="$(jq -r '[.missing[]? | tostring] | join(", ")' "${TRIAGE_METADATA_FILE}")"
+		if ! [[ "${HIST_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${HIST_JOB_ID}" =~ ^[1-9][0-9]*$ ]] ||
+			! [[ "${HIST_EVIDENCE_SOURCE}" =~ ^(log|repro)$ ]] ||
+			! [[ "${HIST_EVIDENCE_OUTCOME}" =~ ^(found|no_failure_line|reproduced|complete_non_reproduction|incomplete)$ ]] ||
+			! [[ "${HIST_TESTED_TREE}" =~ ^(head|merge_commit)?$ ]] ||
+			! [[ "${HIST_TESTED_SHA}" =~ ^([0-9a-f]{40})?$ ]] ||
+			! [[ "${HIST_SKIP_COUNT}" =~ ^[0-9]+$ ]] || ! [[ "${HIST_DEP_SKIP_COUNT}" =~ ^[0-9]+$ ]] ||
+			! [[ "${HIST_MISSING}" =~ ^[A-Za-z0-9_.:/=,\ -]*$ ]]; then
+			log "error historical_metadata_invalid"
+			exit 1
+		fi
+	fi
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+		# Re-check the collect stage's verified ref against the same payload;
+		# a disagreement means the hand-off was altered, so fail closed.
+		routing_meta_ref="$(jq -r '.routing_ref // "" | if type == "string" then . else "" end' "${TRIAGE_METADATA_FILE}" 2>/dev/null)" || routing_meta_ref=""
+		routing_detail=""
+		if [ -z "${routing_meta_ref}" ]; then
+			routing_detail="metadata_missing"
+		elif ! routing_verified_ref="$(triage_verify_pr_head_route "${RUNTIME_DIR}/pr_payload.json" "${HEAD_SHA}")"; then
+			routing_detail="${routing_verified_ref}"
+		elif [ "${routing_verified_ref}" != "${routing_meta_ref}" ]; then
+			routing_detail="ref_mismatch"
+		else
+			ROUTING_REF="${routing_verified_ref}"
+		fi
+		if [ -n "${routing_detail}" ]; then
+			log "error reason=routing_unverified detail=${routing_detail} pr=${PR_NUMBER}"
+			tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: the PR-head routing hand-off could not be re-verified (detail: ${routing_detail}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			exit 1
+		fi
+	fi
 	if ! INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${TRIAGE_METADATA_FILE}")"; then
 		INTEGRATION_BRANCH="__unparseable__"
 	fi
@@ -254,7 +447,13 @@ esac
 
 # --- Fingerprint (in-process / duplicate-issue dedup key) ------------------
 
-FP="$(printf '%s' "${REPO}|pr=${PR_NUMBER}|check=${CHECK_NAME}" | sha256sum | awk '{print $1}')"
+if [ "${HISTORICAL_MODE}" = "true" ]; then
+	# Distinct from the normal fingerprint, so earlier normal-mode issues for
+	# the same PR + check do not suppress the historical follow-up.
+	FP="$(printf '%s' "${REPO}|pr=${PR_NUMBER}|check=${CHECK_NAME}|run=${HIST_RUN_ID}|job=${HIST_JOB_ID}" | sha256sum | awk '{print $1}')"
+else
+	FP="$(printf '%s' "${REPO}|pr=${PR_NUMBER}|check=${CHECK_NAME}" | sha256sum | awk '{print $1}')"
+fi
 FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
 
 # --- Resolve PR + lineage generation ---------------------------------------
@@ -286,15 +485,63 @@ if ! PR_URL_DISPLAY="$(triage_single_line_metadata "${PR_URL}")"; then
 	log "error metadata_flatten_failed"
 	exit 1
 fi
-if [ -n "${PR_STATE}" ] && [ "${PR_STATE}" != "open" ]; then
+if [ "${HISTORICAL_MODE}" = "true" ]; then
+	# The fork guard below needs a known head repository; historical mode fails
+	# closed instead of proceeding with minimal context.
+	if [ -z "${HEAD_REPO_FULL_NAME}" ] || [ -z "${PR_STATE}" ]; then
+		log "error historical_pr_unverified pr=${PR_NUMBER}"
+		exit 1
+	fi
+	PR_MERGED="$(printf '%s' "${PR_JSON}" | jq -r '.merged // false' 2>/dev/null || echo false)"
+	case "${PR_MERGED}" in
+		true|false) ;;
+		*) PR_MERGED=false ;;
+	esac
+	log "historical_mode=true pr=${PR_NUMBER} state=${PR_STATE} merged=${PR_MERGED} run=${HIST_RUN_ID} job=${HIST_JOB_ID}"
+fi
+if [ -n "${PR_STATE}" ] && [ "${PR_STATE}" != "open" ] &&
+	! { [ "${HISTORICAL_MODE}" = "true" ] && [ "${PR_STATE}" = "closed" ]; }; then
 	log "skip reason=pr_not_open pr=${PR_NUMBER} state=${PR_STATE}"
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+		routing_result="pr_not_open"
+		triage_report_routing_unverified
+	fi
 	exit 0
 fi
 if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
 	log "skip reason=fork_pr pr=${PR_NUMBER} head_repo=${HEAD_REPO_FULL_NAME}"
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+		routing_result="not_same_repo"
+		triage_report_routing_unverified
+	fi
 	exit 0
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
+
+# Opt-in routing (CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED, default off): route
+# the triage issue's fix to the failing PR's own branch, but only for an open
+# PR whose head and base are this repository, read from the PR payload fetched
+# above (a failed fetch leaves an empty state, which never verifies).
+if [ "${CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" != "true" ]; then
+	log "routing outcome=skip reason=disabled"
+elif [ "${PR_STATE}" != "open" ]; then
+	log "routing outcome=skip reason=pr_not_verified_open"
+elif [ -z "${HEAD_REPO_FULL_NAME}" ] || [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
+	log "routing outcome=skip reason=head_repo_unverified"
+else
+	ROUTING_BASE_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.full_name // ""')"
+	ROUTING_DEFAULT_BRANCH="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.default_branch // ""')"
+	if [ -z "${ROUTING_BASE_REPO_FULL_NAME}" ] || [ "${ROUTING_BASE_REPO_FULL_NAME}" != "${REPO}" ] || [ -z "${ROUTING_DEFAULT_BRANCH}" ]; then
+		log "routing outcome=skip reason=base_repo_unverified"
+	elif ! triage_routing_ref_is_safe "${HEAD_REF}"; then
+		log "routing outcome=skip reason=invalid_ref"
+	elif [ "${HEAD_REF}" = "${ROUTING_DEFAULT_BRANCH}" ]; then
+		log "routing outcome=skip reason=head_is_default_branch"
+	else
+		ROUTING_TARGET_BRANCH="${HEAD_REF}"
+		log "routing outcome=emit target_branch=${ROUTING_TARGET_BRANCH}"
+	fi
+fi
 
 # --- Verified integration branch (issue #6726) -----------------------------
 # The branch comes only from the API-reported PR head (head.ref and
@@ -416,8 +663,14 @@ fi
 
 # --- Duplicate-issue dedup -------------------------------------------------
 
+# Historical mode also matches closed issues, so the follow-up never re-files
+# a run whose triage issue was already handled.
+TRIAGE_DEDUP_STATE=open
+if [ "${HISTORICAL_MODE}" = "true" ]; then
+	TRIAGE_DEDUP_STATE=all
+fi
 OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
-	-f state=open \
+	-f state="${TRIAGE_DEDUP_STATE}" \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
 	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null \
@@ -425,7 +678,24 @@ OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	# This exit also skips PR-head routing; report an unverified route here too
+	# (local payload check only, no API call).
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ] &&
+		! routing_result="$(triage_verify_pr_head_route "${PR_JSON_FILE}" "${HEAD_SHA}")"; then
+		triage_report_routing_unverified
+	fi
 	exit 0
+fi
+
+# --- PR-head route verification (off by default) ---------------------------
+# Verified before the base-branch gate: a verified route lands the fix on the
+# failing PR's own head branch, so a green base branch does not make the
+# failure unfixable. An unverified route is reported by the routing gate below.
+routing_result=""
+if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+	if routing_result="$(triage_verify_pr_head_route "${PR_JSON_FILE}" "${HEAD_SHA}")"; then
+		ROUTING_REF="${routing_result}"
+	fi
 fi
 
 # --- Base-branch gate (#7020) ----------------------------------------------
@@ -448,13 +718,25 @@ fi
 # as before.
 BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
 BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
-if [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
+if [ "${HISTORICAL_MODE}" = "true" ]; then
+	# The PR is already closed (usually merged into its base), so comparing
+	# with the base branch's current result says nothing about this run.
+	log "base_gate outcome=bypassed reason=historical_mode pr=${PR_NUMBER}"
+elif [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
 	log "base_gate outcome=disabled pr=${PR_NUMBER}"
 elif [ -n "${INTEGRATION_BRANCH}" ]; then
 	# Issue #6726: this issue is routed to the failing PR's own verified
 	# orchestrator/project-<N> head, so its fix lands on that PR's branch and a
 	# green base branch does not make the failure unfixable. No API reads.
 	log "base_gate outcome=file reason=integration_branch branch=${INTEGRATION_BRANCH} pr=${PR_NUMBER}"
+elif [ -n "${ROUTING_REF}" ]; then
+	# Issue #6974: routed to the failing PR's verified head ref (see above).
+	log "base_gate outcome=file reason=pr_head_route branch=${ROUTING_REF} pr=${PR_NUMBER}"
+elif [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+	# Issue #7056: the issue carries a verified "Target branch:" line naming the
+	# failing PR's own head, so its fix lands on that branch and a green base
+	# branch does not make the failure unfixable. No API reads.
+	log "base_gate outcome=file reason=target_branch_route branch=${ROUTING_TARGET_BRANCH} pr=${PR_NUMBER}"
 elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
 	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
 else
@@ -490,6 +772,9 @@ else
 	base_gate_conclusion="$(printf '%s' "${base_gate_conclusion,,}" | tr -cd 'a-z_' | cut -c1-40)"
 	if [ "${base_gate_conclusion}" = "success" ]; then
 		log "skip reason=pr_specific_failure base=${BASE_REF} base_conclusion=success pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+			triage_report_routing_unverified
+		fi
 		exit 0
 	fi
 	# The base branch's newest run of this check is still in progress: its
@@ -501,6 +786,9 @@ else
 	# completes, because every PR then fails the same way.
 	if [ "${base_gate_conclusion}" = "pending" ]; then
 		log "skip reason=base_pending base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+			triage_report_routing_unverified
+		fi
 		exit 0
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
@@ -518,6 +806,10 @@ ensure_triage_labels
 
 if [ "${GEN}" -gt "${MAX_DEPTH}" ]; then
 	log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	# This exit also skips an unverified PR-head route; report it as well.
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ] && [ -z "${ROUTING_REF}" ]; then
+		triage_report_routing_unverified
+	fi
 	# PRs are issues for the labels API, so issue edit works on the PR number.
 	if ! gh_retry gh issue edit "${PR_NUMBER}" --repo "${REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1; then
 		log "error escalation_label_failed pr=${PR_NUMBER} label=${ESCALATED_LABEL}"
@@ -528,7 +820,438 @@ if [ "${GEN}" -gt "${MAX_DEPTH}" ]; then
 	exit 0
 fi
 
+# --- PR-head routing gate (off by default) ---------------------------------
+
+if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+	if [ -n "${ROUTING_REF}" ]; then
+		log "routing=pr_head pr=${PR_NUMBER} ref=${ROUTING_REF}"
+	else
+		triage_report_routing_unverified
+		exit 0
+	fi
+fi
+
 # --- Collect failing check-run context (logs) ------------------------------
+
+# Historical mode (#7093) evidence collection. Runs only in this host-side,
+# GH_PAT-bearing collect stage; the isolated diagnosis sees nothing but the
+# redacted context file it writes.
+historical_api_get()
+{
+	# historical_api_get <outfile> <api path>: 0 ok, 4 not found / gone,
+	# 1 other failure after bounded retries.
+	local hist_api_out="$1" hist_api_path="$2" hist_api_err hist_api_attempt=1
+	hist_api_err="${RUNTIME_DIR}/historical_api_err.txt"
+	while true; do
+		# Job logs carry ANSI colour codes; gh refuses such a body without
+		# --allow-escape-sequences (harmless for the JSON reads).
+		if gh api --allow-escape-sequences "${hist_api_path}" > "${hist_api_out}" 2> "${hist_api_err}"; then
+			return 0
+		fi
+		if grep -qE 'HTTP (404|410)' "${hist_api_err}" 2>/dev/null; then
+			return 4
+		fi
+		if [ "${hist_api_attempt}" -ge 3 ]; then
+			return 1
+		fi
+		sleep $((hist_api_attempt * 2))
+		hist_api_attempt=$((hist_api_attempt + 1))
+	done
+}
+
+historical_redact()
+{
+	# Known secret values plus generic credential shapes (redact_secrets).
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${HEAL_HELPER}" redact-stream \
+		--secret-env GH_TOKEN,GITHUB_TOKEN,GH_PAT,TG_BOT_SECRET,OPENROUTER_API_KEY
+}
+
+collect_historical_evidence()
+{
+	local hist_run_file="${RUNTIME_DIR}/historical_run.json"
+	local hist_job_file="${RUNTIME_DIR}/historical_job.json"
+	local hist_raw="${RUNTIME_DIR}/historical_job.log"
+	local hist_redacted="${RUNTIME_DIR}/historical_job.redacted.log"
+	local hist_context_tmp="${RUNTIME_DIR}/historical_context.raw.txt"
+	local hist_summary="${RUNTIME_DIR}/historical_summary.json"
+	local hist_field="" hist_log_rc=0
+	if [ ! -f "${HEAL_HELPER}" ] || [ -L "${HEAL_HELPER}" ]; then
+		log "error historical_helper_missing"
+		exit 1
+	fi
+
+	# Bind the run and job to this repository, PR head and CI workflow before
+	# reading any log (two reads; fail closed on any mismatch).
+	if ! historical_api_get "${hist_run_file}" "repos/${REPO}/actions/runs/${HIST_RUN_ID}"; then
+		log "error historical_binding_mismatch field=run_unreadable run=${HIST_RUN_ID}"
+		exit 1
+	fi
+	if ! historical_api_get "${hist_job_file}" "repos/${REPO}/actions/jobs/${HIST_JOB_ID}"; then
+		log "error historical_binding_mismatch field=job_unreadable job=${HIST_JOB_ID}"
+		exit 1
+	fi
+	hist_field="$(jq -r --arg repo "${REPO}" --arg head_sha "${HEAD_SHA,,}" --arg head_ref "${HEAD_REF}" \
+		--argjson run "${HIST_RUN_ID}" --slurpfile job "${hist_job_file}" '
+		def failed: (. // "") as $c | ($c == "failure" or $c == "timed_out");
+		if (.repository.full_name // "") != $repo then "repository"
+		elif ((.path // "") | startswith(".github/workflows/ci.yml") | not) then "path"
+		elif (.event // "") != "pull_request" then "event"
+		elif (.conclusion | failed | not) then "conclusion"
+		elif $head_sha == "" or (.head_sha // "") != $head_sha then "head_sha"
+		elif $head_ref == "" or (.head_branch // "") != $head_ref then "head_branch"
+		elif ($job[0].run_id // 0) != $run then "job_run_id"
+		elif ($job[0].conclusion | failed | not) then "job_conclusion"
+		else "" end' "${hist_run_file}" 2>/dev/null || echo "parse")"
+	if [ -n "${hist_field}" ]; then
+		log "error historical_binding_mismatch field=${hist_field} run=${HIST_RUN_ID} job=${HIST_JOB_ID}"
+		exit 1
+	fi
+
+	historical_api_get "${hist_raw}" "repos/${REPO}/actions/jobs/${HIST_JOB_ID}/logs" || hist_log_rc=$?
+	if [ "${hist_log_rc}" -eq 0 ]; then
+		if ! historical_redact < "${hist_raw}" > "${hist_redacted}"; then
+			rm -f "${hist_raw}" "${hist_redacted}"
+			log "error historical_redaction_failed"
+			exit 1
+		fi
+		rm -f "${hist_raw}"
+		HIST_EVIDENCE_SOURCE="log"
+		PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${HEAL_HELPER}" heal-scope failing-tests \
+			--log-files "${hist_redacted}" > "${RUNTIME_DIR}/historical_failing_tests.json" 2>/dev/null ||
+			printf '{}' > "${RUNTIME_DIR}/historical_failing_tests.json"
+		if ! HIST_EVIDENCE_OUTCOME="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - log "${hist_redacted}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${RUNTIME_DIR}/historical_failing_tests.json" "${HIST_RUN_ID}" "${HIST_JOB_ID}" <<'PY'
+import json
+import re
+import sys
+
+_mode, log_path, context_path, names_path, run_id, job_id = sys.argv[1:7]
+with open(log_path, encoding="utf-8", errors="replace") as handle:
+	lines = handle.read().split("\n")
+# Most specific first: a test-level failure, then an error annotation, then a
+# traceback (passing tests can print expected tracebacks).
+tiers = (
+	("test_failure", re.compile(r"\bFAIL  [A-Za-z0-9_]+|TEST_CASE_EVENT: .*\"status\":\s*\"fail\"|\bFAILED tests/")),
+	("error_annotation", re.compile(r"::error::orchestrate-poll shard [0-9]+ failed|##\[error\]|::error::")),
+	("traceback", re.compile(r"Traceback \(most recent call last\)")),
+)
+match_index, match_kind = None, ""
+for kind, pattern in tiers:
+	for index, line in enumerate(lines):
+		if pattern.search(line):
+			match_index, match_kind = index, kind
+			break
+	if match_index is not None:
+		break
+try:
+	with open(names_path, encoding="utf-8") as handle:
+		names = [name for name in (json.load(handle).get("names") or []) if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_]{1,200}", name)]
+except (OSError, ValueError, AttributeError):
+	names = []
+out = [f"Historical job log (redacted); first shard failure:", f"Run: {run_id} Job: {job_id}"]
+if match_index is None:
+	outcome = "no_failure_line"
+	out.append("No failure line matched (evidence=log_no_failure_line); last 200 redacted lines:")
+	excerpt = lines[-200:]
+else:
+	outcome = "found"
+	start, end = max(0, match_index - 40), min(len(lines), match_index + 81)
+	out.append(f"Match: {match_kind} at line {match_index + 1} of {len(lines)}")
+	out.append("Failing tests named in the log: " + (", ".join(names[:50]) if names else "(none parsed)"))
+	out.append(f"--- log excerpt (lines {start + 1}-{end}) ---")
+	excerpt = lines[start:end]
+budget, kept = 16384, []
+for line in excerpt:
+	cost = len(line.encode("utf-8")) + 1
+	if cost > budget:
+		kept.append("(excerpt truncated at 16 KiB)")
+		break
+	kept.append(line)
+	budget -= cost
+with open(context_path, "w", encoding="utf-8") as handle:
+	handle.write("\n".join(out + kept) + "\n")
+print(outcome)
+PY
+)"; then
+			log "error historical_log_parse_failed"
+			exit 1
+		fi
+		log "historical_evidence source=log outcome=${HIST_EVIDENCE_OUTCOME} run=${HIST_RUN_ID} job=${HIST_JOB_ID}"
+	elif [ "${hist_log_rc}" -eq 4 ] && [ -n "${HIST_REPRO_DIR}" ] && [ -d "${HIST_REPRO_DIR}" ] && [ ! -L "${HIST_REPRO_DIR}" ]; then
+		rm -f "${hist_raw}"
+		HIST_EVIDENCE_SOURCE="repro"
+		# The reproduction ran PR-head code: every artifact byte is untrusted
+		# data. Counts and completeness are recomputed here, never read from a
+		# summary the reproduction wrote.
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${HIST_REPRO_DIR}" "${HIST_EXPECTED_GROUPS}" "${hist_context_tmp}" "${HEAD_SHA,,}" > "${hist_summary}" <<'PY'
+import json
+import os
+import re
+import stat
+import sys
+
+root, expected_groups, context_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+# Failing run head SHA (already bound to the run); a green run on any other
+# tree cannot be a complete non-reproduction.
+failing_head = sys.argv[4] if len(sys.argv) > 4 else ""
+FILE_CAP, TOTAL_CAP = 2 * 1024 * 1024, 16 * 1024 * 1024
+total_read = 0
+missing = []
+
+
+def safe_token(value):
+	return re.sub(r"[^A-Za-z0-9_.:/=-]", "_", value)[:120]
+
+
+def note(item):
+	item = safe_token(item)
+	if item not in missing and len(missing) < 40:
+		missing.append(item)
+
+
+def read_file(path, rel):
+	global total_read
+	try:
+		info = os.lstat(path)
+		if not stat.S_ISREG(info.st_mode):
+			note(f"not_regular:{rel}")
+			return None
+		fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+		try:
+			if not stat.S_ISREG(os.fstat(fd).st_mode):
+				note(f"not_regular:{rel}")
+				return None
+			allowed = min(FILE_CAP, TOTAL_CAP - total_read)
+			if allowed <= 0:
+				note("total_size_cap")
+				return None
+			data = os.read(fd, allowed + 1)
+		finally:
+			os.close(fd)
+	except OSError:
+		note(f"unreadable:{rel}")
+		return None
+	if len(data) > allowed:
+		note(f"size_capped:{rel}")
+		data = data[:allowed]
+	total_read += len(data)
+	return data.decode("utf-8", errors="replace")
+
+
+def walk(directory, rel, depth, files):
+	try:
+		entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+	except OSError:
+		note(f"unreadable_dir:{rel}")
+		return
+	for entry in entries:
+		entry_rel = f"{rel}/{entry.name}" if rel else entry.name
+		if entry.is_symlink():
+			note(f"symlink_rejected:{entry_rel}")
+		elif entry.is_dir(follow_symlinks=False):
+			if depth < 3:
+				walk(entry.path, entry_rel, depth + 1, files)
+		elif entry.is_file(follow_symlinks=False):
+			text = read_file(entry.path, entry_rel)
+			if text is not None:
+				files[entry_rel] = text
+		else:
+			note(f"not_regular:{entry_rel}")
+
+
+RESULT_RE = re.compile(r"^\s*(PASS|FAIL|SKIP)  ([A-Za-z0-9_]+)(.*)$")
+DEP_RE = re.compile(r"\bjq\b|yaml", re.IGNORECASE)
+groups = {}
+try:
+	top = sorted(os.scandir(root), key=lambda entry: entry.name)
+except OSError:
+	top = []
+	note("repro_dir_unreadable")
+for entry in top:
+	match = re.fullmatch(r"(?:[a-z0-9-]*-)?group-([0-9]{1,2})", entry.name)
+	if entry.is_symlink():
+		note(f"symlink_rejected:{entry.name}")
+	elif match and entry.is_dir(follow_symlinks=False):
+		files = {}
+		walk(entry.path, "", 0, files)
+		groups[int(match.group(1))] = (entry.name, files)
+
+totals = {"pass": 0, "fail": 0, "skip": 0, "dep_skip": 0}
+nonzero = []
+first_failure = None
+trees = set()
+summary_lines = []
+for group in range(expected_groups):
+	if group not in groups:
+		note(f"group_missing:{group}")
+		continue
+	group_name, files = groups[group]
+	tested = re.fullmatch(r"tree=(head|merge_commit) sha=([0-9a-f]{40})\s*", files.get("tested.txt", ""))
+	if tested:
+		trees.add((tested.group(1), tested.group(2)))
+	else:
+		note(f"tested_tree_unknown:g{group}")
+	if "extract_failed" in files:
+		note(f"extract_failed:g{group}:" + files["extract_failed"].strip().split("\n")[0][:40])
+	plan = []
+	for line in files.get("plan.tsv", "").splitlines():
+		parts = line.split("\t")
+		if len(parts) >= 3 and re.fullmatch(r"[0-9]{1,3}", parts[0]):
+			plan.append((parts[0], parts[1], set(parts[2].split(","))))
+	if not plan:
+		note(f"plan_missing:g{group}")
+	rcs = {}
+	for line in files.get("steps.tsv", "").splitlines():
+		parts = line.split("\t")
+		if len(parts) >= 3 and re.fullmatch(r"[0-9]{1,3}", parts[0]) and re.fullmatch(r"[0-9]{1,3}", parts[2]):
+			rcs[parts[0]] = int(parts[2])
+	kinds = {kind for _, kind, _ in plan}
+	flags = set().union(*(step_flags for _, _, step_flags in plan)) if plan else set()
+	required = {"derive", "unit"} | ({"fastfail"} if group == 0 else set())
+	for kind in sorted(required - kinds):
+		note(f"step_missing:g{group}:{kind}")
+	if plan and "sharding" not in flags:
+		note(f"sharding_test_not_run:g{group}")
+	if plan and group == 0 and "single" not in flags:
+		note("single_file_modules_not_run:g0")
+	counted_logs = []
+	for number, kind, _ in plan:
+		if number not in rcs:
+			note(f"step_not_run:g{group}:{number}")
+		elif rcs[number] != 0:
+			nonzero.append(f"g{group}:step{number}:{kind}:rc{rcs[number]}")
+		if kind == "fastfail":
+			counted_logs.append(f"out/step-{number}.log")
+	shard_ids = sorted({int(m.group(1)) for name in files for m in [re.fullmatch(r"out/poll_shard_([0-9]{1,2})\.txt", name)] if m})
+	active_shards = [shard for shard in shard_ids if files.get(f"out/poll_shard_{shard}.txt", "").strip()]
+	if plan and not active_shards:
+		note(f"no_shards:g{group}")
+	shard_summary = []
+	for shard in active_shards:
+		log_name, rc_name = f"out/poll_shard_{shard}.log", f"out/poll_shard_{shard}.rc"
+		if log_name not in files:
+			note(f"shard_log_missing:g{group}:s{shard}")
+		else:
+			counted_logs.append(log_name)
+		rc_text = files.get(rc_name, "").strip()
+		if not re.fullmatch(r"[0-9]{1,3}", rc_text):
+			note(f"shard_rc_missing:g{group}:s{shard}")
+		elif int(rc_text) != 0:
+			nonzero.append(f"g{group}:shard{shard}:rc{rc_text}")
+	for log_name in counted_logs:
+		counts = {"PASS": 0, "FAIL": 0, "SKIP": 0}
+		for index, line in enumerate(files.get(log_name, "").split("\n")):
+			result = RESULT_RE.match(line)
+			if not result:
+				continue
+			counts[result.group(1)] += 1
+			if result.group(1) == "SKIP" and DEP_RE.search(result.group(3)):
+				totals["dep_skip"] += 1
+			if result.group(1) == "FAIL" and first_failure is None:
+				first_failure = (group, log_name, index)
+		totals["pass"] += counts["PASS"]
+		totals["fail"] += counts["FAIL"]
+		totals["skip"] += counts["SKIP"]
+		shard_summary.append(f"{log_name}: {counts['PASS']}/{counts['FAIL']}/{counts['SKIP']}")
+	# Other step logs (they repeat shard output, so result lines are skipped):
+	# unittest-style failures and dependency skips from single-file modules.
+	for name in sorted(files):
+		if not re.fullmatch(r"out/step-[0-9]{1,3}\.log", name) or name in counted_logs:
+			continue
+		for index, line in enumerate(files[name].split("\n")):
+			if RESULT_RE.match(line):
+				continue
+			if re.search(r"No module named '?yaml", line):
+				totals["dep_skip"] += 1
+			elif re.search(r"\bskipped\b", line) and DEP_RE.search(line):
+				totals["dep_skip"] += 1
+			if re.match(r"^(FAIL|ERROR): test", line):
+				totals["fail"] += 1
+				if first_failure is None:
+					first_failure = (group, name, index)
+	summary_lines.append(f"group {group} ({group_name}): steps " + ", ".join(f"{number}:{kind}:rc={rcs.get(number, 'none')}" for number, kind, _ in plan) + "; pass/fail/skip " + ("; ".join(shard_summary) or "none"))
+
+if len(trees) > 1:
+	note("tested_sha_mismatch")
+tested_tree, tested_sha = (sorted(trees)[0] if trees else ("", ""))
+if trees and tested_tree != "head":
+	note("failing_head_not_tested")
+elif tested_sha and tested_sha != failing_head:
+	note("tested_sha_not_failing_head")
+if totals["fail"] or nonzero:
+	outcome = "reproduced"
+elif not missing and totals["dep_skip"] == 0:
+	outcome = "complete_non_reproduction"
+else:
+	outcome = "incomplete"
+	if totals["dep_skip"]:
+		note(f"dependency_skips:{totals['dep_skip']}")
+
+out = [f"Historical CI reproduction (redacted); outcome: {outcome}",
+	f"Tested tree: {tested_tree or 'unknown'} {tested_sha or ''}".rstrip(),
+	f"Totals: pass={totals['pass']} fail={totals['fail']} skip={totals['skip']} dependency_skips={totals['dep_skip']}",
+	"Non-zero exits: " + (", ".join(nonzero) or "none"),
+	"Missing for a complete reproduction: " + (", ".join(missing) or "none")]
+out += summary_lines
+if first_failure is None and nonzero:
+	match = re.match(r"g([0-9]+):step([0-9]+):", nonzero[0])
+	if match and int(match.group(1)) in groups:
+		log_name = f"out/step-{match.group(2)}.log"
+		lines = groups[int(match.group(1))][1].get(log_name, "").split("\n")
+		first_failure = (int(match.group(1)), log_name, max(0, len(lines) - 41))
+if first_failure is not None:
+	group, log_name, index = first_failure
+	lines = groups[group][1].get(log_name, "").split("\n")
+	start, end = max(0, index - 40), min(len(lines), index + 81)
+	out.append(f"--- first failure: group {group} {safe_token(log_name)} lines {start + 1}-{end} ---")
+	out += lines[start:end]
+text = "\n".join(out)
+if len(text.encode("utf-8")) > 49152:
+	text = text.encode("utf-8")[:49152].decode("utf-8", errors="ignore") + "\n(context truncated at 48 KiB)"
+with open(context_path, "w", encoding="utf-8") as handle:
+	handle.write(text + "\n")
+json.dump({"outcome": outcome, "tested_tree": tested_tree, "tested_sha": tested_sha,
+	"skip_count": totals["skip"], "dependency_skip_count": totals["dep_skip"], "missing": missing}, sys.stdout)
+PY
+		then
+			rm -f "${hist_context_tmp}"
+			log "error historical_repro_parse_failed"
+			exit 1
+		fi
+		if ! historical_redact < "${hist_context_tmp}" > "${PR_CHECK_RUNS_CONTEXT_FILE}"; then
+			rm -f "${hist_context_tmp}"
+			: > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+			log "error historical_redaction_failed"
+			exit 1
+		fi
+		rm -f "${hist_context_tmp}"
+		HIST_EVIDENCE_OUTCOME="$(jq -r '.outcome' "${hist_summary}")"
+		HIST_TESTED_TREE="$(jq -r '.tested_tree' "${hist_summary}")"
+		HIST_TESTED_SHA="$(jq -r '.tested_sha' "${hist_summary}")"
+		HIST_SKIP_COUNT="$(jq -r '.skip_count' "${hist_summary}")"
+		HIST_DEP_SKIP_COUNT="$(jq -r '.dependency_skip_count' "${hist_summary}")"
+		HIST_MISSING="$(jq -r '.missing | join(", ")' "${hist_summary}")"
+		log "historical_evidence source=repro outcome=${HIST_EVIDENCE_OUTCOME} tested_tree=${HIST_TESTED_TREE:-unknown} tested_sha=${HIST_TESTED_SHA:-unknown} skips=${HIST_SKIP_COUNT} dependency_skips=${HIST_DEP_SKIP_COUNT}"
+	else
+		rm -f "${hist_raw}"
+		local hist_repro_state=absent
+		if [ -n "${HIST_REPRO_DIR}" ] && [ -d "${HIST_REPRO_DIR}" ]; then
+			hist_repro_state=present
+		fi
+		log "error historical_evidence_unavailable log_status=${hist_log_rc} repro_dir=${hist_repro_state}"
+		exit 1
+	fi
+	if [ ! -s "${hist_summary}" ]; then
+		printf '{}' > "${hist_summary}"
+	fi
+	HIST_META_JSON="$(jq -n --arg run "${HIST_RUN_ID}" --arg job "${HIST_JOB_ID}" \
+		--arg source "${HIST_EVIDENCE_SOURCE}" --arg outcome "${HIST_EVIDENCE_OUTCOME}" \
+		--arg tree "${HIST_TESTED_TREE}" --arg sha "${HIST_TESTED_SHA}" \
+		--argjson skips "${HIST_SKIP_COUNT}" --argjson dep_skips "${HIST_DEP_SKIP_COUNT}" \
+		--slurpfile summary "${hist_summary}" \
+		'{historical_run_id: $run, historical_job_id: $job, evidence_source: $source, evidence_outcome: $outcome,
+		tested_tree: $tree, tested_sha: $sha, skip_count: $skips, dependency_skip_count: $dep_skips,
+		missing: ($summary[0].missing // [])}')"
+}
 
 PR_PAYLOAD_FILE="${PR_JSON_FILE}"
 : > "${PR_CHECK_RUNS_CONTEXT_FILE}"
@@ -553,7 +1276,9 @@ if [ "${context_head_sha_label}" != "pr_payload" ] && [ "${context_head_sha_labe
 	fi
 fi
 log "context_head_sha=${context_head_sha_label} pr_head_sha=${PR_HEAD_SHA_CURRENT:-unknown} pr_head_advanced=${pr_head_advanced}"
-if [ -f scripts/collect_pr_check_runs_context.py ]; then
+if [ "${HISTORICAL_MODE}" = "true" ]; then
+	collect_historical_evidence
+elif [ -f scripts/collect_pr_check_runs_context.py ]; then
 	if PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" \
 		PR_CHECK_RUNS_CONTEXT_FILE="${PR_CHECK_RUNS_CONTEXT_FILE}" \
 		PR_CHECK_RUNS_HEAD_SHA_OVERRIDE="${HEAD_SHA}" \
@@ -572,13 +1297,35 @@ if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \
 		--arg fingerprint "${FP}" --arg generation "${GEN}" --arg root "${ROOT}" \
 		--arg head_ref "${HEAD_REF}" --arg title "${PR_TITLE}" --arg url "${PR_URL}" \
+		--arg routing_target_branch "${ROUTING_TARGET_BRANCH}" \
+		--arg routing_ref "${ROUTING_REF}" \
 		--arg integration_branch "${INTEGRATION_BRANCH}" \
-		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, integration_branch: $integration_branch}' > "${TRIAGE_METADATA_FILE}"
+		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_target_branch: $routing_target_branch, routing_ref: $routing_ref, integration_branch: $integration_branch}' > "${TRIAGE_METADATA_FILE}"
+	if [ "${HISTORICAL_MODE}" = "true" ]; then
+		jq --argjson hist "${HIST_META_JSON}" '. + $hist' "${TRIAGE_METADATA_FILE}" > "${TRIAGE_METADATA_FILE}.tmp"
+		mv "${TRIAGE_METADATA_FILE}.tmp" "${TRIAGE_METADATA_FILE}"
+	fi
 	if [ -n "${GITHUB_OUTPUT:-}" ]; then
 		echo "ready=true" >> "${GITHUB_OUTPUT}"
 	fi
 	exit 0
 fi
+fi
+
+# Defence in depth: the routing value crossed a file hand-off, so check the
+# flag and the ref shape again before it can reach the issue body.
+if [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+	if [ "${CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" != "true" ]; then
+		log "routing outcome=skip reason=disabled"
+		ROUTING_TARGET_BRANCH=""
+	elif ! triage_routing_ref_is_safe "${ROUTING_TARGET_BRANCH}"; then
+		log "routing outcome=skip reason=invalid_ref"
+		ROUTING_TARGET_BRANCH=""
+	elif [ "${ROUTING_TARGET_BRANCH}" != "${HEAD_REF}" ]; then
+		# The route must name the PR head recorded beside it.
+		log "routing outcome=skip reason=handoff_mismatch"
+		ROUTING_TARGET_BRANCH=""
+	fi
 fi
 
 # --- Run the diagnosis model -----------------------------------------------
@@ -782,6 +1529,15 @@ fi
 # --- Compose and open the issue --------------------------------------------
 
 TITLE="CI failure: ${CHECK_NAME_DISPLAY} on PR #${PR_NUMBER}"
+if [ -n "${ROUTING_REF}" ]; then
+	# The only routing line the body validator admits; the ref was verified
+	# against the PR payload by triage_verify_pr_head_route.
+	ROUTING_LINE="- **Integration branch:** \`${ROUTING_REF}\`"
+elif [ -n "${INTEGRATION_BRANCH}" ]; then
+	# Issue #6726: the API-verified orchestrator/project-<N> head, re-validated
+	# above and parsed by scripts/resolve_integration_ref.sh.
+	ROUTING_LINE="- **Integration branch:** \`${INTEGRATION_BRANCH}\`"
+fi
 BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 {
 	echo "${FP_MARKER}"
@@ -795,10 +1551,10 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo
 	echo "- **Repository:** \`${REPO}\`"
 	echo "- **Pull request:** ${PR_URL_DISPLAY} (\`${HEAD_REF_DISPLAY}\`)"
-	if [ -n "${INTEGRATION_BRANCH}" ]; then
-		# The one routing line this body may carry: API-verified in collect,
+	if [ -n "${ROUTING_LINE}" ]; then
+		# The one routing line this body may carry: verified in collect,
 		# re-validated above, and parsed by scripts/resolve_integration_ref.sh.
-		echo "- **Integration branch:** \`${INTEGRATION_BRANCH}\`"
+		echo "${ROUTING_LINE}"
 	fi
 	echo "- **Failing check:** \`${CHECK_NAME_DISPLAY}\` (conclusion: \`${CHECK_CONCLUSION_DISPLAY}\`)"
 	if [ -n "${CHECK_RUN_ID}" ]; then
@@ -807,7 +1563,38 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo "- **Check details:** ${CHECK_DETAILS_URL_DISPLAY}"
 	echo "- **Head SHA:** \`${HEAD_SHA_DISPLAY}\`"
 	echo "- **Triage run:** ${RUN_URL}"
+	if [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+		# The only routing line the body may carry; the validator below allows
+		# exactly this line, once, before the first separator.
+		echo
+		echo "Target branch: ${ROUTING_TARGET_BRANCH}"
+	fi
 	echo
+	if [ "${HISTORICAL_MODE}" = "true" ]; then
+		hist_run_url="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${HIST_RUN_ID}"
+		echo "## Historical run follow-up"
+		echo
+		echo "This issue covers one already-finished CI run of PR #${PR_NUMBER}, which is no longer open. It was filed by a historical check-failure triage run, not by a new CI failure."
+		echo
+		echo "- **Run:** ${hist_run_url}"
+		echo "- **Job log:** ${hist_run_url}/job/${HIST_JOB_ID}"
+		echo "- **Evidence source:** \`${HIST_EVIDENCE_SOURCE}\` (outcome: \`${HIST_EVIDENCE_OUTCOME}\`)"
+		if [ "${HIST_EVIDENCE_SOURCE}" = "repro" ]; then
+			echo "- **Tested tree:** \`${HIST_TESTED_TREE:-unknown}\` at \`${HIST_TESTED_SHA:-unknown}\`"
+			echo "- **Skipped tests:** ${HIST_SKIP_COUNT} (jq / PyYAML dependency skips: ${HIST_DEP_SKIP_COUNT})"
+			if [ -n "${HIST_MISSING}" ]; then
+				echo "- **Missing for a complete reproduction:** \`${HIST_MISSING}\`"
+			fi
+		fi
+		echo
+		echo "### Acceptance criteria"
+		echo
+		echo "1. The fix PR targets this repository's default branch (\`main\`)."
+		echo "2. Add a regression test that reproduces the identified failure. For a complete non-reproduction, explain in the PR why no code change is needed."
+		echo "3. The affected test and \`CI / lint\` pass on the fix PR."
+		echo "4. Update the conclusion of the earlier triage note for this PR (\`docs/triage/pr-${PR_NUMBER}-*.md\`, when one exists) in the same PR."
+		echo
+	fi
 	echo "---"
 	echo
 	cat "${DIAG_FILE}"
@@ -839,13 +1626,22 @@ then
 	exit 1
 fi
 
-if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${INTEGRATION_BRANCH}" <<'PY'
+if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<'PY'
 import pathlib
 import re
 import sys
 
 body = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 lines = body.split("\n")
+expected_branch = sys.argv[7] if len(sys.argv) > 7 else ""
+
+
+def routing_ref_is_safe(ref):
+	return (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", ref) is not None
+		and ".." not in ref and "//" not in ref and "@{" not in ref
+		and not ref.endswith(("/", ".", ".lock")))
+
+
 expected = [sys.argv[2], f"<!-- check-failure-triage:gen={sys.argv[3]} -->",
             f"<!-- check-failure-triage:root={sys.argv[4]} -->",
             f"<!-- check-failure-triage:pr={sys.argv[5]} -->"]
@@ -853,7 +1649,8 @@ if (not re.fullmatch(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->", expected[
         or not re.fullmatch(r"[0-9]+", sys.argv[3])
         or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[4])
         or not re.fullmatch(r"[1-9][0-9]*", sys.argv[5])
-        or lines[:4] != expected or "<!--" in "\n".join(lines[4:])):
+        or lines[:4] != expected or "<!--" in "\n".join(lines[4:])
+        or (expected_branch and not routing_ref_is_safe(expected_branch))):
 	print("marker")
 elif re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
 	print("reissue")
@@ -861,28 +1658,32 @@ else:
 	# Cover resolve_integration_ref.sh, security_dependency.py and
 	# orchestrate_lib.py's TARGET_BRANCH_LINE_RE, including Unicode newlines.
 	key = re.compile(r"^\s*(?:[-*>]\s*)*\**\s*(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:", re.IGNORECASE)
-	integration_branch = sys.argv[6] if len(sys.argv) > 6 else ""
-	reason = ""
-	exempt_index = None
-	if integration_branch:
-		# Exactly one trusted line, in the header (before the first "---"),
-		# also counted across Unicode line separators.
-		trusted_line = f"- **Integration branch:** `{integration_branch}`"
-		header_end = lines.index("---") if "---" in lines else len(lines)
-		positions = [index for index, line in enumerate(lines) if line == trusted_line]
-		if (not re.fullmatch(r"orchestrator/project-[1-9][0-9]*", integration_branch)
-				or len(positions) != 1 or positions[0] >= header_end
-				or body.splitlines().count(trusted_line) != 1):
-			reason = "integration_branch"
-		else:
-			exempt_index = positions[0]
-	if not reason:
-		exempt_line = lines[exempt_index] if exempt_index is not None else None
-		checked = [line for index, line in enumerate(lines) if index != exempt_index]
-		checked += [line for line in body.splitlines() if exempt_line is None or line != exempt_line]
-		if any(key.match(line) for line in checked):
-			reason = "routing_key"
-	print(reason)
+	routing_line = sys.argv[6] if len(sys.argv) > 6 else ""
+	# Each enabled feature contributes one trusted line: the script-generated
+	# Integration branch bullet (routing_line) and the "Target branch:" line.
+	allowed_lines = []
+	if routing_line:
+		allowed_lines.append(routing_line)
+	if expected_branch:
+		allowed_lines.append(f"Target branch: {expected_branch}")
+	if not allowed_lines:
+		print("routing_key" if any(key.match(line) for line in body.splitlines() + lines) else "")
+	else:
+		# Admit exactly the trusted routing lines, each verbatim and once, in the
+		# header before the first separator.
+		routing_ok = (not routing_line
+			or re.fullmatch(r"- \*\*Integration branch:\*\* `[A-Za-z0-9._/-]+`", routing_line) is not None)
+		for line_list in (body.splitlines(), lines):
+			if not routing_ok:
+				break
+			if sorted(line for line in line_list if key.match(line)) != sorted(allowed_lines):
+				routing_ok = False
+				break
+			separator = line_list.index("---") if "---" in line_list else -1
+			if any(not (4 <= line_list.index(allowed) < separator) for allowed in allowed_lines):
+				routing_ok = False
+				break
+		print("" if routing_ok else "routing_key")
 PY
 )"; then
 	body_validation_reason="marker"

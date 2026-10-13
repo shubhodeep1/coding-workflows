@@ -196,6 +196,17 @@ Copy this block when adding a new entry:
   - The feature is on by default, so removal requires confirming no consumer still wants it: for every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly `false` (the repo has opted out) before removing it.
 - **Owner:** @shubhodeep1
 
+### `.github/workflows/check-failure-triage-historical.yml`
+
+- **Introduced in:** #7093 (2026-10-10)
+- **Type:** single-use
+- **Removal trigger:** the `ai:check-triage` issue for PR #6611's CI run 37922279826 (job 113792812346) is closed. The workflow already skips itself on every push once that issue exists; removing it also lets the historical inputs of `check_failure_triage.yml` stay unused until another historical follow-up needs them.
+- **Removal preflight checks:**
+  - `gh issue list --label ai:check-triage --search 37922279826 --state all -R shubhodeep1/coding-workflows` shows a closed issue whose body links run 37922279826.
+  - `gh run list --workflow check-failure-triage-historical.yml --limit 5 -R shubhodeep1/coding-workflows` shows the latest runs ending in the guard job with `HISTORICAL_TRIAGE skip reason=already_filed` (no `repro` or `triage` job ran).
+  - `rg -n 'check-failure-triage-historical' .github/ docs/ agents.md tests/` lists only this workflow, its inventory line, the generated TREE block, its entry in `tests/test_workflow_checkout_integration_ref_audit.py` and `tests/test_check_failure_triage_historical.py` (plus that test's line in `ci.yml`), which are removed together.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)
@@ -259,4 +270,36 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
+
+### `workflow-templates/.claude/hooks/prepush_affected_tests.py`
+
+- **Introduced in:** PR for #7137 (2026-10-11)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the pre-push affected-test gate: the interactive `PreToolUse` hook and stamp, and (from plan phases P3-P5) every AI push path run it. Removing it drops the only pre-push test run.
+- **Removal preflight checks:**
+  - `grep -rn prepush_affected_tests .github/workflows scripts workflow-templates` returns no callers other than this file and `scripts/prepush_test_gate_run.sh`.
+  - `workflow-templates/.claude/settings.json` and `.claude/settings.json` no longer register the `prepush_affected_tests.py hook` command, in this repo and in every repo in `.github/ai/consumer_repos.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_prepush_affected_tests.py` is removed or migrated with the module.
+- **Owner:** @shubhodeep1
+
+### `scripts/prepush_test_gate_run.sh`
+
+- **Introduced in:** PR for #7137 (2026-10-11)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only credential-free container path for running PR tests before an AI push (plan phases P3-P5 call it).
+- **Removal preflight checks:**
+  - `grep -rn prepush_test_gate_run .github/workflows scripts workflow-templates` returns no callers.
+  - `docs/INVENTORY.md` row and the `tests/test_prepush_affected_tests.py` wrapper tests are removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `.github/workflows/pr6576-shard-followup.yml` + `scripts/pr6576_shard_followup.py` + `tests/test_pr6576_shard_followup.py`
+
+- **Introduced in:** issue #7072 (2026-10-10); PR number assigned when the implementation PR opens.
+- **Type:** single-use
+- **Removal trigger:** the marker comment `<!-- ai:pr6576-shard-followup:v1 -->` is posted on #7072 by the GH_PAT account, and any defect issue it filed is closed.
+- **Removal preflight checks:**
+  - `gh api --paginate repos/shubhodeep1/coding-workflows/issues/7072/comments --jq '.[] | select(.body | contains("ai:pr6576-shard-followup:v1")) | .user.login'` prints the pipeline (GH_PAT) login.
+  - `gh issue list -R shubhodeep1/coding-workflows --state open --search "ai:pr6576-shard-followup-defect in:body"` returns no issues.
+  - `gh api 'repos/shubhodeep1/coding-workflows/actions/workflows/pr6576-shard-followup.yml/runs?status=in_progress&per_page=1' --jq .total_count` returns `0`.
 - **Owner:** @shubhodeep1
