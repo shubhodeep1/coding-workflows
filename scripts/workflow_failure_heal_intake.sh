@@ -122,7 +122,10 @@
 #                                         then only after the composed body's
 #                                         ai:workflow-heal-scope:v1 marker verifies; a missing
 #                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
-#                                         sends a CRITICAL alert and exits nonzero.
+#                                         sends a CRITICAL alert and exits nonzero. Exception:
+#                                         a heal-scope recovery replacement (see
+#                                         HEAL_SCOPE_RECOVERY_ENABLED) is still verified and
+#                                         created while this gate is off.
 #   HEAL_SCOPE_RECOVERY_ENABLED           default on (#7191, #7323). Unset, empty or "true"
 #                                         (any letter case) lets a verified-identity report
 #                                         replace an open, pipeline-authored heal issue that has
