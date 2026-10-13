@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix to `tests/test_issue_7251_dependency_wait.py` land on?\nChoices:\nA) PR #7259's head branch `ai/issue-7257`. Add a `Target branch: ai/issue-7257` line to this issue's header, and the fix lands on that PR's branch. (RECOMMENDED)\nB) The default branch. The file would be created there as a new test, separate from PR #7259.\nC) Nowhere. Close this issue as a PR-specific failure and leave the fix to PR #7259's own review/autofix loop.\n**Note:** B conflicts with PR #7259, which adds the same file, and the two would collide on merge. Choose B only if PR #7259 is being abandoned.",
+  "fingerprint": "89a839796c2b54e6d44b9b313864afab970f8ce41bcf944a61c51bd135fc70ce",
+  "lineage": {
+    "issue_number": 7332,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38479567942",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38479567942",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013224757_30138a4055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7332,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38479567942"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7332 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T22:47:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
