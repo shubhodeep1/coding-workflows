@@ -1217,8 +1217,12 @@ def test_extract_plan_file_paths_keeps_exact_files_from_the_files_section() -> N
 		assert guard._plan_grant_path(good) == good, good
 	# A slashless nested directory would cover every file beneath it
 	# (entry_matches), so it is never written as an exact grant.
-	for bad in ("scripts/lib", "docs/plans", ".github/ai", "src/conf.d"):
+	for bad in ("scripts/lib", "docs/plans", ".github/ai", "src/conf.d", "scripts/v1.0", "api/v2.10",
+			"docs/2024.01.15"):
 		assert guard._plan_grant_path(bad) == "", bad
+	# A letter-led extension still marks a file at any depth.
+	for good in ("scripts/a.sh", "src/mod.rs", "web/x.mp3"):
+		assert guard._plan_grant_path(good) == good, good
 
 
 def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
@@ -1269,6 +1273,9 @@ def test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted() -
 	plan = "## Files likely to change\n- `scripts/lib`\n- `scripts/a.sh`\n"
 	code, record, body = _run_grant_cli(plan, _pipeline_meta())
 	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/lib"] and body is None
+	plan = "## Files likely to change\n- `scripts/v1.0`\n- `scripts/a.sh`\n"
+	code, record, body = _run_grant_cli(plan, _pipeline_meta())
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/v1.0"] and body is None
 	# More files than the cap: no proposal, the open-grant hold stands.
 	many = "## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
 	code, record, body = _run_grant_cli(many, _pipeline_meta())

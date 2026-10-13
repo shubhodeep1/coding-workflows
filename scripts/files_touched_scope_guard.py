@@ -664,7 +664,9 @@ _PLAN_GRANT_ROOT_FILE_RE = re.compile(
 # (entry_matches), so it is never written as an "exact" grant.
 _PLAN_GRANT_BARE_FILE_RE = re.compile(
 	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile)$")
-_PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z0-9]+)$")
+# The extension must start with a letter: a digit-led suffix (`v1.0`,
+# `2024.01.15`) is usually a versioned directory, which would cover its subtree.
+_PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")
 
 
 def _plan_grant_path(raw: str) -> str:
