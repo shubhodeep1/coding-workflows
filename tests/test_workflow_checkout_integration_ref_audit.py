@@ -295,7 +295,7 @@ def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
 	}
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
 		for mode, reason in failures.items():
-			for routing in ("true", "TRUE", "on"):
+			for routing in ("true", "TRUE", "1", "yes", "on"):
 				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
 				label = f"{workflow_name} mode={mode} routing={routing}"
 				assert rc != 0, f"{label}: expected failure\n{out}"
