@@ -27797,6 +27797,8 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #   - A productive commit needs the `[ai-autofix]` / `[judge-fix]` prefix
 #     AND the pipeline git identity (NOOP_PRODUCTIVE_COMMIT_NAME /
 #     _EMAIL) as author or committer.
+#     Before a force-merge it must also have been pushed by the pipeline
+#     login (repository activity API push actor, Gate C binding).
 #   - The snapshot head must equal the Gate A head, and the merge is bound
 #     to it, so every gate and the merge apply to one commit.
 #
@@ -27823,7 +27825,8 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #     but not comments.
 # The common case (PR with no noop warnings) costs just 1 comments
 # call and exits. A noop-suspicious PR additionally costs 1 commits
-# call, 1 pulls call (force-merge gate), and the gate D reads (check-runs,
+# call, 1 pulls call (force-merge gate), 1 repository activity call (Gate C
+# pusher binding), and the gate D reads (check-runs,
 # branch protection, and one actions/runs?head_sha= read when a named CI
 # check is configured) — gated so they only fire when the retry threshold
 # has been reached. The fork fields ride the existing `gh pr list` call
@@ -28278,6 +28281,52 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
+	# Gate C binding (issue #7126): git author / committer fields are
+	# metadata anyone with push access can set, so a qualifying commit must
+	# also have been pushed by the pipeline login. The repository activity
+	# API (newest first) records the authenticated pusher; a push by
+	# N_TRUSTED_LOGIN covers the PR commits after its `before` up to and
+	# including its `after` (a `before` outside the PR list covers from the
+	# start). Pipeline pushes use GH_PAT (review checkout token, judge-fix
+	# credential helper), the login unblock_trusted_login resolves.
+	# §14: one extra GET, only on this retry-cap path; no earlier call in
+	# the sweep returns pusher data. A failed read retries next sweep
+	# without paging; no covered commit fails closed and pages once.
+	N_HEAD_REF_URI="$(jq -rn --arg r "refs/heads/${N_HEAD}" '$r | @uri' 2>/dev/null || echo "")"
+	N_ACTIVITY_JSON=""
+	if [ -n "${N_HEAD_REF_URI}" ]; then
+		N_ACTIVITY_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/activity?ref=${N_HEAD_REF_URI}&per_page=100" 2>/dev/null || echo "")"
+	fi
+	if ! printf '%s' "${N_ACTIVITY_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		echo "::warning::PR #${N_PR}: gate C could not read push activity for ${N_HEAD} (reason=activity_unreadable); re-checking next sweep."
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+	# Both documents go through stdin: either can exceed the per-argument
+	# size limit that --argjson would hit on a long PR.
+	N_PROD_PUSHED="$(printf '%s\n%s\n' "${N_COMMITS_JSON}" "${N_ACTIVITY_JSON}" | jq -rs \
+		--arg login "${N_TRUSTED_LOGIN}" \
+		--arg ref "refs/heads/${N_HEAD}" \
+		--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}" \
+		--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}" '
+		.[0] as $commits | .[1] as $acts
+		| ([$commits | to_entries[] | {key: (.value.sha // ""), value: .key}] | from_entries) as $idx
+		| [$commits | to_entries[]
+			| select((.value.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))
+			| select(((.value.commit.committer.name // "") == $name and (.value.commit.committer.email // "") == $email)
+				or ((.value.commit.author.name // "") == $name and (.value.commit.author.email // "") == $email))
+			| .key] as $prod
+		| [$acts[] | select((.actor.login // "") == $login and (.ref // "") == $ref)
+			| select(($idx[(.after // "")] // null) != null)
+			| {b: ($idx[(.before // "")] // -1), a: $idx[.after]}] as $pushes
+		| if ([$prod[] as $k | $pushes[] | select(.b < $k and $k <= .a)] | length) > 0 then "true" else "false" end' \
+		2>/dev/null || echo "false")"
+	if [ "${N_PROD_PUSHED}" != "true" ]; then
+		_noop_gate_failure_alert "C_pusher" "Noop-suspicious force-merge gate C failed for PR #${N_PR}: no [ai-autofix] / [judge-fix] commit was pushed by the pipeline account. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
 	# Gate D: required checks, including the named CI check, passed.
 	if ! [[ "${N_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
 		_noop_gate_failure_alert "D_head" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: head SHA missing or malformed. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
@@ -28346,19 +28395,20 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 			# check, when configured, was still required by the wait helper.
 			;;
 		0:ok)
-			if ! [[ "${PR_CHECKS_LAST_TOTAL:-}" =~ ^[1-9][0-9]*$ ]]; then
-				# Three review runs since the last productive commit: an empty
-				# check-run listing is unexpected. Fail closed, page once.
-				_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: no check-runs on ${N_HEAD_SHA} (reason=no_check_runs). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
-				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
-				continue
-			fi
 			# The shared helper counts an unreadable actions/runs listing as
 			# zero pending CI runs (fail-open for its other callers). Here a
 			# queued CI run may not have check-runs yet, so an unread listing
 			# is unknown: re-check next sweep without paging (issue #7126).
+			# Checked before the empty-listing page, which it may explain.
 			if [ "${PR_CHECKS_RUNS_READ:-}" = "false" ]; then
 				echo "::warning::PR #${N_PR}: gate D could not read CI workflow runs on ${N_HEAD_SHA} (reason=ci_runs_unreadable); re-checking next sweep."
+				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+				continue
+			fi
+			if ! [[ "${PR_CHECKS_LAST_TOTAL:-}" =~ ^[1-9][0-9]*$ ]]; then
+				# Three review runs since the last productive commit: an empty
+				# check-run listing is unexpected. Fail closed, page once.
+				_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: no check-runs on ${N_HEAD_SHA} (reason=no_check_runs). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 				continue
 			fi

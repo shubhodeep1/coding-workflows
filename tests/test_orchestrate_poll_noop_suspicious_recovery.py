@@ -932,9 +932,16 @@ def _noop_pr(head_sha: str = NOOP_HEAD, head_repo: str | None = "o/r") -> dict:
 		"base": {"ref": "main"}, "labels": []}
 
 
+def _noop_activity(actor: str = PIPELINE_LOGIN, before: str = "0" * 40, after: str = NOOP_HEAD) -> list:
+	# Repository activity API rows, newest first; the push actor is the
+	# authenticated pusher.
+	return [{"activity_type": "push", "ref": "refs/heads/ai/issue-5", "before": before,
+		"after": after, "actor": {"login": actor}}]
+
+
 def _run_noop_sweep(*, snapshot=None, comments=None, commits=None, pr=None,
 		wait_outcome: str = "ok", wait_total: str = "5", login: str = PIPELINE_LOGIN,
-		runs_read: str = "true") -> dict:
+		runs_read: str = "true", activity=None) -> dict:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		log = root / "log"
@@ -943,6 +950,7 @@ def _run_noop_sweep(*, snapshot=None, comments=None, commits=None, pr=None,
 			"comments": comments if comments is not None else _noop_comments(),
 			"commits": commits if commits is not None else _noop_commits(),
 			"pr": pr if pr is not None else _noop_pr(),
+			"activity": activity if activity is not None else _noop_activity(),
 		}
 		for name, value in fixtures.items():
 			(root / f"{name}.json").write_text(json.dumps(value))
@@ -958,6 +966,7 @@ _safe_gh_jq() {
 		case "${a}" in
 			repos/*/issues/*/comments*) rec "READ comments"; cat "${FX}/comments.json"; return 0 ;;
 			repos/*/pulls/*/commits*) rec "READ commits"; cat "${FX}/commits.json"; return 0 ;;
+			repos/*/activity*) rec "READ activity ${a}"; [ -s "${FX}/activity.json" ] || return 1; cat "${FX}/activity.json"; return 0 ;;
 			repos/*/pulls/*) rec "READ pr"; cat "${FX}/pr.json"; return 0 ;;
 			user) printf '%s' "${TRUSTED}"; return 0 ;;
 		esac
@@ -1030,6 +1039,46 @@ def test_noop_forged_productive_commit_fails_gate_c():
 	out = _run_noop_sweep(commits=_noop_commits({"name": "mallory", "email": "m@x"}))
 	assert not out["merges"], out
 	assert any("gate C" in a for a in out["alerts"]), out
+
+
+def test_noop_productive_commit_not_pushed_by_pipeline_fails_gate_c():
+	"""Issue #7126: git identity is forgeable, so the qualifying commit must
+	also be inside a push by the pipeline login."""
+	out = _run_noop_sweep(activity=_noop_activity(actor="mallory"))
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "pushed by the pipeline account" in out["alerts"][0], out
+	assert any("gate=C_pusher" in line for line in out["log"]), out
+	assert any("activity?ref=refs%2Fheads%2Fai%2Fissue-5" in line for line in out["log"]), out
+
+
+def test_noop_pipeline_push_before_forged_commit_does_not_cover_it():
+	"""A trusted push that ends before the qualifying commit does not cover it."""
+	base = "b" * 40
+	commits = [{"sha": base, "commit": {"message": "human change",
+			"committer": dict(CODEX_IDENTITY, date="2026-09-30T00:00:00Z"),
+			"author": dict(CODEX_IDENTITY, date="2026-09-30T00:00:00Z")}}] + _noop_commits()
+	out = _run_noop_sweep(commits=commits, activity=_noop_activity(after=base))
+	assert not out["merges"], out
+	assert any("gate=C_pusher" in line for line in out["log"]), out
+	covered = _run_noop_sweep(commits=commits, activity=_noop_activity(before=base))
+	assert len(covered["merges"]) == 1, covered
+
+
+def test_noop_unreadable_activity_waits_without_paging():
+	"""A non-array activity payload is a failed read: retry next sweep, no page."""
+	out = _run_noop_sweep(activity={"message": "Server Error"})
+	assert not out["merges"] and not out["alerts"], out
+	assert "reason=activity_unreadable" in out["stdout"]
+	# An empty (readable) listing has no covering push: fail closed, page once.
+	empty = _run_noop_sweep(activity=[])
+	assert not empty["merges"] and any("gate=C_pusher" in line for line in empty["log"]), empty
+
+
+def test_noop_unreadable_ci_runs_with_no_check_runs_waits_without_paging():
+	"""The unreadable runs listing is checked before the empty-listing page."""
+	out = _run_noop_sweep(runs_read="false", wait_total="0")
+	assert not out["merges"] and not out["alerts"], out
+	assert "reason=ci_runs_unreadable" in out["stdout"]
 
 
 def test_noop_pending_checks_wait_without_paging():
