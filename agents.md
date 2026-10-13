@@ -1156,7 +1156,7 @@ bypass it. Log prefix: `IMPLEMENT_AUTOMATION_PATH_GUARD`.
   (log prefix `LABEL_SYNC_DELETED`; `LABEL_SYNC_RETIRED_ABSENT` when already
   gone; the output gains a `deleted` list). Nothing creates or applies them.
 
-`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default `false`, #6838) moves
+`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default `true`, #6838) moves
 the same grant check in front of the automatic `/approved`. When on,
 `plan.yml`'s "Auto-approve clear plan" step and both poller stall-recovery
 `auto_approve` branches extract the automation paths from the plan's
@@ -1168,10 +1168,10 @@ path is ungranted, or the check cannot run, the issue stays in
 comment and a WARNING. The poller logs `STALL_SKIP ...
 reason=automation_path_ungranted|automation_path_check_unavailable` without
 counting a recovery attempt. `orchestrate_poll.yml` forwards the flag to the
-poller with a `false` default, so it checks when enabled even if the plan-step
+poller with a `true` default, so it checks even if the plan-step
 hold marker fails to post; explicitly disabling it ignores old markers.
-Direct script callers with an unset flag can still activate the gate with a
-trusted hold marker newer than the latest trusted plan comment. The extractor
+Direct script callers with an unset flag get the same `true` default
+(`scripts/orchestrate_poll_process.sh`). The extractor
 block is byte-identical in both files, and
 `tests/test_plan_auto_approve_safe_state_fetch.py` pins that.
 
@@ -3574,6 +3574,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/audit_consumer_drift.yml
 .github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
+.github/workflows/check-failure-triage-historical.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
