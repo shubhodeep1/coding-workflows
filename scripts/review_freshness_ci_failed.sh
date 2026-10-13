@@ -66,12 +66,14 @@ freshness_ci_failed_main()
 	# Up to 3 attempts: a transient API error must not strand the PR, and a
 	# duplicate marker (a lost success response) is harmless.
 	local marker_attempt=1 marker_posted=false
+	local retry_sleep="${FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS:-5}"
+	[[ "${retry_sleep}" =~ ^[0-9]+$ ]] || retry_sleep=5
 	while [ "${marker_attempt}" -le 3 ]; do
 		if gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
 			marker_posted=true
 			break
 		fi
-		[ "${marker_attempt}" -lt 3 ] && sleep "${FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS:-5}"
+		[ "${marker_attempt}" -lt 3 ] && sleep "${retry_sleep}"
 		marker_attempt=$((marker_attempt + 1))
 	done
 	if [ "${marker_posted}" != "true" ]; then
