@@ -220,6 +220,8 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	assert full["if"] == "steps.find_tracking.outputs.has_work == 'true'"
 	assert sweep["if"] == "steps.find_tracking.outputs.has_work != 'true'"
 	assert "github.repository" not in sweep["if"]
+	# A recovery failure must not skip the later idle-tick sweeps.
+	assert sweep.get("continue-on-error") is True
 	# Same order as the full poller: recovery, latch release, unblock scan.
 	assert (
 		names.index("Process each tracking issue")
