@@ -1196,6 +1196,31 @@ def test_noop_productive_identity_matches_commit_writers():
 		assert re.search(r'git config user\.email "codex@users\.noreply\.github\.com"', writer), rel
 
 
+def test_noop_force_merge_controls_named_by_security_pass_findings_stay_in_place():
+	"""Security-pass fix cycle 2 of #7126 re-reported
+	`noop-force-merge-forged-comment-gates` and
+	`noop-gate-d-ignores-pending-checks-unbound-merge` because the audit read
+	the default branch's support copy of this script. Pin each control those
+	findings name, so a later sync that drops one fails here."""
+	text = _poller_text()
+	conflict = text[text.index('echo "Standalone PR conflict sweep"'):text.index(SWEEP_HEADER)]
+	pr_list = [line for line in conflict.splitlines() if "--json number,headRefName" in line]
+	assert pr_list, "the open-PR snapshot must request its fields explicitly"
+	assert all("isCrossRepository" in line and "headRepositoryOwner" in line for line in pr_list), pr_list
+	sweep_code = _strip_shell_comments(_sweep_block())
+	selections = [m.start() for m in re.finditer(r'--arg lit "\$\{NOOP_WARNING_LITERAL\}"', sweep_code)]
+	assert len(selections) >= 3, "noop-warning selections moved; re-check the author filter"
+	for start in selections:
+		jq_filter = sweep_code[start:sweep_code.index("2>/dev/null", start)]
+		assert '(.user.login // "") == $login' in jq_filter, jq_filter
+	summary_lines = [line for line in sweep_code.splitlines() if 'startswith("AI autofix editor summary")' in line]
+	assert summary_lines and all('(.user.login // "") == $login' in line for line in summary_lines), summary_lines
+	assert '_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0' in sweep_code
+	merges = [line for line in sweep_code.splitlines() if "gh pr merge" in line and "--squash" in line]
+	assert len(merges) == 1, merges
+	assert '--match-head-commit "${N_HEAD_SHA}"' in merges[0], merges
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern rather than pytest discovery, so without
