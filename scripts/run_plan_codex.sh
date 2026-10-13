@@ -67,7 +67,9 @@ Your job:
 
 Create a structured implementation plan that includes:
 
-1. Files likely to change
+1. `## Files likely to change` — a markdown section with exactly this heading. List one
+   repo-relative path per bullet, each in backticks. Put the next item under its own `##`
+   heading (for example `## Functions or modules to implement`) so the file list ends there.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes

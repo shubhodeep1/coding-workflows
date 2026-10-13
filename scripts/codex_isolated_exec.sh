@@ -61,6 +61,10 @@
 #       Exit 75: isolation unavailable (no Docker or python3, image build
 #       failed); the caller falls back to codex (plan D1). Exit 73: the relay
 #       did not start for this account. Otherwise the CLI's exit status.
+#       CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS (default 1, capped at 5) retries
+#       the sandbox image build only, waiting
+#       CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS (default 15) times the
+#       attempt number between tries; no other failure is retried.
 #   codex_isolated_exec.sh cleanup --root DIR
 #   codex_isolated_exec.sh image-context [--engine claude] --out DIR
 #       Write the generated image build context (the Dockerfile only) into
@@ -271,30 +275,50 @@ new_root()
 
 # Pull the prebuilt image of this context, or build it locally
 # (scripts/sandbox_image.sh); without the helper, build locally as before.
+# CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS (default 1, at most 5) retries only
+# this build; implement's two `prepare` calls set it inline (#7196). The
+# sleep before attempt n+1 is CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS
+# (default 15) times n. Every other isolation failure is never retried.
 build_image()
 {
 	local version="${CODEX_VERSION:-v0.114.0}" context image
 	local -a build_args=(--build-arg "CODEX_VERSION=${version}")
+	local max_attempts="${CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS:-1}" sleep_secs="${CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS:-15}" attempt
 	[[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "invalid CODEX_VERSION"
-	context="$(mktemp -d)"
-	write_image_context "${context}"
+	if ! [[ "${max_attempts}" =~ ^[1-9][0-9]{0,2}$ ]]; then
+		echo "::warning::CODEX_ISOLATION image_build invalid_attempts; using 1" >&2
+		max_attempts=1
+	fi
+	[ "${max_attempts}" -le 5 ] || max_attempts=5
+	[[ "${sleep_secs}" =~ ^[0-9]{1,4}$ ]] || sleep_secs=15
 	if [ "${engine}" = claude ]; then
 		build_args+=(--build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}")
 	fi
-	if [ -f "${support_dir}/sandbox_image.sh" ] && [ ! -L "${support_dir}/sandbox_image.sh" ]; then
-		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" \
-			bash "${support_dir}/sandbox_image.sh" build --family "codex-isolated-${engine}" "${build_args[@]}" "${context}" 2>"${context}.err")" || image=""
-		grep '^SANDBOX_IMAGE ' "${context}.err" >&2 || true
-	else
-		image="$(docker_env build -q "${build_args[@]}" "${context}" 2>"${context}.err")" || image=""
-	fi
-	if ! [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+		context="$(mktemp -d)"
+		write_image_context "${context}"
+		if [ -f "${support_dir}/sandbox_image.sh" ] && [ ! -L "${support_dir}/sandbox_image.sh" ]; then
+			image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" SANDBOX_IMAGE_REGISTRY="${SANDBOX_IMAGE_REGISTRY:-}" SANDBOX_IMAGE_PULL_TIMEOUT_SECS="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-}" \
+				bash "${support_dir}/sandbox_image.sh" build --family "codex-isolated-${engine}" "${build_args[@]}" "${context}" 2>"${context}.err")" || image=""
+			grep '^SANDBOX_IMAGE ' "${context}.err" >&2 || true
+		else
+			image="$(docker_env build -q "${build_args[@]}" "${context}" 2>"${context}.err")" || image=""
+		fi
+		if [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+			rm -rf -- "${context}" "${context}.err"
+			[ "${max_attempts}" -eq 1 ] || echo "CODEX_ISOLATION image_build attempt=${attempt}/${max_attempts} outcome=ok" >&2
+			printf '%s\n' "${image}"
+			return 0
+		fi
 		tail -n 30 "${context}.err" >&2 || true
 		rm -rf -- "${context}" "${context}.err"
-		unavailable image_build_failed "sandbox image build failed"
-	fi
-	rm -rf -- "${context}" "${context}.err"
-	printf '%s\n' "${image}"
+		if [ "${attempt}" -lt "${max_attempts}" ]; then
+			echo "CODEX_ISOLATION image_build attempt=${attempt}/${max_attempts} outcome=retry" >&2
+			command -p sleep "$((sleep_secs * attempt))"
+		fi
+	done
+	[ "${max_attempts}" -eq 1 ] || echo "CODEX_ISOLATION image_build attempt=${max_attempts}/${max_attempts} outcome=fail" >&2
+	unavailable image_build_failed "sandbox image build failed"
 }
 
 cpu_limit()
