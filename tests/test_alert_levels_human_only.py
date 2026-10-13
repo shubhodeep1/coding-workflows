@@ -365,6 +365,10 @@ def test_standalone_sweeps_do_not_inherit_smoke_silent_level():
 	assert "warning=sent" in out
 	assert "Standalone PR sweeps alert level: WARNING (poller level: SILENT)" in out
 	assert "restored=SILENT" in out
+	# Levels are case-insensitive, as in tg_helpers.sh.
+	out = _sweep_alert_level_harness("ALERT_MSG_LEVEL=SILENT\nSTANDALONE_SWEEP_ALERT_MSG_LEVEL=warning\n")
+	assert "warning=sent" in out
+	assert "restored=SILENT" in out
 
 
 def test_standalone_sweep_alert_level_empty_or_invalid_keeps_poller_level():

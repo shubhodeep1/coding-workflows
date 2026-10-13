@@ -222,6 +222,9 @@ def test_standalone_pr_sweeps_run_without_tracking_issues() -> None:
 	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert "STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert 'PYTHONDONTWRITEBYTECODE: "1"' in step
+	assert "ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}" in step
+	assert "continue-on-error: true" in step
+	assert "for f in validate_editor_audit.sh; do" in wf
 	main_start = wf.index("- name: Process each tracking issue")
 	main_end = wf.index("- name: Release staged-support latches without active projects", main_start)
 	main_step = wf[main_start:main_end]
@@ -250,7 +253,7 @@ def test_standalone_pr_sweeps_run_without_tracking_issues() -> None:
 	yaml.safe_load(wf)
 
 
-STANDALONE_SWEEP_STEP ="Run standalone stall recovery without active projects"
+STANDALONE_SWEEP_STEP = "Run standalone stall recovery without active projects"
 STANDALONE_SWEEP_POLLER_GUARD = 'if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then'
 
 

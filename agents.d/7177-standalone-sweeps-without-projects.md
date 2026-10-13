@@ -9,8 +9,12 @@ sweeps without active projects" runs `scripts/orchestrate_poll_process.sh` with
 loop, `prime_phase_concurrency_snapshot`, standalone stall recovery, the
 staged-support latch release, the unblock scan and `close_merged_issues_sweep`.
 The complementary `has_work` gates keep the two paths exclusive. The step skips
-with a warning when the staged poller lacks the mode. Both sweeps send Telegram
+with a warning when the staged poller lacks the mode, is `continue-on-error`,
+and forwards `ALLOW_WORKFLOW_EDITS`. "Stage workflow support files" also stages
+`validate_editor_audit.sh` (optional), which the no-op sweep's force-merge
+gate B needs; without it gate B fails closed. Both sweeps send Telegram
 alerts at `STANDALONE_SWEEP_ALERT_MSG_LEVEL` (from `vars.ALERT_MSG_LEVEL`, default
 `WARNING`) instead of inheriting `find_tracking`'s all-smoke-fixture `SILENT`,
-then restore `ALERT_MSG_LEVEL`. An empty value keeps the poller level, and a value
-outside `DEBUG|WARNING|ERROR|CRITICAL|SILENT` is ignored with a warning.
+then restore `ALERT_MSG_LEVEL`. An empty value keeps the poller level, the value is
+matched case-insensitively, and a value outside
+`DEBUG|WARNING|ERROR|CRITICAL|SILENT` is ignored with a warning.

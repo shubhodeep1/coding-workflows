@@ -27389,7 +27389,8 @@ fi
 _STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="false"
 _STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL=""
 _standalone_sweep_alert_level_apply() {
-	local requested="${STANDALONE_SWEEP_ALERT_MSG_LEVEL:-}"
+	local requested
+	requested="$(printf '%s' "${STANDALONE_SWEEP_ALERT_MSG_LEVEL:-}" | tr '[:lower:]' '[:upper:]')"
 	if [ "${ALERT_MSG_LEVEL+set}" = "set" ]; then
 		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="true"
 		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL}"
