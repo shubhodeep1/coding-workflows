@@ -49,6 +49,8 @@ if preseed_docker image inspect "${preseed_ref}" >/dev/null 2>&1; then
 fi
 
 read -r -a preseed_mirrors <<< "${CLARIFY_BASE_IMAGE_MIRRORS-public.ecr.aws/docker/library mirror.gcr.io/library}"
+# At most 8 mirrors, so a misconfigured list cannot queue dozens of sequential pulls.
+preseed_mirrors=("${preseed_mirrors[@]:0:8}")
 preseed_attempted=0
 for preseed_mirror in "${preseed_mirrors[@]}"; do
 	if ! [[ "${preseed_mirror}" =~ ${preseed_mirror_re} ]]; then

@@ -74,7 +74,7 @@ case "$1" in
 		;;
 	pull)
 		shift
-		[ "$1" = --quiet ] && shift
+		case "$1" in --quiet|-q) shift ;; esac
 		ref="$1"
 		for mirror in ${FAKE_DOCKER_GOOD_MIRRORS:-}; do
 			case "${ref}" in
@@ -547,8 +547,13 @@ def test_isolated_run_preseeds_before_build() -> None:
 	guard = lines[call - 1]
 	assert '-f "${support}/clarify_base_image_preseed.sh"' in guard
 	assert '! -L "${support}/clarify_base_image_preseed.sh"' in guard
-	build_lines = [i for i, l in enumerate(lines) if "sandbox_image.sh" in l or "docker build" in l]
-	assert build_lines and all(i > call for i in build_lines), "pre-seed must run before every build"
+	# The prebuilt pull needs no FROM image, so it runs first; the pre-seed
+	# then runs before every local build (#7215 review).
+	ref_line = next(i for i, l in enumerate(lines) if "sandbox_image.sh\" ref " in l)
+	pull_line = next(i for i, l in enumerate(lines) if "docker pull -q \"${clarify_prebuilt_ref}\"" in l)
+	assert ref_line < pull_line < call, "the prebuilt pull must be tried before the mirror pre-seed"
+	local_builds = [i for i, l in enumerate(lines) if i > call and ("sandbox_image.sh\" build" in l or "docker build" in l)]
+	assert len(local_builds) == 2, "both local-build fallbacks must follow the pre-seed"
 	assert "reason=helper_missing\" >&2" in body
 
 
@@ -577,6 +582,44 @@ def test_isolated_run_build_uses_preseeded_base() -> None:
 		assert "outcome=seeded source=mirror.gcr.io/library" in result.stderr
 		lines = sb.log_lines()
 		assert not any(line.startswith("HUB_HEAD") for line in lines), lines
+
+	_with_sandbox(_real_dockerfile(), check)
+
+
+def test_isolated_run_skips_preseed_when_prebuilt_pulls() -> None:
+	"""A pullable prebuilt image is used without waiting on the mirrors."""
+	body = _clarify_image_build_body()
+
+	def check(sb: Sandbox) -> None:
+		stub = sb.root / "scripts" / "sandbox_image.sh"
+		stub.write_text(
+			'case "$1" in\n'
+			"\tref) echo ghcr.example/sandbox/clarify:abc ;;\n"
+			"\tbuild) echo sha256:prebuilt ;;\n"
+			"\t*) exit 2 ;;\n"
+			"esac\n",
+			encoding="utf-8",
+		)
+		script = sb.root / "image_build.sh"
+		script.write_text(
+			"set -euo pipefail\nsupport=scripts\nclarify_image_build()\n{\n"
+			+ body
+			+ "}\nimage=\"$(clarify_image_build)\"\nprintf 'IMAGE=%s\\n' \"${image}\"\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", "--noprofile", "--norc", str(script)],
+			cwd=sb.root,
+			env=sb.env("ghcr.example/sandbox mirror.gcr.io/library"),
+			capture_output=True,
+			text=True,
+			timeout=120,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == "IMAGE=sha256:prebuilt\n", result.stdout
+		assert "CLARIFY_BASE_IMAGE_PRESEED" not in result.stderr
+		pulls = [line for line in sb.log_lines() if line.startswith("pull")]
+		assert pulls == ["pull -q ghcr.example/sandbox/clarify:abc"], pulls
 
 	_with_sandbox(_real_dockerfile(), check)
 
@@ -613,7 +656,7 @@ def test_callers_stage_the_helper() -> None:
 def test_ci_runs_this_file() -> None:
 	ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 	match = re.search(
-		r'TMPDIR="\$\{RUNNER_TEMP\}"[^\n]*\\\n\s*tests/test_clarify_sandbox_base_image_preseed\.py\s*$', ci, re.M
+		r'^\s*TMPDIR="\$\{RUNNER_TEMP\}" [^\n]*pytest[^\n]* tests/test_clarify_sandbox_base_image_preseed\.py\s*$', ci, re.M
 	)
 	assert match, "ci.yml must run this file with an executable-friendly TMPDIR"
 
@@ -640,6 +683,7 @@ def main() -> int:
 		test_helper_does_not_pass_secrets_to_docker,
 		test_isolated_run_preseeds_before_build,
 		test_isolated_run_build_uses_preseeded_base,
+		test_isolated_run_skips_preseed_when_prebuilt_pulls,
 		test_callers_stage_the_helper,
 		test_ci_runs_this_file,
 	]
