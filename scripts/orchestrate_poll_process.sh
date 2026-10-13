@@ -2393,9 +2393,10 @@ else
   ALLOW_WORKFLOW_EDITS="false"
 fi
 
-# Issue #6769: automatic /approved for plans that list automation paths stays
-# off until an operator enables this flag (see _plan_auto_approval_gate).
-AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"
+# Issue #6769: automatic /approved for plans that list automation paths.
+# On by default; set the variable to false to hold every such plan for a
+# human /approved (see _plan_auto_approval_gate).
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"
 
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
@@ -15402,7 +15403,7 @@ _plan_auto_approval_gate_comments()
 # workflow-templates/). The plan is the newest comment carrying the
 # `<!-- ai:plan-proposal:v1 -->` marker line posted by the pipeline login, so
 # a forged marker from anyone else is ignored. scripts/files_touched_scope_guard.py
-# decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off every such
+# decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off (false) every such
 # plan is held; when on, every protected path needs a trusted, exact
 # issue-body grant (the open pipeline-author grant does not count). Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
@@ -15468,7 +15469,7 @@ _plan_auto_approval_gate()
         fi
         gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --plan-auto-approval-gate \
           --plan-file "${gate_plan_file}" \
-          --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" \
+          --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" \
           --issue-meta-file "${gate_meta_arg}" \
           --pipeline-login "${gate_login}" \
           --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" \

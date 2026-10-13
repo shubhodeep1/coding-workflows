@@ -4148,81 +4148,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
-            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-          else
-            # Fetched helper artifacts can be removed in caller repos during
-            # commit cleanup; keep a local fallback for this late stage.
-            ensure_label_exists() {
-              local label_name="$1"
-              local repo="$2"
-              case "${label_name}" in
-                ai:ready-to-merge)
-                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
-                  ;;
-                ai:closed)
-                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
-                  ;;
-                *)
-                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
-                  ;;
-              esac
-            }
-            set_issue_phase_label_resilient() {
-              local issue_number="$1"
-              local target_label="$2"
-              local repo="$3"
-              ensure_label_exists "${target_label}" "${repo}" || true
-              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                -f "labels[]=${target_label}" >/dev/null 2>&1 \
-                || echo "::warning::Fallback label add failed for #${issue_number}."
-            }
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_ready_to_merge.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_ready_to_merge.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_mark_ready_to_merge.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues ready to merge'."
+            exit 1
           fi
-          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
-            set_issue_phase_label_resilient() {
-              local issue_number="$1"
-              local target_label="$2"
-              local repo="$3"
-              ensure_label_exists "${target_label}" "${repo}" || true
-              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                -f "labels[]=${target_label}" >/dev/null 2>&1 \
-                || echo "::warning::Fallback label add failed for #${issue_number}."
-            }
-          fi
-
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
-          fi
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
-          fi
-
-          ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-          while IFS= read -r issue_number; do
-            [ -n "${issue_number}" ] || continue
-            echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"
-          done <<< "${ISSUE_NUMBERS}"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
       - name: Detect review-blocked break-glass override
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
