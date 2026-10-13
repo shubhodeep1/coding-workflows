@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: A scheduled scan has no OIDC-signed report. What should count as verified evidence before the scan runs the recovery path?\nChoices:\nA. Rebuild the report from the heal issue's own pipeline-written metadata: source repo and PR/issue, run IDs and fingerprint. Then re-check each run through the existing provenance gate: same repository, failed conclusion, allowed workflow path, linked to the source item. Recompute the fingerprint from the fetched job logs and require it to match the issue. Only then pass a separate auth value (for example `report_auth=reconstructed`) that only the recovery path accepts. Logs that cannot be read or have expired, or a mismatch, mean skip with nothing filed. (RECOMMENDED)\nB. Don't change authentication. The scan only re-triggers the original reporter (re-dispatch review/autofix on the source PR) so a fresh OIDC-signed report arrives at the intake. This does not work when the source PR is closed or its head has moved.\nC. Accept a heal issue as evidence on its own when it is pipeline-authored and has no marker, without re-reading any runs.\nQ2: Which non-retryable reasons should be checked for recovery before the early exit (gap 2)?\nChoices:\nA. Only `conflict_resolver_sandbox_path_unsupported` and `conflict_resolver_sandbox_support_missing`. `conflict_resolver_sandbox_path_host_only` keeps its #6745/#6756 manual-merge outcome and never becomes a heal issue, even as a replacement. (RECOMMENDED)\nB. All three reasons in `NON_RETRYABLE_FAILURE_REASONS`, including the host-only stop. This overrides #6756's \"never becomes a heal issue\" rule for recovery replacements.\nQ3: For an authenticated non-retryable report that is eligible for recovery, should the existing non-retryable PR handling still run after the replacement is created? That handling is the `ai:workflow-heal-non-retryable:v1` comment, `ai:needs-human`, and the WARNING.\nChoices:\nA. Recovery only. Create the scoped replacement, close the original, and skip the PR diagnosis comment and label for this report.\nB. Both. Run recovery first, then the existing non-retryable PR handling unchanged. Its per-pr/head/reason dedup still applies. (RECOMMENDED)\nAssumptions I made (not asked):\n- Planning picks the scan's trigger. The natural choice is a `schedule:` on `workflow-failure-heal-intake.yml`, which already has the shared `workflow-failure-heal-intake` concurrency group.\n- The scan has a per-tick cap and stays behind the `HEAL_SCOPE_RECOVERY_ENABLED` switch.\nMissing context: I could not check GitHub to see whether #7082 is still open or whether its failed-run logs are still retained.",
+  "fingerprint": "56eacd9daf159885d6ddbf89354a97cd081923aece0b0cb0bcc9fa8511f6a6b3",
+  "lineage": {
+    "issue_number": 7333,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38481935606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38481935606",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013231042_942b735524",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7333,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38481935606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7333 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T23:10:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
