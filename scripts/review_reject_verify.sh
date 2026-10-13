@@ -156,6 +156,12 @@ def extract_files_touched(text: str) -> list[str] | None:
 		if stripped not in {"files_touched:", "- files_touched:"}:
 			continue
 		base_indent = len(raw) - len(raw.lstrip(" "))
+		# YAML also lets a bare `files_touched:` key keep its list at the
+		# key's own indent (`- path` lines flush with the key, as the
+		# orchestrator judge wrote #7296). The first entry fixes the indent:
+		# a flush list continues only with flush entries.
+		flush_allowed = stripped == "files_touched:"
+		flush: bool | None = None
 		entries: list[str] = []
 		for candidate in lines[idx + 1 :]:
 			if not candidate.strip():
@@ -163,7 +169,12 @@ def extract_files_touched(text: str) -> list[str] | None:
 					break
 				continue
 			indent = len(candidate) - len(candidate.lstrip(" "))
-			if indent <= base_indent:
+			if flush is None:
+				flush = flush_allowed and indent == base_indent
+			if flush:
+				if indent != base_indent:
+					break
+			elif indent <= base_indent:
 				break
 			match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
 			if not match:
