@@ -96,6 +96,11 @@
 #                                         repository.default_branch; empty rejects CI runs)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
+#   WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED  "false" (exact value) files workflow-defect /
+#                                         inconclusive / base-self-inflicted / consumer-app-defect
+#                                         heal issues even when the
+#                                         intake-rendered scope marker is missing or invalid; default
+#                                         true refuses to file them (skip reason=scope_marker_unresolved)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
 #                                         OIDC identity; default "false" (transition mode: they
 #                                         are accepted after the binding checks). A report that
@@ -118,6 +123,15 @@
 #                                         ai:workflow-heal-scope:v1 marker verifies; a missing
 #                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
 #                                         sends a CRITICAL alert and exits nonzero.
+#   HEAL_SCOPE_RECOVERY_ENABLED           default "false" (#7191). Only "true" (any letter case)
+#                                         lets a verified-identity report replace an open,
+#                                         pipeline-authored heal issue that has no scope marker
+#                                         (heal-scope status `missing`) instead of recording a
+#                                         duplicate. Also needs HEAL_INTAKE_SCOPE_GUARD_ENABLED=true:
+#                                         the replacement is created only through the unchanged
+#                                         scope guard. The original gets one recovery-marker
+#                                         comment and is closed as "not planned"; its body is
+#                                         never copied or edited.
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -156,9 +170,14 @@ REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json
 TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
 SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
 SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
+# Only the exact value "false" disables the pre-filing scope-marker check, so
+# a typo keeps the guard on (fail closed).
+SCOPE_MARKER_GUARD_ENABLED="${WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED:-true}"
 # Heal issue creation gate (#6871): off by default, fail closed. See
 # _heal_intake_scope_guard_permits_create.
 SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"
+# Heal-scope recovery (#7191): off by default. See _heal_scope_recovery_evaluate.
+SCOPE_RECOVERY_ENABLED="${HEAL_SCOPE_RECOVERY_ENABLED:-false}"
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -918,6 +937,165 @@ esac
 ensure_label_exists "${HEAL_LABEL}" "${SELF_REPO}" || true
 ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true
 
+# --- Heal-scope recovery (#7191) --------------------------------------------
+# A pipeline-authored heal issue filed without an ai:workflow-heal-scope:v1
+# marker (#7082) is refused by the implement preflight, and retrying cannot
+# make its body verifiable. With HEAL_SCOPE_RECOVERY_ENABLED=true and the scope
+# guard on, a report whose OIDC identity verified may replace it: a duplicate
+# decision is turned into an open, so the new issue goes through the normal
+# scope freeze, diagnosis, scope render and the unchanged scope guard. The
+# original body is never an input; its markers are left out of the lineage by
+# re-running the budget without it. Once the replacement exists, the original
+# gets one recovery-marker comment and is closed as "not planned".
+# §14 audit: the heal issue list carries no comments and no token identity, so
+# this path adds at most one /user read (when no earlier /user result exists)
+# and one paginated comments read, the latter only after the local
+# scope-status and issue-author checks passed.
+HEAL_SCOPE_RECOVERY_ACTIVE="false"
+HEAL_SCOPE_RECOVERY_ISSUE=""
+HEAL_SCOPE_RECOVERY_REPO=""
+HEAL_SCOPE_RECOVERY_URL=""
+
+_heal_scope_recovery_evaluate()
+{
+	[ "${SCOPE_RECOVERY_ENABLED,,}" = "true" ] || return 0
+	[ "${ACTION}" = "duplicate" ] || return 0
+	local recovery_issue recovery_repo recovery_url recovery_login
+	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
+	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"
+	local recovery_check="${RUNTIME_DIR}/heal_scope_recovery_check.json"
+	local recovery_issues="${RUNTIME_DIR}/heal_issues_recovery.json"
+	local recovery_decision="${RUNTIME_DIR}/decision_recovery.json"
+	local recovery_reason recovery_action recovery_replaced recovery_replaced_repo recovery_close
+	recovery_issue="$(jq -r '.existing_issue // ""' "${DECISION_FILE}")"
+	recovery_repo="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
+	[ -n "${recovery_repo}" ] || recovery_repo="${SELF_REPO}"
+	recovery_url="$(jq -r '.existing_url // ""' "${DECISION_FILE}")"
+	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
+		log "heal_scope_recovery outcome=skip reason=scope_guard_disabled issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if [ "${REPORT_AUTH}" != "verified" ]; then
+		log "heal_scope_recovery outcome=skip reason=report_unauthenticated report_auth=${REPORT_AUTH:-none} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if ! [[ "${recovery_issue}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${recovery_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		log "heal_scope_recovery outcome=skip reason=issue_invalid fp=${FP}"
+		return 0
+	fi
+	# A heal issue whose own phase run failed keeps the existing
+	# heal_issue_failed_itself escalation below (assumption: only phase reports
+	# have that path, so only they are excluded here).
+	if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${recovery_issue}" = "${ISSUE_NUMBER:-}" ] && [ "${recovery_repo}" = "${SOURCE_REPO}" ]; then
+		log "heal_scope_recovery outcome=skip reason=own_issue_report issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if ! jq -e --argjson n "${recovery_issue}" --arg r "${recovery_repo}" \
+		'[.[] | select(.number == $n and (.repository // "") == $r)] | first | type == "object"' "${ISSUES_FILE}" >/dev/null 2>&1; then
+		log "heal_scope_recovery outcome=skip reason=issue_record_missing issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	jq --argjson n "${recovery_issue}" --arg r "${recovery_repo}" \
+		'[.[] | select(.number == $n and (.repository // "") == $r)] | first' "${ISSUES_FILE}" > "${recovery_record}"
+	# Every candidate below is a /user result for the intake's own token.
+	recovery_login="${PROVENANCE_LOGIN:-}"
+	[ -n "${recovery_login}" ] || recovery_login="${HEAL_TRUSTED_AUTHOR:-}"
+	if [ -z "${recovery_login}" ]; then
+		recovery_login="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+	fi
+	if [ -z "${recovery_login}" ]; then
+		log "heal_scope_recovery outcome=skip reason=identity_unavailable issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	# Local pre-check (scope status, issue author) before the comments read.
+	if ! python3 "${HEAL_PY}" heal-scope-recovery check --issue-json "${recovery_record}" \
+		--pipeline-login "${recovery_login}" > "${recovery_check}" 2>/dev/null; then
+		log "heal_scope_recovery outcome=skip reason=check_failed issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if [ "$(jq -r '.eligible // false' "${recovery_check}")" != "true" ]; then
+		recovery_reason="$(jq -r '.reason // "unknown"' "${recovery_check}" | tr -cd 'a-z_' | head -c 40)"
+		log "heal_scope_recovery outcome=skip reason=${recovery_reason:-unknown} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if ! gh_retry gh api --method GET --paginate "repos/${recovery_repo}/issues/${recovery_issue}/comments" -F per_page=100 \
+		--jq '.[] | {id, body: (.body // ""), user: (.user // {})}' 2>/dev/null \
+		| jq -s '.' > "${recovery_comments}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${recovery_comments}" >/dev/null 2>&1; then
+		log "heal_scope_recovery outcome=skip reason=comments_unavailable issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if ! python3 "${HEAL_PY}" heal-scope-recovery check --issue-json "${recovery_record}" \
+		--comments-json "${recovery_comments}" --pipeline-login "${recovery_login}" > "${recovery_check}" 2>/dev/null; then
+		log "heal_scope_recovery outcome=skip reason=check_failed issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	recovery_reason="$(jq -r '.reason // "unknown"' "${recovery_check}" | tr -cd 'a-z_' | head -c 40)"
+	if [ "${recovery_reason}" = "already_replaced" ]; then
+		recovery_replaced="$(jq -r '.replaced_by // ""' "${recovery_check}")"
+		recovery_replaced_repo="$(jq -r '.replaced_repo // ""' "${recovery_check}")"
+		if [[ "${recovery_replaced}" =~ ^[1-9][0-9]*$ ]] && [[ "${recovery_replaced_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+			# Record this report on the replacement, and retry the close a
+			# failed finalize left open.
+			jq --argjson n "${recovery_replaced}" --arg r "${recovery_replaced_repo}" --argjson from "${recovery_issue}" --arg from_repo "${recovery_repo}" \
+				'.existing_issue = $n | .existing_repo = $r | .existing_url = ("https://github.com/" + $r + "/issues/" + ($n | tostring)) | .redirected_from = {issue: $from, repo: $from_repo}' \
+				"${DECISION_FILE}" > "${DECISION_FILE}.recovery" && mv "${DECISION_FILE}.recovery" "${DECISION_FILE}"
+			recovery_close="failed"
+			if gh_retry gh issue close "${recovery_issue}" --repo "${recovery_repo}" --reason "not planned" >/dev/null 2>&1; then
+				recovery_close="done"
+			fi
+			log "heal_scope_recovery outcome=redirect issue=${recovery_issue} repo=${recovery_repo} replaced_by=${recovery_replaced} replaced_repo=${recovery_replaced_repo} close=${recovery_close} fp=${FP}"
+			if [ "${recovery_close}" != "done" ]; then
+				tg_send_msg "Workflow failure heal could not close ${recovery_url:-https://github.com/${recovery_repo}/issues/${recovery_issue}}, already replaced by https://github.com/${recovery_replaced_repo}/issues/${recovery_replaced}. Close it by hand if it is still open."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			fi
+		else
+			log "heal_scope_recovery outcome=skip reason=marker_invalid issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		fi
+		return 0
+	fi
+	if [ "$(jq -r '.eligible // false' "${recovery_check}")" != "true" ]; then
+		log "heal_scope_recovery outcome=skip reason=${recovery_reason:-unknown} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	# Re-run the budget without the original, so its unverified markers add
+	# nothing to the lineage and every cap (including an already open
+	# replacement for this fingerprint) still applies.
+	jq --argjson n "${recovery_issue}" --arg r "${recovery_repo}" \
+		'[.[] | select((.number == $n and (.repository // "") == $r) | not)]' "${ISSUES_FILE}" > "${recovery_issues}"
+	local recovery_budget_args=() recovery_arg_index=0
+	while [ "${recovery_arg_index}" -lt "${#BUDGET_ARGS[@]}" ]; do
+		if [ "${BUDGET_ARGS[${recovery_arg_index}]}" = "--issues-json" ]; then
+			recovery_budget_args+=(--issues-json "${recovery_issues}")
+			recovery_arg_index=$((recovery_arg_index + 2))
+			continue
+		fi
+		recovery_budget_args+=("${BUDGET_ARGS[${recovery_arg_index}]}")
+		recovery_arg_index=$((recovery_arg_index + 1))
+	done
+	if ! python3 "${HEAL_PY}" budget "${recovery_budget_args[@]}" > "${recovery_decision}" 2>/dev/null; then
+		log "heal_scope_recovery outcome=skip reason=budget_failed issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	recovery_action="$(jq -r '.action // "unknown"' "${recovery_decision}" | tr -cd 'a-z_' | head -c 40)"
+	if [ "${recovery_action}" != "open" ]; then
+		log "heal_scope_recovery outcome=skip reason=budget_${recovery_action:-unknown} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	DECISION_FILE="${recovery_decision}"
+	ACTION="open"
+	GEN="$(jq -r '.gen // 1' "${DECISION_FILE}")"
+	ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
+	[ -n "${ROOT}" ] || ROOT="${FP}"
+	HEAL_SCOPE_RECOVERY_ACTIVE="true"
+	HEAL_SCOPE_RECOVERY_ISSUE="${recovery_issue}"
+	HEAL_SCOPE_RECOVERY_REPO="${recovery_repo}"
+	HEAL_SCOPE_RECOVERY_URL="${recovery_url:-https://github.com/${recovery_repo}/issues/${recovery_issue}}"
+	log "heal_scope_recovery outcome=eligible issue=${recovery_issue} repo=${recovery_repo} fp=${FP} gen=${GEN}"
+	return 0
+}
+
+_heal_scope_recovery_evaluate
+
 case "${ACTION}" in
 	duplicate)
 		EXISTING="$(jq -r '.existing_issue' "${DECISION_FILE}")"
@@ -1485,6 +1663,43 @@ _heal_intake_scope_guard_permits_create()
 	return 1
 }
 
+# Runs only after the replacement issue exists (#7191). Points the original at
+# it with a recovery marker comment, then closes the original as "not planned"
+# (attempted even when the comment fails, so it stops matching new reports).
+# Never fails the intake: the replacement is already filed.
+_heal_scope_recovery_finalize()
+{
+	local finalize_repo="$1" finalize_url="${2%%[[:space:]]*}" finalize_number="" finalize_marker=""
+	local finalize_comment="${RUNTIME_DIR}/heal_scope_recovery_comment.md"
+	local finalize_comment_state="failed" finalize_close_state="failed"
+	if [[ "${finalize_url}" =~ /issues/([1-9][0-9]*)$ ]]; then
+		finalize_number="${BASH_REMATCH[1]}"
+	fi
+	if [ -n "${finalize_number}" ]; then
+		finalize_marker="$(python3 "${HEAL_PY}" heal-scope-recovery marker --replaced-by "${finalize_number}" --repo "${finalize_repo}" 2>/dev/null || true)"
+	fi
+	if [ -n "${finalize_marker}" ]; then
+		{
+			echo "Workflow failure heal replaced this issue with ${finalize_url}: this issue has no verifiable \`ai:workflow-heal-scope:v1\` marker, so the implement step cannot run it. The replacement was filed from an authenticated failure report with a freshly rendered scope."
+			echo
+			echo "Heal intake run: ${RUN_URL}"
+			echo
+			echo "${finalize_marker}"
+		} > "${finalize_comment}"
+		if gh_retry gh api "repos/${HEAL_SCOPE_RECOVERY_REPO}/issues/${HEAL_SCOPE_RECOVERY_ISSUE}/comments" -F body=@"${finalize_comment}" >/dev/null 2>&1; then
+			finalize_comment_state="posted"
+		fi
+	fi
+	if gh_retry gh issue close "${HEAL_SCOPE_RECOVERY_ISSUE}" --repo "${HEAL_SCOPE_RECOVERY_REPO}" --reason "not planned" >/dev/null 2>&1; then
+		finalize_close_state="done"
+	fi
+	log "heal_scope_recovery outcome=replaced issue=${HEAL_SCOPE_RECOVERY_ISSUE} repo=${HEAL_SCOPE_RECOVERY_REPO} replacement=${finalize_number:-unknown} replacement_repo=${finalize_repo} comment=${finalize_comment_state} close=${finalize_close_state} fp=${FP}"
+	if [ "${finalize_comment_state}" != "posted" ] || [ "${finalize_close_state}" != "done" ]; then
+		tg_send_msg "Workflow failure heal replaced ${HEAL_SCOPE_RECOVERY_URL} (no scope marker) with ${finalize_url}, but could not finish on the original (comment=${finalize_comment_state}, close=${finalize_close_state}). Close it by hand if it is still open."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	fi
+	return 0
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
@@ -1528,6 +1743,28 @@ _open_issue()
 		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
 	fi
 	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
+	# Fail closed on an unresolved scope (#7059): an issue the heal implementer
+	# must fix is refused by implement preflight without a valid intake-authored
+	# marker (#6866 was filed with an empty one). consumer-app-defect issues carry
+	# the same heal label and preflight, so they are checked too. Check it with the same parser
+	# implement uses before filing; nothing is persisted before this point, so
+	# the next report of this fingerprint retries.
+	if [ "${SCOPE_MARKER_GUARD_ENABLED}" != "false" ]; then
+		case "${CLASSIFICATION}" in
+			workflow-defect|inconclusive|base-self-inflicted|consumer-app-defect)
+				local scope_check_json="" scope_check_status="unknown" scope_check_rc=0
+				scope_check_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${scope_marker_file}" 2>/dev/null)" || scope_check_rc=$?
+				scope_check_status="$(jq -r '.status // "unknown"' <<< "${scope_check_json}" 2>/dev/null || echo unknown)"
+				[[ "${scope_check_status}" =~ ^[a-z_]{1,20}$ ]] || scope_check_status="unknown"
+				if [ "${scope_check_rc}" -ne 0 ] || [ "${scope_check_status}" != "valid" ]; then
+					[ "${scope_check_status}" != "valid" ] || scope_check_status="unknown"
+					log "skip reason=scope_marker_unresolved fp=${FP} classification=${CLASSIFICATION} status=${scope_check_status} source=${SOURCE_LABEL}"
+					tg_send_msg "Workflow failure heal refused to file an issue without a valid intake-authored scope marker (intake defect, status ${scope_check_status}) for ${SOURCE_LABEL} (classification ${CLASSIFICATION}, fingerprint ${FP})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+					return 1
+				fi
+				;;
+		esac
+	fi
 	rm -f "${title_file}" "${body_file}"
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${PAYLOAD_FILE}" \
@@ -1573,6 +1810,9 @@ _open_issue()
 		return 1
 	fi
 	NEW_ISSUE_URL="${issue_url}"
+	if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
+		_heal_scope_recovery_finalize "${repo}" "${issue_url}"
+	fi
 	return 0
 }
 
@@ -1772,3 +2012,15 @@ case "${CLASSIFICATION}" in
 		exit 1
 		;;
 esac
+
+# Recovery was active but this classification opened no replacement (#7191):
+# record the report on the original as the duplicate path would have.
+if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ] && [ -z "${NEW_ISSUE_URL}" ]; then
+	RECOVERY_OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence_recovery.md"
+	RECOVERY_OCCURRENCE_STATE="failed"
+	if python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
+		&& gh_retry gh api "repos/${HEAL_SCOPE_RECOVERY_REPO}/issues/${HEAL_SCOPE_RECOVERY_ISSUE}/comments" -F body=@"${RECOVERY_OCCURRENCE_FILE}" >/dev/null 2>&1; then
+		RECOVERY_OCCURRENCE_STATE="posted"
+	fi
+	log "heal_scope_recovery outcome=no_replacement reason=classification_$(printf '%s' "${CLASSIFICATION}" | tr -cd 'a-z-' | tr '-' '_') issue=${HEAL_SCOPE_RECOVERY_ISSUE} repo=${HEAL_SCOPE_RECOVERY_REPO} occurrence=${RECOVERY_OCCURRENCE_STATE} fp=${FP}"
+fi

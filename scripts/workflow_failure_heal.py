@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -2438,6 +2439,61 @@ def strip_heal_scope_markers(text: str) -> str:
 	return re.sub(r"(?im)^.*ai(?::|&#0*58;|&colon;|&amp;:)workflow-heal-scope.*\n?", "", text)
 
 
+def _heal_scope_marker_shape_ok(paths: list[str], runs: list[str]) -> bool:
+	"""Shape rules shared by verify_heal_scope and check_heal_scope_marker_file:
+	3-22 unique paths ending in the fixed test/changelog globs, every other path
+	safe (or a `scripts/<prefix>_step_*.sh` glob), and 1-3 unique `owner/repo:N` run refs."""
+	return not (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
+		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
+		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
+		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
+		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs))
+
+
+HEAL_SCOPE_MARKER_FILE_MAX_BYTES = 8192
+
+
+def check_heal_scope_marker_file(path: str) -> dict[str, Any]:
+	"""Check the intake-rendered scope marker file before an issue is filed.
+
+	Same parser as verify_heal_scope (HEAL_SCOPE_RE plus the shared shape
+	rules), minus the authorship/edit checks, which only apply once the issue
+	exists. Statuses: valid, missing, not_regular, duplicated, malformed.
+	"""
+	try:
+		info = os.lstat(path)
+	except FileNotFoundError:
+		return {"status": "missing", "paths": 0}
+	except OSError:
+		return {"status": "not_regular", "paths": 0}
+	if not stat.S_ISREG(info.st_mode):
+		return {"status": "not_regular", "paths": 0}
+	try:
+		fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+	except OSError:
+		return {"status": "not_regular", "paths": 0}
+	try:
+		raw = os.read(fd, HEAL_SCOPE_MARKER_FILE_MAX_BYTES + 1)
+	finally:
+		os.close(fd)
+	if len(raw) > HEAL_SCOPE_MARKER_FILE_MAX_BYTES:
+		return {"status": "malformed", "paths": 0}
+	text = raw.decode("utf-8", errors="replace").strip()
+	count = len(re.findall(r"ai:workflow-heal-scope", text, re.IGNORECASE))
+	if count == 0:
+		return {"status": "missing", "paths": 0}
+	if count != 1:
+		return {"status": "duplicated", "paths": 0}
+	match = HEAL_SCOPE_RE.fullmatch(text)
+	if not match:
+		return {"status": "malformed", "paths": 0}
+	paths = match.group(1).split(",")
+	runs = match.group(2).split(",")
+	if not _heal_scope_marker_shape_ok(paths, runs):
+		return {"status": "malformed", "paths": 0}
+	return {"status": "valid", "paths": len(paths)}
+
+
 def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | None, labels: Iterable[str], pipeline_login: str) -> dict[str, Any]:
 	markers = HEAL_SCOPE_RE.findall(body)
 	count = len(re.findall(r"ai:workflow-heal-scope", body, re.IGNORECASE))
@@ -2454,13 +2510,87 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 		status = "edited"
 	paths = markers[0][0].split(",") if markers else []
 	runs = markers[0][1].split(",") if markers else []
-	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
-		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
-		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
-		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
-		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
+	if status == "verified" and not _heal_scope_marker_shape_ok(paths, runs):
 		status = "malformed"
 	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
+
+
+# Heal-scope recovery (#7191, unblock fix-up for #7082). A pipeline-authored
+# heal issue filed without an ai:workflow-heal-scope:v1 marker cannot pass the
+# implement preflight, and retrying cannot make its body verifiable. With
+# HEAL_SCOPE_RECOVERY_ENABLED on, the intake replaces it from an authenticated
+# report: the replacement's scope is rendered from the verified runs and passes
+# the unchanged intake scope guard. The original body is never an input. This
+# marker, posted by the intake's own account on the original before it is
+# closed, sends later reports to the replacement.
+HEAL_SCOPE_RECOVERY_RE = re.compile(r"<!-- ai:heal-scope-recovery:v1 replaced_by=([1-9][0-9]*) repo=([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) -->")
+
+
+def render_heal_scope_recovery_marker(replaced_by: Any, repo: str) -> str:
+	number = _positive_int(replaced_by)
+	if number is None or not isinstance(repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+		raise ValueError("invalid recovery marker fields")
+	return f"<!-- ai:heal-scope-recovery:v1 replaced_by={number} repo={repo} -->"
+
+
+def _comment_author_login(comment: Any) -> str:
+	if not isinstance(comment, dict):
+		return ""
+	user = comment.get("user")
+	if isinstance(user, dict) and isinstance(user.get("login"), str):
+		return user["login"]
+	author = comment.get("author")
+	if isinstance(author, dict) and isinstance(author.get("login"), str):
+		return author["login"]
+	return author if isinstance(author, str) else ""
+
+
+def heal_scope_recovery_check(*, issue: dict[str, Any], comments: Iterable[Any], pipeline_login: str) -> dict[str, Any]:
+	"""Decide whether a duplicate-matched heal issue may be replaced.
+
+	Eligible only when the issue body has no scope marker at all
+	(``verify_heal_scope`` status ``missing``), the issue was authored by the
+	intake's authenticated account, and no comment by that account already
+	carries the recovery marker. Recovery-marker comments by anyone else are
+	ignored. Fails closed on an unknown identity.
+	"""
+	issue = issue if isinstance(issue, dict) else {}
+	body = issue.get("body") if isinstance(issue.get("body"), str) else ""
+	author = issue.get("author")
+	if isinstance(author, dict):
+		author = author.get("login")
+	author = author if isinstance(author, str) else ""
+	login = pipeline_login.strip() if isinstance(pipeline_login, str) else ""
+	scope_status = verify_heal_scope(body=body, author_login=author, last_edited_at=None, labels=[HEAL_LABEL], pipeline_login=login)["status"]
+	if scope_status != "missing":
+		return {"eligible": False, "reason": f"scope_{scope_status}", "scope_status": scope_status}
+	if not login:
+		return {"eligible": False, "reason": "identity_unavailable", "scope_status": scope_status}
+	if author.casefold() != login.casefold():
+		return {"eligible": False, "reason": "untrusted_issue_author", "scope_status": scope_status}
+	trusted: tuple[int, str] | None = None
+	ignored = 0
+	for comment in comments if isinstance(comments, (list, tuple)) else []:
+		comment_body = comment.get("body") if isinstance(comment, dict) else None
+		if not isinstance(comment_body, str):
+			continue
+		matches = HEAL_SCOPE_RECOVERY_RE.findall(comment_body)
+		if not matches:
+			continue
+		if _comment_author_login(comment).casefold() != login.casefold():
+			ignored += 1
+			continue
+		# Only a marker on the comment's own last line counts (the intake writes
+		# it there), so quoted text elsewhere in a pipeline comment is ignored.
+		anchored = HEAL_SCOPE_RECOVERY_RE.fullmatch(comment_body.rstrip().rsplit("\n", 1)[-1].strip())
+		if anchored is None:
+			ignored += 1
+			continue
+		# Comments arrive oldest first; the newest trusted marker wins.
+		trusted = (int(anchored.group(1)), anchored.group(2))
+	if trusted is not None:
+		return {"eligible": False, "reason": "already_replaced", "scope_status": scope_status, "replaced_by": trusted[0], "replaced_repo": trusted[1], "ignored_untrusted_markers": ignored}
+	return {"eligible": True, "reason": "eligible", "scope_status": scope_status, "ignored_untrusted_markers": ignored}
 
 
 def carry_heal_scope(*, child_body: str, parent_verification: dict[str, Any]) -> str:
@@ -4189,6 +4319,10 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
 						merged[key].append(item)
 		_write_json(merged)
+	elif args.operation == "check-marker":
+		result = check_heal_scope_marker_file(args.marker_file)
+		_write_json(result)
+		return 0 if result["status"] == "valid" else 1
 	elif args.operation == "verify":
 		data = _load_json_file(args.input_json)
 		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
@@ -4210,6 +4344,16 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 		else:
 			data = _load_json_file(args.input_json)
 		sys.stdout.write(carry_heal_scope(child_body=Path(args.body_file).read_text(), parent_verification=data))
+	return 0
+
+
+def _cmd_heal_scope_recovery(args: argparse.Namespace) -> int:
+	if args.operation == "marker":
+		sys.stdout.write(render_heal_scope_recovery_marker(args.replaced_by, args.repo) + "\n")
+		return 0
+	issue = _load_json_file(args.issue_json)
+	comments = _load_json_file(args.comments_json) if args.comments_json else []
+	_write_json(heal_scope_recovery_check(issue=issue if isinstance(issue, dict) else {}, comments=comments if isinstance(comments, list) else [], pipeline_login=args.pipeline_login))
 	return 0
 
 
@@ -4659,8 +4803,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_route)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests"))
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests", "check-marker"))
 	p.add_argument("--log-files", nargs="*")
+	p.add_argument("--marker-file", default="")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
 	p.add_argument("--checkout", default=".")
@@ -4669,6 +4814,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--parent-issue", default="")
 	p.add_argument("--pipeline-login", default="")
 	p.set_defaults(func=_cmd_heal_scope)
+
+	p = sub.add_parser("heal-scope-recovery", help="Decide whether a markerless heal issue may be replaced (check) or print the recovery marker (marker)")
+	p.add_argument("operation", choices=("check", "marker"))
+	p.add_argument("--issue-json", default="")
+	p.add_argument("--comments-json", default="")
+	p.add_argument("--pipeline-login", default="")
+	p.add_argument("--replaced-by", default="")
+	p.add_argument("--repo", default="")
+	p.set_defaults(func=_cmd_heal_scope_recovery)
 
 	p = sub.add_parser("verify-phase-provenance", help="Verify a phase failure report against GitHub-read run, job and comment evidence")
 	p.add_argument("--payload-json", required=True)

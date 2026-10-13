@@ -81,14 +81,32 @@ def test_step_name_predicate_and_id() -> None:
 	assert "continue-on-error" not in step
 
 
-def test_flag_defaults_off_in_workflow_and_shell() -> None:
+def test_flag_defaults_on_in_workflow_and_shell() -> None:
 	step = _step()
 	env = step["env"]
-	assert env["UPDATER_PR_DELIVERY_ENABLED"] == "${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'false' }}"
+	assert env["UPDATER_PR_DELIVERY_ENABLED"] == "${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'true' }}"
 	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	assert env["VERIFIED"] == "${{ steps.verify_release_manifest.outputs.verified }}"
 	assert env["UPSTREAM_SHA"] == "${{ steps.fetch.outputs.upstream_sha }}"
-	assert '"${UPDATER_PR_DELIVERY_ENABLED:-false}"' in step["run"]
+	assert '"${UPDATER_PR_DELIVERY_ENABLED:-true}"' in step["run"]
+
+
+def test_assembly_outputs_reach_the_body_through_env() -> None:
+	# The run: body must carry no ${{ }} expression: assembler outputs travel
+	# through env: so they are data, not script source (#7219).
+	step = _step()
+	env = step["env"]
+	expected = {
+		"CHANGELOG_ASSEMBLED": "${{ steps.changelog_assemble.outputs.changelog_assembled }}",
+		"CHANGELOG_FRAGMENT_COUNT": "${{ steps.changelog_assemble.outputs.changelog_fragment_count }}",
+		"CHANGELOG_LAYOUT": "${{ steps.changelog_assemble.outputs.changelog_layout }}",
+		"AGENTS_ASSEMBLED": "${{ steps.agents_assemble.outputs.agents_assembled }}",
+		"AGENTS_FRAGMENT_COUNT": "${{ steps.agents_assemble.outputs.agents_fragment_count }}",
+		"AGENTS_FILE": "${{ steps.agents_assemble.outputs.agents_file }}",
+	}
+	for key, value in expected.items():
+		assert env[key] == value, key
+	assert "${{" not in step["run"]
 
 
 def test_branch_pattern_never_matches_merge_train_or_forward_merge() -> None:
@@ -105,10 +123,14 @@ def test_bare_push_only_on_the_flag_off_path() -> None:
 	lines = [line.strip() for line in run.splitlines()]
 	bare = [index for index, line in enumerate(lines) if line == "git push"]
 	assert len(bare) == 1
-	gate = lines.index('if [ "${PR_DELIVERY}" != "true" ]; then')
+	gate = lines.index('if [ "${PR_DELIVERY}" != "true" ] && [ "${UPDATE_VIA_PR:-true}" != "true" ]; then')
 	assert gate < bare[0] < gate + 5
-	assert lines[bare[0] + 1] == "exit 0"
-	pushes = [line for line in lines if "git push" in line and line != "git push"]
+	assert "exit 0" in lines[bare[0] + 1:bare[0] + 6]
+	# The ai-sync/stable delivery (#7128) has its own lease-checked push.
+	sync_pushes = [line for line in lines if "git push" in line and "${SYNC_BRANCH}" in line]
+	assert len(sync_pushes) == 1
+	assert '--force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_REMOTE_SHA}"' in sync_pushes[0]
+	pushes = [line for line in lines if "git push" in line and line != "git push" and "${SYNC_BRANCH}" not in line]
 	assert len(pushes) == 2
 	for line in pushes:
 		assert '--force-with-lease="refs/heads/${BRANCH}:' in line
@@ -142,7 +164,12 @@ def test_auto_merge_is_bound_to_head_and_gated_on_verification() -> None:
 	gate = run.index('if [ "${VERIFIED_TEXT}" = "true" ]; then')
 	pending = run.index('AUTO_MERGE="pending_verify"')
 	assert gate < pending < run.index("AUTO_MERGE=\"skipped_unverified\"")
-	assert "gh pr merge" not in run
+	# The ai-sync/stable delivery (#7128) merges its own PR, bound to the
+	# head it pushed; the auto/update-workflows-* flow never merges here.
+	sync_start = run.index('SYNC_BRANCH="ai-sync/stable"')
+	sync_end = run.index("# ── Pull-request delivery (UPDATER_PR_DELIVERY_ENABLED=true)")
+	assert "gh pr merge" not in run[:sync_start] + run[sync_end:]
+	assert run[sync_start:sync_end].count('--match-head-commit "${MERGE_HEAD_SHA}"') == 2
 	verify_steps = _doc()["jobs"]["verify"]["steps"]
 	publish = [step for step in verify_steps if step.get("id") == "verify_publish"]
 	assert len(publish) == 1
@@ -177,6 +204,22 @@ def test_lint_script_is_attested() -> None:
 
 
 # ── Behavioural tests ────────────────────────────────────────────────────
+
+
+def _write_sync_policy(runner_temp: Path) -> Path:
+	"""Provide what "Verify signed sync manifest" leaves for the commit step (#7128).
+
+	The inline verifier is extracted from the workflow as the real step writes
+	it; the allowlist covers the paths these fixtures stage.
+	"""
+	text = WORKFLOW.read_text(encoding="utf-8")
+	body = text.split("<<'SYNC_VERIFY_PY'\n", 1)[1].split("\n          SYNC_VERIFY_PY\n", 1)[0]
+	source = "\n".join(line[10:] if line.strip() else "" for line in body.split("\n"))
+	runner_temp.mkdir(parents=True, exist_ok=True)
+	(runner_temp / "sync_manifest_verify.py").write_text(source + "\n", encoding="utf-8")
+	allowed = runner_temp / "sync_allowed_consumer_paths.txt"
+	allowed.write_text(".github/workflows/*\n", encoding="utf-8")
+	return allowed
 
 
 def _clean_env() -> dict[str, str]:
@@ -285,12 +328,6 @@ class Fixture:
 		self.stage_change()
 		self.output.write_text("", encoding="utf-8")
 		script = _run_text().replace("/tmp/", f"{self.state}/")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_assembled }}", "false")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_fragment_count }}", "0")
-		script = script.replace("${{ steps.changelog_assemble.outputs.changelog_layout }}", "none")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_assembled }}", "false")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_file }}", "AGENTS.md")
-		script = script.replace("${{ steps.agents_assemble.outputs.agents_fragment_count }}", "0")
 		assert "${{" not in script
 		env = {
 			**_clean_env(),
@@ -306,6 +343,17 @@ class Fixture:
 			"RELEASE_TAG": release_tag,
 			"DEFAULT_BRANCH": "main",
 			"UPDATER_PR_DELIVERY_ENABLED": flag,
+			# These cases cover the auto/update-workflows-* and direct-push
+			# paths; update_via_pull_request=false keeps the direct push.
+			"UPDATE_VIA_PR": "false",
+			"RUNNER_TEMP": str(self.tmp / "runner_temp"),
+			"SYNC_ALLOWED_FILE": str(_write_sync_policy(self.tmp / "runner_temp")),
+			"CHANGELOG_ASSEMBLED": "false",
+			"CHANGELOG_FRAGMENT_COUNT": "0",
+			"CHANGELOG_LAYOUT": "none",
+			"AGENTS_ASSEMBLED": "false",
+			"AGENTS_FILE": "AGENTS.md",
+			"AGENTS_FRAGMENT_COUNT": "0",
 			"FAKE_GH_LOG": str(self.gh_log),
 			"FAKE_PR_LIST": str(self.pr_list),
 			"FAKE_STALE_LIST": str(self.stale_list),

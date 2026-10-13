@@ -28,6 +28,15 @@ the network; the shell only executes.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
        or a resume command, so the finding stays blocked (#6541).
+       Optional `protected_rejection` (`{"guard": "automation-path", "run",
+       "paths", "truncated"}`, issues only; the judge sets it only with
+       UNBLOCK_PROTECTED_HANDOFF_ENABLED=true, #7060): the newest trusted
+       guard comment on the issue is an automation-path grant rejection, so a
+       fix-up would hit the same guard. `descope` and `operator_step` then
+       record an operator handoff (an operator step, then a comment ending in
+       the hold marker
+       `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`,
+       then a WARNING) and create no fix-up; the issue stays blocked. A malformed value is dropped and the normal path runs.
       An optional `ci_owner` object `{"number", "state", "head_sha",
       "head_ref", "base_ref"}` carries the facts scripts/unblock_judge.sh read
       about the pull request that owns a CI-failure issue (#7032). `state` is
@@ -41,6 +50,11 @@ the network; the shell only executes.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
+  followup-handoff --context-file PATH --fixup N --verdict descope|operator_step
+      Instead of that reset, when the context carries a `protected_rejection`
+      (the item is still held by an automation-path rejection that the
+      verdict followed, #7287): the operator handoff ops with
+      `handoff_retry: true` on the WARNING, so a failed write is retried.
   ci-owner --item-file PATH --repo R
       Reads the already-fetched item JSON and prints
       `{"pr": n|null, "reason": s, "declared_branch": s|null}`: the pull
@@ -112,6 +126,10 @@ INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch
 TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
 SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 MAX_COMMAND_TEXT = 300
+PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
+PROTECTED_HANDOFF_MAX_PATHS = 100
+PROTECTED_HANDOFF_SHOWN_PATHS = 20
+PROTECTED_HANDOFF_PATH_MAX_LEN = 300
 # CI-failure issues and the PR that owns them (#7032). check_failure_triage.sh
 # writes both the label and the marker; unblock re-issues copy the marker.
 CHECK_TRIAGE_LABELS = ("ai:check-triage", "ai:check-triage-escalated")
@@ -255,6 +273,7 @@ def _context(raw: object) -> dict:
 		and isinstance(pr_head_sha, str)
 		and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", pr_head_sha) is not None
 	)
+	protected_rejection = _protected_rejection(raw.get("protected_rejection")) if kind == "issue" else None
 	security_source_body = raw.get("security_source_body")
 	if kind != "issue" or SECURITY_LABEL not in labels or not isinstance(security_source_body, str) or len(security_source_body) > 65536:
 		security_source_body = None
@@ -318,6 +337,7 @@ def _context(raw: object) -> dict:
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
+		"protected_rejection": protected_rejection,
 		"ci_owner": _ci_owner(raw.get("ci_owner")) if kind == "issue" else None,
 		"pr_source_present": pr_source_present,
 		"pr_source_finding_id": pr_source_finding_id,
@@ -326,6 +346,26 @@ def _context(raw: object) -> dict:
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 		"pr_base_branch": pr_base_branch,
 	}
+
+
+def _protected_rejection(raw: object) -> dict | None:
+	"""A verified automation-path rejection carried by the judge, or None when malformed."""
+	if not isinstance(raw, dict) or raw.get("guard") != "automation-path":
+		return None
+	run = raw.get("run")
+	paths = raw.get("paths")
+	truncated = raw.get("truncated")
+	if not isinstance(run, str) or re.fullmatch(r"[0-9]{1,20}", run) is None or not isinstance(truncated, bool):
+		return None
+	if not isinstance(paths, list) or not 0 < len(paths) <= PROTECTED_HANDOFF_MAX_PATHS:
+		return None
+	for path in paths:
+		if (
+			not isinstance(path, str) or not path or len(path) > PROTECTED_HANDOFF_PATH_MAX_LEN
+			or "`" in path or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in path)
+		):
+			return None
+	return {"guard": "automation-path", "run": run, "paths": list(paths), "truncated": truncated}
 
 
 def _provenance_line(ctx: dict) -> str:
@@ -480,12 +520,118 @@ def _fixup_ops(ctx: dict, verdict: dict, kind_word: str) -> list[dict]:
 	return [{"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": ctx["item"]}]
 
 
+def _protected_handoff_ops(ctx: dict, verdict: dict, retryable: bool = False) -> list[dict]:
+	"""Operator handoff for a protected-path rejection: no fix-up, the item stays blocked.
+
+	`retryable` marks the WARNING op `handoff_retry: true` for a handoff the
+	next judge run retries when a write fails (followup-handoff, #7287).
+	"""
+	item = ctx["item"]
+	rejection = ctx["protected_rejection"]
+	run = rejection["run"]
+	paths = rejection["paths"]
+	shown = ", ".join(f"`{path}`" for path in paths[:PROTECTED_HANDOFF_SHOWN_PATHS])
+	more = len(paths) - PROTECTED_HANDOFF_SHOWN_PATHS
+	paths_line = "Protected paths: " + shown + (f" and {more} more" if more > 0 else "")
+	if rejection["truncated"]:
+		paths_line += " (the rejection listed only the first 100 paths)"
+	name = verdict["verdict"]
+	# A retryable handoff follows a fix-up that already merged (#7287), so its
+	# text must not claim no fix-up exists.
+	lead = (
+		f"The unblock judge's earlier `{name}` fix-up merged, but implementation run {run} was rejected by the automation-path grant guard"
+		" and that is still the newest guard result, so no resume command was posted. "
+		if retryable else
+		f"The unblock judge chose `{name}`, but implementation run {run} was rejected by the automation-path grant guard. "
+		"A fix-up issue would hit the same guard, so none was created. "
+	)
+	body = "\n".join(
+		[
+			lead + "This issue stays blocked until a person grants or makes the change.",
+			"",
+			paths_line,
+			"",
+			f"Change: {verdict.get('instructions', '')}",
+			"",
+			f"Why: {verdict['reason']}",
+			"",
+			f"<!-- ai:unblock-wait:v1 item={item} reason=operator_handoff run={run} -->",
+		]
+	)
+	# An `_ENABLED` operator_step may carry no operator_instructions; fall back to the change itself.
+	operator_text = (verdict.get("operator_instructions") if name == "operator_step" else "") or verdict.get("instructions")
+	step = {
+		"title": f"Make the protected-path change for #{item}",
+		"instructions": "\n".join(
+			[
+				_one_line(operator_text or ""),
+				f"Rejected run: {run}",
+				"Paths: " + ", ".join(paths[:PROTECTED_HANDOFF_SHOWN_PATHS]) + (f" and {more} more" if more > 0 else ""),
+			]
+		),
+	}
+	# Only a placeholder a person must set keeps code dormant; an `_ENABLED`
+	# flag ships on (see _placeholder_needs_person).
+	if name == "operator_step" and verdict.get("placeholder") and _placeholder_needs_person(verdict["placeholder"]):
+		step["dormant_until"] = verdict["placeholder"]
+	# The operator step goes first: unblock_run_ops skips later writes after a
+	# failure, so the hold marker (which stops later judge runs) is posted only
+	# once the operator step is recorded. For a verdict handoff the verdict is
+	# already recorded, so a failed handoff is not retried; unblock_run_ops still
+	# sends a WARNING. A `retryable` handoff (#7287) keeps its fix-up wait open,
+	# so the next judge run retries it.
+	warning = {
+		"op": "telegram", "level": "WARNING",
+		"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",
+	}
+	if retryable:
+		warning["text"] = f"Operator handoff for #{item}: automation-path guard rejected run {run}; merged fix-up not resumed, the item stays blocked"
+		warning["handoff_retry"] = True
+	return [
+		{"op": "operator_step", "key": f"unblock-{item}", "source": f"Unblock judge, #{item}", "steps": [step]},
+		{"op": "comment", "issue": item, "body": body},
+		warning,
+	]
+
+
+def followup_handoff_ops(ctx: dict, fixup: int, verdict_name: str) -> list[dict]:
+	"""The handoff for a merged fix-up whose item is still held by an automation-path rejection (#7287).
+
+	The fix-up was filed for a `descope` / `operator_step` verdict recorded
+	after the rejection; resuming the item would hit the same guard, so it is
+	handed to an operator instead. The verdict text is fixed, never model text.
+	"""
+	if fixup < 1:
+		raise UsageError("--fixup must be an issue number")
+	if verdict_name not in PROTECTED_HANDOFF_VERDICTS:
+		raise UsageError(f"--verdict must be one of {list(PROTECTED_HANDOFF_VERDICTS)}")
+	rejection = ctx.get("protected_rejection")
+	if not rejection:
+		raise UsageError("followup-handoff needs a valid protected_rejection in the context")
+	synthetic = {
+		"verdict": verdict_name,
+		"reason": (
+			f"Fix-up #{fixup} merged, but the newest guard result on this issue is still the automation-path grant guard's"
+			f" rejection of run {rejection['run']}; resuming would hit the same guard."
+		),
+		"instructions": "Grant the listed paths in the issue's files_touched block or make the change by hand, then clear ai:scope-blocked.",
+	}
+	ops = _protected_handoff_ops(ctx, synthetic, retryable=True)
+	# Its own key: the newest comment for a key supersedes earlier ones, so
+	# reusing `unblock-<item>` would replace the original operator_step entry
+	# (its instructions and dormant_until placeholder) with this generic one.
+	ops[0]["key"] = f"unblock-handoff-{ctx['item']}"
+	return ops
+
+
 def plan(verdict: dict, ctx: dict) -> list[dict]:
 	name = verdict.get("verdict")
 	item = ctx["item"]
 	ops: list[dict] = []
 	if ctx["kind"] == "pr" and not ctx["pr_trusted"] and name in ("reissue", "descope", "operator_step", "accept_with_followup"):
 		return _untrusted_pr_ops(ctx, name)
+	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
+		return _protected_handoff_ops(ctx, verdict)
 	if name == "retry_budget":
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
 		ops += reset_ops(ctx, verdict["instructions"])
@@ -728,6 +874,10 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	followup_handoff_cmd = sub.add_parser("followup-handoff")
+	followup_handoff_cmd.add_argument("--context-file", required=True)
+	followup_handoff_cmd.add_argument("--fixup", required=True, type=int)
+	followup_handoff_cmd.add_argument("--verdict", required=True)
 	owner_cmd = sub.add_parser("ci-owner")
 	owner_cmd.add_argument("--item-file", required=True)
 	owner_cmd.add_argument("--repo", required=True)
@@ -756,6 +906,8 @@ def run(argv: list[str] | None = None) -> dict:
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
 		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	if args.command == "followup-handoff":
+		return {"ops": followup_handoff_ops(ctx, args.fixup, args.verdict)}
 	if args.command == "regrant":
 		rejection = _read_json(args.rejection_file, "--rejection-file")
 		if not isinstance(rejection, dict) or rejection.get("status") != "ok":

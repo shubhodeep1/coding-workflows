@@ -45,6 +45,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"comprehensive-test-and-release.yml": "Comprehensive release conductor dispatches downstream workflows and does not execute tracking-issue integration-ref checkout.",
 	"drift-audit.yml": "Scheduled maintenance workflow audits review-autofix logs and is not an orchestrator issue-phase checkout path.",
 	"check_failure_triage.yml": "Check-run triage operates on failing PR-check metadata and PR head refs, not orchestrator issue-phase integration refs.",
+	"check-failure-triage-historical.yml": "Single-use historical triage checks out one closed PR's failing head (or merge commit) by SHA in a credential-free reproduction job, not orchestrator issue-phase integration refs.",
 	"update_workflows.yml": "Workflow-template sync job is repository maintenance, not issue-phase execution.",
 	"validation-improvements-intake.yml": "Validation prompt intake workflow is repository_dispatch PR automation.",
 	"validation-refresh.yml": "Validation refresh workflow iterates consumer repos and is not an orchestrator issue-phase checkout path.",
@@ -61,6 +62,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"claude-engine-smoke.yml": "Dispatch-only Claude engine self-test checks out the dispatched ref to exercise its own scripts; it executes no orchestrator issue phase.",
 	"publish-sandbox-images.yml": "Push-to-main/stable and weekly maintenance builds and pushes the sandbox images from a fixed branch ref; it reads no tracking-issue metadata.",
 	"propagate-consumer-secrets.yml": "Push-to-main / dispatch maintenance copies the library's Actions secrets into registered consumers; it reads the consumer registry on main and no tracking-issue metadata.",
+	"pr6576-shard-followup.yml": "One-time default-branch follow-up for PR #6576 reads CI job logs and posts one result through the API; it executes no orchestrator issue phase.",
 }
 
 

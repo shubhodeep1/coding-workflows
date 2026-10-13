@@ -119,7 +119,8 @@ def test_template_grants_every_permission_the_updater_needs() -> None:
 def test_verify_job_asks_for_no_job_level_permissions() -> None:
 	# Inheriting the caller's grant keeps an older caller wrapper (contents:
 	# write only) from failing the whole updater at startup; without
-	# statuses: write its status post fails and the job fails closed.
+	# statuses: write each status post retries once with GH_PAT, and the job
+	# fails closed only when both tokens are refused.
 	assert "permissions" not in _verify_job()
 	assert "permissions" not in _workflow()
 
@@ -196,15 +197,24 @@ def test_verify_job_runs_after_the_update_job_for_opened_prs_only() -> None:
 
 def test_auto_merge_is_enabled_only_by_the_verify_job() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
-	assert text.count("gh pr merge") == 1
+	commit_push = [step for step in _workflow()["jobs"]["update-wrappers"]["steps"] if step.get("id") == "commit_push"][0]
+	# The ai-sync/stable delivery (#7128) merges its own verified PR, bound to
+	# the head it pushed; the auto/update-workflows-* flow below the
+	# ai-sync section stays verify-job-only.
+	commit_run = commit_push["run"]
+	sync_start = commit_run.index('SYNC_BRANCH="ai-sync/stable"')
+	sync_end = commit_run.index("# ── Pull-request delivery (UPDATER_PR_DELIVERY_ENABLED=true)")
+	sync_section = commit_run[sync_start:sync_end]
+	assert sync_section.count("gh pr merge") == 2
+	assert sync_section.count('--match-head-commit "${MERGE_HEAD_SHA}"') == 2
+	assert text.count("gh pr merge") - sync_section.count("gh pr merge") == 1
 	run = _verify_step("verify_publish")["run"]
 	success = run.index("-f state=success")
 	merge = run.index('gh pr merge "${PR_NUMBER}"')
 	assert success < merge
 	assert run.index('if [ "${VERIFIED:-}" = "true" ]; then') < merge
 	assert '--auto --squash --match-head-commit "${PUSHED_SHA}"' in run
-	commit_push = [step for step in _workflow()["jobs"]["update-wrappers"]["steps"] if step.get("id") == "commit_push"][0]
-	assert "gh pr merge" not in commit_push["run"]
+	assert "gh pr merge" not in commit_run[:sync_start] + commit_run[sync_end:]
 	assert 'AUTO_MERGE="pending_verify"' in commit_push["run"]
 	steps = [step.get("id") for step in _verify_job()["steps"]]
 	for earlier in ("verify_inputs", "verify_release", "verify_topology", "verify_reproduce", "verify_tree"):
@@ -363,13 +373,15 @@ def test_template_gate_is_registered_in_ci() -> None:
 FAKE_GH = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_GH_LOG}"
 printf 'token=%s\n' "${GH_TOKEN:-}" >> "${FAKE_GH_LOG}"
+if [ "$1" = "api" ] && [ "${GH_TOKEN:-}" = "${FAKE_STATUS_REFUSED_TOKEN:-none}" ]; then exit 1; fi
 if [ "$1" = "api" ]; then exit "${FAKE_STATUS_RC:-0}"; fi
 if [ "$1 $2" = "pr merge" ]; then exit "${FAKE_MERGE_RC:-0}"; fi
 exit 1
 """
 
 
-def _run_publish(tmp_path: Path, verified: str, status_rc: int = 0, merge_rc: int = 0) -> tuple[subprocess.CompletedProcess, list[str], dict]:
+def _run_publish(tmp_path: Path, verified: str, status_rc: int = 0, merge_rc: int = 0,
+	refused_token: str = "none") -> tuple[subprocess.CompletedProcess, list[str], dict]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
@@ -395,6 +407,7 @@ def _run_publish(tmp_path: Path, verified: str, status_rc: int = 0, merge_rc: in
 		"FAKE_GH_LOG": str(log),
 		"FAKE_STATUS_RC": str(status_rc),
 		"FAKE_MERGE_RC": str(merge_rc),
+		"FAKE_STATUS_REFUSED_TOKEN": refused_token,
 	}
 	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
 	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -433,6 +446,72 @@ def test_status_post_failure_blocks_the_merge(tmp_path: Path) -> None:
 	assert not any(call.startswith("pr merge") for call in calls)
 	assert "auto_merge" not in outputs
 	assert "reason=status_post_failed" in result.stdout
+	assert sum(call.startswith("api -X POST") for call in calls) == 2
+
+
+def test_status_post_retries_with_pat_when_job_token_is_refused(tmp_path: Path) -> None:
+	# A caller wrapper rendered before it granted `statuses: write`: the PR
+	# that fixes the wrapper must not wait for a human.
+	result, calls, outputs = _run_publish(tmp_path, "true", refused_token="job-token")
+	assert result.returncode == 0, result.stderr
+	posts = [i for i, call in enumerate(calls) if call.startswith("api -X POST")]
+	assert [calls[i + 1] for i in posts] == ["token=job-token", "token=pat-token"]
+	assert "::warning::UPDATER_PR_VERIFY posted the status with GH_PAT" in result.stdout
+	assert outputs["auto_merge"] == "enabled"
+
+
+def _run_pending(tmp_path: Path, status_rc: int = 0, refused_token: str = "none") -> tuple[subprocess.CompletedProcess, list[str]]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GH, encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+	log = tmp_path / "gh.log"
+	output = tmp_path / "out"
+	output.write_text("", encoding="utf-8")
+	step = _verify_step("verify_inputs")
+	assert step["env"]["MERGE_TOKEN"] == "${{ secrets.GH_PAT }}"
+	script = step["run"]
+	assert "${{" not in script
+	env = {
+		**{k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "GH_", "FAKE_"))},
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"GITHUB_OUTPUT": str(output),
+		"GITHUB_REPOSITORY": REPO,
+		"GITHUB_RUN_ID": "1",
+		"PR_NUMBER": "77",
+		"PUSHED_SHA": PUSHED_SHA,
+		"UPSTREAM_SHA": PUSHED_SHA,
+		"BASE": "main",
+		"VERIFIED": "true",
+		"VERIFY_STATUS_CONTEXT": STATUS_CONTEXT,
+		"GH_TOKEN": "job-token",
+		"MERGE_TOKEN": "pat-token",
+		"FAKE_GH_LOG": str(log),
+		"FAKE_STATUS_RC": str(status_rc),
+		"FAKE_STATUS_REFUSED_TOKEN": refused_token,
+	}
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	return result, calls
+
+
+def test_pending_status_retries_with_pat_when_job_token_is_refused(tmp_path: Path) -> None:
+	# The pending post runs first in the job: without the same fallback an
+	# older wrapper would fail here and never reach the publish step.
+	result, calls = _run_pending(tmp_path, refused_token="job-token")
+	assert result.returncode == 0, result.stdout + result.stderr
+	posts = [i for i, call in enumerate(calls) if call.startswith("api -X POST")]
+	assert [calls[i + 1] for i in posts] == ["token=job-token", "token=pat-token"]
+	assert "state=pending" in calls[posts[0]]
+	assert "::warning::UPDATER_PR_VERIFY posted the status with GH_PAT" in result.stdout
+
+
+def test_pending_status_fails_closed_when_both_tokens_are_refused(tmp_path: Path) -> None:
+	result, calls = _run_pending(tmp_path, status_rc=1)
+	assert result.returncode != 0
+	assert sum(call.startswith("api -X POST") for call in calls) == 2
+	assert "reason=status_post_failed stage=status" in result.stdout
 
 
 def test_merge_failure_is_reported_not_retried(tmp_path: Path) -> None:

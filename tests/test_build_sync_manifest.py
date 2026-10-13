@@ -1,0 +1,209 @@
+"""Tests for scripts/build_sync_manifest.py (issue #7128)."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILDER = REPO_ROOT / "scripts" / "build_sync_manifest.py"
+UPDATE_WORKFLOWS = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
+ASSEMBLE_CHANGELOG = REPO_ROOT / "scripts" / "assemble_changelog.py"
+
+GIT_ENV = {
+	"GIT_AUTHOR_NAME": "test",
+	"GIT_AUTHOR_EMAIL": "test@example.invalid",
+	"GIT_COMMITTER_NAME": "test",
+	"GIT_COMMITTER_EMAIL": "test@example.invalid",
+	"GIT_CONFIG_NOSYSTEM": "1",
+	"HOME": "/nonexistent",
+}
+
+
+def _load_builder():
+	spec = importlib.util.spec_from_file_location("build_sync_manifest", BUILDER)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def _git(repo: Path, *args: str) -> str:
+	env = {**os.environ, **GIT_ENV}
+	result = subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args], env=env, check=True, capture_output=True, text=True)
+	return result.stdout.strip()
+
+
+def make_upstream_repo(root: Path) -> tuple[Path, str]:
+	"""A scratch coding-workflows tree with every kind of entry the builder reads."""
+	repo = root / "upstream"
+	files = {
+		"CLAUDE.md": "rules\n",
+		"README.md": "readme\n",
+		"workflow-templates/ai-review.yml": "name: AI Review\n",
+		"workflow-templates/profiles/full.txt": "ai-review.yml\n",
+		"workflow-templates/.claude/commands/do.md": "do\n",
+		"workflow-templates/audit-gate/contract.json": json.dumps({"managed_files": [{"source": "assets/x.js", "target": "scripts/security/x.js"}]}),
+		"workflow-templates/retired_files.txt": "# comment\n.claude/commands/old.md abc123\n",
+		"scripts/tool.py": "print('x')\n",
+		"docs/outside.md": "not in cone\n",
+	}
+	for rel, text in files.items():
+		path = repo / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(text, encoding="utf-8")
+	(repo / "workflow-templates" / "CLAUDE.md").symlink_to("../CLAUDE.md")
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "base")
+	return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def run_builder(*args: str) -> subprocess.CompletedProcess:
+	return subprocess.run([sys.executable, str(BUILDER), *args], capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+
+
+def test_build_is_deterministic_and_covers_the_cone(tmp_path):
+	repo, sha = make_upstream_repo(tmp_path)
+	out_a, out_b = tmp_path / "a.json", tmp_path / "b.json"
+	for out in (out_a, out_b):
+		result = run_builder("build", "--repo-root", str(repo), "--commit", sha, "--version", "v1.2.3", "--out", str(out))
+		assert result.returncode == 0, result.stderr
+		assert "SYNC_MANIFEST outcome=built" in result.stderr
+	assert out_a.read_bytes() == out_b.read_bytes()
+	manifest = json.loads(out_a.read_text(encoding="utf-8"))
+	assert manifest["schema"] == "coding-workflows.sync-manifest.v1"
+	assert manifest["repository"] == "shubhodeep1/coding-workflows"
+	assert manifest["commit"] == sha
+	assert manifest["version"] == "v1.2.3"
+	files = manifest["files"]
+	assert files["workflow-templates/CLAUDE.md"] == "symlink:../CLAUDE.md"
+	assert "CLAUDE.md" in files and "README.md" in files
+	assert "scripts/tool.py" in files
+	assert "docs/outside.md" not in files
+	assert re.fullmatch(r"[0-9a-f]{64}", files["README.md"])
+	allowed = manifest["allowed_consumer_paths"]
+	for expected in (
+		".github/workflows/ai-review.yml",
+		".claude/commands/do.md",
+		"scripts/security/x.js",
+		".claude/commands/old.md",
+		"CLAUDE.md",
+		".gitattributes",
+		"changelog.d/*.md",
+		"agents.d/*.md",
+		"package.json",
+	):
+		assert expected in allowed
+	assert ".github/workflows/full.txt" not in allowed
+	assert allowed == sorted(allowed)
+
+
+def test_build_rejects_bad_arguments(tmp_path):
+	repo, sha = make_upstream_repo(tmp_path)
+	out = str(tmp_path / "m.json")
+	assert run_builder("build", "--repo-root", str(repo), "--commit", sha, "--version", "1.2.3", "--out", out).returncode == 2
+	assert run_builder("build", "--repo-root", str(repo), "--commit", sha.upper(), "--version", "v1.2.3", "--out", out).returncode == 2
+	assert run_builder("build", "--repo-root", str(repo)).returncode == 2
+	assert run_builder().returncode == 2
+
+
+def test_build_rejects_submodule_entries(tmp_path):
+	repo, sha = make_upstream_repo(tmp_path)
+	_git(repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},scripts/sub")
+	_git(repo, "commit", "-q", "-m", "gitlink")
+	new_sha = _git(repo, "rev-parse", "HEAD")
+	result = run_builder("build", "--repo-root", str(repo), "--commit", new_sha, "--version", "v1.2.3", "--out", str(tmp_path / "m.json"))
+	assert result.returncode == 1
+	assert "unsupported tree entry" in result.stderr
+
+
+def test_glob_matcher_does_not_cross_directories():
+	module = _load_builder()
+	regex = module.glob_to_regex("changelog.d/*.md")
+	assert regex.match("changelog.d/123-x.md")
+	assert not regex.match("changelog.d/x/y.md")
+	assert not regex.match("changelog.dXy.md")
+	assert module.glob_to_regex("a+b(c).yml").match("a+b(c).yml")
+
+
+def test_check_paths_exit_codes(tmp_path):
+	allowed = tmp_path / "allowed.txt"
+	allowed.write_text("CHANGELOG.md\nchangelog.d/*.md\n", encoding="utf-8")
+	ok = tmp_path / "ok.txt"
+	ok.write_text("CHANGELOG.md\nchangelog.d/1-x.md\n", encoding="utf-8")
+	bad = tmp_path / "bad.txt"
+	bad.write_text("CHANGELOG.md\nchangelog.d/x/y.md\n", encoding="utf-8")
+	assert run_builder("check-paths", "--allowed-file", str(allowed), "--paths-file", str(ok)).returncode == 0
+	result = run_builder("check-paths", "--allowed-file", str(allowed), "--paths-file", str(bad))
+	assert result.returncode == 3
+	assert result.stdout.strip() == "changelog.d/x/y.md"
+	assert run_builder("check-paths", "--allowed-file", str(tmp_path / "missing"), "--paths-file", str(ok)).returncode == 1
+
+
+def test_allowed_paths_subcommand_matches_build(tmp_path):
+	repo, sha = make_upstream_repo(tmp_path)
+	result = run_builder("allowed-paths", "--repo-root", str(repo))
+	assert result.returncode == 0, result.stderr
+	module = _load_builder()
+	assert result.stdout.splitlines() == module.derive_allowed_paths(repo, sha)
+
+
+def _commit_step_body() -> str:
+	text = UPDATE_WORKFLOWS.read_text(encoding="utf-8")
+	start = text.index("      - name: Commit and push updates\n")
+	end = text.index("      - name: Send Telegram notification\n", start)
+	return text[start:end]
+
+
+def test_every_git_add_source_maps_to_an_allowlist_class():
+	"""Each staging source of the commit step has a matching allowlist class."""
+	body = _commit_step_body()
+	sources = set(re.findall(r"done < (/tmp/[a-z_]+\.txt)", body))
+	sources |= set(re.findall(r'git add (?:-A )?(?:-- )?("?[^\n"]+"?(?: [^\n]+)?)$', body, re.M))
+	expected_classes = {
+		"/tmp/audit_gate_changed_files.txt": "audit-gate managed_files targets and package.json",
+		"/tmp/claude_changed_files.txt": ".claude/<rel> for workflow-templates/.claude/",
+		"/tmp/claude_md_changed_file.txt": "CLAUDE.md",
+		"/tmp/retired_removed_files.txt": "retired_files.txt first tokens",
+		"/tmp/changelog_asset_files.txt": "changelog.d/.gitkeep and .gitattributes",
+	}
+	for source in expected_classes:
+		assert source in sources, source
+	file_sources = {item for item in sources if item.startswith("/tmp/")}
+	assert file_sources == set(expected_classes), file_sources - set(expected_classes)
+	assert "git add .github/workflows/" in body
+	assert "git add -A -- CHANGELOG.md changelog.d" in body
+	assert 'git add -A -- "${AGENTS_FILE}" agents.d' in body
+	allowed = _load_builder().STATIC_ALLOWED_PATHS
+	for entry in ("CLAUDE.md", "CHANGELOG.md", "changelog.d/*.md", "changelog.d/.gitkeep", ".gitattributes", "agents.md", "AGENTS.md", "agents.d/*.md", "package.json"):
+		assert entry in allowed
+
+
+def test_changelog_ensure_assets_paths_are_allowed(tmp_path):
+	consumer = tmp_path / "consumer"
+	consumer.mkdir()
+	changed = tmp_path / "changed.txt"
+	result = subprocess.run(
+		[sys.executable, str(ASSEMBLE_CHANGELOG), "ensure-assets", "--repo-root", str(consumer), "--changed-paths-file", str(changed)],
+		capture_output=True,
+		text=True,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert result.returncode == 0, result.stderr
+	module = _load_builder()
+	compiled = [module.glob_to_regex(entry) for entry in module.STATIC_ALLOWED_PATHS]
+	paths = [line for line in changed.read_text(encoding="utf-8").splitlines() if line]
+	assert paths, "ensure-assets reported no changed paths in an empty consumer"
+	for path in paths:
+		assert module.path_allowed(path, compiled), path
+
+
+if __name__ == "__main__":
+	sys.exit(pytest.main([__file__, "-q"]))

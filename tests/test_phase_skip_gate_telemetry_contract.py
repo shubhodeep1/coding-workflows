@@ -81,6 +81,7 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 		host_python_dir = root / "host_python"
 		host_python_dir.mkdir()
 		(host_python_dir / "security_dependency.py").write_bytes((REPO_ROOT / "scripts" / "security_dependency.py").read_bytes())
+		(host_python_dir / "pr_dependency.py").write_bytes((REPO_ROOT / "scripts" / "pr_dependency.py").read_bytes())
 		cases = [
 			("issues", "opened", "User", "OWNER", "maintainer", False, "open", False, False),
 			("issues", "opened", "User", "MEMBER", "maintainer", True, "open", True, True),

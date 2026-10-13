@@ -283,7 +283,7 @@ jobs:
           echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -294,7 +294,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             case "${f}" in
-              load_workflow_overlay.py|security_dependency.py)
+              pr_dependency.py|load_workflow_overlay.py|security_dependency.py|check_triage_resolution.py|workflow_failure_heal.py)
                 install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}" ;;
             esac
             _fetched_scripts+=("${f}")
@@ -481,6 +481,8 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
@@ -556,8 +558,59 @@ jobs:
               exit 1
             fi
           fi
+          # Hold a trusted standalone issue that declares `- Depends on PR: #N`
+          # and `- Requires on main: <path> contains <string>` until that PR is
+          # merged into the default branch and the string is on it (issue
+          # #7228). Held issues get no questions or /answer, keep only
+          # ai:clarification (the standalone poller releases them once), and
+          # drop ai:blocked so the unblock scan never spends rounds on them.
+          # The runner-temp copy is staged from verified support, not the issue branch.
+          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
+          if [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            SKIP_CODEX="true"
+            _pr_dependency_reason="$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.reason // "unknown"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency reason=${_pr_dependency_reason:-unknown} outcome=skip issue=${ISSUE_NUMBER}"
+            # No label writes on a closed issue or an untrusted new issue.
+            if [ "${IS_CLOSED}" != "true" ] && { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
+              source scripts/gh_helpers.sh
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+                echo "::error::Could not mark PR-dependent issue #${ISSUE_NUMBER} as waiting"
+                exit 1
+              fi
+              if jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+                if ! gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null; then
+                  echo "::warning::Could not remove ai:blocked from PR-dependent issue #${ISSUE_NUMBER}; the unblock scan may still see it."
+                fi
+              fi
+            fi
+          fi
+          # An ai:check-triage issue whose linked PR merged and whose failure
+          # is verified fixed on the default branch is closed with evidence
+          # instead of asking for /answer (issue #7095). Unverified or
+          # unreadable evidence keeps the normal path (the helper posts the
+          # failing job's traceback); a write failure after verification
+          # fails the run so no /answer follows. Non-triage issues: no API call.
+          CHECK_TRIAGE_RESOLVED="false"
+          if [ "${SKIP_CODEX}" != "true" ] && jq -e '[(.labels // [])[]?.name] | index("ai:check-triage") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            triage_rc=0
+            TRIAGE_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/check_triage_resolution.py" gate --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" --default-branch "${DEFAULT_BRANCH:-main}")" || triage_rc=$?
+            triage_status="$(printf '%s' "${TRIAGE_VERDICT}" | jq -r '.status // ""' 2>/dev/null || true)"
+            if [ "${triage_rc}" -eq 3 ]; then
+              echo "::error::Verified check-triage issue #${ISSUE_NUMBER} as resolved but could not record or close it"
+              exit 1
+            elif [ "${triage_rc}" -eq 0 ] && { [ "${triage_status}" = "resolved" ] || [ "${triage_status}" = "already_resolved" ]; }; then
+              SKIP_CODEX="true"
+              CHECK_TRIAGE_RESOLVED="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=check_triage_resolved reason=verified outcome=skip issue=${ISSUE_NUMBER}"
+            elif [ "${triage_rc}" -ne 0 ]; then
+              echo "::warning::Check-triage resolution gate failed (rc=${triage_rc}); continuing with clarification"
+            fi
+          fi
+          echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"
+
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+            [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else
@@ -933,64 +986,14 @@ jobs:
           CLARIFY_BASE_IMAGE_MIRRORS: ${{ vars.CLARIFY_BASE_IMAGE_MIRRORS || 'public.ecr.aws/docker/library mirror.gcr.io/library' }}
           CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS: ${{ vars.CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS || '300' }}
         run: |
-          set -uo pipefail
-          preseed_dockerfile="scripts/clarify_sandbox/Dockerfile"
-          # Only an implicit Docker Hub official image (`name:tag`) maps onto
-          # `<mirror>/<name>:<tag>`; anything else is left to docker build.
-          preseed_ref_re='^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._-]{1,128}$'
-          # The first character must be alphanumeric so an entry can never be
-          # parsed by `docker pull` as a CLI flag (for example `-x/lib`).
-          preseed_mirror_re='^[a-z0-9][a-z0-9.-]*(/[a-z0-9._-]+)*$'
-          preseed_sanitize() { printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._:/@-' '_' | cut -c1-200; }
-          preseed_docker() { env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker "$@"; }
-
-          preseed_timeout="${CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS:-300}"
-          if ! [[ "${preseed_timeout}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${preseed_timeout}))" -lt 30 ] || [ "$((10#${preseed_timeout}))" -gt 1800 ]; then
-            preseed_timeout=300
-          fi
-          preseed_timeout=$((10#${preseed_timeout}))
-
-          if [ ! -f "${preseed_dockerfile}" ]; then
-            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=dockerfile_missing"
+          # The step body lives in scripts/clarify_base_image_preseed.sh (#7215),
+          # which scripts/clarify_isolated_run.sh also runs before every build.
+          # Best effort: a missing helper or any failure never blocks Run Codex.
+          if [ ! -f scripts/clarify_base_image_preseed.sh ] || [ -L scripts/clarify_base_image_preseed.sh ]; then
+            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing"
             exit 0
           fi
-          preseed_ref="$(awk 'toupper($1) == "FROM" { print $2; exit }' "${preseed_dockerfile}")"
-          if ! [[ "${preseed_ref}" =~ ${preseed_ref_re} ]]; then
-            preseed_safe_ref="$(preseed_sanitize "${preseed_ref}")"
-            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=${preseed_safe_ref:-none} outcome=skip reason=unsupported_ref"
-            exit 0
-          fi
-
-          if preseed_docker image inspect "${preseed_ref}" >/dev/null 2>&1; then
-            echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=present"
-            exit 0
-          fi
-
-          read -r -a preseed_mirrors <<< "${CLARIFY_BASE_IMAGE_MIRRORS:-}"
-          preseed_attempted=0
-          for preseed_mirror in "${preseed_mirrors[@]}"; do
-            if ! [[ "${preseed_mirror}" =~ ${preseed_mirror_re} ]]; then
-              echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=mirror_skipped source=$(preseed_sanitize "${preseed_mirror}") reason=invalid_mirror"
-              continue
-            fi
-            preseed_attempted=$((preseed_attempted + 1))
-            preseed_source="${preseed_mirror}/${preseed_ref}"
-            # Actions runs this body under `bash -e`; a failed assignment from a
-            # command substitution would exit before the next mirror, so the
-            # status is captured with `||` instead of a separate `$?` read.
-            preseed_pull_rc=0
-            preseed_pull_out="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout "${preseed_timeout}" docker pull --quiet "${preseed_source}" 2>&1)" || preseed_pull_rc=$?
-            if [ "${preseed_pull_rc}" -eq 0 ] \
-              && preseed_docker tag "${preseed_source}" "${preseed_ref}" >/dev/null 2>&1 \
-              && preseed_docker image inspect "${preseed_ref}" >/dev/null 2>&1; then
-              echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=seeded source=${preseed_mirror}"
-              exit 0
-            fi
-            preseed_detail="$(printf '%s' "${preseed_pull_out}" | tail -n 1 | tr -c 'A-Za-z0-9._:/@ -' '_' | cut -c1-200)"
-            echo "CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=mirror_failed source=${preseed_mirror} rc=${preseed_pull_rc} detail=${preseed_detail:-none}"
-          done
-          echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=${preseed_ref} outcome=unavailable mirrors=${preseed_attempted}"
-          exit 0
+          bash scripts/clarify_base_image_preseed.sh scripts/clarify_sandbox/Dockerfile || true; exit 0
 
       - name: Run Codex
         id: run_codex
@@ -1657,7 +1660,9 @@ jobs:
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
-          if [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
+          if [ "${{ steps.clarify_route.outputs.check_triage_resolved }}" = "true" ]; then
+            OUTCOME="check_triage_resolved"
+          elif [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
             OUTCOME="auto_answered_by_orchestrator"
           elif [ "${{ steps.parse_codex.outputs.blocked }}" = "true" ]; then
             OUTCOME="blocked"

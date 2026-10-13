@@ -436,6 +436,52 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
 
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      - name: Implement post-Codex recovery unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      - name: Regression tests wired by the CI wiring guard (part 1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_cli.py \
+            tests/test_branch_rebuild.py \
+            tests/test_clarify_sandbox_base_image_preseed.py \
+            tests/test_codex_thread_reuse_review.py \
+            tests/test_family_python_mongo_flask.py \
+            tests/test_family_python_repo_checks.py \
+            tests/test_implement_heal_preflight.py \
+            tests/test_implement_pr_body_tracking_refs.py \
+            tests/test_orchestrate_final_merge_required_checks_gate.py \
+            tests/test_prompt_compaction.py \
+            tests/test_render_validation_templates_node_hardhat_regressions.py \
+            tests/test_render_validation_templates_node_runtime_regressions.py \
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
+            tests/test_review_commit_new_files_preserved.py \
+            tests/test_review_conflict_resolve_sandbox_only.py \
+            tests/test_review_freshness_ci_failed.py \
+            tests/test_review_head_gate.py \
+            tests/test_review_parse_consolidator.py \
+            tests/test_review_pipeline_integration.py \
+            tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_install_timeout.py \
+            tests/test_review_static_context_readme.py \
+            tests/test_semble_helpers.py \
+            tests/test_validate_driver_credential_scrub.py \
+            tests/test_validate_lint_graceful_shutdown_hooks.py \
+            tests/test_validate_lint_init_true.py \
+            tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_render_recovery.py \
+            tests/test_validation_import_audit_stdlib.py \
+            tests/test_verify_integration_fingerprints_partial_removal.py \
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
+
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -546,16 +592,31 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_memory_maintenance_contract_noop.py
 
       - name: Merged-PR commit guard hook tests (CLAUDE.md §21)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
 
       - name: Live .claude/ copies match their templates
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
 
       - name: PR-watch guard hook tests (CLAUDE.md §25)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
@@ -571,12 +632,14 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_auto_decisions.py \
             tests/test_clarify_respond_standalone.py \
-            tests/test_clarify_github_facts.py
+            tests/test_clarify_github_facts.py \
+            tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Clarify sandbox base image pre-seed tests (#6985)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
+          # The fake docker lives in a temp dir, so TMPDIR must allow executables.
+          TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Single-issue security pass tests (port P1)
         run: |
@@ -596,9 +659,20 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
 
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py
+
+      - name: Pre-push affected-test gate tests
+        run: |
+          set -euo pipefail
+          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
 
       - name: Claude engine selection and claude_run tests
         run: |
@@ -612,7 +686,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
             tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
-            tests/test_integration_judge_scope_guard.py
+            tests/test_integration_judge_scope_guard.py tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Claude engine decision tests
         run: |
@@ -654,11 +728,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
 
-      - name: Clarify sandbox base image pre-seed tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
-
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail
@@ -688,6 +757,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+      - name: Validation shell-quoting and credential-scrub tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py
 
       - name: Claude pool health alert tests
         run: |
@@ -729,7 +803,7 @@ jobs:
       - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py tests/test_pr_dependency.py tests/test_check_triage_resolution.py
 
       - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
         run: |
@@ -781,6 +855,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -921,48 +996,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
-
-      - name: Implement post-Codex recovery unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
-      - name: Regression tests wired by the CI wiring guard (part 1)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_cli.py \
-            tests/test_branch_rebuild.py \
-            tests/test_clarify_sandbox_base_image_preseed.py \
-            tests/test_codex_thread_reuse_review.py \
-            tests/test_family_python_mongo_flask.py \
-            tests/test_family_python_repo_checks.py \
-            tests/test_implement_heal_preflight.py \
-            tests/test_implement_pr_body_tracking_refs.py \
-            tests/test_orchestrate_final_merge_required_checks_gate.py \
-            tests/test_prompt_compaction.py \
-            tests/test_render_validation_templates_node_hardhat_regressions.py \
-            tests/test_render_validation_templates_node_runtime_regressions.py \
-            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
-            tests/test_review_commit_new_files_preserved.py \
-            tests/test_review_conflict_resolve_sandbox_only.py \
-            tests/test_review_head_gate.py \
-            tests/test_review_parse_consolidator.py \
-            tests/test_review_pipeline_integration.py \
-            tests/test_review_rb_judge_reissue_baseline.py \
-            tests/test_review_sandbox_install_timeout.py \
-            tests/test_review_static_context_readme.py \
-            tests/test_semble_helpers.py \
-            tests/test_validate_driver_credential_scrub.py \
-            tests/test_validate_lint_graceful_shutdown_hooks.py \
-            tests/test_validate_lint_init_true.py \
-            tests/test_validate_preflight_canary_tools_scope.py \
-            tests/test_validate_process_render_recovery.py \
-            tests/test_validation_import_audit_stdlib.py \
-            tests/test_verify_integration_fingerprints_partial_removal.py \
-            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py \
-            tests/test_workflow_support_ref_follows_pin.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1234,6 +1267,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
 
+      - name: Consumer sync PR review-skip tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_workflow_sync_skip.py
+
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
           set -euo pipefail
@@ -1256,6 +1294,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
@@ -1279,6 +1318,8 @@ jobs:
             tests/test_gh_helpers_list_runs_method.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
             tests/test_pytest_git_env_isolation.py \
             tests/test_render_validation_templates.py \
             tests/test_render_validation_templates_repo_checks.py \
@@ -1316,6 +1357,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Full history: tests/claude_template_drift.py diffs against the PR
+          # base SHA, which a depth-1 checkout does not contain.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1355,6 +1400,14 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
 
+      - name: Signed consumer sync manifest tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_build_sync_manifest.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_sync_manifest_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_manifest_verification.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_pull_request_delivery.py
+
       - name: Audit gate template atomicity contract test
         run: |
           set -euo pipefail
@@ -1362,6 +1415,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_identity.py
 
       - name: SessionStart hook repo-slug contract test
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
@@ -1451,6 +1509,7 @@ jobs:
       - name: Release CI gate tests (stubbed gh; both release workflows)
         run: |
           set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_ci_gate.py
           # Security finding release-gate-ignores-actions-ci (#6797, Refs
           # #6532): both stable-tag writers must require a successful
           # github-actions `lint` check-run from ci.yml on the exact commit
