@@ -18429,6 +18429,8 @@ The project judge produced no usable output (${why}) ${failures} time(s) in a ro
 run_unblock_scan() {
   local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection verify_item verified_details
   local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
+  # Issue #7251 dependency wait: refresh the hold before #7251 can be judged.
+  if declare -F _issue_7251_dependency_wait_once >/dev/null 2>&1; then _issue_7251_dependency_wait_once; fi
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
     echo "UNBLOCK_SCAN outcome=skip reason=disabled"
     return 0
@@ -19015,7 +19017,22 @@ PR #${pr} was closed without merging into the default branch, so this issue cann
   esac
 }
 
+# _issue_7251_dependency_wait_once: run the handler at most once per poller
+# process, so the stall loop and the unblock scan share one GraphQL read.
+_ISSUE_7251_DEPENDENCY_WAIT_RAN="false"
+_issue_7251_dependency_wait_once() {
+  [ "${_ISSUE_7251_DEPENDENCY_WAIT_RAN:-false}" = "true" ] && return 0
+  _ISSUE_7251_DEPENDENCY_WAIT_RAN="true"
+  if declare -F run_issue_7251_dependency_wait >/dev/null 2>&1; then
+    run_issue_7251_dependency_wait || true
+  fi
+  return 0
+}
+
 run_standalone_stall_recovery() {
+  # Issue #7251 dependency wait: runs on every path that reaches stall
+  # recovery (full tick and the STANDALONE_RECOVERY_SWEEP_ONLY idle tick).
+  if declare -F _issue_7251_dependency_wait_once >/dev/null 2>&1; then _issue_7251_dependency_wait_once; fi
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
     return
@@ -21487,7 +21504,6 @@ fi
 # only path that scans blocked standalone items on those ticks. The workflow's
 # complementary has_work gates keep it exclusive with the post-loop scan.
 if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
-  run_issue_7251_dependency_wait || true
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
   exit 0
 fi
@@ -27840,8 +27856,6 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 done
 
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
-  run_issue_7251_dependency_wait || true
-
   run_standalone_stall_recovery
 
   release_staged_support_needs_human_latches

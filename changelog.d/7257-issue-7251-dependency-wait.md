@@ -1,5 +1,5 @@
 <!-- changelog: changed -->
-- **Issue #7251 now waits for PR #6667 instead of re-running clarify and plan into the same block.** While #6667 has not merged into the default branch, the poller, clarify and plan leave #7251 alone and post nothing.
+- **Issue #7251 now waits for PR #6667 instead of re-running clarify and plan into the same block.** While #6667 has not merged into the default branch, the poller, clarify and plan leave #7251 alone and post nothing. After #6667 merges or closes, clarify and plan keep holding #7251 until the poller has posted its outcome comment below, so a comment or `/answer` cannot restart it first.
 
 When #6667 merges, the poller checks the default branch's `scripts/ai_engine.sh` for both plans' Phase 0 symbols (`_AI_ENGINE_EXIT_REFUSED` and `ai_engine_fallback_class`). If both are there, it restarts #7251 with one `/reclarify`. If either is missing, it posts one comment naming the missing symbol, sends one Telegram WARNING, and does not restart #7251. If #6667 is closed without merging, it labels #7251 `ai:blocked` again so the unblock judge takes it over. Each of these happens once, deduplicated by a marker comment from an owner, member or collaborator.
 

@@ -532,7 +532,7 @@ jobs:
               && issue_7251_dependency_wait_applies "${GITHUB_REPOSITORY}" "${ISSUE_NUMBER}"; then
               ISSUE_7251_STATE="$(issue_7251_dependency_gate_state "${GITHUB_REPOSITORY}")"
               case "${ISSUE_7251_STATE}" in
-                open|unverified)
+                open|unverified|merged_pending|closed_pending)
                   ISSUE_7251_HELD="true"
                   SKIP_CODEX="true"
                   echo "AI_PHASE_GATE_V1 phase=clarify gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip issue=${ISSUE_NUMBER} detail=${ISSUE_7251_STATE}"

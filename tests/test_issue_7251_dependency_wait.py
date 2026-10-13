@@ -159,6 +159,35 @@ def test_gate_state_reads_one_snapshot_and_fails_unverified(tmp_path):
 	assert _bash(script, env).stdout.strip() == "unverified"
 
 
+@needs_jq
+@pytest.mark.parametrize(
+	("snapshot", "expected"),
+	[
+		(_snapshot(pr_state="MERGED", merged=True), "merged_pending"),
+		(_snapshot(pr_state="MERGED", merged=True, comments=((f"/reclarify\n{RELEASED}", "OWNER"),)), "merged"),
+		(_snapshot(pr_state="MERGED", merged=True, comments=((f"{PREFLIGHT}\nreport", "MEMBER"),)), "merged"),
+		(_snapshot(pr_state="MERGED", merged=True, comments=((f"/reclarify\n{RELEASED}", "NONE"),)), "merged_pending"),
+		(_snapshot(pr_state="CLOSED"), "closed_pending"),
+		(_snapshot(pr_state="CLOSED", comments=((f"{CLOSED}\nreblocked", "COLLABORATOR"),)), "closed_unmerged"),
+	],
+)
+def test_gate_state_holds_until_poller_handles_outcome(tmp_path, snapshot, expected):
+	env = _fake_gh(tmp_path)
+	Path(env["FAKE_SNAPSHOT_FILE"]).write_text(json.dumps(snapshot), encoding="utf-8")
+	script = f'source "{GH_HELPERS}"; gh_retry() {{ "$@"; }}; issue_7251_dependency_gate_state "{SOURCE_REPO}"'
+	assert _bash(script, env).stdout.strip() == expected
+
+
+@needs_jq
+def test_gate_state_reads_long_history(tmp_path):
+	env = _fake_gh(tmp_path)
+	env["FAKE_COMMENTS"] = json.dumps([{"body": f"{CLOSED}\nx", "author_association": "OWNER"}])
+	Path(env["FAKE_SNAPSHOT_FILE"]).write_text(json.dumps(_snapshot(pr_state="CLOSED", total=150)), encoding="utf-8")
+	script = f'source "{GH_HELPERS}"; gh_retry() {{ "$@"; }}; issue_7251_dependency_gate_state "{SOURCE_REPO}"'
+	assert _bash(script, env).stdout.strip() == "closed_unmerged"
+	assert "api --paginate repos/shubhodeep1/coding-workflows/issues/7251/comments" in (tmp_path / "calls.txt").read_text()
+
+
 # ---------------------------------------------------------------- poller
 
 
@@ -315,15 +344,37 @@ def test_other_repo_or_flag_off_makes_no_call(tmp_path, extra):
 
 def test_poller_call_sites_and_skip_points():
 	text = POLLER.read_text(encoding="utf-8")
-	sweep = text[text.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then'):]
-	assert sweep.index("run_issue_7251_dependency_wait || true") < sweep.index("run_unblock_scan ||")
-	main_tail = text[text.rindex("\nrun_standalone_stall_recovery\n") - 200:]
-	assert "run_issue_7251_dependency_wait || true\n\nrun_standalone_stall_recovery" in main_tail
+	once = "_issue_7251_dependency_wait_once; fi"
+	# The handler runs from inside both consumers, so every tick that reaches
+	# them (full tick, UNBLOCK_SCAN_SWEEP_ONLY, STANDALONE_RECOVERY_SWEEP_ONLY)
+	# refreshes the hold first, and it runs at most once per process.
 	stall = text[text.index("run_standalone_stall_recovery() {"):]
+	assert stall.index(once) < stall.index("ENABLE_STANDALONE_STALL_RECOVERY")
 	assert stall.index("issue_7251_dependency_wait_held") < stall.index("security_dependency.py security-dependency")
 	assert stall.index("issue_7251_dependency_wait_held") < stall.index('if [ "${has_pipeline_label}" -eq 0 ]')
 	scan = text[text.index("run_unblock_scan() {"):text.index("run_unblock_scan() {") + 6000]
+	assert scan.index(once) < scan.index("UNBLOCK_JUDGE_ENABLED")
 	assert "outcome=skip reason=issue_7251_dependency_wait" in scan
+	assert text.count("run_issue_7251_dependency_wait || true") == 1
+	helper = text[text.index("_issue_7251_dependency_wait_once() {"):]
+	assert '_ISSUE_7251_DEPENDENCY_WAIT_RAN="true"' in helper[:400]
+
+
+@needs_jq
+def test_handler_runs_once_per_process(tmp_path):
+	env = _fake_gh(tmp_path)
+	env.update({"GITHUB_REPOSITORY": SOURCE_REPO, "RUNTIME_DIR": str(tmp_path)})
+	Path(env["FAKE_SNAPSHOT_FILE"]).write_text(json.dumps(_snapshot()), encoding="utf-8")
+	script = "\n".join([
+		f'source "{GH_HELPERS}"',
+		'gh_retry() { "$@"; }',
+		_poller_functions(),
+		"_issue_7251_dependency_wait_once",
+		"_issue_7251_dependency_wait_once",
+	])
+	result = _bash(script, env)
+	assert result.stdout.count("detail=open action=none") == 1
+	assert (tmp_path / "calls.txt").read_text().count("api graphql") == 1
 
 
 # ---------------------------------------------------------------- workflows
@@ -342,7 +393,10 @@ def test_clarify_gate_contract():
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip" in step
 	gate = step[step.index('ISSUE_7251_HELD="false"'):step.index("DEPENDENCY_VERDICT=")]
 	assert "labels" not in gate.replace("No labels are written", "")
-	assert '[ "${ISSUE_7251_HELD}" != "true" ]' in step[step.index("orchestrator_fast_path=true") - 400:]
+	fast_path = step.index('echo "orchestrator_fast_path=true"')
+	fast_if = step.rindex('if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ]', 0, fast_path)
+	assert '[ "${ISSUE_7251_HELD}" != "true" ]' in step[fast_if:fast_path]
+	assert "open|unverified|merged_pending|closed_pending)" in gate
 
 
 def test_plan_gate_contract():
@@ -350,6 +404,7 @@ def test_plan_gate_contract():
 	assert "ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}" in step
 	gate_line = "AI_PHASE_GATE_V1 phase=plan gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip"
 	assert gate_line in step
+	assert "open|unverified|merged_pending|closed_pending)" in step
 	assert step.index(gate_line) < step.index("--add-label 'ai:planning'")
 	assert step.index("reason=issue_closed") < step.index(gate_line)
 

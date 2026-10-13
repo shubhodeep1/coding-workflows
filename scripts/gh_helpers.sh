@@ -2787,14 +2787,66 @@ issue_7251_dependency_pr_state()
 	esac
 }
 
+# issue_7251_dependency_gate_marker <repo> <snapshot_json> <prefixes_json_array>
+# 0 = an OWNER/MEMBER/COLLABORATOR comment on #7251 starts with one of the
+# prefixes, 1 = none, 2 = the history is longer than the snapshot window and
+# the paginated read failed. Reads more comments only past the window.
+issue_7251_dependency_gate_marker()
+{
+	local _repo="${1:-}" _snapshot="${2:-}" _prefixes="${3:-[]}" _total _count _comments
+	local _filter='any(.[]; ((.authorAssociation // .author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+		and ((.body // "") as $b | any($ps[]; . as $p | $b | startswith($p))))'
+	if printf '%s' "${_snapshot}" | jq -e --argjson ps "${_prefixes}" "(.issue.comments.nodes // []) | ${_filter}" >/dev/null 2>&1; then
+		return 0
+	fi
+	_total="$(printf '%s' "${_snapshot}" | jq -r '.issue.comments.totalCount // 0' 2>/dev/null || echo 0)"
+	_count="$(printf '%s' "${_snapshot}" | jq -r '(.issue.comments.nodes // []) | length' 2>/dev/null || echo 0)"
+	[[ "${_total}" =~ ^[0-9]+$ ]] || _total=0
+	[[ "${_count}" =~ ^[0-9]+$ ]] || _count=0
+	[ "${_total}" -gt "${_count}" ] || return 1
+	[[ "${_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 2
+	if ! _comments="$(gh api --paginate "repos/${_repo}/issues/${ISSUE_7251_DEPENDENCY_ISSUE}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+		return 2
+	fi
+	printf '%s' "${_comments}" | jq -e --argjson ps "${_prefixes}" "${_filter}" >/dev/null 2>&1 && return 0
+	return 1
+}
+
 # issue_7251_dependency_gate_state <repo>
 # One snapshot read reduced to the PR state; a failed read is "unverified".
+# A merged or closed-unmerged PR prints "merged_pending" / "closed_pending"
+# until the poller's trusted outcome marker is on #7251 (released or
+# preflight-failed after a merge, closed after a close), so clarify and plan
+# keep holding until the poller has handled the outcome; it then prints
+# "merged" / "closed_unmerged".
 issue_7251_dependency_gate_state()
 {
-	local _snapshot
-	if _snapshot="$(issue_7251_dependency_snapshot "${1:-}")"; then
-		issue_7251_dependency_pr_state "${_snapshot}"
-	else
+	local _snapshot _state _prefixes _rc
+	local _released="<!-- ai:issue-${ISSUE_7251_DEPENDENCY_ISSUE}-dependency-released:${ISSUE_7251_DEPENDENCY_PR} -->"
+	local _preflight="<!-- ai:issue-${ISSUE_7251_DEPENDENCY_ISSUE}-preflight-failed:${ISSUE_7251_DEPENDENCY_PR} -->"
+	local _closed="<!-- ai:issue-${ISSUE_7251_DEPENDENCY_ISSUE}-dependency-closed:${ISSUE_7251_DEPENDENCY_PR} -->"
+	if ! _snapshot="$(issue_7251_dependency_snapshot "${1:-}")"; then
 		printf 'unverified\n'
+		return 0
 	fi
+	_state="$(issue_7251_dependency_pr_state "${_snapshot}")"
+	case "${_state}" in
+		merged)
+			_prefixes="$(jq -cn --arg a "/reclarify"$'\n'"${_released}" --arg b "${_preflight}" '[$a, $b]' 2>/dev/null)" || { printf 'unverified\n'; return 0; }
+			;;
+		closed_unmerged)
+			_prefixes="$(jq -cn --arg a "${_closed}" '[$a]' 2>/dev/null)" || { printf 'unverified\n'; return 0; }
+			;;
+		*)
+			printf '%s\n' "${_state}"
+			return 0
+			;;
+	esac
+	_rc=0
+	issue_7251_dependency_gate_marker "${1:-}" "${_snapshot}" "${_prefixes}" || _rc=$?
+	case "${_rc}" in
+		0) printf '%s\n' "${_state}" ;;
+		1) if [ "${_state}" = "merged" ]; then printf 'merged_pending\n'; else printf 'closed_pending\n'; fi ;;
+		*) printf 'unverified\n' ;;
+	esac
 }
