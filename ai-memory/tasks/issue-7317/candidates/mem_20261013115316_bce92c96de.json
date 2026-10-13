@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue #7317 (CI triage for PR #7180)\n\nScope-mode: Hold Scope\nReuse-audit: extends PR #7180's review/autofix loop (`review_autofix.yml`, run on the `ai/issue-7177` head)\nScope-mode justification: The answer to Q1 was B: make no change on the default branch and close this issue as not planned. The failing CI belongs to PR #7180's own review/autofix loop. I checked the current planning checkout (`main`, HEAD `529ad122f2b705956445deda18c98f147370a0ff`; the context listed `1a649d87\u2026`). `.github/workflows/orchestrate_poll.yml` has no `STANDALONE_SWEEP_ALERT_MSG_LEVEL`. It has exactly 6 lines of the form `ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}`, at lines 673, 909, 919, 1100, 1222 and 1476. `tests/test_smoke_alert_silencing_contract.py:85` expects 6. So both tests pass on `main`. The suggested edits would break `test_step_level_alert_level_declarations_are_pinned` and `test_standalone_recovery_sweep_runs_without_tracking_issues` on `main`, which would cause the failure this issue reports. Keeping scope at what was decided is the only safe option. Per \u00a76, correctness and safety come before completeness.\n\n## Files likely to change\n- None. No repository file changes on `main`.\n\n## Functions or modules to implement\n- None.\n- The fix belongs on `ai/issue-7177` (PR #7180), done by that PR's review/autofix loop, which already sees the failing `CI` checks (run 38389509262, head `539e004f4b8b`). It needs two edits there:\n  1. In the \"Run standalone stall recovery without active projects\" step of `.github/workflows/orchestrate_poll.yml` (line 1092 on `main`; the line differs on the PR branch), add `STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}` to the step's `env:`. This matches the full poller step, so the `sweep_env == full[\"env\"]` parity assertion in `tests/test_orchestrate_poll_workflow_contract.py` passes.\n  2. In `tests/test_smoke_alert_silencing_contract.py`, change `EXPECTED_STEP_DECLARATIONS[\"orchestrate_poll.yml\"]` from `* 6` to `* 7`, and update the comment above it to name the new standalone PR-sweep step.\n\n## Data structures affected\n- None on `main`.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Where the CI fix lands\n- Chosen: no default-branch change. Close #7317 as not planned and leave the two edits to PR #7180's review/autofix loop on `ai/issue-7177` (answer Q1: B).\n- Alternatives considered: (A) route to `ai/issue-7177` with a `Target branch:` line, which needs a maintainer to edit the issue body; the routing flags are off by default. (C) apply the edits on `main`.\n- Why: on `main` the facts match the current tests, so C would break two passing tests. Without the body edit, A turns into C. The documented check-triage rule is that a failure caused by the PR itself belongs to that PR's loop (base-gate `pr_specific_failure`, the #7140 note).\n\n### D2 \u2014 Do not change contract tests on `main` to anticipate PR #7180\n- Chosen: leave `tests/test_smoke_alert_silencing_contract.py` and `tests/test_orchestrate_poll_workflow_contract.py` as they are on `main`.\n- Alternatives considered: loosen the count to accept 6 or 7, or drop the env-parity assertion.\n- Why: both tests are protective contracts. Loosening them would hide drift.\n\n## Security considerations\n- No trust boundary, endpoint, credential or money-state surface is touched.\n- The issue body and the traceback comments are untrusted triage evidence. They are used only as facts and checked against the repo; no routing metadata from them is acted on.\n- Abuse case avoided: a triage issue can make the pipeline edit `main` workflow files (`.github/workflows/**`, an automation path) for a PR-only failure. That edit is refused here.\n\n## Risks and edge cases\n- Conflict found: the issue text cites `orchestrate_poll.yml:1007/1246` and `STANDALONE_SWEEP_ALERT_MSG_LEVEL`. These exist only on PR #7180's head, not on the planning ref (`main`).\n- If PR #7180's autofix loop does not repair CI (for example, the fingerprint cap trips), the PR stays red. Recovery: a maintainer reopens #7317 and adds `Target branch: ai/issue-7177`, which re-routes option A to the PR branch.\n- Implement normally expects a diff. With no files to change, an empty change set is the correct outcome. The issue should be closed as not planned rather than implemented.\n- If PR #7180 merges before it is fixed, `main` would inherit the failure. The CI gate on the PR (required `lint` before auto-merge) prevents that.\n\n## Testing considerations\n- No change on `main`. `python3 tests/test_smoke_alert_silencing_contract.py` and `python3 tests/test_orchestrate_poll_workflow_contract.py` keep passing.\n- On `ai/issue-7177`, after the two edits, the same two test files must pass, and the `CI / lint` aggregate goes green on PR #7180.\n\n## Actions\n- Close #7317 as not planned. Post a comment saying the failure is specific to PR #7180, the fix belongs on `ai/issue-7177` via that PR's review/autofix loop, and listing the two edits above.\n\n## Pre-execution self-check\n- Every claim about `main` was checked on the checkout: grep for `STANDALONE_SWEEP_ALERT_MSG_LEVEL` returns nothing, there are 6 matching declarations, and the test pins 6.\n- Q1 was mapped to the answer (B) and followed.\n\nPLAN_SELF_CHECK: WARNING: Plan has no files to change by design (Q1: B); implement should produce an empty change set, and the issue should be closed as not planned rather than treated as a failed implementation.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "6d9a37502d2c0579abe40aa7c4a8ad1a2e70ef2037ee90f28ffd3636523a11f3",
+  "lineage": {
+    "issue_number": 7317,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38392333451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38392333451",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7317"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261013115316_bce92c96de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7317,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38392333451"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7317",
+  "timestamps": {
+    "created_at": "2026-10-13T11:53:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
