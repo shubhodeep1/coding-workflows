@@ -268,6 +268,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
+- `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.

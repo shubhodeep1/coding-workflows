@@ -10,7 +10,10 @@
 #   2. if an earlier `descope` / `operator_step` verdict is waiting on its
 #      fix-up issue, checks the fix-up instead: still open, it refreshes the
 #      wait marker and stops; merged, it posts the stop's resume command
-#      (scripts/unblock_actions.py followup) and stops;
+#      (scripts/unblock_actions.py followup) and stops, unless the protected
+#      handoff applies and the verdict followed an automation-path rejection
+#      that is still the newest guard result (#7287): then it records the
+#      operator handoff (unblock_actions.py followup-handoff) instead;
 #   2a. for a scope-blocked issue whose newest rejection is from the
 #      automation-path guard, re-runs today's guard on the rejected paths and,
 #      when it grants them all, resumes the issue without a verdict (once per
@@ -388,7 +391,13 @@ PY
 					elif [ "${ITEM_KIND}" = "issue" ] && jq -e '.ops[0].op == "operator_step" and .ops[2].op == "telegram" and ((.ops[2].text // "") | startswith("Operator handoff for #"))' "${ops_file}" >/dev/null 2>&1; then
 						# Protected-path handoff (#7060): the verdict is already recorded,
 						# so a failed write is not retried; the WARNING is the only page.
-						unblock_tg "WARNING" "Operator handoff for #${ITEM} is incomplete: a write failed and the verdict will not be retried; the item stays blocked (${REPOSITORY})."
+						# A handoff after a merged fix-up (#7287) keeps its wait open and
+						# is retried by the next run.
+						if jq -e '.ops[2].handoff_retry == true' "${ops_file}" >/dev/null 2>&1; then
+							unblock_tg "WARNING" "Operator handoff for #${ITEM} after fix-up merge is incomplete: a write failed; the next judge run retries it; the item stays blocked (${REPOSITORY})."
+						else
+							unblock_tg "WARNING" "Operator handoff for #${ITEM} is incomplete: a write failed and the verdict will not be retried; the item stays blocked (${REPOSITORY})."
+						fi
 					fi
 					continue
 				fi
@@ -480,8 +489,11 @@ unblock_rejection_snapshot()
 # the re-grant marker and the stop's resume command instead of asking the
 # judge. The implementation run checks the grant again before it commits.
 # Returns 0 when it acted (this run ends), 1 to let the judge decide.
+# UNBLOCK_REGRANT_RESULT is `regranted` or `failed` after a 0 return, so a
+# caller can tell a completed resume from a failed actuation (#7287).
 unblock_try_regrant()
 {
+	UNBLOCK_REGRANT_RESULT=""
 	local rejection_file="${RUNTIME_DIR}/automation_rejection.json" grant_file="${RUNTIME_DIR}/automation_grant.json"
 	local staged_file="${RUNTIME_DIR}/automation_staged.txt" ops_file="${RUNTIME_DIR}/regrant_ops.json" run_id reason guard_rc
 	if [ "${UNBLOCK_JUDGE_REGRANT_ENABLED:-true}" != "true" ]; then
@@ -522,9 +534,11 @@ unblock_try_regrant()
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" regrant --context-file "${RUNTIME_DIR}/context.json" \
 		--rejection-file "${rejection_file}" > "${ops_file}" || ! unblock_run_ops "${ops_file}"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=failed reason=actuation_failed"
+		UNBLOCK_REGRANT_RESULT="failed"
 		return 0
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} paths=$(wc -l < "${staged_file}" | tr -d ' ') outcome=regranted"
+	UNBLOCK_REGRANT_RESULT="regranted"
 	return 0
 }
 
@@ -676,9 +690,51 @@ unblock_resolve_ci_owner()
 	return 0
 }
 
+# Protected-path handoff (#7060), off by default: only a scope-blocked issue
+# (the stop the automation-path guard latches) is ever held.
+unblock_protected_handoff_applies()
+{
+	[ "$(printf '%s' "${UNBLOCK_PROTECTED_HANDOFF_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ] \
+		&& [ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "scope-blocked" ]
+}
+
+# Parses the newest trusted automation-path rejection from the comments this
+# run already fetched into ${RUNTIME_DIR}/protected_rejection.json, once per
+# run. An unreadable result is written as status none and logged.
+UNBLOCK_PROTECTED_REJECTION_LOADED=""
+unblock_protected_rejection_load()
+{
+	local protected_file="${RUNTIME_DIR}/protected_rejection.json"
+	if [ "${UNBLOCK_PROTECTED_REJECTION_LOADED}" = "true" ] && [ -f "${protected_file}" ]; then
+		return 0
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" protected-rejection --item "${ITEM}" \
+		--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${protected_file}" \
+		|| ! jq -e 'type == "object"' "${protected_file}" >/dev/null 2>&1; then
+		echo '{"status":"none","reason":"unreadable"}' > "${protected_file}"
+		unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=unreadable"
+	fi
+	UNBLOCK_PROTECTED_REJECTION_LOADED="true"
+}
+
+# Adds the loaded rejection to context.json for unblock_actions.py.
+unblock_protected_context_merge()
+{
+	if jq --slurpfile protected "${RUNTIME_DIR}/protected_rejection.json" \
+		'. + {protected_rejection: ($protected[0] | {guard, run, paths, truncated})}' \
+		"${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context.json.tmp" 2>/dev/null; then
+		mv "${RUNTIME_DIR}/context.json.tmp" "${RUNTIME_DIR}/context.json"
+		return 0
+	fi
+	rm -f "${RUNTIME_DIR}/context.json.tmp"
+	unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=context_merge"
+	return 1
+}
+
 unblock_main()
 {
 	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
+	UNBLOCK_PROTECTED_REJECTION_LOADED=""
 	local project_failed_substituted="false" project_status=""
 	if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
 		unblock_log "item=${ITEM:-} outcome=skip reason=disabled"
@@ -821,6 +877,64 @@ unblock_main()
 				return 0
 			fi
 			if jq -e '.state == "closed" and .state_reason == "completed" and (.labels | index("ai:merged") != null)' <<< "${fixup_json}" >/dev/null 2>&1; then
+				# #7287: a fix-up filed for a descope / operator_step verdict that
+				# followed an automation-path rejection must not resume the item
+				# into the same guard; hand it to an operator instead.
+				if unblock_protected_handoff_applies && unblock_protected_rejection_load \
+					&& jq -e '.status == "ok"' "${RUNTIME_DIR}/protected_rejection.json" >/dev/null 2>&1; then
+					local followup_run followup_verdict
+					followup_run="$(jq -r '.run' "${RUNTIME_DIR}/protected_rejection.json")"
+					followup_verdict="$(jq -r '.prior_handoff_verdict // ""' "${RUNTIME_DIR}/protected_rejection.json")"
+					# A grant the current guard already accepts resumes the item
+					# (as the deterministic exit below would) instead of a handoff.
+					rm -f "${RUNTIME_DIR}/automation_rejection.json"
+					if unblock_try_regrant; then
+						if [ "${UNBLOCK_REGRANT_RESULT:-}" != "regranted" ]; then
+							# A failed resume keeps the fix-up wait open, so the next
+							# run checks the item again instead of a done wait hiding it.
+							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_regrant_failed run=${followup_run}"
+							return 0
+						fi
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge re-checked the automation-path grant instead of posting a resume command.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=followup_regrant run=${followup_run}"
+						return 0
+					fi
+					if jq -e '.handoff_pending == true' "${RUNTIME_DIR}/protected_rejection.json" >/dev/null 2>&1; then
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; this item is waiting for an operator (protected-path handoff), so no resume command was posted.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=skip reason=operator_handoff_pending run=${followup_run}"
+						return 0
+					fi
+					if jq -e --arg run "${followup_run}" '.status == "none" and .reason == "already_regranted" and .run == $run' \
+						"${RUNTIME_DIR}/automation_rejection.json" >/dev/null 2>&1; then
+						# An earlier re-grant of this run posted its marker but its resume
+						# failed: the guard already granted these paths, so retry the
+						# resume below instead of asking an operator to grant them.
+						unblock_log "item=${ITEM} fixup=${wait_fixup} op=regrant run=${followup_run} outcome=resume_retry reason=already_regranted"
+					elif [[ "${followup_verdict}" =~ ^(descope|operator_step)$ ]]; then
+						if ! unblock_protected_context_merge; then
+							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_handoff_failed"
+							return 0
+						fi
+						ops_file="${RUNTIME_DIR}/followup_handoff_ops.json"
+						if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup-handoff --context-file "${RUNTIME_DIR}/context.json" \
+							--fixup "${wait_fixup}" --verdict "${followup_verdict}" > "${ops_file}" \
+							|| ! unblock_run_ops "${ops_file}"; then
+							# The wait stays open, so the next run retries; the keyed
+							# operator step and the hold marker make that idempotent.
+							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_handoff_failed"
+							return 0
+						fi
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged, but the automation-path guard's rejection of run ${followup_run} is still the newest guard result; the unblock judge handed this item to an operator instead of posting a resume command.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=followup_handoff fixup=${wait_fixup} run=${followup_run}"
+						return 0
+					fi
+				fi
 				ops_file="${RUNTIME_DIR}/followup_ops.json"
 				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" > "${ops_file}" \
 					|| ! unblock_run_ops "${ops_file}"; then
@@ -886,15 +1000,9 @@ unblock_main()
 	# already fetched; it never changes the guard or override eligibility.
 	# The automation-path guard always latches ai:scope-blocked, so only that
 	# stop is held: an old rejection cannot hold a later, unrelated block.
-	if [ "$(printf '%s' "${UNBLOCK_PROTECTED_HANDOFF_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ] \
-		&& [ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "scope-blocked" ]; then
+	if unblock_protected_handoff_applies; then
 		local protected_file="${RUNTIME_DIR}/protected_rejection.json"
-		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" protected-rejection --item "${ITEM}" \
-			--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${protected_file}" \
-			|| ! jq -e 'type == "object"' "${protected_file}" >/dev/null 2>&1; then
-			echo '{"status":"none","reason":"unreadable"}' > "${protected_file}"
-			unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=unreadable"
-		fi
+		unblock_protected_rejection_load
 		if jq -e '.status == "ok" and .handoff_pending == true' "${protected_file}" >/dev/null 2>&1; then
 			# Refresh the hold comment, as the fix-up wait does, so the poller's
 			# scan (UNBLOCK_JUDGE_RETRY_HOURS on the marker's updatedAt) does
@@ -918,14 +1026,7 @@ Still waiting for an operator; last checked ${now}.
 			return 0
 		fi
 		if jq -e '.status == "ok"' "${protected_file}" >/dev/null 2>&1; then
-			if jq --slurpfile protected "${protected_file}" \
-				'. + {protected_rejection: ($protected[0] | {guard, run, paths, truncated})}' \
-				"${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context.json.tmp" 2>/dev/null; then
-				mv "${RUNTIME_DIR}/context.json.tmp" "${RUNTIME_DIR}/context.json"
-			else
-				rm -f "${RUNTIME_DIR}/context.json.tmp"
-				unblock_log "item=${ITEM} op=protected_rejection outcome=failed reason=context_merge"
-			fi
+			unblock_protected_context_merge || true
 		fi
 	fi
 
