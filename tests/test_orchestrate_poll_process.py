@@ -792,6 +792,7 @@ def _run_poller(
 	fail_issue_comment_post_for: list[int] | None = None,
 	fail_issue_comment_post_after_write_for: list[int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
+	fail_issue_patch_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
 	fail_issue_close_for: list[int] | None = None,
@@ -888,6 +889,7 @@ def _run_poller(
 	fail_issue_comment_post_for = fail_issue_comment_post_for or []
 	fail_issue_comment_post_after_write_for = fail_issue_comment_post_after_write_for or []
 	fail_issue_get_for = fail_issue_get_for or []
+	fail_issue_patch_for = fail_issue_patch_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
 	fail_issue_edit_on_calls = fail_issue_edit_on_calls or {}
 	fail_issue_close_for = fail_issue_close_for or []
@@ -1316,6 +1318,7 @@ esac
 			"fail_issue_comment_post_for": [int(x) for x in fail_issue_comment_post_for],
 			"fail_issue_comment_post_after_write_for": [int(x) for x in fail_issue_comment_post_after_write_for],
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
+			"fail_issue_patch_for": [int(x) for x in fail_issue_patch_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
 			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
 			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
@@ -2322,6 +2325,18 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
+	if m and method == 'PATCH' and any(f.startswith('body=') for f in fields):
+		# Issue body write (pipeline plan grant, Q108).
+		num = int(m.group(1))
+		if num in set(store.get('fail_issue_patch_for', [])):
+			print('forced issue PATCH failure', file=sys.stderr)
+			sys.exit(1)
+		issue = get_issue(m.group(1))
+		issue['body'] = next(f.split('=', 1)[1] for f in fields if f.startswith('body='))
+		store.setdefault('issue_body_patch_calls', []).append({'issue': num, 'body': issue['body']})
+		save()
+		print(json.dumps({'number': num, 'body': issue['body']}))
+		sys.exit(0)
 	if m:
 		num = int(m.group(1))
 		if num in set(store.get('fail_issue_get_for', [])):
@@ -24482,19 +24497,54 @@ def test_managed_auto_approve_holds_without_trusted_plan_comment() -> None:
 	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
 
 
+def _pipeline_plan_grant_run(**overrides) -> dict:
+	# Pipeline-authored security finding without files_touched (open grant).
+	kwargs = {
+		"state": _managed_awaiting_approval_state(), "enable_validation": "false", "max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		"issue_comments": {10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		"issue_bodies": {10: "Security finding. No allowlist."},
+		"issue_authors": {10: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
+		"env_overrides": {"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def test_managed_auto_approve_writes_pipeline_plan_grant_then_approves() -> None:
+	# Q108: the open grant never approves on its own; the poller writes an
+	# exact files_touched block from the plan into the issue body first.
+	result = _pipeline_plan_grant_run()
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "PIPELINE_PLAN_GRANT issue=10 source=poller outcome=written" in log
+	patches = result.get("issue_body_patch_calls", [])
+	assert len(patches) == 1, log
+	body = patches[0]["body"]
+	assert body.startswith("Security finding. No allowlist.\n\n---\n**Pipeline plan grant.**")
+	assert "<!-- ai:pipeline-plan-grant:v1 -->\nfiles_touched:\n" in body
+	# `$(cat ...)` drops the body's final newline.
+	assert body.endswith("\n".join(f"  - {p}" for p in (*_PROTECTED_PLAN_FILES, "tests/**", "changelog.d/*", "agents.d/*")))
+
+
+def test_managed_pipeline_plan_grant_write_failure_holds() -> None:
+	result = _pipeline_plan_grant_run(fail_issue_patch_for=[10])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert "PIPELINE_PLAN_GRANT issue=10 source=poller outcome=failed reason=issue_body_write_failed" in log
+	assert "reason=pipeline_plan_grant_write_failed outcome=defer issue=10" in log
+
+
+def test_managed_pipeline_plan_grant_skipped_for_directory_plan() -> None:
+	# A listed directory can never be an exact grant: no body write, hold.
+	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(("scripts/", "scripts/a.sh"))]})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_body_patch_calls", []) == []
+	assert "reason=path_not_granted outcome=defer issue=10 paths=scripts/" in log
+
+
 def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> None:
-	# Pipeline-authored security finding without files_touched: open grant,
-	# never an exact grant for auto-approval.
-	held = _run_poller(
-		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
-		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
-		issue_bodies={10: "Security finding. No allowlist."},
-		issue_authors={10: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
-		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
-	)
-	assert _approved_bodies(held, "10") == []
-	assert "reason=open_grant_not_exact outcome=defer issue=10" in held["stdout"] + held["stderr"]
 
 	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
 	granted = _run_poller(

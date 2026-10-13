@@ -15405,7 +15405,9 @@ _plan_auto_approval_gate_comments()
 # a forged marker from anyone else is ignored. scripts/files_touched_scope_guard.py
 # decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off (false) every such
 # plan is held; when on, every protected path needs a trusted, exact
-# issue-body grant (the open pipeline-author grant does not count). Every
+# issue-body grant. The open pipeline-author grant does not count; instead
+# the guard proposes an exact files_touched block from the plan (Q108),
+# which is written to the issue body before the approval. Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
 # does not increment the recovery count; the implement-time guard still runs.
 # Args: <issue_num> <details_map_json> <comments_json> <phase>
@@ -15426,6 +15428,8 @@ _plan_auto_approval_gate()
   local gate_reason=""
   local gate_paths="none"
   local gate_display_paths="[]"
+  local gate_grant_body_file=""
+  local gate_fresh_file=""
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -15440,7 +15444,8 @@ _plan_auto_approval_gate()
     else
       gate_plan_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_plan.XXXXXX" 2>/dev/null || true)"
       gate_meta_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX" 2>/dev/null || true)"
-      if [ -z "${gate_plan_file}" ] || [ -z "${gate_meta_file}" ]; then
+      gate_grant_body_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_grant_body.XXXXXX" 2>/dev/null || true)"
+      if [ -z "${gate_plan_file}" ] || [ -z "${gate_meta_file}" ] || [ -z "${gate_grant_body_file}" ]; then
         gate_reason="plan_gate_error"
       elif ! printf '%s' "${comments_json:-[]}" | jq -er --arg login "${gate_login}" '
           [ .[]?
@@ -15474,9 +15479,34 @@ _plan_auto_approval_gate()
           --pipeline-login "${gate_login}" \
           --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" \
           --origin-repo "${GITHUB_REPOSITORY:-}" \
+          --pipeline-grant-body-out "${gate_grant_body_file}" \
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        # Q108: write the proposed exact grant before approving. The body the
+        # guard extended comes from this tick's batched snapshot, so it is
+        # re-read first (one REST read; no batched call carries a live body)
+        # and the write is skipped when the body changed since, so a newer
+        # edit is never overwritten. This runs at most once per issue: the
+        # written block makes later ticks take the ordinary exact grant.
+        if [ "${gate_decision}" = "approve" ] && printf '%s' "${gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
+          gate_fresh_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_fresh.XXXXXX" 2>/dev/null || true)"
+          gate_decision="hold"
+          if [ -z "${gate_fresh_file}" ] || [ ! -s "${gate_grant_body_file}" ] \
+            || ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${gate_fresh_file}" 2>/dev/null; then
+            gate_reason="pipeline_plan_grant_write_failed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_read_failed"
+          elif [ "$(jq -r '(.body // "") | gsub("\r"; "")' "${gate_fresh_file}" 2>/dev/null)" != "$(jq -r '(.body // "") | gsub("\r"; "")' "${gate_meta_file}" 2>/dev/null)" ]; then
+            gate_reason="pipeline_plan_grant_body_changed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_body_changed"
+          elif ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" -f body="$(cat "${gate_grant_body_file}")" >/dev/null 2>&1; then
+            gate_reason="pipeline_plan_grant_write_failed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_body_write_failed"
+          else
+            gate_decision="approve"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=written"
+          fi
+        fi
         gate_paths="$(printf '%s' "${gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
         # The hold comment names the raw plan paths (globs kept, so the
         # maintainer sees what the plan lists); log_paths strips `*?[]`.
@@ -15490,7 +15520,7 @@ _plan_auto_approval_gate()
       fi
     fi
   fi
-  rm -f "${gate_plan_file}" "${gate_meta_file}" 2>/dev/null || true
+  rm -f "${gate_plan_file}" "${gate_meta_file}" "${gate_grant_body_file}" "${gate_fresh_file}" 2>/dev/null || true
   if [ "${gate_decision}" = "approve" ]; then
     return 0
   fi
@@ -15546,7 +15576,7 @@ _plan_auto_approval_hold_notify()
       | [
         (if $reason == "automation_path_plan_auto_approval_disabled"
           then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
-          elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable"))
+          elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable", "pipeline_plan_grant_write_failed", "pipeline_plan_grant_body_changed"))
           then "**Automatic approval withheld: the automation-path grant check could not run.**"
           else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
         "",
