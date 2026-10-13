@@ -63,7 +63,7 @@ jobs:
       # (.github/, .claude/, scripts/, prompts/, workflow-templates/) get no
       # automatic /approved. When on, every listed protected path needs a
       # trusted, exact files_touched grant in the issue body.
-      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}
+      AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -2342,7 +2342,7 @@ jobs:
               # Automation-path plan gate (issue #6769). Plans listing
               # .github/, .claude/, scripts/, prompts/ or workflow-templates/
               # paths are held while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED
-              # is off; when it is on, every such path needs a trusted, exact
+              # is false (it defaults to true); when it is on, every such path needs a trusted, exact
               # issue-body grant (the open pipeline-author grant does not
               # count). Every error holds. A held plan keeps ai:awaiting-approval
               # for a human /approved; the implement-time guard still applies.
@@ -2360,7 +2360,7 @@ jobs:
                 run_plan_gate() {
                   PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate \
                     --plan-file "${plan_gate_file}" \
-                    --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" \
+                    --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" \
                     --issue-meta-file "${plan_gate_meta_file}" \
                     --pipeline-login "${plan_gate_login}" \
                     --allow-workflow-edits "${plan_gate_allow_edits}" \

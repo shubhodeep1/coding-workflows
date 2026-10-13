@@ -24425,6 +24425,7 @@ def test_managed_auto_approve_holds_protected_plan_with_flag_off() -> None:
 		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
 		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
 		issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 	log = result["stdout"] + result["stderr"]
 	assert _approved_bodies(result, "10") == [], log
@@ -24518,6 +24519,7 @@ def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
 		issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
 		mock_gh_issue_list_label_filter=True,
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "false"},
 	)
 	log = result["stdout"] + result["stderr"]
 	assert _approved_bodies(result, "501") == [], log
@@ -24527,7 +24529,7 @@ def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
 
 def test_plan_gate_poller_wiring() -> None:
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert 'AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"' in poller
+	assert 'AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"' in poller
 	# Batched GraphQL carries the issue author (no new API call).
 	assert "          author { login }\n          authorAssociation\n" in poller
 	assert "author_login: (.value.author.login // \"\")," in poller
@@ -24537,7 +24539,7 @@ def test_plan_gate_poller_wiring() -> None:
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "workflow_failure_heal.py files_touched_scope_guard.py; do" in workflow
 	assert workflow.count(
-		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}") == 4
+		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}") == 4
 	# The staged-support latch release is intentionally not gated (AD-3: B).
 	release = poller.split("release_staged_support_needs_human_latches()", 1)[1].split("\n}\n", 1)[0]
 	assert "_plan_auto_approval_gate" not in release
