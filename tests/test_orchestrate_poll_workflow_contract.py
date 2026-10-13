@@ -579,9 +579,17 @@ def main() -> int:
 	for counts, has_work, outcome in (
 		({}, "false", "outcome=none labeled=0 state_marker=0 clarify_marker=0"),
 		({"labeled": 2}, "true", "outcome=candidates labeled=2 state_marker=0 clarify_marker=0"),
+		({"state": 1}, "true", "outcome=candidates labeled=0 state_marker=1 clarify_marker=0"),
+		({"clarify": 3}, "true", "outcome=candidates labeled=0 state_marker=0 clarify_marker=3"),
 	):
 		_with_tmp(test_find_tracking_standalone_probe_counts, counts, has_work, outcome)
-	for kwargs, reason in (({"graphql_rc": 1}, "graphql_failed"), ({"graphql": "not json"}, "malformed")):
+	for kwargs, reason in (
+		({"graphql_rc": 1}, "graphql_failed"),
+		({"graphql": "not json"}, "malformed"),
+		({"graphql": {"data": {"repository": None}}}, "malformed"),
+		({"graphql": {"data": {"repository": {f"l{i}": {"totalCount": 0} for i in range(6)}, "state": {"issueCount": 0}, "clarify": {"issueCount": 0}}}}, "malformed"),
+		({"graphql": {"data": {"repository": {f"l{i}": {"totalCount": "1"} for i in range(7)}, "state": {"issueCount": 0}, "clarify": {"issueCount": 0}}}}, "malformed"),
+	):
 		_with_tmp(test_find_tracking_standalone_probe_fails_open, kwargs, reason)
 	return 0
 
