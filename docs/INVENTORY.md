@@ -46,6 +46,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
+- `.github/workflows/check-failure-triage-historical.yml` — GitHub Actions workflow: Internal: Historical check-failure triage (PR #6611 run 37922279826).
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
