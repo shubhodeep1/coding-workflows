@@ -11,4 +11,4 @@ If a hold marker already exists, the wait is marked done and the run logs `outco
 What this means for operators:
 - With the flag off (the default) nothing changes.
 - A fix-up that followed a different verdict (for example `retry_budget`), or an issue whose newest guard comment is not an automation-path rejection, still resumes as before.
-- Verdict, rejection and hold markers count only when posted by the pipeline's `GH_PAT` login. No new GitHub reads.
+- Verdict, rejection and hold markers count only when posted by the pipeline's `GH_PAT` login. The handoff itself adds no GitHub reads; the grant re-check that runs first reads each source issue a re-issue names (one read per source issue, at most 8), as the existing re-grant check does.
