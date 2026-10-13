@@ -68,13 +68,15 @@ def _sent_text(env: dict) -> str:
 	return next(arg for arg in args if arg.startswith("text=")).removeprefix("text=")
 
 
-def test_sends_one_warning_naming_every_account_at_the_gate(env: dict) -> None:
+def test_sends_one_debug_note_naming_every_account_at_the_gate(env: dict) -> None:
+	"""Gated accounts reset on their own and roles fall back meanwhile, so the
+	note is DEBUG: delivered only when ALERT_MSG_LEVEL opts in to DEBUG."""
 	probes = [_probe("BETA", 0.2, 0.1), _probe("ALPHA", 0.95, 0.1), _probe("GAMMA", None, None, status="rejected")]
-	result = _run(env, probes)
+	result = _run(env, probes, ALERT_MSG_LEVEL="DEBUG")
 	assert result.returncode == 0, result.stderr
 	assert "CLAUDE_POOL_HEALTH accounts=3 gated=2 auth_failed=0 probe_failed=0 alert=sent" in result.stdout
 	text = _sent_text(env)
-	assert text.startswith("⚠️ WARNING: Claude pool: 2 of 3 account(s) at or above the 90% usage gate; 1 usable.\n")
+	assert text.startswith("🔍 DEBUG: Claude pool: 2 of 3 account(s) at or above the 90% usage gate; 1 usable.\n")
 	assert "ALPHA: 5h 95% (resets 1970-01-01 00:16 UTC), 7d 10%" in text
 	assert "GAMMA: usage limit reached (resets unknown)" in text
 	assert "BETA:" not in text
@@ -122,13 +124,20 @@ def test_skips_never_fail_the_job(env: dict, probes: list | None, extra: dict, e
 	assert not env["log"].exists()
 
 
+def test_gated_only_pool_does_not_page_at_the_default_threshold(env: dict) -> None:
+	result = _run(env, [_probe("ALPHA", 0.95, 0.1)])
+	assert result.returncode == 0, result.stderr
+	assert "gated=1 auth_failed=0 probe_failed=0 alert=not_delivered" in result.stdout
+	assert not env["log"].exists()
+
+
 def test_the_gate_comes_from_the_engine_config_when_not_overridden(env: dict, tmp_path: Path) -> None:
 	config = tmp_path / "claude_engine.json"
 	config.write_text(json.dumps({"gate_utilization": 0.5}), encoding="utf-8")
 	values = {key: value for key, value in env["env"].items() if key != "CLAUDE_POOL_HEALTH_GATE"}
 	result = subprocess.run(
 		["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, check=False,
-		env=dict(values, CLAUDE_ENGINE_CONFIG=str(config), CLAUDE_POOL_PROBES=json.dumps([_probe("ALPHA", 0.6, 0.1)])),
+		env=dict(values, ALERT_MSG_LEVEL="DEBUG", CLAUDE_ENGINE_CONFIG=str(config), CLAUDE_POOL_PROBES=json.dumps([_probe("ALPHA", 0.6, 0.1)])),
 	)
 	assert "gated=1" in result.stdout and "alert=sent" in result.stdout
 	assert "at or above the 50% usage gate" in _sent_text(env)

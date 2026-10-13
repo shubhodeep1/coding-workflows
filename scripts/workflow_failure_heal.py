@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -204,6 +205,11 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"conflict_resolver_sandbox_support_missing",
 	}
 )
+# A non-retryable cap is re-armed once per verified review-support commit not
+# yet recorded (``support=``) on a trusted marker for the head, so a resolver
+# fix on main reaches a capped head without a manual rerun (#6911). Bounded
+# per head so frequent pushes to main cannot undo the cap (#6438).
+DEFAULT_FAILURE_CAP_MAX_REARMS = 3
 # The resolver's host-only conflict stop is an intentional fail-closed state
 # that needs a human merge: review_conflict_resolve.sh already prints the
 # "host-only conflicted path(s) need a manual merge" ::error:: line and the
@@ -2433,6 +2439,61 @@ def strip_heal_scope_markers(text: str) -> str:
 	return re.sub(r"(?im)^.*ai(?::|&#0*58;|&colon;|&amp;:)workflow-heal-scope.*\n?", "", text)
 
 
+def _heal_scope_marker_shape_ok(paths: list[str], runs: list[str]) -> bool:
+	"""Shape rules shared by verify_heal_scope and check_heal_scope_marker_file:
+	3-22 unique paths ending in the fixed test/changelog globs, every other path
+	safe (or a `scripts/<prefix>_step_*.sh` glob), and 1-3 unique `owner/repo:N` run refs."""
+	return not (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
+		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
+		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
+		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
+		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs))
+
+
+HEAL_SCOPE_MARKER_FILE_MAX_BYTES = 8192
+
+
+def check_heal_scope_marker_file(path: str) -> dict[str, Any]:
+	"""Check the intake-rendered scope marker file before an issue is filed.
+
+	Same parser as verify_heal_scope (HEAL_SCOPE_RE plus the shared shape
+	rules), minus the authorship/edit checks, which only apply once the issue
+	exists. Statuses: valid, missing, not_regular, duplicated, malformed.
+	"""
+	try:
+		info = os.lstat(path)
+	except FileNotFoundError:
+		return {"status": "missing", "paths": 0}
+	except OSError:
+		return {"status": "not_regular", "paths": 0}
+	if not stat.S_ISREG(info.st_mode):
+		return {"status": "not_regular", "paths": 0}
+	try:
+		fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+	except OSError:
+		return {"status": "not_regular", "paths": 0}
+	try:
+		raw = os.read(fd, HEAL_SCOPE_MARKER_FILE_MAX_BYTES + 1)
+	finally:
+		os.close(fd)
+	if len(raw) > HEAL_SCOPE_MARKER_FILE_MAX_BYTES:
+		return {"status": "malformed", "paths": 0}
+	text = raw.decode("utf-8", errors="replace").strip()
+	count = len(re.findall(r"ai:workflow-heal-scope", text, re.IGNORECASE))
+	if count == 0:
+		return {"status": "missing", "paths": 0}
+	if count != 1:
+		return {"status": "duplicated", "paths": 0}
+	match = HEAL_SCOPE_RE.fullmatch(text)
+	if not match:
+		return {"status": "malformed", "paths": 0}
+	paths = match.group(1).split(",")
+	runs = match.group(2).split(",")
+	if not _heal_scope_marker_shape_ok(paths, runs):
+		return {"status": "malformed", "paths": 0}
+	return {"status": "valid", "paths": len(paths)}
+
+
 def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | None, labels: Iterable[str], pipeline_login: str) -> dict[str, Any]:
 	markers = HEAL_SCOPE_RE.findall(body)
 	count = len(re.findall(r"ai:workflow-heal-scope", body, re.IGNORECASE))
@@ -2449,11 +2510,7 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 		status = "edited"
 	paths = markers[0][0].split(",") if markers else []
 	runs = markers[0][1].split(",") if markers else []
-	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
-		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
-		or any(not (_safe_heal_path(path) or _HEAL_SCOPE_STEP_GLOB_RE.fullmatch(path)) for path in paths[:-2])
-		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
-		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
+	if status == "verified" and not _heal_scope_marker_shape_ok(paths, runs):
 		status = "malformed"
 	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
 
@@ -2532,8 +2589,9 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	``run`` lets the counter treat two failure comments of one run as a single
 	failure. ``support`` (issue #6625) records the verified review-support SHA
 	that ran, so a later review on updated support can ignore failures from an
-	older support version; it is omitted when ``support_sha`` is not a 40-hex
-	SHA. Returns an empty string when the head or fingerprint is malformed.
+	older support version, and feeds the non-retryable cap re-arm (#6911); it
+	is omitted when ``support_sha`` is not a 40-hex SHA. Returns an empty
+	string when the head or fingerprint is malformed.
 	"""
 	head = str(head_sha or "").strip().lower()
 	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
@@ -2789,7 +2847,15 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 	return markers
 
 
-def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> dict[str, Any]:
+def count_identical_failures(
+	comments: Iterable[dict[str, Any]],
+	*,
+	head_sha: str,
+	author_login: str,
+	support_sha: str | None = None,
+	current_support_sha: str = "",
+	max_rearms: int = DEFAULT_FAILURE_CAP_MAX_REARMS,
+) -> dict[str, Any]:
 	"""Count the trailing identical failures on ``head_sha``.
 
 	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
@@ -2804,6 +2870,15 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
 
+	``support`` is the newest counted marker's ``support=`` value. When the
+	support filter leaves no counted marker but the newest trusted markers of
+	any support version are a non-retryable stop, that older stop is reported
+	instead (with ``current_support_sha`` only), so the bound applies. ``rearm``
+	(#6911) is true only for a non-retryable result when ``current_support_sha``
+	is a valid SHA that no trusted marker for the head records yet and fewer
+	than ``max_rearms`` distinct support SHAs are recorded for the head; an
+	invalid current SHA or ``max_rearms <= 0`` never re-arms.
+
 	With a valid ``support_sha`` (the verified review-support SHA of the
 	evaluating run, issue #6625), failure and cap markers whose ``support``
 	field is missing or different come from an older support version: they are
@@ -2815,19 +2890,35 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
-	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	result: dict[str, Any] = {
+		"count": 0,
+		"fp": "",
+		"reason": "",
+		"cap_applied": False,
+		"non_retryable": False,
+		"support": "",
+		"rearm": False,
+	}
 	if not head or not author:
 		return result
+	recorded_supports: set[str] = set()
 	for comment in ordered:
 		if _comment_author(comment) != author:
 			continue
-		cap_body = sanitize_text(comment.get("body"))
+		body = sanitize_text(comment.get("body"))
 		if any(
 			fields.get("head", "").lower() == head and (not support or fields.get("support", "").lower() == support)
-			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(cap_body))
+			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body))
 		):
 			result["cap_applied"] = True
-			break
+		for failure_fields in (_marker_fields(match) for match in _FAILURE_MARKER_RE.finditer(body)):
+			recorded = failure_fields.get("support", "").lower()
+			# Outage markers never count (#6633), so they must not spend a
+			# re-arm slot either: the resolver never ran under that support.
+			if failure_fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				continue
+			if failure_fields.get("head", "").lower() == head and is_valid_sha(recorded):
+				recorded_supports.add(recorded)
 	seen_runs: set[str] = set()
 	skip_paired_summary = False
 	for comment in reversed(ordered):
@@ -2852,6 +2943,8 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			if not result["fp"]:
 				result["fp"] = fields["fp"]
 				result["reason"] = fields.get("reason") or "unknown"
+				support_field = fields.get("support", "").lower()
+				result["support"] = support_field if is_valid_sha(support_field) else ""
 			elif fields["fp"] != result["fp"]:
 				break
 			result["count"] += 1
@@ -2868,6 +2961,33 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				continue
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
+	current_support = str(current_support_sha or "").strip().lower()
+	fallback_cap_applied = False
+	if support and is_valid_sha(current_support) and result["count"] == 0:
+		# #6911: the support filter above hides a non-retryable stop recorded
+		# under an older (or no) support version. For the re-arm decision the
+		# newest trusted markers of any support version are read, so the
+		# per-head bound below applies instead of an unbounded fresh count.
+		older = count_identical_failures(ordered, head_sha=head, author_login=author)
+		if older["non_retryable"]:
+			for key in ("count", "fp", "reason", "support", "non_retryable"):
+				result[key] = older[key]
+			fallback_cap_applied = bool(older["cap_applied"])
+	try:
+		rearm_limit = int(max_rearms)
+	except (TypeError, ValueError):
+		rearm_limit = 0
+	result["rearm"] = (
+		result["non_retryable"]
+		and is_valid_sha(current_support)
+		and current_support not in recorded_supports
+		and len(recorded_supports) < rearm_limit
+	)
+	if fallback_cap_applied and not result["rearm"]:
+		# The older stop was already capped (under an older support SHA): keep
+		# reporting it so the gate does not re-post the cap once the bound is
+		# spent, one comment / label / heal report per new support commit.
+		result["cap_applied"] = True
 	return result
 
 
@@ -3892,13 +4012,22 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
 		raise ValueError("comments JSON must be a list")
-	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
+	result = count_identical_failures(
+		comments,
+		head_sha=args.head_sha,
+		author_login=args.author_login,
+		support_sha=args.support_sha or None,
+		current_support_sha=args.current_support_sha,
+		max_rearms=args.max_rearms,
+	)
 	sys.stdout.write(f"count={int(result['count'])}\n")
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
+	sys.stdout.write(f"rearm={'true' if result['rearm'] else 'false'}\n")
+	sys.stdout.write(f"prior_support={safe_token(result['support'], 40)}\n")
 	newest_reason = newest_trusted_failure_reason(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
 	sys.stdout.write(f"newest_reason={safe_token(newest_reason) if newest_reason else ''}\n")
 	return 0
@@ -4112,6 +4241,10 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
 						merged[key].append(item)
 		_write_json(merged)
+	elif args.operation == "check-marker":
+		result = check_heal_scope_marker_file(args.marker_file)
+		_write_json(result)
+		return 0 if result["status"] == "valid" else 1
 	elif args.operation == "verify":
 		data = _load_json_file(args.input_json)
 		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
@@ -4489,18 +4622,27 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
-	p.add_argument("--support-sha", default="", help="verified review-support SHA; recorded as support= in the marker (issue #6625)")
+	p.add_argument(
+		"--support-sha",
+		default=os.environ.get("AUTOFIX_FAILURE_SUPPORT_SHA", ""),
+		help="verified review-support SHA recorded as support= in the marker (issues #6625, #6911); defaults to AUTOFIX_FAILURE_SUPPORT_SHA",
+	)
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / newest_reason= for the trailing identical failures on a head")
+	p = sub.add_parser(
+		"autofix-identical-failure-count",
+		help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / rearm= / prior_support= / newest_reason= for the trailing identical failures on a head",
+	)
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
 	p.add_argument("--support-sha", default="", help="verified review-support SHA; markers from other support versions are ignored (issue #6625)")
+	p.add_argument("--current-support-sha", default="", help="verified review-support commit; a non-retryable cap re-arms once per new SHA (#6911)")
+	p.add_argument("--max-rearms", type=int, default=DEFAULT_FAILURE_CAP_MAX_REARMS)
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
 	p = sub.add_parser("non-retryable-route", help="Decide whether a provenance-verified autofix_failure report is non-retryable; prints JSON with the rendered PR comment")
@@ -4573,8 +4715,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_route)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests"))
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests", "check-marker"))
 	p.add_argument("--log-files", nargs="*")
+	p.add_argument("--marker-file", default="")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
 	p.add_argument("--checkout", default=".")

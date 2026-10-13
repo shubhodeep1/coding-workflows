@@ -116,6 +116,7 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}" in wf
 	assert "SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}" in wf
 	assert "SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}" in wf
+	assert "VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}" in wf
 	assert "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}" in wf
 	assert "for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do" in wf
 	assert "_templates/mode-judge-security-pass-exhaustion.txt" in wf
@@ -163,7 +164,7 @@ def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	step = wf[step_start:step_end]
 	assert "steps.find_tracking.outputs.has_work != 'true'" in step
 	assert "github.repository == 'shubhodeep1/coding-workflows'" in step
-	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in step
+	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert 'STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"' in step
 	assert 'run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh' in step
 	assert 'if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then' in poller
@@ -184,7 +185,7 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
 	assert "TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}" in step
 	assert "TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}" in step
-	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in step
+	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert 'PYTHONDONTWRITEBYTECODE: "1"' in step
 	assert "run: bash scripts/orchestrate_poll_process.sh" in step
 	for name, default in (

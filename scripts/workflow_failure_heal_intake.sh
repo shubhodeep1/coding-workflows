@@ -44,9 +44,11 @@
 #          (label ai:workflow-heal, `Target branch: stable` so the fix is a
 #          hotfix on the stable line; a failed release run targets the branch it
 #          failed on; a failed review/autofix run on a pull request in this
-#          repo targets that pull request's head branch, because the run
-#          executed the PR's own workflow code — falling back to stable when
-#          the branch no longer exists)
+#          repo targets that pull request's head branch only when the run
+#          staged the PR's own scripts (script_ref == head SHA), falling back
+#          to stable when the branch no longer exists; otherwise the run hit
+#          the shared workflow support and the issue carries no Target
+#          branch, so the fix ships on the default branch)
 #        consumer-app-defect           -> issue in the source repository
 #        consumer-config               -> Telegram ERROR + comment, no issue
 #        transient                     -> Telegram DEBUG + comment, no issue
@@ -94,6 +96,11 @@
 #                                         repository.default_branch; empty rejects CI runs)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
+#   WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED  "false" (exact value) files workflow-defect /
+#                                         inconclusive / base-self-inflicted / consumer-app-defect
+#                                         heal issues even when the
+#                                         intake-rendered scope marker is missing or invalid; default
+#                                         true refuses to file them (skip reason=scope_marker_unresolved)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
 #                                         OIDC identity; default "false" (transition mode: they
 #                                         are accepted after the binding checks). A report that
@@ -107,6 +114,15 @@
 #                                         set by the workflow's materialize step
 #   WORKFLOW_HEAL_OIDC_JWKS_FILE          test hook: read the JWKS from this file instead of
 #                                         fetching it (default empty)
+#   HEAL_INTAKE_SCOPE_GUARD_ENABLED       default "false": the intake composes the heal issue,
+#                                         logs `skip reason=scope_guard_disabled` and creates
+#                                         no issue or outcome comment (#6798 / #6871 operator
+#                                         step pending; SELF_REPO heal labels are still ensured). Only
+#                                         "true" (any letter case) enables issue creation, and
+#                                         then only after the composed body's
+#                                         ai:workflow-heal-scope:v1 marker verifies; a missing
+#                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
+#                                         sends a CRITICAL alert and exits nonzero.
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -145,6 +161,12 @@ REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json
 TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
 SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
 SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
+# Only the exact value "false" disables the pre-filing scope-marker check, so
+# a typo keeps the guard on (fail closed).
+SCOPE_MARKER_GUARD_ENABLED="${WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED:-true}"
+# Heal issue creation gate (#6871): off by default, fail closed. See
+# _heal_intake_scope_guard_permits_create.
+SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -414,7 +436,9 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 	ISSUE_URL="$(_pf '.issue_url // ""')"
 	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
 	if [ "${REPORT_AUTH}" = "absent" ]; then
-		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# DEBUG: the report is processed normally and the daily wrapper sync
+		# (update_workflows.yml) brings the consumer's wrappers up to date.
+		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
 	fi
 else
 	log "report_auth=event reason=workflow_run_event source=${SOURCE_REPO} kind=${SOURCE_KIND}"
@@ -1426,6 +1450,49 @@ _git_fetch_consumer_scope_ref()
 		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
 }
 
+# Gate in front of the only heal issue-create call (#6871). With
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED off (the default) it ends the intake with
+# exit 0 before the issue-create writes, so no heal issue, target-repo label,
+# outcome comment or "created" alert happens (the ai:workflow-heal /
+# ai:workflow-heal-escalated labels in SELF_REPO are still ensured earlier,
+# as for every report). With it on it re-verifies the composed body's
+# ai:workflow-heal-scope:v1 marker through the same `heal-scope verify` the
+# implement preflight uses (author / label / edit checks are satisfied
+# synthetically: the issue does not exist yet, so only the marker shape is
+# checked) and refuses creation, fail closed, on anything but `verified`.
+_heal_intake_scope_guard_permits_create()
+{
+	local scope_guard_repo="$1" scope_guard_body_file="$2" scope_guard_labels="$3" scope_guard_target_branch="${4:-}"
+	local scope_guard_input="${RUNTIME_DIR}/scope_guard_input.json" scope_guard_status=""
+	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
+		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+		fi
+		exit 0
+	fi
+	if [ ! -s "${scope_guard_body_file}" ]; then
+		# Name the cause: a missing/empty composed body is not a marker problem.
+		scope_guard_status="body_missing"
+	elif jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
+		'{body: $body, author_login: "heal-intake-precreate", pipeline_login: "heal-intake-precreate", labels: [$label], last_edited_at: null}' \
+		> "${scope_guard_input}" 2>/dev/null; then
+		scope_guard_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_PY}" heal-scope verify --input-json "${scope_guard_input}" 2>/dev/null \
+			| jq -r '.status // empty' 2>/dev/null || true)"
+	fi
+	rm -f "${scope_guard_input}"
+	if [ "${scope_guard_status}" = "verified" ]; then
+		log "scope_guard outcome=verified repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+		return 0
+	fi
+	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
+	echo "::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}" >&2
+	log "error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+	tg_send_msg "Workflow failure heal refused to open an issue in ${scope_guard_repo} for ${SOURCE_LABEL}: the scope marker could not be verified (${scope_guard_status})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+	return 1
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
@@ -1469,6 +1536,28 @@ _open_issue()
 		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
 	fi
 	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
+	# Fail closed on an unresolved scope (#7059): an issue the heal implementer
+	# must fix is refused by implement preflight without a valid intake-authored
+	# marker (#6866 was filed with an empty one). consumer-app-defect issues carry
+	# the same heal label and preflight, so they are checked too. Check it with the same parser
+	# implement uses before filing; nothing is persisted before this point, so
+	# the next report of this fingerprint retries.
+	if [ "${SCOPE_MARKER_GUARD_ENABLED}" != "false" ]; then
+		case "${CLASSIFICATION}" in
+			workflow-defect|inconclusive|base-self-inflicted|consumer-app-defect)
+				local scope_check_json="" scope_check_status="unknown" scope_check_rc=0
+				scope_check_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${scope_marker_file}" 2>/dev/null)" || scope_check_rc=$?
+				scope_check_status="$(jq -r '.status // "unknown"' <<< "${scope_check_json}" 2>/dev/null || echo unknown)"
+				[[ "${scope_check_status}" =~ ^[a-z_]{1,20}$ ]] || scope_check_status="unknown"
+				if [ "${scope_check_rc}" -ne 0 ] || [ "${scope_check_status}" != "valid" ]; then
+					[ "${scope_check_status}" != "valid" ] || scope_check_status="unknown"
+					log "skip reason=scope_marker_unresolved fp=${FP} classification=${CLASSIFICATION} status=${scope_check_status} source=${SOURCE_LABEL}"
+					tg_send_msg "Workflow failure heal refused to file an issue without a valid intake-authored scope marker (intake defect, status ${scope_check_status}) for ${SOURCE_LABEL} (classification ${CLASSIFICATION}, fingerprint ${FP})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+					return 1
+				fi
+				;;
+		esac
+	fi
 	rm -f "${title_file}" "${body_file}"
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${PAYLOAD_FILE}" \
@@ -1491,14 +1580,20 @@ _open_issue()
 	fi
 	local title
 	title="$(head -1 "${title_file}")"
+	local issue_label_names="${HEAL_LABEL}"
+	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
+		# Same lineage convention as the review-blocked judge's
+		# merge_with_followup issues: the orchestrator treats it as a child.
+		label_args+=(--label "ai:orchestrator-managed")
+		issue_label_names="${issue_label_names},ai:orchestrator-managed"
+	fi
+	# Nothing below this gate may run unless it permits creation (#6871).
+	_heal_intake_scope_guard_permits_create "${repo}" "${body_file}" "${issue_label_names}" "${target_branch}" || return 1
 	if [ "${repo}" != "${SELF_REPO}" ]; then
 		ensure_label_exists "${HEAL_LABEL}" "${repo}" || true
 	fi
 	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
-		# Same lineage convention as the review-blocked judge's
-		# merge_with_followup issues: the orchestrator treats it as a child.
 		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
-		label_args+=(--label "ai:orchestrator-managed")
 	fi
 	local issue_url
 	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>/dev/null || echo '')"
@@ -1519,14 +1614,24 @@ case "${CLASSIFICATION}" in
 		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
-		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
-			# Review/autofix stages support scripts from SCRIPT_REF, not
-			# necessarily this PR's head. Only a verified support ref on main
-			# (or stable) redirects the fix; an unknown ref retains the PR-head
-			# target instead of guessing a branch from untrusted report prose.
-			TARGET_BRANCH="${HEAD_BRANCH}"
-			TARGET_BRANCH_SOURCE="source_pr_head"
-			if [ "${PAYLOAD_SCRIPT_REF}" = stable ]; then
+		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+			# A review/autofix run in this repo normally executes the verified
+			# workflow-support commit (main's shared scripts), not the pull
+			# request's own copies: PR-head scripts are review data. A defect in
+			# that shared code must be fixed on the default branch; aiming the
+			# fix at the blocked PR's head branch strands it there (issue #6623
+			# was filed against ai/issue-5152 and could not be planned). Only a
+			# run that provably staged the PR head's own scripts (script_ref
+			# equal to the PR head SHA) routes the fix to that head branch.
+			# A verified support ref on stable (or a SHA on main) redirects the
+			# fix to that branch (`support_ref`). Otherwise no Target-branch
+			# header is written and the issue follows the default branch
+			# (`shared_workflow`), instead of guessing a branch from untrusted
+			# report prose.
+			if [ -n "${HEAD_BRANCH}" ] && [[ "${PAYLOAD_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${PAYLOAD_SCRIPT_REF}" = "${HEAD_SHA}" ]; then
+				TARGET_BRANCH="${HEAD_BRANCH}"
+				TARGET_BRANCH_SOURCE="source_pr_head"
+			elif [ "${PAYLOAD_SCRIPT_REF}" = stable ]; then
 				TARGET_BRANCH=stable
 				TARGET_BRANCH_SOURCE=support_ref
 			elif [[ "${PAYLOAD_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${PAYLOAD_SCRIPT_REF}" != "${HEAD_SHA}" ] \
@@ -1534,6 +1639,9 @@ case "${CLASSIFICATION}" in
 				&& git merge-base --is-ancestor "${PAYLOAD_SCRIPT_REF}" refs/remotes/origin/main 2>/dev/null; then
 				TARGET_BRANCH=main
 				TARGET_BRANCH_SOURCE=support_ref
+			else
+				TARGET_BRANCH=""
+				TARGET_BRANCH_SOURCE="shared_workflow"
 			fi
 		fi
 		# A consumer pinned to a release commit that the default heal target
@@ -1563,7 +1671,7 @@ case "${CLASSIFICATION}" in
 					;;
 			esac
 		fi
-		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
+		if [ -n "${TARGET_BRANCH}" ] && ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
 				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
 				TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
@@ -1584,6 +1692,8 @@ case "${CLASSIFICATION}" in
 			HOTFIX_NOTE=" on this pull request's own branch \`${TARGET_BRANCH}\`"
 		elif [ -n "${TARGET_BRANCH}" ]; then
 			HOTFIX_NOTE=" as a hotfix on \`${TARGET_BRANCH}\`"
+		elif [ "${TARGET_BRANCH_SOURCE}" = "shared_workflow" ]; then
+			HOTFIX_NOTE=" on the default branch, because the failing code is the shared workflow support this pull request's review ran, not this pull request's own changes"
 		fi
 		{
 			echo "<!-- workflow-failure-heal:outcome -->"
