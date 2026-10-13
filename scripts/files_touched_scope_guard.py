@@ -667,7 +667,10 @@ _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 _PLAN_GRANT_ROOT_FILE_RE = re.compile(
-	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:md|markdown|txt|json|ya?ml|toml|cfg|ini|py|sh|js|mjs|cjs|ts|tsx|jsx|lock|sql|html|css)"
+	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:md|markdown|txt|json|ya?ml|toml|cfg|ini|py|sh|js|mjs|cjs|ts|tsx|jsx|lock|sql|html|css"
+	# Root manifests and sources of other ecosystems (go.mod, go.sum, main.go,
+	# build.rs, build.gradle, pom.xml): a dropped file would be left out of the grant.
+	r"|mod|sum|go|rs|rb|java|kt|gradle|xml|properties)"
 	r"|\.(?:gitignore|gitattributes|editorconfig)|Makefile|Dockerfile)$")
 # Extensionless file names accepted as the last segment of a grant path. Any
 # other extensionless (or `.d`) last segment may be a directory, and a

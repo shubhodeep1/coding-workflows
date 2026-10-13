@@ -1214,7 +1214,8 @@ def test_extract_plan_file_paths_keeps_exact_files_from_the_files_section() -> N
 	for bad in ("scripts/", "/etc/x", "a//b.py", "scripts/../x.sh", "scripts/a b.sh", "-rf/x", "x.y",
 			"https://example.com/a.py", "scripts/*.sh", "`"):
 		assert guard._plan_grant_path(bad) == "", bad
-	for good in ("Makefile", ".gitignore", "agents.md", "src/pkg/__init__.py", "scripts/a+b.py"):
+	for good in ("Makefile", ".gitignore", "agents.md", "src/pkg/__init__.py", "scripts/a+b.py",
+			"go.mod", "go.sum", "main.go", "build.rs", "pom.xml", "build.gradle"):
 		assert guard._plan_grant_path(good) == good, good
 	# Underscores are part of a name, never stripped as markdown emphasis.
 	for good in ("__init__.py", "__main__.py", "_config.yml", "LICENSE", "scripts/LICENSE", "scripts/.hidden"):
