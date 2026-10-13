@@ -24509,6 +24509,28 @@ def test_judge_checkout_fallback_keeps_the_targets_tracked_scripts() -> None:
 		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced kept_target=1" in out, out
 
 
+def test_security_pass_judge_checkout_keeps_the_trusted_support_scripts() -> None:
+	"""The security pass runs scripts/security_audit.sh from this checkout with
+	the poller's credentials, so its forced checkout keeps the poller's staged
+	support files instead of the audited branch's copies."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+		func = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "prepare_tracking_judge_checkout() {")
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "main copy\n", out
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced_overlay_kept kept_target=0 reason=trusted_support" in out, out
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}" "true"' in poller
+	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"' in poller
+
+
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	"""Regression for PR #3991 / issue #3990: stall recovery closed a
 	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``

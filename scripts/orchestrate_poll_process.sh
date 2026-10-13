@@ -5609,6 +5609,11 @@ prepare_tracking_judge_checkout() {
   local default_branch="$2"
   local checkout_mode="${3:-api-verified}"
   local target_ref_override="${4:-}"
+  # Optional 5th argument: "true" keeps the poller's trusted support files
+  # after a forced checkout. The security pass passes it because it executes
+  # scripts/security_audit.sh and its helpers from this checkout with the
+  # poller's credentials, so the audited branch must not supply them.
+  local keep_trusted_support="${5:-false}"
   local target_branch="${default_branch:-main}"
   local target_ref=""
   local checkout_succeeded="false"
@@ -5679,12 +5684,14 @@ prepare_tracking_judge_checkout() {
         # all of scripts/ then showed the judge the poller's own copies
         # beside the target's tests, and project #7126's judge filed
         # restore issues #7296, #7306 and #7307 for code the branch had.
-        _judge_overlaid="$(git diff --name-only -- scripts prompts .github/ai 2>/dev/null | wc -l | tr -d ' ')"
-        if git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
+        if [ "${keep_trusted_support}" = "true" ]; then
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=trusted_support"
+        elif _judge_overlaid="$(git diff --name-only -- scripts prompts .github/ai 2>/dev/null | wc -l | tr -d ' ')" \
+          && git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
           echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced kept_target=${_judge_overlaid:-0}"
         else
           echo "::warning::Judge context for tracking #${TRACKING_NUM:-unknown}: could not put back the target's tracked scripts/prompts after the forced checkout; the judge may see the poller's copies."
-          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0"
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=checkout_failed"
         fi
       else
         rm -rf "${_wf_backup}"
@@ -7752,11 +7759,11 @@ run_security_pass_inline() {
   done
 
   if [ -n "${verified_analysis_ref}" ]; then
-    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
+    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}" "true"; then
       security_pass_fail_closed "engine_unavailable" "The verified final-PR checkout could not be prepared for read-only analysis." "${prior_security_status}"
       return 1
     fi
-  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only"; then
+  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"; then
     security_pass_fail_closed "engine_unavailable" "The composed project checkout could not be prepared for read-only analysis." "${prior_security_status}"
     return 1
   fi
