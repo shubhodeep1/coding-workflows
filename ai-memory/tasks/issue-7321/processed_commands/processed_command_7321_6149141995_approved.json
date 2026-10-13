@@ -5,13 +5,27 @@
   "entry_id": "processed_command_7321_6149141995_approved",
   "issue_number": 7321,
   "metadata": {
+    "branch": "ai/issue-7321",
+    "changed_files": [
+      "agents.d/7126-security-pass-audit-tree.md",
+      "changelog.d/7126-security-pass-audits-integration-tree.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_noop_suspicious_recovery.py",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_security_audit_workflow_contract.py"
+    ],
+    "issue_number": 7321,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7321",
+    "pr_number": 7322,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7322",
+    "run_attempt": "1",
+    "run_id": "38422859528",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38422859528"
   },
   "run_attempt": 1,
   "run_id": "38422859528",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-13T15:34:25Z",
+  "status": "completed",
+  "timestamp": "2026-10-13T16:12:03Z",
   "workflow": "implement"
 }
