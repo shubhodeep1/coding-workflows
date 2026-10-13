@@ -186,7 +186,9 @@ class ReleaseCiGateTest(unittest.TestCase):
 			"pending_poll",
 			1,
 			r"outcome=waiting reason=pending.*outcome=fail reason=wait_timeout .*last_state=pending",
-			RELEASE_CI_GATE_WAIT_SECS="2",
+			# 3s, not 2s: waited_secs uses whole-second `date +%s`, so a slow
+			# first poll could otherwise time out before logging `waiting`.
+			RELEASE_CI_GATE_WAIT_SECS="3",
 		)
 		self.assertGreaterEqual(self._check_reads("pending_poll"), 2)
 
