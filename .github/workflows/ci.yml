@@ -590,7 +590,8 @@ jobs:
       - name: Clarify sandbox base image pre-seed tests (#6985)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
+          # The fake docker lives in a temp dir, so TMPDIR must allow executables.
+          TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Single-issue security pass tests (port P1)
         run: |
