@@ -75,6 +75,7 @@ PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([1-9][0-9]{0,9}
 FAILING_CHECK_RE = re.compile(r"^- \*\*Failing check:\*\* `([^`\n]+)` \(conclusion: `[^`\n]*`\)\s*$")
 CHECK_RUN_ID_RE = re.compile(r"^- \*\*Check run id:\*\* `([1-9][0-9]{0,19})`\s*$")
 CHECK_DETAILS_RE = re.compile(r"^- \*\*Check details:\*\* (\S*)\s*$")
+HEAD_SHA_RE = re.compile(r"^- \*\*Head SHA:\*\* `([0-9a-f]{40})`\s*$")
 RESOLVED_MARKER_RE = re.compile(
 	r"^<!-- ai:check-triage-resolved:v1 issue=([1-9][0-9]*) pr=([1-9][0-9]*) sha=([0-9a-f]{40}) -->$"
 )
@@ -177,6 +178,7 @@ def parse_triage_issue(issue: Any, repo: str = "") -> dict[str, Any] | None:
 		check_name = _one(FAILING_CHECK_RE, "- **Failing check:**", True)
 		check_run_id = _one(CHECK_RUN_ID_RE, "- **Check run id:**", False)
 		details_url = _one(CHECK_DETAILS_RE, "- **Check details:**", True)
+		head_sha = _one(HEAD_SHA_RE, "- **Head SHA:**", False)
 	except ValueError:
 		return {"malformed": "header_fields"}
 	run_id = None
@@ -192,6 +194,7 @@ def parse_triage_issue(issue: Any, repo: str = "") -> dict[str, Any] | None:
 		"check_run_id": int(check_run_id) if check_run_id else None,
 		"details_url": details_url,
 		"run_id": run_id,
+		"head_sha": head_sha,
 	}
 
 
@@ -314,16 +317,20 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			run = None
 		if not isinstance(run, dict):
 			# Without run metadata, list the run's jobs for the traceback only
-			# when every job's own fields bind it to this run, workflow and PR
-			# head (the readable path's identity check); else post nothing.
-			# The result stays unverified either way.
+			# when every job's own fields bind it to this run, workflow and a
+			# known head: the failed run's head from the trusted triage header
+			# (the PR may have advanced since) or the PR's current head. Else
+			# post nothing. The result stays unverified either way.
 			try:
 				fallback_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"]))
 			except GhApiError:
 				fallback_jobs = []
-			pr_head_sha = head.get("sha") if isinstance(head.get("sha"), str) and SHA_RE.match(head.get("sha")) else None
-			if fallback_jobs and pr_head_sha and all(
-				job.get("run_id") == run_id and job.get("workflow_name") == triage["check_name"] and job.get("head_sha") == pr_head_sha
+			known_heads = {
+				sha for sha in (triage.get("head_sha"), head.get("sha"))
+				if isinstance(sha, str) and SHA_RE.match(sha)
+			}
+			if fallback_jobs and known_heads and all(
+				job.get("run_id") == run_id and job.get("workflow_name") == triage["check_name"] and job.get("head_sha") in known_heads
 				for job in fallback_jobs
 			):
 				verdict["failed_jobs"] = _failed_jobs(fallback_jobs)

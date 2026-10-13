@@ -435,12 +435,25 @@ def test_unreadable_run_still_posts_traceback_from_jobs(tmp_path, monkeypatch):
 		result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
 		assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
 
+	# The PR advanced after the failed run (an autofix push): the jobs still
+	# bind through the failed run's Head SHA in the trusted triage header.
+	moved_pr = _pr()
+	moved_pr["head"]["sha"] = "7" * 40
+	routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"), rf"repos/{REPO}/pulls/{PR}": moved_pr, jobs_path: _bound_jobs()})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["traceback_posted"] == [FAILED_JOB_ID]
+
+	# An unreadable PR still binds through the header SHA; without a header
+	# SHA and without the PR there is no known head, so nothing is posted.
 	routes = _routes(**{
 		rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"),
 		rf"repos/{REPO}/pulls/{PR}": mod.GhApiError("rc=1"),
 		jobs_path: _bound_jobs(),
 	})
 	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["traceback_posted"] == [FAILED_JOB_ID]
+	no_head_issue = _issue(body=_body().replace(f"- **Head SHA:** `{PR_HEAD_SHA}`\n", ""))
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=no_head_issue, routes=routes)
 	assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
 
 	routes = _routes(**{
