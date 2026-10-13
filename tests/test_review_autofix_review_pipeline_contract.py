@@ -7526,7 +7526,7 @@ def test_dependency_install_budget_exhausted_skips_remaining_steps() -> None:
 
 def test_review_sandbox_bounded_install_flag_contract() -> None:
 	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
-	assert '"${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}"' in helper
+	assert '"${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-true}"' in helper
 	assert 'bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"' in helper
 	assert '--env "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=${bounded_deps_enabled}"' in helper
 	assert '--env "REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=${bounded_deps_budget}"' in helper
@@ -7537,7 +7537,7 @@ def test_review_sandbox_bounded_install_flag_contract() -> None:
 	assert 'review_untrusted_workspace.py" refresh "${workspace}"' in helper
 	block = _step_block("Install project dependencies (best-effort)")
 	assert (
-		"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'false' }}"
+		"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'true' }}"
 		in block
 	)
 	assert (
@@ -7548,19 +7548,24 @@ def test_review_sandbox_bounded_install_flag_contract() -> None:
 
 def test_review_sandbox_bounded_install_host_normalization() -> None:
 	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
-	start = helper.index("\tbounded_deps_enabled=false\n")
+	start = helper.index("\tbounded_deps_enabled=true\n")
 	end_marker = '\tbounded_deps_budget="$((10#${bounded_deps_budget}))"\n'
 	snippet = helper[start:helper.index(end_marker) + len(end_marker)]
 	snippet += 'printf "%s %s\\n" "${bounded_deps_enabled}" "${bounded_deps_budget}"\n'
+	# On by default since #6793; `false`/0/no/off turn it off and an
+	# unrecognised value turns it off with a warning.
 	cases = [
-		({}, "false 600", False),
+		({}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": ""}, "true 600", False),
 		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "TRUE"}, "true 600", False),
-		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "maybe"}, "false 600", False),
-		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0300"}, "false 300", False),
-		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "abc"}, "false 600", True),
-		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0"}, "false 600", True),
-		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "9999"}, "false 600", True),
-		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "99999999999999999999"}, "false 600", True),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "OFF"}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "maybe"}, "false 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0300"}, "true 300", False),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "abc"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "9999"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "99999999999999999999"}, "true 600", True),
 	]
 	for extra, expected, warns in cases:
 		env = _git_clean_env()
@@ -7918,6 +7923,29 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	assert gate_job.index("- name: Resolve trusted review support commit") < gate_job.index("- name: Checkout fingerprint cap helper")
 	assert gate_job.index("- name: Verify fingerprint cap support identity") < gate_job.index("- name: Evaluate review gate")
 	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
+
+
+def test_fingerprint_cap_support_sha_rearm_wiring() -> None:
+	"""#6911: the verified support SHA reaches the cap decision and every marker."""
+	verify = _step_block("Verify fingerprint cap support identity")
+	assert 'echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"' in verify
+	assert verify.index("FINGERPRINT_CAP_SUPPORT_VERIFIED=true") < verify.index("FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}")
+	gate = _step_block("Evaluate review gate")
+	assert "if grep -q 'current-support-sha' \"${fingerprint_cap_helper}\"; then" in gate
+	assert 'fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")' in gate
+	assert '"${fingerprint_cap_extra_args[@]}"' in gate
+	assert '[[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in gate
+	rearm = gate.index("AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER}")
+	assert rearm < gate.index('SKIP_REASON="fingerprint_cap"')
+	assert "prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}" in gate
+	assert """awk -F= '$1 == "prior_support" { print $2 }'""" in gate
+	agent = _job_block("codex-agent")
+	assert "AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in agent
+	cap_job = _job_block("fingerprint-cap-block")
+	assert "REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in cap_job
+	assert 'if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in cap_job
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in cap_job
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in _job_block("gate")
 
 
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
