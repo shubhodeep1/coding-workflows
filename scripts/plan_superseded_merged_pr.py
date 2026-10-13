@@ -327,8 +327,9 @@ def render_superseded_comment(result: dict) -> str:
 		f"- Check: `{check}` (`success` on the final head)",
 		"",
 		"The pipeline closed this issue as not planned instead of planning edits to the pull request's former head branch. "
-		"If this is wrong, reopen the issue, replace the `ai:closed` label with `ai:planning`, and reply with `/answer`. To turn this check off, set the repository variable "
-		"`PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` to `false`.",
+		"Reopening the issue does not undo this: while the pull request stays merged with this check passing, the next planning run "
+		"closes it again. To plan it anyway, first set the repository variable `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` to `false`, "
+		"then reopen the issue, replace the `ai:closed` label with `ai:planning`, and reply with `/answer`.",
 		"",
 		f"{MARKER_PREFIX} pr={result['pr']} head={sha} -->",
 	])

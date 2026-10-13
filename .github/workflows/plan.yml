@@ -946,8 +946,16 @@ jobs:
               echo "PLAN_MERGED_PR_FACTS_FILE=${facts_file}" >> "$GITHUB_ENV"
               branch_ok() { [[ "$1" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] && [[ "$1" != *..* ]]; }
               if [ -n "${head_ref}" ] && [ "${PLAN_SUPERSEDE_RESOLVED_REF}" = "${head_ref}" ] && branch_ok "${base_ref}"; then
+                # "Stage workflow support files" installed support copies over
+                # tracked scripts/ and prompts/ files, so a plain checkout
+                # refuses when they differ between head and base. Save them,
+                # force the checkout, then put the staged copies back.
+                staged_tar="${RUNTIME_DIR}/plan_reroute_staged_support.tar"
                 if git fetch --quiet --depth 1 origin "refs/heads/${base_ref}" && \
-                  git checkout --quiet -B "${base_ref}" FETCH_HEAD; then
+                  { git diff -z --name-only HEAD; git ls-files -z --others --exclude-standard -- scripts prompts ai-memory; } | \
+                    tar --null --ignore-failed-read -cf "${staged_tar}" -T - 2>/dev/null && \
+                  git checkout --quiet -f -B "${base_ref}" FETCH_HEAD && \
+                  tar -xf "${staged_tar}"; then
                   echo "PLAN_REROUTED_REF=${base_ref}" >> "$GITHUB_ENV"
                   log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref} to=${base_ref}"
                 else

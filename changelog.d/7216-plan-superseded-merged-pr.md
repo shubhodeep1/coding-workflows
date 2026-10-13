@@ -9,4 +9,4 @@ Issue #7185 asked the pipeline to repair CI on PR #6976 after that PR had merged
 | Re-issue hops followed / issues read, at most | 4 / 8 |
 | API reads per qualifying issue | 1 identity, up to 8 issues, 1 PR, 1 or 2 check reads |
 
-What this means for operators: nothing to set. A closed issue can be reopened if the check was wrong; set `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED=false` to turn the check off.
+What this means for operators: nothing to set. Reopening a closed issue alone does not help, because the next planning run closes it again; to plan it anyway, set `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED=false` first, then reopen it.

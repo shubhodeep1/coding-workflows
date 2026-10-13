@@ -108,6 +108,8 @@ def test_7185_regression_reissue_of_merged_green_pr_is_superseded():
 	assert result["final_head_sha"] == HEAD_SHA
 	assert HEAD_BRANCH not in result["comment_body"]
 	assert f"<!-- ai:plan-superseded:v1 pr=6976 head={HEAD_SHA} -->" in result["comment_body"]
+	assert "Reopening the issue does not undo this" in result["comment_body"]
+	assert "first set the repository variable `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` to `false`" in result["comment_body"]
 	# Workflow-run triage: resolve the workflow from the details run, then the head's newest run.
 	assert any("actions/runs/123" in " ".join(call) for call in gh.calls)
 	assert any(f"actions/workflows/77/runs?head_sha={HEAD_SHA}" in " ".join(call) for call in gh.calls)
