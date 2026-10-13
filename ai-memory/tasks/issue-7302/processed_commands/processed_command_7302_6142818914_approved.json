@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7302_6142818914_approved",
   "issue_number": 7302,
   "metadata": {
+    "branch": "ai/issue-7302",
+    "changed_files": [
+      "changelog.d/7302-check-triage-resolution-ansi-job-logs.md",
+      "scripts/check_triage_resolution.py",
+      "tests/test_check_triage_resolution.py"
+    ],
+    "issue_number": 7302,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7302",
+    "pr_number": 7312,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7312",
+    "run_attempt": "1",
+    "run_id": "38378613585",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38378613585"
   },
   "run_attempt": 1,
   "run_id": "38378613585",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-13T09:47:43Z",
+  "status": "completed",
+  "timestamp": "2026-10-13T10:00:43Z",
   "workflow": "implement"
 }
