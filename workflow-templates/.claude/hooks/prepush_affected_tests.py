@@ -958,7 +958,15 @@ def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str, str]], s
 			bulk, tips, deletes = [], ["HEAD"], False
 		pushes.extend((directory, tip, "") for tip in tips)
 		pushes.extend((directory, "HEAD", f"bulk:{option}") for option in bulk)
-		if not tips and not bulk and not deletes:
+		# _push_targets drops tag and other non-branch refspecs (and `--tags`),
+		# so a push that mixes them with a branch must still ask: the tag can
+		# point at a commit the branch stamp does not cover.
+		arguments = [a for a in getattr(invocation, "arguments", []) if isinstance(a, str)]
+		mixed_non_branch = any(a in ("--tags", "--tag", "--ta") for a in arguments) or any(
+			not a.startswith("-") and (d := a.removeprefix("+").split(":", 1)[-1]).startswith("refs/") and not d.startswith("refs/heads/")
+			for a in arguments
+		)
+		if (not tips and not bulk and not deletes) or (tips and mixed_non_branch):
 			pushes.append((directory, "", "non_branch"))
 	if not pushes and not any(getattr(i, "subcommand", "") == "push" for i in invocations) and _UNPARSED_PUSH_RE.search(_QUOTED_WORD_RE.sub("''", command)):
 		return [(cwd, "HEAD", "")], ""

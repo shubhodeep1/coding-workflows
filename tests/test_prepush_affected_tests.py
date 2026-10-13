@@ -765,3 +765,14 @@ def test_hook_ignores_git_push_inside_quoted_text(tmp_path):
 	root = _repo(tmp_path, {"a.txt": ""})
 	assert _hook(_push(root, 'git commit -m "document git push behaviour"'), {"TMPDIR": str(tmp_path)}) == {}
 	assert _hook(_push(root, "echo 'git push'"), {"TMPDIR": str(tmp_path)}) == {}
+
+
+@pytest.mark.parametrize("command", ["git push origin main refs/tags/v1", "git push --tags origin main"])
+def test_hook_asks_for_mixed_branch_and_tag_pushes(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "tag", "v1")
+	_write(root, tmp_path, "pass")
+	assert _hook(_push(root, "git push origin main"), {"TMPDIR": str(tmp_path)}) == {}
+	out = _hook(_push(root, command), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "tags" in out["hookSpecificOutput"]["permissionDecisionReason"]
