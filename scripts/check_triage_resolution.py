@@ -311,8 +311,15 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		try:
 			run = _gh_api([f"repos/{repo}/actions/runs/{run_id}"])
 		except GhApiError:
-			return _fail("run_unreadable")
+			run = None
 		if not isinstance(run, dict):
+			# The run id comes from the trusted triage header (bound to this
+			# repository), so still list its failed jobs for the traceback;
+			# the result stays unverified either way.
+			try:
+				verdict["failed_jobs"] = _failed_jobs(_jobs_of(_gh_api([f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"])))
+			except GhApiError:
+				pass
 			return _fail("run_unreadable")
 		run_repo = (run.get("repository") or {}).get("full_name") if isinstance(run.get("repository"), dict) else None
 		run_prs = [item.get("number") for item in run.get("pull_requests") or [] if isinstance(item, dict)]

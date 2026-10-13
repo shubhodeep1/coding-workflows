@@ -413,6 +413,20 @@ def test_unreadable_pr_check_run_triage_still_posts_traceback(tmp_path, monkeypa
 	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
 
 
+def test_unreadable_run_still_posts_traceback_from_jobs(tmp_path, monkeypatch):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1")}))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "run_unreadable"
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert [(w["method"], w["path"]) for w in result["writes"]] == [("POST", f"repos/{REPO}/issues/{ISSUE}/comments")]
+
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": mod.GhApiError("rc=1"),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
+
+
 def test_details_url_for_another_repository_is_ignored(tmp_path, monkeypatch):
 	issue = _issue(body=_body(details=f"https://github.com/other/repo/actions/runs/{RUN_ID}"))
 	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue)
