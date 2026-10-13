@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:113, 121-122 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When `AUTO_MERGE_REQUIRED_CI_CHECK=none`, a cancelled required CI check can be superseded by a successful same-name check from another workflow.\n  WHY: The required-check list can still require `lint`, allowing `_pr_checks_completed` to authorize a merge without successful CI.\n- scripts/orchestrate_poll_process.sh:_summarize_final_merge_blockers | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The summary's lookup for `_pr_auto_merge_required_ci_check_name` leaves `summary_ci_name` as `\"none\"` because that function is not defined, so name-only supersession can omit a cancelled required check from the alert.\n  WHY: The gate can still block on the cancelled check while the summary marks it superseded by an unrelated workflow's newer same-name check, causing the alert to omit the real blocker.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:113, 121-122 | severity=high | confidence=4\n  PROBLEM: The cancellation safeguard treats a check name specially only when it matches `_pr_auto_merge_required_ci_check_name`. When `AUTO_MERGE_REQUIRED_CI_CHECK=none`, that function returns `none`, so a cancelled required `lint` run uses generic name-only supersession.\n  WHY: The required-check list is resolved independently by `_pr_required_check_names_for_base` and can still require `lint`. On an unprotected branch with `ORCH_FINAL_MERGE_REQUIRED_CHECKS=lint`, a cancelled CI `lint` followed by a successful `lint` from another workflow is treated as passing; `_pr_checks_completed` can then authorize a merge without successful CI.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:_summarize_final_merge_blockers | severity=low | confidence=3\n  PROBLEM: The summary calls `_pr_auto_merge_required_ci_check_name` to resolve the CI check name for the supersession rules, but this function is not defined in `scripts/pr_checks_lib.sh` (the diff adds no such function, and the library defines `_pr_required_check_names_for_base` instead). When the function is absent, `summary_ci_name` stays `\"none\"`, the CI-name branch of `PR_CHECKS_JQ_SUPERSEDE_DEFS` is skipped (`$ci != \"none\"` is false), and the summary falls back to plain name-only supersession. That is more permissive than the gate: a cancelled `lint` superseded by a newer `lint` from an unrelated workflow (for example `lint-pr-body-auto-close.yml` re-running on a PR body edit) is dropped from the alert text even though the gate would still block on it. The alert then posts `Blocking check-runs: unknown \u2014 see PR check-runs`, which is misleading when the gate's actual blocker is visible in the check-runs.\n  WHY: The gate refuses a merge because a cancelled required `lint` is not superseded (no same-run re-run, no bound CI run). The summary, using name-only supersession, marks that cancelled `lint` as superseded by the newer unrelated `lint` and returns an empty blocker list. The alert body omits the real blocker.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "46781bea74db3632d0b5b94b5173dc50d111d2282bebd24461bfc17681855640",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38336051976",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38336051976",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013024556_86c70193f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38336051976"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T02:45:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
