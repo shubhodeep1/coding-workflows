@@ -7535,7 +7535,29 @@ security_pass_exhaustion_judge() {
         SECURITY_PASS_JUDGE_OUTCOME=deferred
         return 0
       fi
-      poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      # The judge's read-only sandbox snapshots its working directory
+      # (_poller_rb_judge_sandbox_attempt: prepare-ephemeral requires PWD to be
+      # the snapshot workspace), so run it in the audit worktree to read the
+      # same tree the audit read.  Its trusted support still resolves from
+      # GITHUB_WORKSPACE, kept at the poller root.  One call site: a prepared
+      # worktree that cannot be entered defers the judge rather than letting
+      # it read the poller checkout the audit did not read.
+      local security_judge_dir="${PWD}"
+      local security_judge_support_root="${GITHUB_WORKSPACE:-${SECURITY_PASS_AUDIT_SUPPORT_ROOT:-${PWD}}}"
+      if [ -n "${SECURITY_PASS_AUDIT_WORKTREE:-}" ]; then
+        security_judge_dir="${SECURITY_PASS_AUDIT_WORKTREE}"
+        echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${head_sha} judge_workspace=audit_worktree"
+      fi
+      if ! pushd "${security_judge_dir}" >/dev/null 2>&1; then
+        echo '::warning::Security-pass judge workspace is unavailable; deferring to the next poll.' >&2
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        return 0
+      fi
+      GITHUB_WORKSPACE="${security_judge_support_root}" \
+        poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      if ! popd >/dev/null 2>&1; then
+        cd "${security_judge_support_root}" || { echo '::error::Cannot return to the poller root after the security-pass judge.' >&2; exit 1; }
+      fi
       if [ "${security_judge_rc}" -eq 77 ]; then
         _record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
         SECURITY_PASS_JUDGE_OUTCOME=deferred
@@ -7821,6 +7843,102 @@ sys.stdout.write("\n".join(lines) + "\n")
 PY
 }
 
+# Audit worktree for the project security pass.  prepare_tracking_judge_checkout
+# moves the poller's own checkout to the integration head, but when the staged
+# trusted support copies block a plain checkout it forces the checkout and then
+# restores the poller's support copies of scripts/ and prompts/ over the tree.
+# In this repository those copies are the default branch's, so the audit read
+# the default branch's helpers while its diff and fix-cycle hunks came from the
+# integration branch: project #6664 re-reported two findings that its branch
+# had already fixed (review_head_gate.sh, pr_checks_lib.sh), citing the
+# default branch's line numbers.  The audit now reads a clean detached worktree
+# of the audited head.  Every script it executes still comes from the trusted
+# support root (the poller's working directory); the worktree is only read, by
+# the model inside the read-only isolated snapshot.  No GitHub API calls.
+# SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED (default true): unset, empty or
+# true keeps it on, false turns it off, any other value turns it off with a
+# warning.  Logs SECURITY_PASS_AUDIT_TREE.
+SECURITY_PASS_AUDIT_WORKTREE=""
+SECURITY_PASS_AUDIT_SUPPORT_ROOT=""
+
+security_pass_audit_clean_worktree_enabled() {
+  case "$(printf '%s' "${SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    ''|true) return 0 ;;
+    false) return 1 ;;
+    *)
+      echo "::warning::SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED has an unrecognised value; the security pass audits the poller checkout in place. Use true or false." >&2
+      return 1
+      ;;
+  esac
+}
+
+# _security_pass_discard_audit_worktree_path <path> — fail-open removal of a
+# (possibly stale) audit worktree.  Run from the poller root.
+_security_pass_discard_audit_worktree_path() {
+  local audit_wt_path="${1:-}"
+  [ -n "${audit_wt_path}" ] || return 0
+  worktree_registry_deregister "$(basename -- "${audit_wt_path}")"
+  git worktree remove --force "${audit_wt_path}" >/dev/null 2>&1 || true
+  rm -rf -- "${audit_wt_path}" 2>/dev/null || true
+  git worktree prune >/dev/null 2>&1 || true
+  return 0
+}
+
+# security_pass_prepare_audit_worktree <head_sha> — check the audited head out
+# into ${RUNTIME_DIR}/security-pass-audit-wt-<tracking issue>, verify that its
+# HEAD is <head_sha> and that no tracked file differs, and export
+# SECURITY_PASS_AUDIT_WORKTREE / SECURITY_PASS_AUDIT_SUPPORT_ROOT.  Returns 1
+# (fail closed) on any failure, leaving both variables empty.
+security_pass_prepare_audit_worktree() {
+  local audit_head_sha="${1:-}" audit_wt_path audit_wt_head audit_wt_status audit_support_root
+  SECURITY_PASS_AUDIT_WORKTREE=""
+  SECURITY_PASS_AUDIT_SUPPORT_ROOT=""
+  if ! [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || ! [[ "${audit_head_sha}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || [[ "${RUNTIME_DIR:-}" != /* ]]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_head_sha:-none} outcome=failed reason=invalid_input"
+    return 1
+  fi
+  audit_support_root="$(pwd -P)"
+  audit_wt_path="${RUNTIME_DIR}/security-pass-audit-wt-${TRACKING_NUM}"
+  _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+  if [ -e "${audit_wt_path}" ] || [ -L "${audit_wt_path}" ]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=stale_path"
+    return 1
+  fi
+  if ! git worktree add --quiet --force --detach "${audit_wt_path}" "${audit_head_sha}" >/dev/null 2>&1; then
+    _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=worktree_add_failed"
+    return 1
+  fi
+  audit_wt_head="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${audit_wt_path}" rev-parse HEAD 2>/dev/null || true)"
+  if [ "${audit_wt_head}" != "${audit_head_sha}" ]; then
+    _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=head_mismatch"
+    return 1
+  fi
+  if ! audit_wt_status="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${audit_wt_path}" status --porcelain --untracked-files=no 2>/dev/null)" \
+    || [ -n "${audit_wt_status}" ]; then
+    _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=worktree_not_clean"
+    return 1
+  fi
+  worktree_registry_register "$(basename -- "${audit_wt_path}")" "${audit_wt_path}" "${audit_head_sha}" "tracking-${TRACKING_NUM}" "orchestrate-poll"
+  SECURITY_PASS_AUDIT_WORKTREE="$(cd "${audit_wt_path}" && pwd -P)"
+  SECURITY_PASS_AUDIT_SUPPORT_ROOT="${audit_support_root}"
+  echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=prepared"
+  return 0
+}
+
+# security_pass_remove_audit_worktree — fail-open, idempotent cleanup of the
+# audit worktree; clears SECURITY_PASS_AUDIT_WORKTREE.
+security_pass_remove_audit_worktree() {
+  local audit_wt_path="${SECURITY_PASS_AUDIT_WORKTREE:-}"
+  SECURITY_PASS_AUDIT_WORKTREE=""
+  SECURITY_PASS_AUDIT_SUPPORT_ROOT=""
+  [ -n "${audit_wt_path}" ] || return 0
+  _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+  return 0
+}
+
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -7929,6 +8047,17 @@ run_security_pass_inline() {
   if [ -z "${merge_base_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
     return 1
+  fi
+  # Audit a clean worktree of the audited head, not the poller checkout whose
+  # scripts/ and prompts/ may carry the restored support copies (see
+  # security_pass_prepare_audit_worktree).  The caller removes it.
+  if security_pass_audit_clean_worktree_enabled; then
+    if ! security_pass_prepare_audit_worktree "${current_head_sha}"; then
+      security_pass_fail_closed "engine_unavailable" "The audited integration head could not be checked out into a clean worktree." "${prior_security_status}"
+      return 1
+    fi
+  else
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} outcome=skipped reason=disabled"
   fi
 
   # Delta re-audit.  Every earlier audit of this project already covered the
@@ -8107,7 +8236,24 @@ run_security_pass_inline() {
     return 1
   fi
 
-  if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+  # The engine always runs from the trusted support root; with the audit
+  # worktree it runs in that worktree, so its REPO_ROOT and read-only snapshot
+  # are the audited head's files, and SECURITY_AUDIT_SUPPORT_DIR points its
+  # prompt, renderer, isolation helper and exclusions back at the support root.
+  local security_pass_engine_dir="${PWD}" security_pass_support_root="${PWD}"
+  local -a security_pass_engine_env=()
+  if [ -n "${SECURITY_PASS_AUDIT_WORKTREE:-}" ]; then
+    security_pass_engine_dir="${SECURITY_PASS_AUDIT_WORKTREE}"
+    security_pass_support_root="${SECURITY_PASS_AUDIT_SUPPORT_ROOT}"
+    # Pin the false-positive exclusion catalog to the trusted copy: from the
+    # worktree, security_audit.sh would otherwise prefer the audited branch's
+    # own scripts/security_audit_fp_exclusions.json.
+    security_pass_engine_env=(-u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
+      SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"
+      SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json")
+  fi
+  if ! ( cd "${security_pass_engine_dir}" && \
+    SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
@@ -8122,10 +8268,11 @@ run_security_pass_inline() {
     SECURITY_AUDIT_CLAUDE_REJECTED_OUT="${RUNTIME_DIR}/security_pass_claude_rejected_${TRACKING_NUM}.txt" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
     AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
-    bash scripts/codex_heartbeat.sh \
+    env ${security_pass_engine_env[@]+"${security_pass_engine_env[@]}"} \
+    bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+      -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}" ); then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -8373,12 +8520,17 @@ ensure_security_pass_before_completion() {
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
   fi
+  # Every caller runs this function in a conditional context, so capturing
+  # the status here does not change errexit behaviour inside the runner.
+  local security_pass_inline_rc=0
   run_security_pass_inline \
     "${integration_branch}" \
     "${default_branch}" \
     "${SECURITY_PASS_VERIFIED_PR_REF:-}" \
     "${SECURITY_PASS_VERIFIED_PR_SHA:-}" \
-    "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}"
+    "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}" || security_pass_inline_rc=$?
+  security_pass_remove_audit_worktree
+  return "${security_pass_inline_rc}"
 }
 
 merge_tree_conflict_paths_json() {

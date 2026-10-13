@@ -1183,6 +1183,11 @@ esac
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
 				"  'line_ownership': os.environ.get('SECURITY_AUDIT_LINE_OWNERSHIP'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
+				"  'cwd': os.path.realpath(os.getcwd()),\n"
+				"  'support_dir': os.environ.get('SECURITY_AUDIT_SUPPORT_DIR'),\n"
+				"  'fp_exclusions': os.environ.get('SECURITY_AUDIT_FP_EXCLUSIONS'),\n"
+				"  'cwd_head': __import__('subprocess').run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip(),\n"
+				"  'cwd_has_integration_sentinel': Path('.orchestrator_judge_context_sentinel.txt').is_file(),\n"
 				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
 				"}), encoding='utf-8')\n"
 				"PY\n"
@@ -3005,6 +3010,9 @@ if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '
 # switching the poller's own checkout; the checkout-failure knob covers it.
 if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
+if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_WORKTREE_ADD_FAIL_SUBSTR', '') \
+		and any(os.environ['MOCK_GIT_WORKTREE_ADD_FAIL_SUBSTR'] in arg for arg in args[2:]):
+	sys.exit(1)
 if args[:2] == ['worktree', 'add']:
 	store.setdefault('git_worktree_add_calls', []).append(args[2:])
 	store_path.write_text(json.dumps(store), encoding='utf-8')
@@ -3849,6 +3857,109 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert "SECURITY_PASS_CLEAN" in combined_log
 	assert result["telegram_cleanup_calls"] == ["192"]
 	assert not any(prior_alert_marker in comment["body"] for comment in result["issues"]["192"]["comments"])
+
+
+def _security_pass_audit_tree_state() -> dict:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	return state
+
+
+def test_security_pass_audits_clean_worktree_of_integration_head() -> None:
+	"""The audit reads a clean detached worktree of the audited head, while the
+	engine itself still runs from the trusted support root (the poller root)."""
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert capture is not None
+	assert capture["cwd"].endswith("/security-pass-audit-wt-192")
+	assert capture["cwd_head"] == capture["diff_head"]
+	assert capture["cwd_has_integration_sentinel"] is True
+	assert capture["support_dir"]
+	assert capture["support_dir"] != capture["cwd"]
+	assert not capture["support_dir"].startswith(capture["cwd"])
+	assert capture["fp_exclusions"] == capture["support_dir"] + "/scripts/security_audit_fp_exclusions.json"
+	assert (
+		f"SECURITY_PASS_AUDIT_TREE tracking_issue=192 head_sha={capture['diff_head']} outcome=prepared"
+		in combined_log
+	)
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	# The worktree is removed once the security pass returns.
+	assert not Path(capture["cwd"]).exists()
+
+
+def test_security_pass_audit_worktree_switch_off_audits_in_place() -> None:
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED": "false"},
+	)
+
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert capture is not None
+	assert "security-pass-audit-wt-" not in capture["cwd"]
+	assert capture["support_dir"] is None
+	assert capture["fp_exclusions"] is None
+	assert "outcome=skipped reason=disabled" in combined_log
+	assert result["latest_state"]["security_pass_status"] == "passed"
+
+
+def test_security_pass_audit_worktree_failure_fails_closed() -> None:
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_GIT_WORKTREE_ADD_FAIL_SUBSTR": "security-pass-audit-wt-"},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert result["security_audit_capture"] is None
+	assert "SECURITY_PASS_AUDIT_TREE tracking_issue=192" in combined_log
+	assert "outcome=failed reason=worktree_add_failed" in combined_log
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in combined_log
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["status"] != "complete"
+
+
+def test_security_pass_audit_worktree_wiring_contract() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	security_runner = poller.split("run_security_pass_inline() {", 1)[1].split("\n}", 1)[0]
+	assert 'security_pass_prepare_audit_worktree "${current_head_sha}"' in security_runner
+	assert 'SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"' in security_runner
+	assert 'SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json"' in security_runner
+	assert 'bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}"' in security_runner
+	# Branch-written scripts are never executed: no relative script path runs
+	# from the audit worktree.
+	assert "bash scripts/security_audit.sh" not in security_runner
+	assert "gh api" not in security_runner
+	gate = poller.split("ensure_security_pass_before_completion() {", 1)[1].split("\n}", 1)[0]
+	assert gate.index("run_security_pass_inline") < gate.index("security_pass_remove_audit_worktree")
+	judge = poller.split("security_pass_exhaustion_judge() {", 1)[1].split("\nsecurity_pass_", 1)[0]
+	assert 'security_judge_dir="${SECURITY_PASS_AUDIT_WORKTREE}"' in judge
+	assert judge.index('pushd "${security_judge_dir}"') < judge.index("poller_claude_judge SECURITY_JUDGE")
+	# One call site: an unenterable worktree defers, never judges the poller checkout.
+	assert judge.count("poller_claude_judge SECURITY_JUDGE") == 1
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}" in workflow
 
 
 def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> None:
