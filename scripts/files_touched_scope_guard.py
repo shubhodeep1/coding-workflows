@@ -720,10 +720,12 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 	paths: list[str] = []
 	for line in section.splitlines():
 		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
-		if not candidates:
-			bullet = _PLAN_GRANT_BULLET_RE.match(line)
-			if bullet:
-				candidates.append(bullet.group(1))
+		# The bullet's first token counts even when the line also has
+		# backticked spans (`- README.md — use `parse()``): otherwise a
+		# non-path span would drop the listed file from the grant.
+		bullet = _PLAN_GRANT_BULLET_RE.match(line)
+		if bullet:
+			candidates.append(bullet.group(1))
 		candidates.extend(match.group(1) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
 		for raw in candidates:
 			path = _plan_grant_path(raw)

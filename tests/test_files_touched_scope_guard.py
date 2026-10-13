@@ -1207,6 +1207,10 @@ def test_extract_plan_file_paths_keeps_exact_files_from_the_files_section() -> N
 		"scripts/security_audit.sh", ".github/workflows/security-audit.yml", "tests/test_security_audit.py", "README.md"]
 	# No Files section: nothing to grant from.
 	assert guard.extract_plan_file_paths("Edit `scripts/a.sh`.") == []
+	# A bare first token is kept even when the line has a non-path backtick span.
+	assert guard.extract_plan_file_paths(
+		"## Files likely to change\n- README.md — update using `parse()`\n- Makefile: add `--strict`\n") == [
+		"README.md", "Makefile"]
 	for bad in ("scripts/", "/etc/x", "a//b.py", "scripts/../x.sh", "scripts/a b.sh", "-rf/x", "x.y",
 			"https://example.com/a.py", "scripts/*.sh", "`"):
 		assert guard._plan_grant_path(bad) == "", bad
