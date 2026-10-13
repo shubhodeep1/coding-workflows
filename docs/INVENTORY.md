@@ -46,6 +46,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
+- `.github/workflows/check-failure-triage-historical.yml` — GitHub Actions workflow: Internal: Historical check-failure triage (PR #6611 run 37922279826).
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
@@ -79,6 +80,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/pr6576-shard-followup.yml` — GitHub Actions workflow: PR 6576 orchestrate-poll shard follow-up.
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
 - `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
@@ -121,15 +123,17 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
+- `scripts/build_sync_manifest.py` — builds the signed consumer sync manifest (`sync-manifest.json`) in the release jobs and checks paths against its consumer allowlist.
 - `scripts/build_static_context.sh` — codex-cli phases.
 - `scripts/check_agents_md_direct_edits.py` — CI check that fails a pull request adding documentation to agents.md / AGENTS.md directly instead of an agents.d fragment (CLAUDE.md §30).
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
 - `scripts/check_failure_triage.sh` — Diagnose a failing pull-request check, enforce triage dedup/lineage rules, and open the follow-up triage issue.
+- `scripts/check_triage_resolution.py` — Close an ai:check-triage issue once its linked PR merged and the failure is verified fixed on the default branch; otherwise post the failing job's traceback (issue #7095).
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
-- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled or startup-failed CI on a current PR head.
+- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
@@ -212,12 +216,18 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
 - `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
 - `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
+- `scripts/orchestrate_stall_retired_conflict.sh` — Stall-recovery helpers sourced by the poller that detect a PR conflict only on retired host-only files (issue #6680).
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
+- `scripts/pr6576_shard_followup.py` — One-time follow-up for PR #6576's failed orchestrate-poll shard: fetch the log or rerun the partition, confirm on main, report once on #7072 (single-use, issue #7072).
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
+- `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
 - `scripts/release_ci_gate.sh` — Stable-release CI gate: require a successful github-actions `lint` check-run from `ci.yml` on the exact released SHA before tagging (log prefix `RELEASE_CI_GATE`, issue #6797).
+- `scripts/release_manifest.py` — Build the deterministic release manifest of files the consumer updater copies from a release.
+- `scripts/release_manifest_publish.sh` — Build the release manifest from the tagged tree and upload it as a GitHub Release asset in the stable release jobs.
+- `scripts/verify_release_manifest.py` — Verify a release tree (`verify`) or an updater PR tree (`verify-pr-tree`) against the attested release manifest; fail-closed, used by `update_workflows.yml` (log prefix `UPDATER_MANIFEST_VERIFY`).
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
@@ -229,7 +239,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
 - `scripts/review_autofix_step_changes_lost_redispatch.sh` — body of the review_autofix.yml "Re-dispatch review on editor-changes-lost" step (sourced by the step): re-dispatches one review run per head from the default branch, bounded by `autofix_changes_lost_head_retry_consumed` (issue #4898).
 - `scripts/review_autofix_step_count_iterations.sh` — body of the review_autofix.yml "Count autofix iterations" step (sourced by the step, `id: retrigger_guard`): classifies the orchestrator PR mode, counts `[ai-autofix]` rounds since the last `[judge-fix]` to decide `max_iterations_reached`, and counts `[judge-fix]` commits for the review-blocked judge retry budget.
+- `scripts/review_autofix_step_partial_finalize_safety.sh` — body of the review_autofix.yml "Decide partial-finalize validation/push safety" step (sourced by the step, moved out for the workflow file size limit, #6963): decides whether a partial-finalize run may still validate and push.
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_evaluate_gate.sh` — body of the review_autofix.yml "Evaluate review gate" step (`id: evaluate`) in the `gate` job (sourced by the step). The gate job runs before support staging, so the script is loaded only from the SHA-verified `.codex-head-gate-src` sparse checkout and the step fails closed when that checkout is unverified (issue #6972).
 - `scripts/review_autofix_step_assemble_failure_evidence.sh` — body of the review_autofix.yml "Assemble failure evidence" step, including the model-provider outage classification (issue #6633; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_provider_outage_record.sh` — body of the review_autofix.yml "Record model-provider outage" step: opens or reuses the `ai:provider-outage` tracker and sends its one alert (issue #6633).
 - `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (workflow failure)" step (moved out to keep the workflow under GitHub's 512,000-byte limit).
@@ -241,6 +253,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_merge_topology_gate.sh` — body of the review_autofix.yml "Pre-review deterministic merge-topology gate" step (sourced by the step).
 - `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_post_commit_retrigger.sh` — body of the review_autofix.yml "Re-trigger review via workflow_dispatch" step (sourced by the step): after an autofix or merge-resolve push, dispatches the next review run from the default branch, PR-named wrappers first (issue #4898).
+- `scripts/review_autofix_step_post_editor_summary.sh` — body of the review_autofix.yml "Post editor summary comment" step (sourced by the step; the step passes the server URL, repository and run id as `AUTOFIX_STEP_SERVER_URL` / `AUTOFIX_STEP_REPOSITORY` / `AUTOFIX_STEP_RUN_ID`).
+- `scripts/review_autofix_step_post_review_blocked_comment.sh` — body of the review_autofix.yml "Post review-blocked comment on PR (autofix exhaustion)" step (sourced by the step; same `AUTOFIX_STEP_*` pass-through as the editor summary step).
+- `scripts/review_autofix_step_detect_smoke_test.sh` — body of the review_autofix.yml "Detect smoke test and tune LLM settings" step (sourced by the step; the step passes the repository as `AUTOFIX_STEP_REPOSITORY`).
 - `scripts/review_autofix_step_apply_fixes_editor.sh` — body of the review_autofix.yml "Apply fixes with editor model" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_restore_partial_resume.sh` — body of the review_autofix.yml "Restore same-head partial resume state" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_generate_diff_context.sh` — body of the review_autofix.yml "Generate diff context" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
@@ -248,13 +263,16 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_editor_noop_disposition.sh` — body of the review_autofix.yml "Validate editor no-op disposition" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_stage_codex_logs.sh` — body of the review_autofix.yml "Stage codex logs for upload (failure or empty-editor)" step (sourced by the step; skips with a warning when the script is missing, since the step also runs after support staging failed; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
+- `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
+- `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
@@ -382,3 +400,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `tests/inventory_exemptions.txt` — Documented inventory parity exemptions (`path | justification`).
 - `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md, README.md, and agents.md.
 - `tests/prompt_size_budget.py` — Direct-run prompt tier budget gate for mode and review prompts.
+
+## Claude hook templates
+
+Not checked by `tests/inventory_parity.py`; listed so the consumer-shipped hooks added for a plan phase have an inventory row.
+
+- `workflow-templates/.claude/hooks/prepush_affected_tests.py` — Pre-push affected-test gate: selects, runs and classifies the tests a change affects; interactive `stamp` and `PreToolUse` hook (issue #7137).

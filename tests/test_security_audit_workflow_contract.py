@@ -2821,7 +2821,7 @@ def test_security_audit_claude_fallback_no_account() -> None:
 
 
 def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
-	# The pool step drops every account at or above gate_utilization (0.9)
+	# The pool step drops every account at or above gate_utilization (0.95)
 	# and reports all_gated; the audit must not start Claude at all.
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-gated-") as td:
 		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})

@@ -1,6 +1,0 @@
-<!-- agents: section="Validation harness isolation" -->
-- In consumer repositories, `validate.yml`'s "Fetch workflow support files" step stages its support scripts from the commit the caller pinned (`shubhodeep1/coding-workflows/.github/workflows/validate.yml@<40-hex>`, read from `toJSON(job)`'s `workflow_ref`, the identity source `review_autofix.yml` and `security-audit.yml` use), fetches that commit directly and fails closed unless the checkout `HEAD` equals it. `@stable`, any other ref, a missing identity, another repository's or another workflow's ref keep `stable`; this repository keeps `main`. Other helpers in the same job (the GitHub API retry bootstrap, the integration-ref resolver, `setup-runtime@stable`) still come from `stable`. Incident: binance-blessings#249's integration branch pinned an old `validate.yml` that failed against `stable`'s scripts on every dispatch. Logs `VALIDATE_SUPPORT_REF ref=<ref> workflow_ref=<ref|unknown>`.
-
-<!-- agents: section="Stable log prefixes (contractual)" -->
-- `VALIDATE_SUPPORT_REF` (`.github/workflows/validate.yml` "Fetch workflow support files": `ref=<sha|stable|main> workflow_ref=<job workflow_ref|unknown>`)
-LOG_PREFIX.name=VALIDATE_SUPPORT_REF

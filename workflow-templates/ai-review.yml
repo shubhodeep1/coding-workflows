@@ -66,16 +66,24 @@ jobs:
     secrets: inherit
 
   security-hold-sweep:
-    if: ${{ github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' }}
+    # Issue #7099: wait for the provider-outage probe and skip dispatch while
+    # it reports a pause. A skipped or failed probe job leaves `paused` empty,
+    # so the sweep still runs (fail-open, like review_autofix_sweep.yml).
+    needs: provider-outage-resume
+    if: ${{ !cancelled() && github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && needs.provider-outage-resume.outputs.paused != 'true' }}
     runs-on: ubuntu-latest
-    # Least privilege for the github.token fallback: list PRs and comments,
-    # post the dedup marker, dispatch the judge. Replaces the workflow block.
+    # Least privilege: github.token does every sweep operation (list PRs and
+    # comments, post the dedup marker, dispatch the judge) within these grants.
+    # GH_PAT only names the account that posts findings markers (issue #7209).
+    # Replaces the workflow block.
     permissions:
       actions: write
       contents: read
       pull-requests: read
       issues: write
     steps:
+      # `ref: stable` is a render token: installed wrappers pin it to the same
+      # release SHA as the reusable-workflow refs (scripts/workflow_wrapper_refs.py).
       - name: Check out trusted security-hold sweep support
         uses: actions/checkout@v5
         with:
@@ -85,7 +93,9 @@ jobs:
           persist-credentials: false
       - name: Re-dispatch stale security holds
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ github.token }}
+          SECURITY_HOLD_FINDING_AUTHOR_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_HOLD_SWEEP_TOKEN_MODE: actions_token
           REPOSITORY: ${{ github.repository }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
@@ -100,6 +110,8 @@ jobs:
   provider-outage-resume:
     if: ${{ github.event_name == 'schedule' && vars.PROVIDER_OUTAGE_RESUME_ENABLED != 'false' }}
     runs-on: ubuntu-latest
+    outputs:
+      paused: ${{ steps.provider_outage.outputs.paused }}
     concurrency:
       group: provider-outage-resume-${{ github.repository }}
       cancel-in-progress: false
@@ -119,6 +131,7 @@ jobs:
           path: .provider-outage-support
           persist-credentials: false
       - name: Provider outage probe and resume
+        id: provider_outage
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -135,11 +148,13 @@ jobs:
           set -uo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=gh_pat_missing"
+            echo "paused=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           helper=".provider-outage-support/scripts/provider_outage.py"
           if [ ! -f "${helper}" ]; then
             echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=helper_missing"
+            echo "paused=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           alert_file="$(mktemp)"
