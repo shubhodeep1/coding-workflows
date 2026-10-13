@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:376-385 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_run_poller_subprocess` sends SIGKILL to the process group but does not wait for descendants to terminate before returning.\n  WHY: The caller can remove the temporary sandbox while a descendant is still writing under `.git/objects`, leaving the cleanup race unresolved; severity was downgraded to NIT by anthropic_claude-sonnet-5_5 and rated MAJOR by the other reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:376-382 | severity=NIT | confidence=2\n  PROBLEM: SIGKILL is sent without waiting for group members to exit, so cleanup can still overlap a dying descendant for a very short time.\n  WHY: only in the narrow window before the kernel finishes terminating the process. The `gc.auto` and `maintenance.auto` settings already remove the known writer, so a flaky `[Errno 39]` is unlikely.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:376-385 | severity=MAJOR | confidence=4\n  PROBLEM: The cleanup logic sends `SIGKILL` to the process group but does not wait for processes to exit.\n  WHY: The caller (the test suite) may begin removing the temporary sandbox directory while descendants are still alive and writing under `.git/objects`, causing `TemporaryDirectory` cleanup to fail with \"[Errno 39] Directory not empty\" or similar I/O errors.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:376-385 | severity not stated | confidence=4\n  PROBLEM: The new code sends `os.killpg(proc.pid, signal.SIGKILL)` to the process group but does not wait for its members to actually exit before returning.\n  WHY: `killpg` queues the signal asynchronously; the function returns immediately while descendants (the git auto-gc/auto-maintenance forks this whole change exists to suppress) can still be writing under `.git/objects` of the throwaway sandbox.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:376-381 | severity=MAJOR | confidence=4\n  PROBLEM: The helper sends `SIGKILL` to the process group and returns immediately without waiting for descendants to terminate.\n  WHY: `killpg` delivers the signal but does not synchronize with process termination. The caller can remove the sandbox immediately after this return while a descendant is still writing under `.git/objects`, so the cleanup race this change targets remains.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py:376-385 | severity=MAJOR | confidence=4\n  PROBLEM: The helper sends `SIGKILL` to the process group with `os.killpg(proc.pid, signal.SIGKILL)` but does not wait for processes to terminate before returning.\n  WHY: Descendant processes may still be running and writing under `.git/objects` when the function returns a `CompletedProcess` and the caller's `finally` block begins removing the temporary sandbox. This reintroduces the exact cleanup race the change is intended to prevent (the \"[Errno 39] Directory not empty\" failure from CI run 38343038127).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f39471b97d8b0b0ce850b0ebcd54cee41c4b9ab08ec852816f40acaabcc1a649",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38345486327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38345486327",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013043607_6141a047b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38345486327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T04:36:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
