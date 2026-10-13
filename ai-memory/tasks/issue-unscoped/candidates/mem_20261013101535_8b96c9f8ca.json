@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/settings.json:140-149 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The template registers a pre-push hook that is absent from the live `.claude/settings.json`, and the live hook file is missing.\n  WHY: The template/live parity tests fail, causing the aggregate `lint` check to fail; severity was reported as BLOCKER.\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI job fails due to parity drift between the live Claude settings and the template.\n  WHY: The parity test requires the template and live files to be byte-identical.\n- .github/workflows/ci.yml:tests-release-and-log-analysis job | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI job fails due to parity drift between the live Claude settings and the template.\n  WHY: The parity test requires the template and live files to be byte-identical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR's CI must pass on the current head SHA before the squash merge of orchestrator project #7126 can land.\n  expected_change_site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py` (live copies)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR check-runs for head 11e61118 show 3 failed checks: `lint`, `tests-hooks-and-orchestrator`, and `tests-release-and-log-analysis`; the template registers `python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook`, which is absent from the live settings; the live hook file is absent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/settings.json (lines about 140-149) versus .claude/settings.json | severity=BLOCKER | confidence=5\n  PROBLEM: The live settings and hook file are out of sync with the template.\n  WHY: CI run 38375946329 fails because parity tests find the pre-push hook entry in the template but not in the live settings; `.claude/hooks/prepush_affected_tests.py` does not exist.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml | tests-hooks-and-orchestrator job\n  PROBLEM: CI job failed due to parity drift in .claude/settings.json and missing live hooks.\n  WHY: The workflow parity tests (tests/test_pr_merge_status_guard.py) require the template and live files to be byte-identical; the current check-in causes a mismatch.\n- .github/workflows/ci.yml | tests-release-and-log-analysis job\n  PROBLEM: CI job failed due to parity drift in .claude/settings.json and missing live hooks.\n  WHY: The workflow parity tests require the template and live files to be byte-identical; the current check-in causes a mismatch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR's CI must pass on the current head SHA before the squash merge of orchestrator project #7126 can land.\n  Expected change site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py` (live copies) to match `workflow-templates/.claude/settings.json` and `workflow-templates/.claude/hooks/prepush_affected_tests.py`.\n  Evidence of absence: PR check-runs for head 11e61118 show 3 failed checks: `lint` (failed because `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` failed), `tests-hooks-and-orchestrator` (failed at `tests/test_pr_merge_status_guard.py:2451` `test_template_copies_are_identical`), and `tests-release-and-log-analysis` (failed at `tests/test_session_start_extract_repo_slug.py`). The diff in the failing log shows the template registers a new pre-push hook entry for `python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook` that is absent from the live `.claude/settings.json`. The previous AI autofix editor summaries (entries 13, 14, 15 in the PR discussion) document this as a deferred task gap because `.claude/` is sandbox-excluded for the editor.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/settings.json:140-149 registers the pre-push hook; tests/test_pr_merge_status_guard.py:2447-2454 requires the live and template settings to match. | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head has a template-only pre-push hook, leaving the live Claude configuration out of sync.\n  WHY: The supplied CI log confirms test_template_copies_are_identical fails on the settings comparison, and the resulting failures make the aggregate lint check fail. The same parity mismatch also fails tests/session-start validation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "654a8a9265a51f8c63acbbc4e1cd7b8be796c9d13e379822c9e2132d7ff71a23",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38380618599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38380618599",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013101535_8b96c9f8ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38380618599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T10:15:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
