@@ -931,7 +931,9 @@ def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str, str]], s
 	``note`` is empty for a single commit tip, ``bulk:<option>`` for a push
 	that publishes several branch tips, and ``non_branch`` for a push that
 	publishes tags or other non-branch refs (alone, or next to a branch via
-	``--tags``, ``--follow-tags`` or a ``refs/tags/`` refspec); both notes ask.
+	``--tags``, ``--follow-tags`` or a ``refs/tags/`` refspec), and
+	``unresolved`` when the guard could not resolve the push options or
+	destination; every note asks.
 	"""
 	try:
 		guard = _load_guard_module()
@@ -952,11 +954,19 @@ def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str, str]], s
 			# for several tips; a push with no tip that deletes nothing
 			# publishes tags or other non-branch refs.
 			targets = guard._push_targets(invocation, directory)
+			# A target warning means the guard could not resolve the push
+			# options or destination (an abbreviated or unknown option such
+			# as `--follow-tag`) and fell back to HEAD; the published refs
+			# are unknown, so ask instead of checking HEAD's stamp.
+			unresolved = any(isinstance(getattr(t, "warning", ""), str) and t.warning for t in targets)
 			bulk = sorted({t.bulk for t in targets if isinstance(getattr(t, "bulk", ""), str) and t.bulk})
 			tips = [t.tip for t in targets if isinstance(getattr(t, "tip", None), str) and t.tip and not getattr(t, "bulk", "")]
 			deletes = any(getattr(t, "deletes", "") for t in targets)
-		except Exception:  # noqa: BLE001 - unknown refspecs: check HEAD
-			bulk, tips, deletes = [], ["HEAD"], False
+		except Exception:  # noqa: BLE001 - unparsable refspecs: pushed refs unknown
+			unresolved, bulk, tips, deletes = True, [], [], False
+		if unresolved:
+			pushes.append((directory, "", "unresolved"))
+			continue
 		pushes.extend((directory, tip, "") for tip in tips)
 		pushes.extend((directory, "HEAD", f"bulk:{option}") for option in bulk)
 		# _push_targets drops tag and other non-branch refspecs (and `--tags`),
@@ -1021,6 +1031,13 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 			reasons.append(
 				f"This push ({_sanitize_name(note[5:])}) publishes several branch tips in {toplevel}; a pre-push test "
 				f"stamp covers one commit. Push each branch by name after running `{STAMP_COMMAND}` on it, or confirm to push anyway."
+			)
+			continue
+		if note == "unresolved":
+			reasons.append(
+				f"Could not resolve which refs this push publishes in {toplevel} (unrecognised push options or "
+				f"destination), so its pre-push test stamp cannot be checked. Run `{STAMP_COMMAND}` on the pushed "
+				"commit and push with full option names, or confirm to push anyway."
 			)
 			continue
 		if note == "non_branch":

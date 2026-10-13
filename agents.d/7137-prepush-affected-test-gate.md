@@ -52,8 +52,9 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   quoted words are ignored for that check). It
   resolves each pushed source ref (the guard's `_push_targets` tip, `HEAD`
   for a bare push) to a commit and asks when that commit's stamp is missing,
-  the ref does not resolve, or the stamp records failures this change
-  caused. A bulk push (`--all`, `--mirror`, `--branches`, a pattern) and a
+  the ref does not resolve, the guard cannot resolve the push options or
+  destination (an abbreviated or unknown option such as `--follow-tag`), or
+  the stamp records failures this change caused. A bulk push (`--all`, `--mirror`, `--branches`, a pattern) and a
   push that includes tags or other non-branch refs (`--tags`, a
   `refs/tags/` refspec or `--follow-tags`, also next to a branch) always ask. A `pass`,
   `unverified` or `skipped` stamp, a non-push command and

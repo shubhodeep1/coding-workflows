@@ -3979,8 +3979,10 @@ The `PreToolUse` hook registered in `.claude/settings.json` reads the stamp
 of the commit each `git push` publishes (the pushed branch's tip, or `HEAD`
 for a bare push), so stamp the branch you push. A bulk push (`--all`,
 `--mirror`, `--branches`) or a push that includes tags always asks. A passing (or unverified, or skipped) stamp lets the push
-through without a prompt. A missing stamp, or one that records failures the
-change caused, asks for confirmation. The hook never runs tests itself, and it
+through without a prompt. A missing stamp, one that records failures the
+change caused, or a push whose options or destination the hook cannot
+resolve (for example an abbreviated option such as `--follow-tag`), asks for
+confirmation. The hook never runs tests itself, and it
 fails open with a warning on internal errors. Set
 `CLAUDE_PREPUSH_TEST_GATE=off` to turn it off.
 

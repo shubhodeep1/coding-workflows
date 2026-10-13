@@ -394,3 +394,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `tests/inventory_exemptions.txt` — Documented inventory parity exemptions (`path | justification`).
 - `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md, README.md, and agents.md.
 - `tests/prompt_size_budget.py` — Direct-run prompt tier budget gate for mode and review prompts.
+
+## Claude hook templates
+
+Not checked by `tests/inventory_parity.py`; listed so the consumer-shipped hooks added for a plan phase have an inventory row.
+
+- `workflow-templates/.claude/hooks/prepush_affected_tests.py` — Pre-push affected-test gate: selects, runs and classifies the tests a change affects; interactive `stamp` and `PreToolUse` hook (issue #7137).
