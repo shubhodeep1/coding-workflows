@@ -624,6 +624,53 @@ def test_isolated_run_skips_preseed_when_prebuilt_pulls() -> None:
 	_with_sandbox(_real_dockerfile(), check)
 
 
+def test_isolated_run_ref_failed_log_skips_registry_off() -> None:
+	"""A failed `ref` logs ref_failed, except when the registry is off or invalid."""
+	body = _clarify_image_build_body()
+
+	def check(sb: Sandbox) -> None:
+		stub = sb.root / "scripts" / "sandbox_image.sh"
+		stub.write_text(
+			'case "$1" in\n'
+			"\tref) exit 1 ;;\n"
+			"\tbuild) echo sha256:local ;;\n"
+			"\t*) exit 2 ;;\n"
+			"esac\n",
+			encoding="utf-8",
+		)
+		script = sb.root / "image_build.sh"
+		script.write_text(
+			"set -euo pipefail\nsupport=scripts\nclarify_image_build()\n{\n"
+			+ body
+			+ "}\nimage=\"$(clarify_image_build)\"\nprintf 'IMAGE=%s\\n' \"${image}\"\n",
+			encoding="utf-8",
+		)
+		for registry, expect_log in (
+			(None, True),
+			("ghcr.example/sandbox", True),
+			("off", False),
+			("Not A Registry!", False),
+		):
+			env = sb.env("mirror.gcr.io/library")
+			env.pop("SANDBOX_IMAGE_REGISTRY", None)
+			if registry is not None:
+				env["SANDBOX_IMAGE_REGISTRY"] = registry
+			result = subprocess.run(
+				["bash", "--noprofile", "--norc", str(script)],
+				cwd=sb.root,
+				env=env,
+				capture_output=True,
+				text=True,
+				timeout=120,
+			)
+			assert result.returncode == 0, result.stderr
+			assert result.stdout == "IMAGE=sha256:local\n", result.stdout
+			logged = "SANDBOX_IMAGE family=clarify outcome=ref_failed" in result.stderr
+			assert logged == expect_log, (registry, result.stderr)
+
+	_with_sandbox(_real_dockerfile(), check)
+
+
 def test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally() -> None:
 	"""A pulled prebuilt image whose hand-off falls back to a local build still gets the pre-seed.
 
@@ -734,6 +781,7 @@ def main() -> int:
 		test_isolated_run_build_uses_preseeded_base,
 		test_isolated_run_skips_preseed_when_prebuilt_pulls,
 		test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally,
+		test_isolated_run_ref_failed_log_skips_registry_off,
 		test_callers_stage_the_helper,
 		test_ci_runs_this_file,
 	]

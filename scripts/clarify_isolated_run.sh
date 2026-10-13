@@ -49,8 +49,12 @@ clarify_image_build()
 		[[ "${clarify_prebuilt_secs}" =~ ^[1-9][0-9]{0,3}$ ]] || clarify_prebuilt_secs=60
 		clarify_prebuilt_ref="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" ref --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox" 2>/dev/null)" || {
 			clarify_prebuilt_ref=""
-			# SANDBOX_IMAGE_REGISTRY=off makes `ref` exit 1 on purpose; not a failure.
-			[ "${SANDBOX_IMAGE_REGISTRY:-}" = off ] || echo "SANDBOX_IMAGE family=clarify outcome=ref_failed" >&2
+			# `ref` exits 1 on purpose when the registry is off, or invalid (which
+			# sandbox_image.sh treats as off with its own warning); not a failure.
+			local clarify_registry="${SANDBOX_IMAGE_REGISTRY:-}"
+			if [ "${clarify_registry}" != off ] && { [ -z "${clarify_registry}" ] || [[ "${clarify_registry}" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]]; }; then
+				echo "SANDBOX_IMAGE family=clarify outcome=ref_failed" >&2
+			fi
 		}
 		if [ -n "${clarify_prebuilt_ref}" ] && env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${clarify_prebuilt_secs}s" docker pull -q "${clarify_prebuilt_ref}" >/dev/null 2>&1; then
 			# sandbox_image.sh build re-pulls and checks the input label; on a

@@ -8,7 +8,7 @@ the prebuilt GHCR image (`sandbox_image.sh ref`, then one pull bounded by
 unset) only before a local build, so slow mirrors never delay a pullable prebuilt image. A failed
 prebuilt pull is retried once by `sandbox_image.sh build`; when that hand-off fails (its unseeded
 local build after a label mismatch or failed re-pull), the helper runs and the image is built
-again. A failed `sandbox_image.sh ref` logs `SANDBOX_IMAGE family=clarify outcome=ref_failed` (not when `SANDBOX_IMAGE_REGISTRY=off`).
+again. A failed `sandbox_image.sh ref` logs `SANDBOX_IMAGE family=clarify outcome=ref_failed` (not when `SANDBOX_IMAGE_REGISTRY` is `off` or invalid).
 This covers clarify, plan,
 clarify-respond, check-failure triage, the unblock judge and the Claude engine smoke; clarify's
 "Pre-seed clarify sandbox base image" step also calls it with the repository-variable overrides.
