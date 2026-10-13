@@ -6794,6 +6794,13 @@ def test_heal_scope_recovery_check_statuses() -> None:
 	assert replaced == {"eligible": False, "reason": "already_replaced", "scope_status": "missing", "replaced_by": 901, "replaced_repo": CONSUMER_REPO, "ignored_untrusted_markers": 1}
 	only_untrusted = heal.heal_scope_recovery_check(issue=base, comments=[_recovery_marker_comment(950, author="mallory")], pipeline_login=login)
 	assert only_untrusted["eligible"] is True and only_untrusted["ignored_untrusted_markers"] == 1
+	# A marker quoted mid-comment, even by the pipeline account, is not trusted.
+	quoted = {"id": 8, "body": heal.render_heal_scope_recovery_marker(960, CONSUMER_REPO) + "\nquoted text after the marker", "user": {"login": login}}
+	quoted_result = heal.heal_scope_recovery_check(issue=base, comments=[quoted], pipeline_login=login)
+	assert quoted_result["eligible"] is True and quoted_result["ignored_untrusted_markers"] == 1
+	# A recovery marker in the issue body is never read; only comments count.
+	body_marker = {"author": login, "body": "x\n" + heal.render_heal_scope_recovery_marker(970, SELF_REPO)}
+	assert heal.heal_scope_recovery_check(issue=body_marker, comments=[], pipeline_login=login)["eligible"] is True
 	marker = heal.render_heal_scope_recovery_marker(42, SELF_REPO)
 	assert heal.HEAL_SCOPE_RECOVERY_RE.fullmatch(marker).groups() == ("42", SELF_REPO)
 	for bad in ((0, SELF_REPO), ("x", SELF_REPO), (5, "not a repo")):
@@ -6849,13 +6856,28 @@ def test_heal_scope_recovery_skips_issues_with_a_marker_or_foreign_author() -> N
 		"scope_duplicated": _markerless_heal_issue(extra_body=f"{_SCOPE_MARKER_OK}\n{_SCOPE_MARKER_OK}"),
 		"scope_untrusted_author": _markerless_heal_issue(author="mallory", extra_body=_SCOPE_MARKER_OK),
 		"untrusted_issue_author": _markerless_heal_issue(author="mallory"),
+		# A scope marker forged onto the original body is not "missing".
+		"scope_malformed_forged": _markerless_heal_issue(extra_body="forged"),
 	}
 	for reason, issue in cases.items():
 		result, state, _ = _run_recovery([issue])
 		assert result.returncode == 0, result.stderr + result.stdout
-		assert f"heal_scope_recovery outcome=skip reason={reason} issue=31" in result.stdout, (reason, result.stdout)
+		assert f"heal_scope_recovery outcome=skip reason={reason.removesuffix('_forged')} issue=31" in result.stdout, (reason, result.stdout)
 		assert "WORKFLOW_HEAL duplicate existing_issue=31" in result.stdout
 		assert "issues_created" not in state and "issues_closed" not in state
+		# The local pre-check rejects before the comments read.
+		assert not [call for call in _recovery_calls(state, f"repos/{SELF_REPO}/issues/31/comments") if "--paginate" in call]
+
+
+def test_heal_scope_recovery_redirects_across_repositories() -> None:
+	path = f"repos/{SELF_REPO}/issues/31/comments"
+	result, state, _ = _run_recovery([_markerless_heal_issue()], comments={path: [_recovery_marker_comment(904, CONSUMER_REPO)]}, issue_close_fail=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"heal_scope_recovery outcome=redirect issue=31 repo={SELF_REPO} replaced_by=904 replaced_repo={CONSUMER_REPO} close=failed" in result.stdout
+	assert f"WORKFLOW_HEAL duplicate existing_issue=904 existing_repo={CONSUMER_REPO}" in result.stdout
+	assert "issues_created" not in state
+	assert [c for c in state["comments_posted"] if c["path"] == f"repos/{CONSUMER_REPO}/issues/904/comments"]
+	assert not [c for c in state["comments_posted"] if c["path"] == path]
 
 
 def test_heal_scope_recovery_replaces_markerless_issue() -> None:

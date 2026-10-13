@@ -2528,9 +2528,14 @@ def heal_scope_recovery_check(*, issue: dict[str, Any], comments: Iterable[Any],
 		if _comment_author_login(comment).casefold() != login.casefold():
 			ignored += 1
 			continue
-		number, repo = matches[-1]
+		# Only a marker on the comment's own last line counts (the intake writes
+		# it there), so quoted text elsewhere in a pipeline comment is ignored.
+		anchored = HEAL_SCOPE_RECOVERY_RE.fullmatch(comment_body.rstrip().rsplit("\n", 1)[-1].strip())
+		if anchored is None:
+			ignored += 1
+			continue
 		# Comments arrive oldest first; the newest trusted marker wins.
-		trusted = (int(number), repo)
+		trusted = (int(anchored.group(1)), anchored.group(2))
 	if trusted is not None:
 		return {"eligible": False, "reason": "already_replaced", "scope_status": scope_status, "replaced_by": trusted[0], "replaced_repo": trusted[1], "ignored_untrusted_markers": ignored}
 	return {"eligible": True, "reason": "eligible", "scope_status": scope_status, "ignored_untrusted_markers": ignored}

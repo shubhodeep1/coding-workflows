@@ -941,7 +941,8 @@ ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true
 # gets one recovery-marker comment and is closed as "not planned".
 # §14 audit: the heal issue list carries no comments and no token identity, so
 # this path adds at most one /user read (when no earlier /user result exists)
-# and one paginated comments read, only after every cheaper check passed.
+# and one paginated comments read, the latter only after the local
+# scope-status and issue-author checks passed.
 HEAL_SCOPE_RECOVERY_ACTIVE="false"
 HEAL_SCOPE_RECOVERY_ISSUE=""
 HEAL_SCOPE_RECOVERY_REPO=""
@@ -998,6 +999,17 @@ _heal_scope_recovery_evaluate()
 		log "heal_scope_recovery outcome=skip reason=identity_unavailable issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
 		return 0
 	fi
+	# Local pre-check (scope status, issue author) before the comments read.
+	if ! python3 "${HEAL_PY}" heal-scope-recovery check --issue-json "${recovery_record}" \
+		--pipeline-login "${recovery_login}" > "${recovery_check}" 2>/dev/null; then
+		log "heal_scope_recovery outcome=skip reason=check_failed issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
+	if [ "$(jq -r '.eligible // false' "${recovery_check}")" != "true" ]; then
+		recovery_reason="$(jq -r '.reason // "unknown"' "${recovery_check}" | tr -cd 'a-z_' | head -c 40)"
+		log "heal_scope_recovery outcome=skip reason=${recovery_reason:-unknown} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
+		return 0
+	fi
 	if ! gh_retry gh api --method GET --paginate "repos/${recovery_repo}/issues/${recovery_issue}/comments" -F per_page=100 \
 		--jq '.[] | {id, body: (.body // ""), user: (.user // {})}' 2>/dev/null \
 		| jq -s '.' > "${recovery_comments}" 2>/dev/null \
@@ -1020,9 +1032,14 @@ _heal_scope_recovery_evaluate()
 			jq --argjson n "${recovery_replaced}" --arg r "${recovery_replaced_repo}" --argjson from "${recovery_issue}" --arg from_repo "${recovery_repo}" \
 				'.existing_issue = $n | .existing_repo = $r | .existing_url = ("https://github.com/" + $r + "/issues/" + ($n | tostring)) | .redirected_from = {issue: $from, repo: $from_repo}' \
 				"${DECISION_FILE}" > "${DECISION_FILE}.recovery" && mv "${DECISION_FILE}.recovery" "${DECISION_FILE}"
-			recovery_close="done"
-			gh_retry gh issue close "${recovery_issue}" --repo "${recovery_repo}" --reason "not planned" >/dev/null 2>&1 || recovery_close="failed"
+			recovery_close="failed"
+			if gh_retry gh issue close "${recovery_issue}" --repo "${recovery_repo}" --reason "not planned" >/dev/null 2>&1; then
+				recovery_close="done"
+			fi
 			log "heal_scope_recovery outcome=redirect issue=${recovery_issue} repo=${recovery_repo} replaced_by=${recovery_replaced} replaced_repo=${recovery_replaced_repo} close=${recovery_close} fp=${FP}"
+			if [ "${recovery_close}" != "done" ]; then
+				tg_send_msg "Workflow failure heal could not close ${recovery_url:-https://github.com/${recovery_repo}/issues/${recovery_issue}}, already replaced by https://github.com/${recovery_replaced_repo}/issues/${recovery_replaced}. Close it by hand if it is still open."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			fi
 		else
 			log "heal_scope_recovery outcome=skip reason=marker_invalid issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
 		fi
