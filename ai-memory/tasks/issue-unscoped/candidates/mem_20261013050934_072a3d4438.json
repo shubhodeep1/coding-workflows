@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:line not specified | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `proc.pid` may not be a valid process group ID for `os.killpg`, risking signaling the wrong process group or failing to clean up the sandbox.\n  WHY: The reviewer rated this BLOCKER, the highest reported severity; other reviewers rejected the finding, citing `start_new_session=True` as making `proc.pid` the process group ID.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py | severity=BLOCKER | confidence=[4]\n  PROBLEM: `proc.pid` is being treated as a Process Group ID (PGID).\n  WHY: `os.killpg` requires a valid PGID. Unless the subprocess was spawned in a new session (e.g., using `start_new_session=True` in `subprocess.Popen`), `proc.pid` is not guaranteed to be a PGID. Sending signals to a PID as if it were a PGID can target the wrong process group (e.g., the parent process's group) or fail, undermining the sandbox cleanup attempt.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No actionable task was provided; the message contained only the system-instructions header, the out-of-scope disclaimer, and an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder. Nothing was changed. If a task was intended, re-dispatch with the actual issue text or prompt body included.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9fd1fef7237adec79b3da52ddd28fe701f4a3ec38faeacd5310094067677bd52",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38347360017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38347360017",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013050934_072a3d4438",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38347360017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T05:09:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
