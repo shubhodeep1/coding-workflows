@@ -14,9 +14,11 @@ same searches as `_fetch_standalone_marker_issues_graphql`. Any count above
 staged-support latch release, the unblock scan, the close-merged sweep and the
 standalone conflict sweep. A failed or malformed probe also sets
 `has_work=true` (fail open, with a warning). All counts `0`, or the switch
-off, keep `has_work=false`, and the two no-project sweep steps run as before.
-`has_tracking` still means an open tracking issue exists. Only counts are read
-and logged.
+off, keep `has_work=false`, and the no-project sweep steps run as before. The
+#7183 `standalone_recovery` output is unchanged (`true` while the switch is on),
+so on an all-zero probe "Run standalone stall recovery without active
+projects" still runs recovery. `has_tracking` still means an open tracking
+issue exists. Only counts are read and logged.
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `STANDALONE_STALL_PROBE` (`.github/workflows/orchestrate_poll.yml` "Find active tracking issues", only when no tracking issue is open: `outcome=candidates|none labeled= state_marker= clarify_marker=`, `outcome=skip reason=disabled`, `outcome=probe_failed reason=graphql_failed|malformed`)
