@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:lines 382-390 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The bounded wait loop correctly handles process-group teardown, exiting immediately when no descendants remain and waiting at most 1 second otherwise.\n  WHY: The reviewer states that the logic does not fail and that its performance impact is bounded.\n- tests/test_orchestrate_poll_process.py:lines 376-390 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The process-group SIGKILL and bounded wait correctly mitigate the temp-directory cleanup race by waiting for remaining descendants.\n  WHY: The reviewer states that the race is correctly mitigated.\n- tests/test_orchestrate_poll_process.py:lines 384-390 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The wait loop adds at most 1 second per poller subprocess invocation and exits immediately when no descendants remain.\n  WHY: The reviewer states that the bounded performance impact is acceptable.\n- tests/test_orchestrate_poll_process.py:lines 382-390 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The comment states \"killpg only queues the signal\" but SIGKILL cannot be queued or caught \u2014 it is delivered immediately.\n  WHY: The reviewer says the comment mischaracterizes signal delivery semantics and could mislead future readers, although the code and wait loop are correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Apply workflow-optimization-2026-09-16 recommendations (verified subset)\" per the PR title and the recommendation processing report.\n  expected_change_site: scripts/pr_checks_lib.sh; Gate D in scripts/orchestrate_poll_process.sh; scripts/implement_handle_guard_block.sh; .github/workflows/implement.yml\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that all \"applied\" items from the recommendation processing report are present in the PR diff and that no gaps were found.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py: lines 382-390 | severity=NIT | confidence=2\n  PROBLEM: The bounded wait loop after `os.killpg(SIGKILL)` correctly handles the process group teardown; the 1-second timeout with 20ms polling provides 50 detection chances for slow-to-die processes.\n  WHY: It does not fail. The logic is correct.\n- tests/test_orchestrate_poll_process.py: lines 376-390 | severity=NIT | confidence=2\n  PROBLEM: The combined fix (process group SIGKILL + bounded wait) addresses the \"[Errno 39] Directory not empty\" race that occurred in CI run 38343038127.\n  WHY: The race is correctly mitigated.\n- tests/test_orchestrate_poll_process.py: lines 384-390 | severity=NIT | confidence=2\n  PROBLEM: The wait loop adds at most 1 second per poller subprocess invocation; in the common case, the first `killpg(pid, 0)` raises `ProcessLookupError` and the loop exits immediately.\n  WHY: The reviewer considers the bounded performance impact acceptable.\n- TASK_GAP\n  Requirement: \"Apply workflow-optimization-2026-09-16 recommendations (verified subset)\" per the PR title and the recommendation processing report.\n  Expected change site: The full PR addresses BUG-001 (scripts/pr_checks_lib.sh), CONSIST-001 (Gate D in scripts/orchestrate_poll_process.sh), API-001 and API-002 (scripts/orchestrate_poll_process.sh), API-004 (scripts/implement_handle_guard_block.sh), and EXPR-001/002 (.github/workflows/implement.yml).\n  Evidence of absence: All \"applied\" items from the recommendation processing report are present in the PR diff. The LAST RUN DIFF adds a bounded wait loop to `_run_poller_subprocess` that hardens the fix for the \"[Errno 39] Directory not empty\" error (CI run 38343038127), which was a follow-up to the Gate D changes. No gaps found.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py: lines 382-390 (the wait loop comment) | severity=NIT | confidence=4\n  PROBLEM: The comment states \"killpg only queues the signal\" but SIGKILL cannot be queued or caught \u2014 it is delivered immediately.\n  WHY: The code itself is correct and the wait loop properly handles the race, but the comment mischaracterizes how SIGKILL works and could mislead future readers about signal delivery semantics.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nThe reviewer reports that no actionable task was provided: the message contains only an unattended-instructions header with an unfilled placeholder (`{{REFERENCE_SEVERITY_CLASSIFICATION}}`), and no issue text, scope, or command. It asks for the issue or task description, or an issue number/repo to fetch it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "afb9644ab613bf603c86a84a478dab8b19812f10b73a0bdefc3cd680dba42e0a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38362697391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38362697391",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013074018_938e29c228",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38362697391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T07:40:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
