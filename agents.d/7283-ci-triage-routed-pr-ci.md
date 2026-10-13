@@ -14,3 +14,11 @@ pinned (the unpinned main-fallback clone counts as `pin_failed`) or found
 while `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` is on (`true`, `1`, `yes` or
 `on`, any case, as the resolver parses it). With the flag off, the
 default-branch fallback is unchanged.
+The `tests-hooks-and-orchestrator` job's "Prepare template-only PR live copies
+for parity tests" step now prepares every pull request except one into
+`stable` (`github.base_ref != 'stable'`), so a routed fix PR into an
+`ai/issue-*` head gets the same dry-run preparation as a PR into `main`.
+`scripts/check_failure_triage.sh`'s base gate skips a failed CI workflow run
+whose base is `ai/issue-<n>` and has no completed push run
+(`CHECK_TRIAGE skip reason=routed_head_base`), because push CI never runs on
+that branch and the routed fix PR's own review/autofix loop owns the failure.

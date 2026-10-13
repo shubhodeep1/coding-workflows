@@ -496,8 +496,7 @@ jobs:
 
       - name: Prepare template-only PR live copies for parity tests
         if: >-
-          (github.event_name == 'pull_request' &&
-           (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))) ||
+          (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
           (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -512,7 +511,9 @@ jobs:
           # when --before is a reachable commit: the script skips an empty,
           # all-zero or unreachable one. A push has no PR base, so it passes
           # its own before; a branch-creation or force push falls back to
-          # the merge-base with main.
+          # the merge-base with main. Pull-request CI runs for every base
+          # since #7283, so a fix PR routed to a failing PR's ai/issue-* head
+          # is prepared too; only PRs into stable check the committed tree.
           before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
           if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
             fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
