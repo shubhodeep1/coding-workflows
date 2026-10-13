@@ -1215,6 +1215,13 @@ def test_noop_force_merge_controls_named_by_security_pass_findings_stay_in_place
 		assert '(.user.login // "") == $login' in jq_filter, jq_filter
 	summary_lines = [line for line in sweep_code.splitlines() if 'startswith("AI autofix editor summary")' in line]
 	assert summary_lines and all('(.user.login // "") == $login' in line for line in summary_lines), summary_lines
+	# Gate C: a qualifying commit must carry the pipeline git identity and
+	# arrive in a push by the pipeline login on this head ref.
+	gate_c = sweep_code[sweep_code.index("N_PROD_PUSHED="):sweep_code.index('if [ "${N_PROD_PUSHED}" != "true" ]')]
+	assert '--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}"' in gate_c and '--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}"' in gate_c, gate_c
+	assert '(.value.commit.committer.name // "") == $name' in gate_c and '(.value.commit.author.email // "") == $email' in gate_c, gate_c
+	assert '(.actor.login // "") == $login and (.ref // "") == $ref' in gate_c, gate_c
+	assert "select(.b < $k and $k <= .a)" in gate_c, gate_c
 	assert '_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0' in sweep_code
 	merges = [line for line in sweep_code.splitlines() if "gh pr merge" in line and "--squash" in line]
 	assert len(merges) == 1, merges
