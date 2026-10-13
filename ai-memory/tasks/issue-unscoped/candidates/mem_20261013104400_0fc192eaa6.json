@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5665-5695 | severity=critical | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `keep_trusted_support=true` path preserves a backup of the live working tree rather than the poller's trusted staged support files, so a prior project's branch-supplied scripts can be executed by a later security pass with poller credentials.\n  WHY: Severity differed (MAJOR vs. BLOCKER); BLOCKER is the highest because project-supplied scripts may execute in a credential-bearing workflow.\n- scripts/orchestrate_poll_process.sh:5612-5695 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The comment claims the keep mode preserves trusted poller support files, but the implementation keeps the live-tree backup, which may contain files from a prior project.\n  WHY: The function does not read trusted support files from `.codex-workflow-src/`, so its documented trust guarantee is inaccurate.\n- tests/test_orchestrate_poll_process.py:24477-24531 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new tests do not cover a security-pass checkout after a prior judge checkout has left another project's tracked files in the working tree.\n  WHY: The tests use a fresh staged tree and therefore do not detect cross-tracking-issue pollution.\n- scripts/orchestrate_poll_process.sh:5689 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `kept_target` log count can understate how many files the overlay replaced because it depends on `core.fileMode` and index state.\n  WHY: This affects only the log count; behavior is unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:5665-5678, 5687-5688 | severity=high | confidence=3\n  PROBLEM: The security-pass keep mode preserves the live working-tree backup, which may contain another project's tracked scripts, rather than the poller's staged support files.\n  WHY: A prior judge checkout in the same process can leave project A's scripts in the tree for project B's security pass to run with poller credentials.\n- scripts/orchestrate_poll_process.sh:5689 | severity=low | confidence=2\n  PROBLEM: The `kept_target` count depends on `core.fileMode` and index state, so it can understate how many files the overlay replaced.\n  WHY: This only affects the number in the log line. Behavior is unchanged.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:5665-5695 | severity=critical | confidence=3\n  PROBLEM: The `keep_trusted_support=true` guard may preserve untrusted branch-supplied scripts from an earlier project run in the shared workspace.\n  WHY: The backup captures the current working tree, which may contain a previous project's files that the security pass then executes with poller credentials.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:5665-5670, 5687-5695 | severity=high | confidence=3\n  PROBLEM: The `keep_trusted_support=\"true\"` path keeps the live working-tree backup rather than the poller's staged trusted support files.\n  WHY: After a prior wave-judge call, a later security pass can execute another project's tracked scripts with poller credentials.\n- scripts/orchestrate_poll_process.sh:5612-5616, 5687-5695 | severity=high | confidence=3\n  PROBLEM: The comment claims the fifth argument keeps the poller's trusted support files, but the implementation skips the HEAD-restore step and keeps the live-tree backup.\n  WHY: `prepare_tracking_judge_checkout` does not read from `.codex-workflow-src/`, so the comment's trusted-support guarantee is inaccurate.\n- tests/test_orchestrate_poll_process.py:24477-24531 | severity=high | confidence=3\n  PROBLEM: The new tests do not exercise the cross-tracking-issue scenario where a prior checkout has left another project's tracked files in the working tree.\n  WHY: The tests use a fresh staged tree and do not catch the security-pass path using files left by a prior call.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:5665-5670, 5687-5688, 7980-7983 | severity=critical | confidence=4\n  PROBLEM: The security-pass exception can preserve scripts from an earlier project's integration branch instead of verifying them against the trusted support source.\n  WHY: A later security pass can execute a prior project's script in a credential-bearing workflow.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "0a893bd2354f673ef3694249add452dc3b48dd3f45e384b3c49f7392cb33b2c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7311,
+    "run_id": "38381021351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38381021351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013104400_0fc192eaa6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7311,
+    "run_id": "38381021351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T10:44:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
