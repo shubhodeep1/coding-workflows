@@ -5610,7 +5610,8 @@ prepare_tracking_judge_checkout() {
   local checkout_mode="${3:-api-verified}"
   local target_ref_override="${4:-}"
   # Optional 5th argument: "true" keeps the poller's trusted support files
-  # after a forced checkout. The security pass passes it because it executes
+  # after a forced checkout, re-copied from the verified .codex-workflow-src
+  # checkout. The security pass passes it because it executes
   # scripts/security_audit.sh and its helpers from this checkout with the
   # poller's credentials, so the audited branch must not supply them.
   local keep_trusted_support="${5:-false}"
@@ -5675,6 +5676,23 @@ prepare_tracking_judge_checkout() {
           [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
         done
         [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
+        # Keep mode: the backup is the live tree, which an earlier judge
+        # checkout in this tick may have left holding another project's
+        # tracked scripts. Re-copy every backed-up support file from the
+        # verified support checkout the workflow staged it from.
+        local _judge_trusted_refreshed=0 _judge_support_file _judge_support_root
+        if [ "${keep_trusted_support}" = "true" ]; then
+          while IFS= read -r -d '' _judge_support_file; do
+            _judge_support_file="${_judge_support_file#./}"
+            for _judge_support_root in .codex-workflow-src .codex-workflow-src-main; do
+              if [ ! -L "${_judge_support_root}" ] && [ -f "${_judge_support_root}/${_judge_support_file}" ] && [ ! -L "${_judge_support_root}/${_judge_support_file}" ]; then
+                rm -f -- "${_judge_support_file}" && cp -- "${_judge_support_root}/${_judge_support_file}" "${_judge_support_file}" \
+                  && _judge_trusted_refreshed=$((_judge_trusted_refreshed + 1))
+                break
+              fi
+            done
+          done < <(cd "${_wf_backup}" && find scripts prompts -type f -print0 2>/dev/null)
+        fi
         rm -rf "${_wf_backup}"
         # Files the target ref tracks keep the target's version, as on the
         # plain checkout path: only support files it does not track stay
@@ -5685,7 +5703,7 @@ prepare_tracking_judge_checkout() {
         # beside the target's tests, and project #7126's judge filed
         # restore issues #7296, #7306 and #7307 for code the branch had.
         if [ "${keep_trusted_support}" = "true" ]; then
-          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=trusted_support"
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=trusted_support trusted_refreshed=${_judge_trusted_refreshed}"
         elif _judge_overlaid="$(git diff --name-only -- scripts prompts .github/ai 2>/dev/null | wc -l | tr -d ' ')" \
           && git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
           echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced kept_target=${_judge_overlaid:-0}"

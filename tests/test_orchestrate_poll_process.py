@@ -24531,6 +24531,33 @@ def test_security_pass_judge_checkout_keeps_the_trusted_support_scripts() -> Non
 	assert 'prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"' in poller
 
 
+def test_security_pass_judge_checkout_refreshes_support_from_the_verified_checkout() -> None:
+	"""An earlier judge checkout in the same tick can leave another project's
+	tracked scripts in the tree. In keep mode the forced fallback re-copies
+	every backed-up support file from .codex-workflow-src, so the security
+	pass never runs a project-supplied security_audit.sh."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").write_text("project A copy\n", encoding="utf-8")
+		(repo / "scripts" / "security_audit.sh").write_text("project A audit\n", encoding="utf-8")
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
+		(trusted / "security_audit.sh").write_text("trusted audit\n", encoding="utf-8")
+		func = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "prepare_tracking_judge_checkout() {")
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "trusted copy\n", out
+		assert (repo / "scripts" / "security_audit.sh").read_text(encoding="utf-8") == "trusted audit\n", out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert "reason=trusted_support trusted_refreshed=2" in out, out
+
+
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	"""Regression for PR #3991 / issue #3990: stall recovery closed a
 	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``
