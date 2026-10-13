@@ -67,7 +67,9 @@ freshness_ci_failed_main()
 	# duplicate marker (a lost success response) is harmless.
 	local marker_attempt=1 marker_posted=false
 	local retry_sleep="${FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS:-5}"
-	[[ "${retry_sleep}" =~ ^[0-9]+$ ]] || retry_sleep=5
+	# 0-60 seconds: a huge repository-variable value would otherwise hold
+	# the job in sleeps before the remaining attempts and the dispatch.
+	{ [[ "${retry_sleep}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${retry_sleep}))" -le 60 ]; } || retry_sleep=5
 	while [ "${marker_attempt}" -le 3 ]; do
 		if gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
 			marker_posted=true

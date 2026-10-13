@@ -101,6 +101,11 @@ def test_a_failed_marker_post_does_not_dispatch() -> None:
 	assert "outcome=marker_failed" in result.stdout
 
 
+def test_retry_sleep_is_bounded() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	assert '[[ "${retry_sleep}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${retry_sleep}))" -le 60 ]; } || retry_sleep=5' in text
+
+
 def test_switch_defaults_on_and_false_turns_it_off() -> None:
 	for value in ("", "TRUE"):
 		result, calls = _run(FRESHNESS_CI_FAILED_REDISPATCH_ENABLED=value)
