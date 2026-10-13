@@ -61,6 +61,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Initialize runtime workspace": ("review_autofix_step_init_runtime_workspace.sh", "error"),
 	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_post_review_blocked_comment.sh", "error"),
 	"Post editor summary comment": ("review_autofix_step_post_editor_summary.sh", "error"),
+	"Mark linked issues ready to merge": ("review_autofix_step_mark_ready_to_merge.sh", "error"),
 	"Detect smoke test and tune LLM settings": ("review_autofix_step_detect_smoke_test.sh", "error"),
 	"Evaluate review gate": ("review_autofix_step_evaluate_gate.sh", "error"),
 }
