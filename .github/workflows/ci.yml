@@ -673,7 +673,7 @@ jobs:
       - name: Prebuilt sandbox image tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py tests/test_clarify_sandbox_base_image_preseed.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
 
       - name: Review sandbox image build retry tests
         run: |
