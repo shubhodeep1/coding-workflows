@@ -182,6 +182,18 @@ def _make_poller_sandbox(
 				stdout=subprocess.DEVNULL,
 				stderr=subprocess.DEVNULL,
 			)
+	# Disable git's auto-gc and auto-maintenance in the throwaway repo. Both
+	# can detach (setsid) and keep writing under .git/objects after the
+	# poller exits, racing TemporaryDirectory cleanup with
+	# "[Errno 39] Directory not empty" (CI run 38343038127).
+	for _key, _value in (("gc.auto", "0"), ("maintenance.auto", "false")):
+		subprocess.run(
+			["git", "-C", str(target), "config", _key, _value],
+			check=False,
+			env=git_env,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "main"],
 		check=True,
@@ -361,6 +373,12 @@ def _run_poller_subprocess(
 				f"stdout:\n{stdout}\n"
 				f"stderr:\n{stderr}"
 			)
+		# Reap descendants that outlived the poller (background jobs still
+		# writing into the sandbox) before the caller removes the tempdir.
+		try:
+			os.killpg(proc.pid, signal.SIGKILL)
+		except (ProcessLookupError, PermissionError):
+			pass
 		return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 	finally:
 		if owns_sandbox:

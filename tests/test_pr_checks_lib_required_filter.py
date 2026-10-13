@@ -381,6 +381,15 @@ def test_cancelled_ci_check_superseded_by_newer_bound_ci_run_only() -> None:
 	assert rc == 1 and reason == "blocking", (rc, reason)
 
 
+def test_cancelled_ci_check_not_superseded_when_bound_ids_empty() -> None:
+	"""An empty PR_CHECKS_CI_RUN_IDS binds nothing: a newer `lint` from a
+	different Actions run must not replace a cancelled CI `lint`."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "PR_CHECKS_CI_RUN_IDS": ""})
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
 def test_non_ci_names_keep_cross_run_supersession() -> None:
 	"""Names other than the CI check (a new review run's `review / gate`)
 	still supersede a cancelled run from an earlier Actions run."""

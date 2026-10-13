@@ -27942,9 +27942,13 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	if ! _pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}"; then
 		# A check-run still running is not a failure: skip without paging and
 		# re-check on the next sweep, so the once-per-head marker is kept for
-		# a settled failure. Otherwise page once per head (gate D_check).
+		# a settled failure. A failed check-runs read (query_failed /
+		# unresolved_head_sha) is not a check failure either and must not
+		# consume that marker. Otherwise page once per head (gate D_check).
 		if [ "${PR_CHECKS_LAST_REASON:-}" = "blocking" ] && [[ "${PR_CHECKS_LAST_PENDING:-0}" =~ ^[1-9][0-9]*$ ]]; then
 			echo "  PR #${N_PR}: gate D waiting for ${PR_CHECKS_LAST_PENDING} running check-run(s) on ${N_HEAD_SHA}; re-checking next sweep."
+		elif [ "${PR_CHECKS_LAST_REASON:-}" = "query_failed" ] || [ "${PR_CHECKS_LAST_REASON:-}" = "unresolved_head_sha" ]; then
+			echo "::warning::PR #${N_PR}: gate D could not read check-runs on ${N_HEAD_SHA} (reason=${PR_CHECKS_LAST_REASON}); re-checking next sweep."
 		else
 			_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required check-runs on ${N_HEAD_SHA} are not all passing (reason=${PR_CHECKS_LAST_REASON:-unknown}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 		fi

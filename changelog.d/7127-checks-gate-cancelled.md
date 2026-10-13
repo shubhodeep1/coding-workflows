@@ -5,7 +5,7 @@
 
 Re-running a job adds a new check-run with the same name on the same commit. A cancelled check-run now blocks only while it is the newest check-run of its name, so a cancelled run that a later run replaced does not block. The CI aggregate check `lint` shares its name with jobs in two PR-body lint workflows that run again on every PR body edit, so a cancelled `lint` is replaced only by a re-run in the same Actions run (or, in the auto-merge wait, by a newer CI run). A failed or still-running check-run still blocks even when a newer run of the same name exists, because a check-run does not say which workflow produced it and different workflows can share a job name. A cancelled required check with nothing newer counts as finished, so the auto-merge wait refuses at once instead of waiting out its budget, unless another check on the head is still running.
 
-The noop-suspicious force-merge fallback in the poller (Gate D) had its own check-runs query. That query blocked on failed advisory checks and ignored required checks that were still running. Gate D now calls the shared gate, so both paths apply the same rules. It pages once per PR head, like the other force-merge gates, and waits without paging while a check is still running.
+The noop-suspicious force-merge fallback in the poller (Gate D) had its own check-runs query. That query blocked on failed advisory checks and ignored required checks that were still running. Gate D now calls the shared gate, so both paths apply the same rules. It pages once per PR head, like the other force-merge gates, and waits without paging while a check is still running or the check-runs could not be read.
 
 | The numbers that matter | Value |
 | --- | --- |
