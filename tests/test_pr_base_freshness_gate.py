@@ -710,6 +710,7 @@ class FreshnessSyncWiring(unittest.TestCase):
 			)
 
 	def test_the_gate_routes_a_verified_update_to_deterministic_skip_merge(self) -> None:
+		# The gate body lives in scripts/review_autofix_step_evaluate_gate.sh (#6972).
 		text = expanded_review_autofix_text()
 		self.assertIn('or ($b | contains("<!-- ai:merge-base-sync:v1 "))', text)
 		self.assertIn("MERGE_BASE_SYNC_FAST_PATH_ENABLED: ${{ vars.MERGE_BASE_SYNC_FAST_PATH_ENABLED || 'true' }}", text)

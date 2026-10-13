@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""plan.yml wiring for the superseded CI-repair issue check (issue #7216).
+
+Contract checks read plan.yml as text. Behavioural checks run the step's own
+shell body with a fake `gh` on PATH and the real helper staged under
+`.codex-workflow-src/scripts`, replaying the #7185 shape: a re-issue (no
+labels, pipeline author) of triage issue #6977 for PR #6976, which merged
+with CI green on its final head.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+STEP_NAME = "Close superseded CI-repair issue (merged PR)"
+REPO = "acme/widgets"
+PIPELINE = "pipeline-bot"
+HEAD_SHA = "c" * 40
+HEAD_BRANCH = "ai/issue-6969"
+
+
+def _step_names() -> list[str]:
+	return [line.strip()[len("- name: "):] for line in PLAN_WORKFLOW.read_text().splitlines()
+		if line.startswith("      - name: ")]
+
+
+def _step_block(name: str) -> list[str]:
+	lines = PLAN_WORKFLOW.read_text().splitlines()
+	start = lines.index(f"      - name: {name}")
+	end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("      - name: "))
+	return lines[start:end]
+
+
+def _step_run(name: str) -> str:
+	block = _step_block(name)
+	run_at = block.index("        run: |")
+	return textwrap.dedent("\n".join(block[run_at + 1:])) + "\n"
+
+
+def test_step_order_and_gating():
+	names = _step_names()
+	position = names.index(STEP_NAME)
+	assert names.index("Skip stale /answer comments") < position
+	assert position < names.index("Check and claim /answer command")
+	assert position < names.index("Run Codex planning")
+	block = "\n".join(_step_block(STEP_NAME))
+	assert "        if: env.SKIP_PLAN != 'true'" in block
+	assert "PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}" in block
+
+
+def test_step_runs_only_the_trusted_helper_without_untrusted_expressions():
+	body = _step_run(STEP_NAME)
+	assert "${{" not in body
+	assert 'python3 -I -B "${helper}" classify' in body
+	assert ".codex-workflow-src/scripts/plan_superseded_merged_pr.py" in body
+	assert "scripts/plan_superseded_merged_pr.py\"" not in body.replace(".codex-workflow-src/scripts/", "").replace(
+		".codex-workflow-src-main/scripts/", "")
+
+
+def test_ref_context_honours_the_reroute():
+	ref_ctx = _step_run("Capture planning ref context")
+	assert 'HEAD_BRANCH="${PLAN_REROUTED_REF}"' in ref_ctx
+	reroute = ref_ctx.index('if [ -n "${PLAN_REROUTED_REF:-}" ]; then\n  REF_MISMATCH="false"')
+	assert reroute > ref_ctx.index('REF_MISMATCH="true"')
+	build = _step_run("Build planning context")
+	assert "MERGED PULL REQUEST FACTS" in build
+	assert "Rerouted from merged PR head to base" in build
+
+
+def test_workflow_parses_as_yaml():
+	yaml = pytest.importorskip("yaml")
+	steps = yaml.safe_load(PLAN_WORKFLOW.read_text())["jobs"]["plan"]["steps"]
+	step = next(step for step in steps if step.get("name") == STEP_NAME)
+	assert step["id"] == "superseded_merged_pr"
+
+
+FAKE_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["GH_LOG"], "a", encoding="utf-8") as handle:
+	handle.write(json.dumps(args) + "\n")
+if args[:2] == ["api", "user"]:
+	print(os.environ["FAKE_LOGIN"])
+	sys.exit(0)
+if args[:2] in (["issue", "edit"], ["issue", "close"]):
+	sys.exit(1 if os.environ.get("FAKE_EDIT_FAIL") == "1" else 0)
+if args and args[0] == "api":
+	path = next(arg for arg in args if arg.startswith("repos/"))
+	if path.endswith("/comments") and "-f" in args:
+		sys.exit(1 if os.environ.get("FAKE_COMMENT_FAIL") == "1" else 0)
+	fixtures = json.load(open(os.environ["GH_FIXTURES"], encoding="utf-8"))
+	if path in fixtures:
+		print(json.dumps(fixtures[path]))
+		sys.exit(0)
+	print("HTTP 404: Not Found", file=sys.stderr)
+	sys.exit(1)
+sys.exit(2)
+'''
+
+
+def _triage_body() -> str:
+	return "\n".join([
+		"<!-- check-failure-triage:pr=6976 -->",
+		"",
+		f"- **Pull request:** https://github.com/{REPO}/pull/6976 (`{HEAD_BRANCH}`)",
+		"- **Failing check:** `CI` (conclusion: `failure`)",
+		f"- **Check details:** https://github.com/{REPO}/actions/runs/123",
+		"",
+		"---",
+	])
+
+
+def _fixtures(run_conclusion: str) -> dict:
+	triage = {"number": 6977, "body": _triage_body(), "user": {"login": "owner-human"},
+		"author_association": "OWNER", "labels": [{"name": "ai:check-triage"}]}
+	return {
+		f"repos/{REPO}/issues/6977": triage,
+		f"repos/{REPO}/pulls/6976": {"merged_at": "2026-10-10T00:00:00Z", "state": "closed",
+			"head": {"sha": HEAD_SHA, "ref": HEAD_BRANCH, "repo": {"full_name": REPO}}, "base": {"ref": "main"}},
+		f"repos/{REPO}/actions/runs/123": {"workflow_id": 77, "repository": {"full_name": REPO}},
+		f"repos/{REPO}/actions/workflows/77/runs?head_sha={HEAD_SHA}&per_page=1":
+			{"workflow_runs": [{"status": "completed", "conclusion": run_conclusion}]},
+	}
+
+
+def _run_step(tmp_path: Path, *, run_conclusion="success", comments=None, env_extra=None, stage_helper=True,
+	issue_body="Re-issued by the unblock judge from #6977.\n\nSpecification: fix CI.\n\nWhy: red.", cwd=None):
+	work = cwd or (tmp_path / "work")
+	work.mkdir(exist_ok=True)
+	if stage_helper:
+		support = work / ".codex-workflow-src" / "scripts"
+		support.mkdir(parents=True, exist_ok=True)
+		for name in ("plan_superseded_merged_pr.py", "files_touched_scope_guard.py"):
+			shutil.copy2(REPO_ROOT / "scripts" / name, support / name)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GH)
+	gh.chmod(0o755)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir(exist_ok=True)
+	meta = runtime / "issue_meta.json"
+	meta.write_text(json.dumps({"number": 7185, "title": "Re-issue of #6977: CI on PR #6976", "body": issue_body,
+		"user": {"login": PIPELINE}, "author_association": "NONE", "labels": []}))
+	(runtime / "issue_comments.json").write_text(json.dumps(comments or []))
+	fixtures = tmp_path / "fixtures.json"
+	fixtures.write_text(json.dumps(_fixtures(run_conclusion)))
+	github_env = tmp_path / "github_env"
+	github_env.write_text("")
+	log = tmp_path / "gh.log"
+	env = {
+		"PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin",
+		"HOME": str(tmp_path),
+		"GH_LOG": str(log), "GH_FIXTURES": str(fixtures), "FAKE_LOGIN": PIPELINE,
+		"GITHUB_ENV": str(github_env), "RUNTIME_DIR": str(runtime),
+		"ISSUE_META_FILE": str(meta), "ISSUE_COMMENTS_FILE": str(runtime / "issue_comments.json"),
+		"ISSUE_NUMBER": "7185", "REPO_SLUG": REPO, "PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED": "true",
+		"PLAN_SUPERSEDE_RESOLVED_REF": "main", "PYTHONDONTWRITEBYTECODE": "1",
+	}
+	env.update(env_extra or {})
+	proc = subprocess.run(["bash", "-c", _step_run(STEP_NAME)], cwd=str(work), env=env, text=True,
+		capture_output=True, timeout=120)
+	calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+	return proc, calls, github_env.read_text()
+
+
+def test_7185_reissue_is_closed_as_superseded(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path)
+	output = proc.stdout + proc.stderr
+	assert proc.returncode == 0, output
+	assert "SKIP_PLAN=true" in github_env
+	posts = [call for call in calls if call[0] == "api" and call[1].endswith("/comments") and "-f" in call]
+	assert len(posts) == 1
+	body = posts[0][posts[0].index("-f") + 1]
+	assert f"<!-- ai:plan-superseded:v1 pr=6976 head={HEAD_SHA} -->" in body
+	assert HEAD_BRANCH not in body
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert "ai:closed" in edit and "ai:planning" in edit and "ai:clarification" in edit
+	close = next(call for call in calls if call[:2] == ["issue", "close"])
+	assert close[close.index("--reason") + 1] == "not planned"
+	assert "outcome=superseded label=applied close=done comment=posted" in output
+
+
+def test_existing_marker_skips_the_post_but_still_closes(tmp_path):
+	marker = f"<!-- ai:plan-superseded:v1 pr=6976 head={HEAD_SHA} -->"
+	comments = [{"user": {"login": PIPELINE}, "body": f"Earlier.\n{marker}"}]
+	proc, calls, github_env = _run_step(tmp_path, comments=comments)
+	assert proc.returncode == 0, proc.stderr
+	assert not [call for call in calls if call[0] == "api" and call[1].endswith("/comments")]
+	assert any(call[:2] == ["issue", "close"] for call in calls)
+	assert "SKIP_PLAN=true" in github_env
+
+
+def test_marker_from_another_author_does_not_count(tmp_path):
+	marker = f"<!-- ai:plan-superseded:v1 pr=6976 head={HEAD_SHA} -->"
+	comments = [{"user": {"login": "someone"}, "body": marker}]
+	proc, calls, _ = _run_step(tmp_path, comments=comments)
+	assert any(call[0] == "api" and call[1].endswith("/comments") for call in calls), proc.stdout
+
+
+def test_comment_failure_plans_as_usual(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, env_extra={"FAKE_COMMENT_FAIL": "1"})
+	assert proc.returncode == 0
+	assert "SKIP_PLAN" not in github_env
+	assert "reason=comment_failed" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_close_failure_still_skips_planning(tmp_path):
+	proc, _, github_env = _run_step(tmp_path, env_extra={"FAKE_EDIT_FAIL": "1"})
+	assert proc.returncode == 0
+	assert "SKIP_PLAN=true" in github_env
+	assert "label=failed close=failed" in proc.stdout
+
+
+def test_switch_off_makes_no_calls(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, env_extra={"PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED": "False"})
+	assert proc.returncode == 0
+	assert calls == [] and github_env == ""
+	assert "outcome=skip reason=disabled" in proc.stdout
+
+
+def test_non_candidate_makes_no_calls(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, issue_body="Accepted with this follow-up by the unblock judge (#7185).")
+	assert proc.returncode == 0
+	assert calls == [] and github_env == ""
+	assert "reason=not_candidate" in proc.stdout
+
+
+def test_missing_helper_plans_as_usual(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, stage_helper=False)
+	assert proc.returncode == 0
+	assert "SKIP_PLAN" not in github_env
+	assert "reason=helper_missing" in proc.stdout
+	assert calls == []
+
+
+def _git(*args, cwd):
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.invalid", "GIT_COMMITTER_NAME": "t",
+		"GIT_COMMITTER_EMAIL": "t@e.invalid"})
+	subprocess.run(["git", *args], cwd=str(cwd), env=env, check=True, capture_output=True)
+
+
+def test_merged_check_failed_reroutes_to_base(tmp_path):
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", "main", str(seed), cwd=tmp_path)
+	(seed / "README.md").write_text("base\n")
+	_git("add", "README.md", cwd=seed)
+	_git("commit", "-q", "-m", "base", cwd=seed)
+	_git("push", "-q", str(origin), "main", cwd=seed)
+	_git("checkout", "-q", "-b", HEAD_BRANCH, cwd=seed)
+	(seed / "README.md").write_text("head\n")
+	_git("commit", "-q", "-am", "head", cwd=seed)
+	_git("push", "-q", str(origin), HEAD_BRANCH, cwd=seed)
+	_git("clone", "-q", "-b", HEAD_BRANCH, str(origin), str(work), cwd=tmp_path)
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={"PLAN_SUPERSEDE_RESOLVED_REF": HEAD_BRANCH})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PLAN_REROUTED_REF=main" in github_env
+	assert "SKIP_PLAN" not in github_env
+	assert (work / "README.md").read_text() == "base\n"
+	facts_line = next(line for line in github_env.splitlines() if line.startswith("PLAN_MERGED_PR_FACTS_FILE="))
+	facts = Path(facts_line.split("=", 1)[1]).read_text()
+	assert "plan against main" in facts and HEAD_BRANCH not in facts
+	assert f"outcome=rerouted from={HEAD_BRANCH} to=main" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_failed_reroute_skips_planning_instead_of_using_the_former_head(tmp_path):
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", HEAD_BRANCH, str(seed), cwd=tmp_path)
+	(seed / "README.md").write_text("head\n")
+	_git("add", "README.md", cwd=seed)
+	_git("commit", "-q", "-m", "head", cwd=seed)
+	# The base branch "main" is absent on origin, so the fetch fails.
+	_git("push", "-q", str(origin), HEAD_BRANCH, cwd=seed)
+	_git("clone", "-q", "-b", HEAD_BRANCH, str(origin), str(work), cwd=tmp_path)
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={"PLAN_SUPERSEDE_RESOLVED_REF": HEAD_BRANCH})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "PLAN_REROUTED_REF" not in github_env
+	assert "outcome=skip reason=reroute_failed" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_reroute_keeps_staged_support_copies_that_differ_between_head_and_base(tmp_path):
+	# "Stage workflow support files" overwrites tracked scripts/ files; a
+	# plain checkout refuses when such a file differs between head and base.
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", "main", str(seed), cwd=tmp_path)
+	(seed / "scripts").mkdir()
+	(seed / "README.md").write_text("base\n")
+	(seed / "scripts" / "helper.sh").write_text("base helper\n")
+	_git("add", "README.md", "scripts/helper.sh", cwd=seed)
+	_git("commit", "-q", "-m", "base", cwd=seed)
+	_git("push", "-q", str(origin), "main", cwd=seed)
+	_git("checkout", "-q", "-b", HEAD_BRANCH, cwd=seed)
+	(seed / "README.md").write_text("head\n")
+	(seed / "scripts" / "helper.sh").write_text("head helper\n")
+	_git("commit", "-q", "-am", "head", cwd=seed)
+	_git("push", "-q", str(origin), HEAD_BRANCH, cwd=seed)
+	_git("clone", "-q", "-b", HEAD_BRANCH, str(origin), str(work), cwd=tmp_path)
+	(work / "scripts" / "helper.sh").write_text("staged helper\n")
+	proc, _, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={"PLAN_SUPERSEDE_RESOLVED_REF": HEAD_BRANCH})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PLAN_REROUTED_REF=main" in github_env, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert (work / "README.md").read_text() == "base\n"
+	assert (work / "scripts" / "helper.sh").read_text() == "staged helper\n"
+
+
+def test_reroute_keeps_ignored_staged_helpers_the_base_tracks(tmp_path):
+	# Consumer runs list staged helpers in scripts/.gitignore; checkout
+	# overwrites an ignored file when the target commit tracks that path.
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", "main", str(seed), cwd=tmp_path)
+	(seed / "scripts").mkdir()
+	(seed / "README.md").write_text("base\n")
+	(seed / "scripts" / "helper.sh").write_text("base helper\n")
+	_git("add", "README.md", "scripts/helper.sh", cwd=seed)
+	_git("commit", "-q", "-m", "base", cwd=seed)
+	_git("push", "-q", str(origin), "main", cwd=seed)
+	_git("checkout", "-q", "-b", HEAD_BRANCH, cwd=seed)
+	_git("rm", "-q", "scripts/helper.sh", cwd=seed)
+	(seed / "README.md").write_text("head\n")
+	_git("commit", "-q", "-am", "head", cwd=seed)
+	_git("push", "-q", str(origin), HEAD_BRANCH, cwd=seed)
+	_git("clone", "-q", "-b", HEAD_BRANCH, str(origin), str(work), cwd=tmp_path)
+	(work / "scripts").mkdir(exist_ok=True)
+	(work / "scripts" / "helper.sh").write_text("staged helper\n")
+	(work / "scripts" / ".gitignore").write_text("helper.sh\n.gitignore\n")
+	proc, _, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={"PLAN_SUPERSEDE_RESOLVED_REF": HEAD_BRANCH})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PLAN_REROUTED_REF=main" in github_env, proc.stdout + proc.stderr
+	assert (work / "README.md").read_text() == "base\n"
+	assert (work / "scripts" / "helper.sh").read_text() == "staged helper\n"
