@@ -414,6 +414,35 @@ def test_rb_judge_jq_mirror_matches_library_defs() -> None:
 	assert m.group(1) in mirror
 
 
+_ACCEPT_EXPR = (
+	'.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" '
+	'and (.conclusion != "cancelled" or (._superseded | not))'
+)
+
+
+def test_restore_7126_cancelled_not_in_accept_set() -> None:
+	"""Static guard (no jq needed), project #7126: a sync or conflict
+	resolution once dropped the #7127 hunks silently. Both gate filters in
+	_pr_checks_completed must share PR_CHECKS_JQ_SUPERSEDE_DEFS and accept a
+	cancelled check-run only when a newer run superseded it."""
+	import re
+
+	lib_text = LIB.read_text(encoding="utf-8")
+	assert re.search(r"\nPR_CHECKS_JQ_SUPERSEDE_DEFS='\n.*def _mark_superseded:", lib_text, re.S), (
+		"PR_CHECKS_JQ_SUPERSEDE_DEFS with _mark_superseded is missing from pr_checks_lib.sh"
+	)
+	start = lib_text.index("\n_pr_checks_completed()\n")
+	end = lib_text.index("\n}\n", start)
+	body = lib_text[start:end]
+	assert body.count('"${PR_CHECKS_JQ_SUPERSEDE_DEFS}"') == 2, body.count('"${PR_CHECKS_JQ_SUPERSEDE_DEFS}"')
+	assert body.count("_mark_superseded") == 2
+	assert body.count(_ACCEPT_EXPR) == 2, "each gate filter must accept cancelled only when superseded"
+	code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+	assert '.conclusion == "cancelled"' not in code
+	assert 'and .conclusion != "cancelled" and' not in code
+	assert not re.search(r'\[[^\]]*"success"[^\]]*"cancelled"[^\]]*\]', code), "cancelled must not be in an accepted list"
+
+
 # ---------------------------------------------------------------------------
 # Sentinels + branch-protection precedence.
 # ---------------------------------------------------------------------------
