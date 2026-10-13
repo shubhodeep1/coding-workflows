@@ -22455,12 +22455,11 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
     elif [ -z "${INTEGRATION_BRANCH_TRACKING:-}" ] || [ "${INTEGRATION_BRANCH_TRACKING}" = "null" ]; then
       VSP_SKIP_REASON="no_integration_branch"
     else
-      VSP_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-}"
-      if [ -z "${VSP_DEFAULT_BRANCH}" ]; then
-        # No `main` fallback: a failed read must not fake stale-pin evidence.
-        # Memoized per poller process (at most one GET repos/<repo>, §14).
-        VSP_DEFAULT_BRANCH="$(_review_run_default_branch)" || VSP_DEFAULT_BRANCH=""
-      fi
+      # No `main` fallback: a failed read must not fake stale-pin evidence.
+      # DEFAULT_BRANCH_TRACKING is not reused because earlier steps fill it
+      # with `|| echo "main"` when their read fails. Memoized per poller
+      # process (at most one GET repos/<repo>, §14).
+      VSP_DEFAULT_BRANCH="$(_review_run_default_branch)" || VSP_DEFAULT_BRANCH=""
       if [ -z "${VSP_DEFAULT_BRANCH}" ] || [ "${VSP_DEFAULT_BRANCH}" = "null" ]; then
         VSP_SKIP_REASON="default_branch_unavailable"
       elif [ "${INTEGRATION_BRANCH_TRACKING}" = "${VSP_DEFAULT_BRANCH}" ]; then
@@ -22514,15 +22513,14 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
         echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
         continue
       fi
-      # The persisted state flag is the once-only guard: without it a later
-      # tick would reload the failed state and dispatch a second run, so
-      # nothing is dispatched until it lands. Retry on the next tick.
-      if ! post_state_comment; then
-        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
-        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
-        continue
-      fi
-      rm -f "${STATE_FILE}.vsp_bak"
+      # Remove the failure labels before the guard flag is persisted. A
+      # leftover ai:validation-failed / ai:validate-failed label would make
+      # the next tick's validating branch call mark_validation_failed while
+      # the new run is active, after the once-only flag is spent. The edits
+      # stay `|| true` (ai:validate-failed may not exist in the repo); a fresh
+      # labels read decides instead. TRACKING_LABELS predates these edits, so
+      # this one extra read (recovery path only, once per project) is needed.
+      # A failure keeps the failed state and retries on the next tick.
       gh_retry gh issue edit "${TRACKING_NUM}" \
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:validation-failed" >/dev/null || true
@@ -22532,6 +22530,23 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       gh_retry gh issue edit "${TRACKING_NUM}" \
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
+      VSP_FRESH_LABELS=""
+      if ! VSP_FRESH_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:validation-failed" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:validate-failed"; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=label_write_failed"
+        continue
+      fi
+      # The persisted state flag is the once-only guard: without it a later
+      # tick would reload the failed state and dispatch a second run, so
+      # nothing is dispatched until it lands. Retry on the next tick.
+      if ! post_state_comment; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
+      rm -f "${STATE_FILE}.vsp_bak"
       set_tracking_phase_label "ai:validating"
       VSP_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
       [[ "${VSP_CYCLE}" =~ ^[0-9]+$ ]] && [ "${VSP_CYCLE}" -ge 1 ] || VSP_CYCLE=1
@@ -22543,6 +22558,11 @@ The last validation run failed with \`raw_status=harness_error\` after an earlie
 This recovery runs once per project. Validation counters were kept (cycle ${VSP_CYCLE}). If validation fails again, repair the cause and comment \`/revalidate\`. Set \`VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED=false\` to turn this recovery off."
       tg_notify "Project #${TRACKING_NUM}: validation re-dispatched from the default branch after a stale integration-branch workflow pin (one-shot recovery)." "DEBUG"
       echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=recovered reason=stale_integration_pin run_head_branch=${VSP_RUN_HEAD_BRANCH_STATE} default_sha=${VSP_DEFAULT_SHA}"
+      # LAST_VAL_RAW_STATUS / LAST_VAL_CONCLUSION are set only on the
+      # validating branch and may still hold an earlier project's run; clear
+      # them so a dispatch failure is classified from this project alone.
+      LAST_VAL_RAW_STATUS=''
+      LAST_VAL_CONCLUSION=''
       if ! dispatch_validation_if_needed "${VSP_CYCLE}"; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after stale-pin recovery. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi

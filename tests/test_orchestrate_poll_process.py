@@ -17765,6 +17765,27 @@ def test_stale_pin_recovery_skips_when_validation_disabled():
 	_assert_stale_pin_skipped(result, "validation_disabled")
 
 
+def test_stale_pin_recovery_skips_when_failure_label_removal_fails():
+	# The failure label must be gone before the once-only flag is persisted;
+	# otherwise the next tick would re-park the project mid-run.
+	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_edit_for=[192])
+	_assert_stale_pin_skipped(result, "label_write_failed")
+	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+
+
+def test_stale_pin_recovery_skips_when_state_write_fails():
+	# No dispatch until the guard flag is persisted; retry next tick.
+	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_comment_post_for=[192])
+	_assert_stale_pin_skipped(result, "state_write_failed")
+	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+
+
+def test_stale_pin_recovery_skips_when_default_branch_unreadable():
+	# A failed default-branch read must not fall back to `main`.
+	result = _run_stale_pin_poller(_stale_pin_state(), default_branch_fail=True)
+	_assert_stale_pin_skipped(result, "default_branch_unavailable")
+
+
 def test_stale_pin_recovery_skips_default_branch_only_project():
 	state = _stale_pin_state(integration_branch="")
 	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "no_integration_branch")
