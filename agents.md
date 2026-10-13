@@ -2929,7 +2929,7 @@ and shipped:
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
 - `PROVIDER_OUTAGE` (`scripts/provider_outage.py`: `op=classify|open|close|mark_label|sweep|resume outcome= …`)
 - `GH_API_RETRY` (`gh_api_retry` in `scripts/gh_helpers.sh` and `scripts/gh_api_retry.py`: `outcome=retry|gave_up|permanent|skipped kind=primary|secondary|transient|permanent|breaker bucket= status= attempt=<i>/<n> wait_secs= endpoint=`)
-- `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
+- `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file|symlink|symlink_in_path|special_file|unreadable path=<path|redacted>`; the per-path report writes unsafe entries as `unsafe<TAB><category><TAB><1|2|3+>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
@@ -3607,6 +3607,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/orchestrate_clarify_respond.yml
 .github/workflows/orchestrate_poll.yml
 .github/workflows/plan.yml
+.github/workflows/pr6576-shard-followup.yml
 .github/workflows/promote-main-to-stable.yml
 .github/workflows/propagate-consumer-secrets.yml
 .github/workflows/publish-sandbox-images.yml

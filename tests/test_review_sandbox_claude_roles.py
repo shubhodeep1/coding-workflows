@@ -161,11 +161,14 @@ def test_check_paths_report_names_only_plain_host_only_paths(tmp_path):
 		env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), capture_output=True, text=True)
 	assert proc.returncode == 1 and "unsupported path" in proc.stderr
 	# assets/x.svg is a directory on the host, so it is unsafe rather than host-only.
+	# Unsafe entries carry a fixed category and depth bucket, never the name (#7059).
 	assert report.read_text().splitlines() == [
 		"host_only\t.ai/.workspace_source_manifest.txt",
 		"host_only\t.claude/hooks/pr_merge_status_guard.py",
-		"unsafe", "unsafe", "unsafe", "unsafe", "unsafe",
+		"unsafe\tsymlink\t2", "unsafe\tspecial_file\t2", "unsafe\tunsafe_name\t1",
+		"unsafe\tunsafe_name\t2", "unsafe\tunsafe_name\t3+",
 	]
+	assert "REVIEW_RESOLVER_PATH_REJECTED reason=symlink path=redacted" in proc.stderr
 	ok = tmp_path / "ok.txt"
 	ok.write_text("scripts/a.py\n")
 	proc = subprocess.run([sys.executable, str(WORKSPACE), "check-paths", str(tmp_path), str(ok), str(report)],
