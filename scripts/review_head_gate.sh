@@ -142,6 +142,16 @@ review_head_gate_freshness_sync()
 	fi
 	fs_from="${fs_marker%% *}"
 	fs_sync="${fs_marker##* }"
+	# CI already failed on this head (scripts/review_freshness_ci_failed.sh,
+	# Q103): review it normally so autofix sees the failing checks.
+	if jq -e --arg login "${fs_login}" --arg pr "${fs_pr}" --arg head "${fs_head}" '
+		[ .[]? | select(type == "object" and (.author_login // "") == $login)
+		  | (.body // "") | select(type == "string")
+		  | test("<!-- ai:freshness-ci-failed:v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
+		"${fs_comments}" >/dev/null 2>&1; then
+		fs_log review ci_failed_on_head "from=${fs_from} sync=${fs_sync}"
+		return 1
+	fi
 	if ! fs_commit="$(gh_retry gh api "repos/${fs_repo}/commits/${fs_head}" \
 		--jq '{parents: [.parents[]?.sha], verified: (.commit.verification.verified // false), committer: (.committer.login // "")}' 2>/dev/null)"; then
 		fs_log review commit_read_failed "from=${fs_from} sync=${fs_sync}"

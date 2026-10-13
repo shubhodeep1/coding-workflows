@@ -900,6 +900,17 @@ def test_plan_gate_cli_granted_and_ordinary_plans() -> None:
 		"denied_paths": [], "log_paths": "none"}
 
 
+def test_plan_gate_flag_defaults_on() -> None:
+	# An empty value is on, like the `|| 'true'` workflow defaults; only an
+	# explicit off value holds every automation-path plan.
+	plan = "## Files likely to change\n- `scripts/a.sh`\n\n## Functions or modules to implement\n- `scripts/b.sh`\n"
+	meta = _owner_meta("scripts/a.sh")
+	code, record = _run_plan_gate_cli(plan, "", meta)
+	assert code == 0 and record["reason"] == "granted" and record["protected_paths"] == ["scripts/a.sh"]
+	for off in ("false", "FALSE", "0", "no", "maybe"):
+		assert _run_plan_gate_cli(plan, off, meta)[1]["reason"] == "automation_path_plan_auto_approval_disabled", off
+
+
 def test_plan_gate_cli_fails_closed() -> None:
 	plan = "### Files likely to change\n- `scripts/a.sh`\n"
 	assert _run_plan_gate_cli(None, "false", None)[1]["reason"] == "plan_gate_error"
@@ -1119,6 +1130,14 @@ def test_origin_repo_is_passed_at_both_grant_call_sites() -> None:
 	assert 'origin_issues=\\((.origin_issues // [])' in metadata
 	unblock = (REPO_ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
 	assert '--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then' in unblock
+	# Issue #7174: both plan auto-approval checks (plan.yml and the poller's
+	# stall-recovery gate) verify a pipeline-authored issue's source chain.
+	plan = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	plan_gate = plan.split("run_plan_gate() {", 1)[1].split('plan_gate_result="$(run_plan_gate)"', 1)[0]
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" \\' in plan_gate
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	poller_gate = poller.split('gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --plan-auto-approval-gate', 1)[1].split('2>/dev/null || true)"', 1)[0]
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" \\' in poller_gate
 
 
 # --- #7209: unblock-judge re-issue that edits automation paths ---
@@ -1171,6 +1190,158 @@ def test_unblock_reissue_without_block_needs_a_trusted_source() -> None:
 	assert guard.build_automation_grant(_reissue_7209("files_touched:\n  not an item\n"), PIPELINE, trusted)["reason"] == "malformed_allowlist"
 	human = dict(_reissue_7209("no block"), user={"login": "maintainer"}, author_association="OWNER")
 	assert guard.build_automation_grant(human, PIPELINE, trusted)["reason"] == "no_allowlist"
+
+
+# --- Pipeline plan grant (Q108) ---------------------------------------------
+
+_GRANT_PLAN = """Implementation Plan
+
+## Files likely to change
+- `scripts/security_audit.sh` — call `audit()` with `--strict`
+- `.github/workflows/security-audit.yml`
+- tests/test_security_audit.py
+- `README.md`
+- `json.load()`
+- `../etc/passwd`
+- `docs/*.md`
+
+## Functions/modules to implement
+- `scripts/leak.sh`
+"""
+
+
+def test_extract_plan_file_paths_keeps_exact_files_from_the_files_section() -> None:
+	assert guard.extract_plan_file_paths(_GRANT_PLAN) == [
+		"scripts/security_audit.sh", ".github/workflows/security-audit.yml", "tests/test_security_audit.py", "README.md"]
+	# No Files section: nothing to grant from.
+	assert guard.extract_plan_file_paths("Edit `scripts/a.sh`.") == []
+	# A bare first token is kept even when the line has a non-path backtick span.
+	assert guard.extract_plan_file_paths(
+		"## Files likely to change\n- README.md — update using `parse()`\n- Makefile: add `--strict`\n") == [
+		"README.md", "Makefile"]
+	for bad in ("scripts/", "/etc/x", "a//b.py", "scripts/../x.sh", "scripts/a b.sh", "-rf/x", "x.1",
+			"https://example.com/a.py", "scripts/*.sh", "`", "json.load()", "v1.0"):
+		assert guard._plan_grant_path(bad) == "", bad
+	for good in ("Makefile", ".gitignore", "agents.md", "src/pkg/__init__.py", "scripts/a+b.py",
+			"go.mod", "go.sum", "main.go", "build.rs", "pom.xml", "build.gradle"):
+		assert guard._plan_grant_path(good) == good, good
+	# Any letter-led extension marks a root file, so no planned root file is
+	# left out of the grant; listed extensionless names and dotfiles count too.
+	for good in ("main.c", "util.h", "app.php", "Pipfile", "Jenkinsfile", ".dockerignore", ".prettierrc",
+			".gitlab-ci.yml", ".eslintrc.json", ".pre-commit-config.yaml"):
+		assert guard._plan_grant_path(good) == good, good
+	# Credential dotfiles and extensionless dot names (often directories) never are.
+	for bad in (".env", ".env.local", ".env.production", ".npmrc", ".netrc", ".vscode", ".devcontainer"):
+		assert guard._plan_grant_path(bad) == "", bad
+	# Underscores are part of a name, never stripped as markdown emphasis.
+	for good in ("__init__.py", "__main__.py", "_config.yml", "LICENSE", "scripts/LICENSE", "scripts/.hidden"):
+		assert guard._plan_grant_path(good) == good, good
+	# A slashless nested directory would cover every file beneath it
+	# (entry_matches), so it is never written as an exact grant.
+	for bad in ("scripts/lib", "docs/plans", ".github/ai", "src/conf.d", "scripts/v1.0", "api/v2.10",
+			"docs/2024.01.15"):
+		assert guard._plan_grant_path(bad) == "", bad
+	# A letter-led extension still marks a file at any depth.
+	for good in ("scripts/a.sh", "src/mod.rs", "web/x.mp3"):
+		assert guard._plan_grant_path(good) == good, good
+
+
+def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
+	body = guard.build_pipeline_plan_grant_body("Fix.\n\n---\n- Managed by: AI Orchestrator\n", ["a/b.py", "tests/**"])
+	assert body.startswith("Fix.\n\n---\n- Managed by: AI Orchestrator\n\n---\n**Pipeline plan grant.**")
+	assert body.endswith(guard.PIPELINE_PLAN_GRANT_MARKER + "\nfiles_touched:\n  - a/b.py\n  - tests/**\n"
+		"  - changelog.d/*\n  - agents.d/*\n")
+	assert guard.extract_files_touched(body) == ["a/b.py", "tests/**", "changelog.d/*", "agents.d/*"]
+
+
+def _run_grant_cli(plan: str, meta: dict, flag: str = "true") -> tuple[int, dict, str | None]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		(tdp / "plan.md").write_text(plan, encoding="utf-8")
+		(tdp / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+		out = tdp / "grant_body.md"
+		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate",
+			"--plan-file", str(tdp / "plan.md"), "--flag-enabled", flag, "--pipeline-login", "pipeline[bot]",
+			"--allow-workflow-edits", "true", "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
+			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False)
+		body = out.read_text(encoding="utf-8") if out.exists() and out.stat().st_size else None
+		return proc.returncode, json.loads(proc.stdout), body
+
+
+def test_plan_gate_proposes_pipeline_plan_grant_for_open_grant_only() -> None:
+	code, record, body = _run_grant_cli(_GRANT_PLAN, _pipeline_meta())
+	assert code == 0 and record["decision"] == "approve" and record["reason"] == "pipeline_plan_grant", record
+	assert record["pipeline_grant_body"] is True and record["denied_paths"] == []
+	assert body is not None and body.startswith(_pipeline_meta()["body"])
+	assert guard.extract_files_touched(body)[:4] == guard.extract_plan_file_paths(_GRANT_PLAN)
+	# The written body is an ordinary exact grant from then on.
+	grant = guard.build_automation_grant(dict(_pipeline_meta(), body=body), "pipeline[bot]")
+	assert grant["reason"] == "granted" and grant["open"] is False
+	# Flag off, a maintainer issue without a block, or an issue that already
+	# has a block: no proposal.
+	assert _run_grant_cli(_GRANT_PLAN, _pipeline_meta(), flag="false")[1]["reason"] == "automation_path_plan_auto_approval_disabled"
+	code, record, body = _run_grant_cli(_GRANT_PLAN, _owner_meta())
+	assert record["reason"] == "no_allowlist" and body is None and "pipeline_grant_body" not in record
+	code, record, body = _run_grant_cli(_GRANT_PLAN, dict(_pipeline_meta(), body=_body("scripts/security_audit.sh")))
+	assert record["decision"] == "hold" and body is None
+
+
+def test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted() -> None:
+	# A listed directory stays protected and ungranted: hold, nothing written.
+	plan = "## Files likely to change\n- `scripts/`\n- `scripts/a.sh`\n"
+	code, record, body = _run_grant_cli(plan, _pipeline_meta())
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/"] and body is None
+	plan = "## Files likely to change\n- `scripts/lib`\n- `scripts/a.sh`\n"
+	code, record, body = _run_grant_cli(plan, _pipeline_meta())
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/lib"] and body is None
+	plan = "## Files likely to change\n- `scripts/v1.0`\n- `scripts/a.sh`\n"
+	code, record, body = _run_grant_cli(plan, _pipeline_meta())
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/v1.0"] and body is None
+	# More files than the cap: no proposal, the open-grant hold stands.
+	many = "## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
+	code, record, body = _run_grant_cli(many, _pipeline_meta())
+	assert record["reason"] == "open_grant_not_exact" and body is None
+
+
+# --- Flush-left files_touched lists (#7296, Q111) ---------------------------
+
+_FLUSH_7296 = (
+	"All must pass.\n\nfiles_touched:\n- scripts/pr_checks_lib.sh\n- scripts/orchestrate_poll_process.sh\n"
+	"- scripts/implement_handle_guard_block.sh\n- changelog.d/*.md\n\nRefs #7126\n"
+)
+
+
+def test_flush_left_list_under_a_bare_key_parses() -> None:
+	assert guard.extract_files_touched(_FLUSH_7296) == [
+		"scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh",
+		"scripts/implement_handle_guard_block.sh", "changelog.d/*.md"]
+	assert guard.files_touched_block_state(_FLUSH_7296)[0] == "ok"
+	grant = guard.build_automation_grant(
+		{"number": 7296, "user": {"login": "maintainer"}, "author_association": "OWNER", "body": _FLUSH_7296}, "pipeline[bot]")
+	assert grant["reason"] == "granted"
+	assert grant["paths"] == ["scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh",
+		"scripts/implement_handle_guard_block.sh"]
+
+
+def test_flush_left_list_edges() -> None:
+	# The first entry fixes the indent: mixing stops the list.
+	assert guard.extract_files_touched("files_touched:\n  - a.py\n- b.py\n") == ["a.py"]
+	assert guard.extract_files_touched("files_touched:\n- a.py\n  - b.py\n") == ["a.py"]
+	# An indented key keeps its list flush with itself.
+	assert guard.extract_files_touched("  files_touched:\n  - a.py\n  - b.py\n") == ["a.py", "b.py"]
+	# `- files_touched:` is itself a list item: a flush `- x` is its sibling.
+	assert guard.extract_files_touched("- files_touched:\n- a.py\n") is None
+	assert guard.extract_files_touched("- files_touched:\n  - a.py\n") == ["a.py"]
+	# Prose right after the key is still malformed.
+	assert guard.files_touched_block_state("files_touched:\nsee below\n- a.py\n")[0] == "malformed"
+
+
+def test_review_reject_verify_parser_matches_the_guard() -> None:
+	# review_reject_verify.sh carries a verbatim copy of the parser.
+	import inspect
+	source = inspect.getsource(guard.extract_files_touched)
+	body = source[source.index("\tlines = text.splitlines()"):]
+	assert body in (REPO_ROOT / "scripts" / "review_reject_verify.sh").read_text(encoding="utf-8")
 
 
 def _run_all() -> int:
