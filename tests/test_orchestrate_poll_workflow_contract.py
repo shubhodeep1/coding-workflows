@@ -162,8 +162,11 @@ def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	step_start = wf.index("- name: Release staged-support latches without active projects")
 	step_end = wf.index("- name: Run worktree registry GC", step_start)
 	step = wf[step_start:step_end]
-	assert "steps.find_tracking.outputs.has_work != 'true'" in step
-	assert "github.repository == 'shubhodeep1/coding-workflows'" in step
+	assert (
+		"if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' "
+		"&& steps.find_tracking.outputs.has_work != 'true' "
+		"&& github.repository == 'shubhodeep1/coding-workflows' }}"
+	) in step
 	assert "STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
 	assert 'STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"' in step
 	assert 'run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh' in step
@@ -179,7 +182,10 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 	step_end = wf.index("- name: Run worktree registry GC", step_start)
 	step = wf[step_start:step_end]
 	assert latch_start < step_start < step_end
-	assert "if: steps.find_tracking.outputs.has_work != 'true'" in step
+	assert (
+		"if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' "
+		"&& steps.find_tracking.outputs.has_work != 'true' }}"
+	) in step
 	assert "github.repository ==" not in step
 	assert 'UNBLOCK_SCAN_SWEEP_ONLY: "true"' in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
@@ -196,12 +202,108 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 		("UNBLOCK_JUDGE_INFLIGHT_MINUTES", "60"),
 	):
 		assert f"{name}: ${{{{ vars.{name} || '{default}' }}}}" in step
-	assert "- name: Process each tracking issue\n        if: steps.find_tracking.outputs.has_work == 'true'" in wf
 	assert (
 		'if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then\n'
 		'  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"\n'
 		'  exit 0'
 	) in poller
+	yaml.safe_load(wf)
+
+
+WIDENED_GATE = (
+	"(steps.find_tracking.outputs.has_work == 'true' || "
+	"steps.find_tracking.outputs.standalone_recovery == 'true')"
+)
+
+
+def _step_block(wf: str, name: str) -> str:
+	start = wf.index(f"      - name: {name}\n")
+	end = wf.find("\n      - name: ", start + 1)
+	return wf[start:] if end == -1 else wf[start:end]
+
+
+def test_standalone_stall_recovery_runs_without_tracking_issues() -> None:
+	"""Issue #7183: no-project ticks still install the poller toolchain."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+
+	find = _step_block(wf, "Find active tracking issues")
+	assert "ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}" in find
+	assert "1|true|yes|on) standalone_recovery=true ;;" in find
+	assert 'echo "standalone_recovery=${standalone_recovery}" >> "$GITHUB_OUTPUT"' in find
+	assert 'echo "standalone_recovery=false" >> "$GITHUB_OUTPUT"' in find
+	assert "Standalone stall recovery without active projects: standalone_recovery=" in find
+
+	for name in (
+		"Setup Node.js",
+		"Setup Python",
+		"Install Codex CLI",
+		"Install OS-level core tools",
+	):
+		assert f"if: {WIDENED_GATE}\n" in _step_block(wf, name), name
+
+	validate = _step_block(wf, "Validate required environment variables")
+	assert "id: validate_env\n" in validate
+	assert f"if: {WIDENED_GATE}\n" in validate
+	assert "continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}" in validate
+	assert "id: stage_support\n" in _step_block(wf, "Stage workflow support files")
+
+	# The recovery step runs only after both idle-tick prerequisites succeeded.
+	recovery = _step_block(wf, STANDALONE_SWEEP_STEP)
+	assert (
+		"if: steps.find_tracking.outputs.has_work != 'true' "
+		"&& steps.validate_env.outcome == 'success' "
+		"&& steps.stage_support.outcome == 'success'\n"
+	) in recovery
+	assert 'STANDALONE_RECOVERY_SWEEP_ONLY: "true"' in recovery
+	assert "bash scripts/orchestrate_poll_process.sh" in recovery
+	yaml.safe_load(wf)
+
+
+def test_standalone_pr_sweeps_run_without_tracking_issues() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	unblock_start = wf.index("- name: Run unblock scan without active projects")
+	step_start = wf.index("- name: Run standalone PR sweeps without active projects")
+	step_end = wf.index("- name: Run worktree registry GC", step_start)
+	step = wf[step_start:step_end]
+	assert unblock_start < step_start < step_end
+	assert "if: steps.find_tracking.outputs.has_work != 'true'" in step
+	assert "github.repository ==" not in step
+	assert 'STANDALONE_PR_SWEEP_ONLY: "true"' in step
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
+	assert "TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}" in step
+	assert "TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}" in step
+	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
+	assert "STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in step
+	assert 'PYTHONDONTWRITEBYTECODE: "1"' in step
+	assert "ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}" in step
+	assert "continue-on-error: true" in step
+	assert "for f in validate_editor_audit.sh; do" in wf
+	main_start = wf.index("- name: Process each tracking issue")
+	main_end = wf.index("- name: Release staged-support latches without active projects", main_start)
+	main_step = wf[main_start:main_end]
+	for name, default in (
+		("STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS", "3"),
+		("STALL_THRESHOLD_MINUTES", "120"),
+		("REVIEW_RUN_MAX_RUNTIME_MINUTES", "250"),
+		("MERGE_BASE_FRESHNESS_ENABLED", "true"),
+		("MERGE_BASE_FRESHNESS_MAX_SYNCS", "2"),
+		("ORCH_PR_AUTOFIX_FLOW_ENABLED", "true"),
+	):
+		line = f"{name}: ${{{{ vars.{name} || '{default}' }}}}"
+		assert line in step, line
+		assert line in main_step, line
+	# The main poller passes the sweep level from vars, never from env (which
+	# carries find_tracking's all-smoke SILENT override).
+	assert "STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}" in main_step
+	assert "STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ env." not in wf
+	# An older staged poller without the mode must not run its full post-loop path.
+	assert "grep -q 'STANDALONE_PR_SWEEP_ONLY' scripts/orchestrate_poll_process.sh" in step
+	assert "::warning::Standalone PR sweep-only support is not yet staged." in step
+	assert "bash scripts/orchestrate_poll_process.sh" in step
+	assert 'if _is_truthy "${STANDALONE_PR_SWEEP_ONLY:-false}"; then' in poller
+	assert 'if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n  run_standalone_stall_recovery' in poller
+	assert poller.rstrip().endswith("_standalone_sweep_alert_level_restore")
 	yaml.safe_load(wf)
 
 
@@ -218,7 +320,11 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	full = steps[names.index("Process each tracking issue")]
 	# Exactly one of the two runs per tick, in every repository.
 	assert full["if"] == "steps.find_tracking.outputs.has_work == 'true'"
-	assert sweep["if"] == "steps.find_tracking.outputs.has_work != 'true'"
+	assert sweep["if"] == (
+		"steps.find_tracking.outputs.has_work != 'true' "
+		"&& steps.validate_env.outcome == 'success' "
+		"&& steps.stage_support.outcome == 'success'"
+	)
 	assert "github.repository" not in sweep["if"]
 	# A recovery failure must not skip the later idle-tick sweeps.
 	assert sweep.get("continue-on-error") is True
@@ -281,6 +387,8 @@ def main() -> int:
 	test_security_pass_recovery_log_prefixes_are_registered()
 	test_staged_support_latch_sweep_runs_without_tracking_issues()
 	test_unblock_scan_runs_without_tracking_issues()
+	test_standalone_stall_recovery_runs_without_tracking_issues()
+	test_standalone_pr_sweeps_run_without_tracking_issues()
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()

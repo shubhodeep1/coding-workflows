@@ -134,6 +134,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
+- `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
@@ -170,6 +171,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
+- `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch` — Fixture asset for phase-b-risk-tier-full.patch.

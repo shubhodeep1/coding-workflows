@@ -215,6 +215,7 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -237,11 +238,21 @@ jobs:
             echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
             echo "has_work=false" >> "$GITHUB_OUTPUT"
+            # Standalone stall recovery still runs on ticks with no active
+            # project (issue #7183); the full poller runs it after its loop
+            # otherwise. Same truthy test as is_truthy in the poller.
+            case "$(printf '%s' "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) standalone_recovery=true ;;
+              *) standalone_recovery=false ;;
+            esac
+            echo "Standalone stall recovery without active projects: standalone_recovery=${standalone_recovery}"
+            echo "standalone_recovery=${standalone_recovery}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "standalone_recovery=false" >> "$GITHUB_OUTPUT"
 
           # If every active tracking issue is the test-and-mark-stable
           # smoke fixture, suppress per-phase Telegram alerts; the gate
@@ -274,19 +285,19 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Setup Node.js
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Setup Python
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         # Intentionally use the released action ref as the rollout boundary.
         # Consumers pick this up when test-and-mark-stable retags @stable.
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
@@ -303,7 +314,7 @@ jobs:
           opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
 
       - name: Install OS-level core tools
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -337,7 +348,9 @@ jobs:
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
-        if: steps.find_tracking.outputs.has_work == 'true'
+        id: validate_env
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
+        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -402,6 +415,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
@@ -452,6 +466,21 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; retired-conflict re-issue stays off."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          # Issue #7177: the noop-suspicious recovery sweep's force-merge gate B
+          # sources this audit helper. Optional: when absent, gate B fails closed.
+          for f in validate_editor_audit.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the no-op force-merge fallback stays closed."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -1001,6 +1030,10 @@ jobs:
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          # Standalone conflict / no-op sweeps page for real standalone PRs even
+          # when every tracking issue is a smoke fixture (find_tracking's SILENT
+          # override, issue #7177), so read vars, not env.
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           # Phase-specific override for ai:done — defaults to a high cap (99)
           # that effectively avoids `skip` in normal operation windows, though
           # `skip` can still occur if the cap is eventually reached.  This
@@ -1078,7 +1111,9 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-        run: bash scripts/orchestrate_poll_process.sh
+        run: |
+          set -euo pipefail
+          bash scripts/orchestrate_poll_process.sh
 
       # Cron ticks with no open tracking issue skip the full poller above, so
       # this is the only place standalone stall recovery (including the
@@ -1090,7 +1125,10 @@ jobs:
       # turns it off. continue-on-error keeps a recovery failure from skipping
       # the latch-release and unblock-scan sweeps that follow on idle ticks.
       - name: Run standalone stall recovery without active projects
-        if: steps.find_tracking.outputs.has_work != 'true'
+        # validate_env and stage_support are continue-on-error on idle ticks;
+        # a missing key or a staging failure skips recovery (issue #7183).
+        # validate_env is skipped when ENABLE_STANDALONE_STALL_RECOVERY is off.
+        if: steps.find_tracking.outputs.has_work != 'true' && steps.validate_env.outcome == 'success' && steps.stage_support.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1161,6 +1199,7 @@ jobs:
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
           STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
           ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
@@ -1202,7 +1241,7 @@ jobs:
           bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
-        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1214,7 +1253,7 @@ jobs:
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run unblock scan without active projects
-        if: steps.find_tracking.outputs.has_work != 'true'
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1229,6 +1268,43 @@ jobs:
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
+
+      # Standalone PR conflict and noop-suspicious recovery sweeps (issue
+      # #7177). With a tracking issue they run inline at the end of "Process
+      # each tracking issue"; without one this step runs only those sweeps.
+      - name: Run standalone PR sweeps without active projects
+        if: steps.find_tracking.outputs.has_work != 'true'
+        # Staging is continue-on-error on idle ticks; a sweep failure must not
+        # skip the worktree registry GC that follows.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_PR_SWEEP_ONLY: "true"
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          # Conflict dispatches forward this to review; keep a repository's
+          # opt-out on idle ticks too.
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # Staging is continue-on-error on these ticks, and a poller from an
+          # older support commit would ignore the flag and run every post-loop
+          # sweep; never launch the full poller from here.
+          if [ ! -f scripts/orchestrate_poll_process.sh ] \
+            || ! grep -q 'STANDALONE_PR_SWEEP_ONLY' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone PR sweep-only support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh

@@ -434,6 +434,52 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
 
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      - name: Implement post-Codex recovery unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      - name: Regression tests wired by the CI wiring guard (part 1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_cli.py \
+            tests/test_branch_rebuild.py \
+            tests/test_clarify_sandbox_base_image_preseed.py \
+            tests/test_codex_thread_reuse_review.py \
+            tests/test_family_python_mongo_flask.py \
+            tests/test_family_python_repo_checks.py \
+            tests/test_implement_heal_preflight.py \
+            tests/test_implement_pr_body_tracking_refs.py \
+            tests/test_orchestrate_final_merge_required_checks_gate.py \
+            tests/test_prompt_compaction.py \
+            tests/test_render_validation_templates_node_hardhat_regressions.py \
+            tests/test_render_validation_templates_node_runtime_regressions.py \
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
+            tests/test_review_commit_new_files_preserved.py \
+            tests/test_review_conflict_resolve_sandbox_only.py \
+            tests/test_review_freshness_ci_failed.py \
+            tests/test_review_head_gate.py \
+            tests/test_review_parse_consolidator.py \
+            tests/test_review_pipeline_integration.py \
+            tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_install_timeout.py \
+            tests/test_review_static_context_readme.py \
+            tests/test_semble_helpers.py \
+            tests/test_validate_driver_credential_scrub.py \
+            tests/test_validate_lint_graceful_shutdown_hooks.py \
+            tests/test_validate_lint_init_true.py \
+            tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_render_recovery.py \
+            tests/test_validation_import_audit_stdlib.py \
+            tests/test_verify_integration_fingerprints_partial_removal.py \
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
+
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -590,7 +636,8 @@ jobs:
       - name: Clarify sandbox base image pre-seed tests (#6985)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
+          # The fake docker lives in a temp dir, so TMPDIR must allow executables.
+          TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Single-issue security pass tests (port P1)
         run: |
@@ -637,7 +684,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
             tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
-            tests/test_integration_judge_scope_guard.py
+            tests/test_integration_judge_scope_guard.py tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Claude engine decision tests
         run: |
@@ -678,11 +725,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
-
-      - name: Clarify sandbox base image pre-seed tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
@@ -952,49 +994,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
-
-      - name: Implement post-Codex recovery unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
-      - name: Regression tests wired by the CI wiring guard (part 1)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_cli.py \
-            tests/test_branch_rebuild.py \
-            tests/test_clarify_sandbox_base_image_preseed.py \
-            tests/test_codex_thread_reuse_review.py \
-            tests/test_family_python_mongo_flask.py \
-            tests/test_family_python_repo_checks.py \
-            tests/test_implement_heal_preflight.py \
-            tests/test_implement_pr_body_tracking_refs.py \
-            tests/test_orchestrate_final_merge_required_checks_gate.py \
-            tests/test_prompt_compaction.py \
-            tests/test_render_validation_templates_node_hardhat_regressions.py \
-            tests/test_render_validation_templates_node_runtime_regressions.py \
-            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
-            tests/test_review_commit_new_files_preserved.py \
-            tests/test_review_conflict_resolve_sandbox_only.py \
-            tests/test_review_freshness_ci_failed.py \
-            tests/test_review_head_gate.py \
-            tests/test_review_parse_consolidator.py \
-            tests/test_review_pipeline_integration.py \
-            tests/test_review_rb_judge_reissue_baseline.py \
-            tests/test_review_sandbox_install_timeout.py \
-            tests/test_review_static_context_readme.py \
-            tests/test_semble_helpers.py \
-            tests/test_validate_driver_credential_scrub.py \
-            tests/test_validate_lint_graceful_shutdown_hooks.py \
-            tests/test_validate_lint_init_true.py \
-            tests/test_validate_preflight_canary_tools_scope.py \
-            tests/test_validate_process_render_recovery.py \
-            tests/test_validation_import_audit_stdlib.py \
-            tests/test_verify_integration_fingerprints_partial_removal.py \
-            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py \
-            tests/test_workflow_support_ref_follows_pin.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1317,6 +1316,8 @@ jobs:
             tests/test_gh_helpers_list_runs_method.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
             tests/test_pytest_git_env_isolation.py \
             tests/test_render_validation_templates.py \
             tests/test_render_validation_templates_repo_checks.py \

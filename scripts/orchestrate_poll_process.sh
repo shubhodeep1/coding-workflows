@@ -21369,10 +21369,25 @@ if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue, the workflow skips the full poller; this mode runs
+# only the standalone PR conflict and noop-suspicious recovery sweeps at the
+# end of this script (issue #7177). The tracking loop and the other post-loop
+# work are skipped. The workflow's complementary has_work gates keep it
+# exclusive with the inline sweeps of the full poller.
+STANDALONE_PR_SWEEP_ONLY_ACTIVE="false"
+if _is_truthy "${STANDALONE_PR_SWEEP_ONLY:-false}"; then
+  STANDALONE_PR_SWEEP_ONLY_ACTIVE="true"
+  echo "Standalone PR sweep-only mode: skipping tracking issues and the other post-loop sweeps."
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
-TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
+if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" = "true" ]; then
+  TRACKING_ISSUES='[]'
+else
+  TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
+fi
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
@@ -21386,7 +21401,9 @@ for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
     echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
   fi
 done
-prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
+  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+fi
 write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
@@ -27722,14 +27739,53 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   esac
 done
 
-run_standalone_stall_recovery
+if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
+  run_standalone_stall_recovery
 
-release_staged_support_needs_human_latches
+  release_staged_support_needs_human_latches
 
-# Never ends the tick: a failure inside is logged and the sweeps below run.
-run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  # Never ends the tick: a failure inside is logged and the sweeps below run.
+  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
 
-close_merged_issues_sweep
+  close_merged_issues_sweep
+fi
+
+# _standalone_sweep_alert_level_apply / _standalone_sweep_alert_level_restore
+# The standalone PR sweeps below alert about real standalone PRs, so they must
+# not inherit the SILENT level the workflow sets when every tracking issue is a
+# smoke fixture (issue #7177). STANDALONE_SWEEP_ALERT_MSG_LEVEL (the workflow
+# passes vars.ALERT_MSG_LEVEL, default WARNING) replaces ALERT_MSG_LEVEL for the
+# two sweeps; tg_send_msg reads ALERT_MSG_LEVEL at call time. Empty keeps the
+# poller level (older workflow copies); a value outside the known levels is
+# ignored with a warning.
+_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="false"
+_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL=""
+_standalone_sweep_alert_level_apply() {
+	local requested
+	requested="$(printf '%s' "${STANDALONE_SWEEP_ALERT_MSG_LEVEL:-}" | tr '[:lower:]' '[:upper:]')"
+	if [ "${ALERT_MSG_LEVEL+set}" = "set" ]; then
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="true"
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL}"
+	else
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="false"
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL=""
+	fi
+	[ -n "${requested}" ] || return 0
+	if ! [[ "${requested}" =~ ^(DEBUG|WARNING|ERROR|CRITICAL|SILENT)$ ]]; then
+		echo "::warning::Ignoring invalid STANDALONE_SWEEP_ALERT_MSG_LEVEL; standalone PR sweeps keep the poller alert level."
+		return 0
+	fi
+	echo "Standalone PR sweeps alert level: ${requested} (poller level: ${_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL:-unset})"
+	export ALERT_MSG_LEVEL="${requested}"
+}
+_standalone_sweep_alert_level_restore() {
+	if [ "${_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET}" = "true" ]; then
+		export ALERT_MSG_LEVEL="${_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL}"
+	else
+		unset ALERT_MSG_LEVEL
+	fi
+}
+_standalone_sweep_alert_level_apply
 
 STANDALONE_CONFLICT_ATTEMPTS_MARKER="<!-- ai:standalone-conflict-attempts:v1 "
 
@@ -28778,3 +28834,4 @@ done
 write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."
 echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head): ${NOOP_RECOVERY_CAP_SKIPPED}."
+_standalone_sweep_alert_level_restore

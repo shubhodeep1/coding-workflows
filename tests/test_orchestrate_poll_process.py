@@ -3640,6 +3640,9 @@ sys.exit(proc.returncode)
 		)
 
 		env = os.environ.copy()
+		# Exercise the script default of the automation-path plan gate (#7181)
+		# unless a test sets the flag through env_overrides.
+		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
 		env.update(
 			{
 				"HOME": str(home_dir),
@@ -5418,6 +5421,32 @@ def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
 		assert "Standalone issue stall recovery" not in combined_log
 		assert "Staged-support needs-human latch release" not in combined_log
 		assert result["api_calls"].count("search/issues") == (enabled == "true")
+
+
+def test_standalone_pr_sweep_only_mode_runs_only_the_standalone_pr_sweeps() -> None:
+	# Issue #7177: without a tracking issue, the workflow runs only the
+	# standalone conflict and noop-suspicious sweeps through this mode.
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		env_overrides={
+			"STANDALONE_PR_SWEEP_ONLY": "true",
+			"ALERT_MSG_LEVEL": "SILENT",
+			"STANDALONE_SWEEP_ALERT_MSG_LEVEL": "WARNING",
+			"OPENROUTER_API_KEY": "",
+		},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Standalone PR sweep-only mode" in combined_log
+	assert "Standalone PR conflict sweep" in combined_log
+	assert "Standalone PR noop-suspicious recovery sweep" in combined_log
+	assert "Noop-suspicious recovery complete." in combined_log
+	assert "Standalone PR sweeps alert level: WARNING (poller level: SILENT)" in combined_log
+	assert "Processing tracking issue" not in combined_log
+	assert "Standalone issue stall recovery" not in combined_log
+	assert "UNBLOCK_SCAN" not in combined_log
+	assert "Staged-support needs-human latch release" not in combined_log
 
 
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
@@ -25297,6 +25326,89 @@ def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> No
 		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
 	)
 	assert _approved_bodies(granted, "10"), granted["stdout"] + granted["stderr"]
+
+
+def test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts_granted() -> None:
+	# Issue #7181: with AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED unset (the
+	# script default), a member's security finding whose plan lists automation
+	# paths without a files_touched grant is held and the missing paths are
+	# named; the same plan with an exact grant is approved.
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+
+	def _default_tick(body: str) -> dict:
+		return _run_poller(
+			state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+			issue_comments={10: [_trusted_plan_comment(_PROTECTED_PLAN_FILES)]},
+			issue_bodies={10: body},
+			issue_authors={10: maintainer},
+		)
+
+	held = _default_tick("Security finding in scripts/security_audit.sh. No allowlist.")
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "10") == [], held_log
+	assert "reason=automation_path_plan_auto_approval_disabled" not in held_log
+	assert ("outcome=defer issue=10 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in held_log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+	assert held["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	holds = [c.get("body", "") for c in held["issues"]["10"]["comments"]
+		if "<!-- ai:automation-path-plan-hold:v1 issue=10 " in c.get("body", "")]
+	assert len(holds) == 1, held_log
+	assert "- `scripts/security_audit.sh`" in holds[0]
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _default_tick(granted_body)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "10"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
+def test_managed_auto_approve_default_on_holds_without_plan_comment() -> None:
+	# Issue #7181: with the flag unset, a missing plan comment fails closed.
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: []},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert "reason=plan_comment_unavailable outcome=defer issue=10" in log
+	assert "STALL_SKIP issue=10 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_standalone_auto_approve_default_on_holds_ungranted_plan_and_posts_granted() -> None:
+	# Issue #7181: standalone stall recovery with the flag unset holds a plan
+	# listing ungranted automation paths and approves it once the body carries
+	# an exact trusted files_touched grant.
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+
+	def _default_tick(body: str) -> dict:
+		return _run_poller(
+			state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+			issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+			issue_bodies={501: body},
+			issue_authors={501: maintainer},
+			mock_gh_issue_list_label_filter=True,
+			tracking_issues_override=[],
+			env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+		)
+
+	held = _default_tick("Security finding in scripts/security_audit.sh. No allowlist.")
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "501") == [], held_log
+	assert "reason=automation_path_plan_auto_approval_disabled" not in held_log
+	assert ("outcome=defer issue=501 "
+		"paths=scripts/security_audit.sh,.github/workflows/security-audit.yml") in held_log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _default_tick(granted_body)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "501"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
 
 
 def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
