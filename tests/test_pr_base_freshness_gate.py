@@ -25,7 +25,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
+# The gate's run: body may live in a review_autofix_step_*.sh script (§24);
+# read the workflow with those bodies inlined again.
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
