@@ -2304,7 +2304,7 @@ jobs:
                 | [
                     (if $reason == "automation_path_plan_auto_approval_disabled"
                       then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
-                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable"))
+                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "pipeline_plan_grant_write_failed"))
                       then "**Automatic approval withheld: the automation-path grant check could not run.**"
                       else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
                     "",
@@ -2343,8 +2343,9 @@ jobs:
               # .github/, .claude/, scripts/, prompts/ or workflow-templates/
               # paths are held while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED
               # is false (it defaults to true); when it is on, every such path needs a trusted, exact
-              # issue-body grant (the open pipeline-author grant does not
-              # count). Every error holds. A held plan keeps ai:awaiting-approval
+              # issue-body grant. The open pipeline-author grant does not
+              # count; instead the pipeline writes an exact grant from the
+              # plan (Q108, below). Every error holds. A held plan keeps ai:awaiting-approval
               # for a human /approved; the implement-time guard still applies.
               plan_gate_file="${CODEX_OUTPUT_FILE:-}"
               plan_gate_guard="scripts/files_touched_scope_guard.py"
@@ -2356,6 +2357,7 @@ jobs:
               esac
               if [ -f "${plan_gate_guard}" ]; then
                 plan_gate_meta_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX")"
+                plan_gate_grant_body_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_grant_body.XXXXXX")"
                 printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_gate_meta_file}"
                 run_plan_gate() {
                   PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate \
@@ -2365,6 +2367,7 @@ jobs:
                     --pipeline-login "${plan_gate_login}" \
                     --allow-workflow-edits "${plan_gate_allow_edits}" \
                     --origin-repo "${GITHUB_REPOSITORY:-}" \
+                    --pipeline-grant-body-out "${plan_gate_grant_body_file}" \
                     --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true
                 }
                 plan_gate_result="$(run_plan_gate)"
@@ -2381,6 +2384,22 @@ jobs:
                 plan_gate_decision="$(printf '%s' "${plan_gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
                 plan_gate_reason="$(printf '%s' "${plan_gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
                 plan_gate_paths="$(printf '%s' "${plan_gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+                # Q108: a pipeline-authored issue without files_touched is
+                # approved only after the guard's exact block (the plan's
+                # files plus tests/changelog/agents fragments) is in the issue
+                # body; it is then the issue's implement-time scope. A failed
+                # write holds.
+                if [ "${plan_gate_decision}" = "approve" ] && printf '%s' "${plan_gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
+                  if [ -s "${plan_gate_grant_body_file}" ] \
+                    && gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" -f body="$(cat "${plan_gate_grant_body_file}")" >/dev/null 2>&1; then
+                    echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=written"
+                  else
+                    echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=failed reason=issue_body_write_failed"
+                    plan_gate_decision="hold"
+                    plan_gate_reason="pipeline_plan_grant_write_failed"
+                  fi
+                fi
+                rm -f "${plan_gate_grant_body_file}"
               else
                 plan_gate_decision="hold"
                 plan_gate_reason="plan_gate_helper_unavailable"
