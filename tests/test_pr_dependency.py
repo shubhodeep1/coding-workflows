@@ -70,6 +70,27 @@ def _cli(*args: str) -> subprocess.CompletedProcess:
 	)
 
 
+def _clarify_host_python_case_alternatives(clarify: str) -> set[str]:
+	"""Return the alternatives of the clarify.yml `case` that installs into CLARIFY_HOST_PYTHON_DIR.
+
+	Parsed rather than matched as one string, so an alternative that main adds
+	or reorders does not break the check; exactly one such block must exist.
+	"""
+	install_line = 'install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}"'
+	lines = clarify.splitlines()
+	found: list[set[str]] = []
+	for idx, line in enumerate(lines):
+		if install_line not in line:
+			continue
+		pattern = lines[idx - 1].strip() if idx >= 1 else ""
+		opener = lines[idx - 2].strip() if idx >= 2 else ""
+		assert opener == 'case "${f}" in', opener
+		assert pattern.endswith(")"), pattern
+		found.append({alt.strip() for alt in pattern[:-1].split("|") if alt.strip()})
+	assert len(found) == 1, f"expected one CLARIFY_HOST_PYTHON_DIR case block, found {len(found)}"
+	return found[0]
+
+
 def test_declaration_parses_plain_and_backticked_forms():
 	assert _decl() == {"pr": 8, "path": "scripts/ai_engine.sh", "needle": "_AI_ENGINE_EXIT_REFUSED"}
 	quoted = "- Depends on PR: #8\n- Requires on main: `scripts/ai_engine.sh` contains `_AI_ENGINE_EXIT_REFUSED`\n"
@@ -186,7 +207,8 @@ def test_gates_are_wired_with_trusted_isolated_copies():
 	poller = (ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	for text in (clarify, plan, implement, poll):
 		assert "for f in gh_helpers.sh " in text and " pr_dependency.py " in text
-	assert "pr_dependency.py|load_workflow_overlay.py|security_dependency.py|" in clarify
+	host_python = _clarify_host_python_case_alternatives(clarify)
+	assert {"pr_dependency.py", "load_workflow_overlay.py", "security_dependency.py"} <= host_python, host_python
 	assert 'python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency' in clarify
 	assert "gate=pr_dependency" in clarify
 	assert '/labels/ai:blocked' in clarify

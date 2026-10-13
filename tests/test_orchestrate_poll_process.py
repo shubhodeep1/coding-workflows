@@ -5789,7 +5789,15 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
 
 
-def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:
+def _run_pr_dependency_tick(
+	*,
+	merged: bool,
+	files: dict[str, str],
+	comments: list[dict] | None = None,
+	extra: dict | None = None,
+	tracking_issues_override: list | None = None,
+	env_overrides: dict[str, str] | None = None,
+) -> dict:
 	"""One standalone poller tick for issue #700 declaring a dependency on PR #801 (issue #7228)."""
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "merged"
@@ -5807,6 +5815,8 @@ def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: li
 		prs=[{"number": 801, "state": "closed" if merged else "open", "merged": merged, "baseRefName": "main", "headRefName": "feature/pr-801"}],
 		mock_gh_issue_list_label_filter=True,
 		mock_store_extra=store_extra,
+		tracking_issues_override=tracking_issues_override,
+		env_overrides=env_overrides,
 	)
 
 
@@ -5843,11 +5853,25 @@ def test_standalone_pr_dependency_holds_until_pr_merges_and_string_lands() -> No
 
 def test_standalone_pr_dependency_fails_closed_without_identity_or_trust() -> None:
 	present = {"scripts/ai_engine.sh": "_AI_ENGINE_EXIT_REFUSED\n"}
+	# With a tracking issue present, an unreadable pipeline login can stop the
+	# whole standalone pass before the candidate loop; nothing is released.
 	no_identity = _run_pr_dependency_tick(merged=True, files=present, extra={"fail_user_lookup": True})
-	# With a tracking issue present, the unreadable pipeline login stops the
-	# whole standalone pass before the candidate loop; either way nothing is released.
-	assert "Pipeline identity unavailable; skipping standalone stall recovery" in no_identity["stdout"] + no_identity["stderr"]
-	assert not _pr_dependency_releases(no_identity)
+	assert not _pr_dependency_releases(no_identity), no_identity["stdout"] + no_identity["stderr"]
+
+	# Without a tracking issue (the idle-tick sweep), the candidate reaches the
+	# pr_dependency block itself. The OWNER author makes the helper report
+	# `ready` without a login, and the poller's own check refuses to release
+	# when the pipeline login is unreadable (issue #7228).
+	issue_only = _run_pr_dependency_tick(
+		merged=True, files=present, extra={"fail_user_lookup": True},
+		tracking_issues_override=[],
+		env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+	)
+	issue_only_log = issue_only["stdout"] + issue_only["stderr"]
+	assert "STALL_SKIP issue=700 reason=pr_dependency_identity_unavailable action=none" in issue_only_log, issue_only_log
+	assert "Pipeline identity unavailable; skipping standalone stall recovery" not in issue_only_log
+	assert "reason=pr_dependency_released" not in issue_only_log
+	assert not _pr_dependency_releases(issue_only)
 
 	untrusted = _run_pr_dependency_tick(
 		merged=True, files=present,
