@@ -458,6 +458,21 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Issue #7177: the noop-suspicious recovery sweep's force-merge gate B
+          # sources this audit helper. Optional: when absent, gate B fails closed.
+          for f in validate_editor_audit.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the no-op force-merge fallback stays closed."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -1001,6 +1016,10 @@ jobs:
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          # Standalone conflict / no-op sweeps page for real standalone PRs even
+          # when every tracking issue is a smoke fixture (find_tracking's SILENT
+          # override, issue #7177), so read vars, not env.
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           # Phase-specific override for ai:done — defaults to a high cap (99)
           # that effectively avoids `skip` in normal operation windows, though
           # `skip` can still occur if the cap is eventually reached.  This
@@ -1161,6 +1180,7 @@ jobs:
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
           STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
           ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
@@ -1229,6 +1249,43 @@ jobs:
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
+
+      # Standalone PR conflict and noop-suspicious recovery sweeps (issue
+      # #7177). With a tracking issue they run inline at the end of "Process
+      # each tracking issue"; without one this step runs only those sweeps.
+      - name: Run standalone PR sweeps without active projects
+        if: steps.find_tracking.outputs.has_work != 'true'
+        # Staging is continue-on-error on idle ticks; a sweep failure must not
+        # skip the worktree registry GC that follows.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_PR_SWEEP_ONLY: "true"
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          # Conflict dispatches forward this to review; keep a repository's
+          # opt-out on idle ticks too.
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # Staging is continue-on-error on these ticks, and a poller from an
+          # older support commit would ignore the flag and run every post-loop
+          # sweep; never launch the full poller from here.
+          if [ ! -f scripts/orchestrate_poll_process.sh ] \
+            || ! grep -q 'STANDALONE_PR_SWEEP_ONLY' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone PR sweep-only support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh

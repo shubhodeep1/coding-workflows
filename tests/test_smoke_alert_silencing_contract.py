@@ -79,10 +79,11 @@ EXPECTED_STEP_DECLARATIONS = {
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 1,
-	# 6 = includes "Alert on Claude pool accounts at the usage gate" (#6951),
-	# the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630)
-	# and "Run standalone stall recovery without active projects" (#7174).
-	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 6,
+	# 7 = includes "Alert on Claude pool accounts at the usage gate" (#6951),
+	# the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630),
+	# "Run standalone stall recovery without active projects" (#7174) and
+	# "Run standalone PR sweeps without active projects" (#7177).
+	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 7,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
 	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,
