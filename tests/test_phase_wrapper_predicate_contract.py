@@ -273,11 +273,227 @@ def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
 		example = _readme_wrapper_example(template_name)
 		predicate = example["jobs"][job_name].get("if")
 		assert isinstance(predicate, str), f"README {template_name}.yml example lacks jobs.{job_name}.if"
-		assert " ".join(predicate.split()) == _canonical_predicate(job_name), (
+		accepted = {_canonical_predicate(job_name)}
+		if job_name == "clarify":
+			# The PR-dependency release clause (#7328) only admits the
+			# poller's GH_PAT-verified release marker; an example without it
+			# keeps every trust clause and starts clarify on fewer comments.
+			accepted.add(_canonical_predicate(job_name).replace(" || " + RELEASE_MARKER_CLAUSE, ""))
+		assert " ".join(predicate.split()) in accepted, (
 			f"README {template_name}.yml example predicate drifted from the reusable workflow"
 		)
 		expected_uses = f"shubhodeep1/coding-workflows/.github/workflows/{PHASE_WORKFLOWS[job_name][0].rsplit('/', 1)[1]}@<40-character-release-sha>"
 		assert example["jobs"][job_name]["uses"] == expected_uses
+
+
+# Issue #7328: the poller's PR-dependency release (/reclarify plus the
+# pr-dependency-released marker, posted with GH_PAT) restarts clarify as an
+# automated run. The job predicate admits it from any User association; the
+# route step verifies the author is the GH_PAT login before trusting it.
+RELEASE_MARKER_CLAUSE = (
+	"(github.event_name == 'issue_comment' && github.event.action == 'created' && "
+	"github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && "
+	"!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association) && "
+	"startsWith(github.event.comment.body, fromJson('\"/reclarify\\n<!-- ai:pr-dependency-released:\"')))"
+)
+
+RELEASE_CONCURRENCY_GROUP = (
+	"ai-clarify-${{ github.event.issue.number }}${{ (github.event_name == 'issue_comment' && "
+	"!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)) "
+	"&& format('-release-{0}', github.event.comment.id) || '' }}"
+)
+
+_GH_STUB = """gh_retry()
+{
+	if [ "${STUB_LOGIN_FAIL:-}" = "1" ]; then
+		return 1
+	fi
+	printf '%s\\n' "${STUB_LOGIN}"
+}
+"""
+
+
+def _clarify_route_step() -> dict:
+	workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8"))
+	return next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Decide clarify route")
+
+
+def _release_block() -> str:
+	script = _clarify_route_step()["run"]
+	begin = script.index("# BEGIN pr-dependency release classification (#7328)")
+	end = script.index("# END pr-dependency release classification (#7328)")
+	return script[begin:end]
+
+
+def _run_release_block(body: str, association: str, comment_login: str, token_login: str = "pipeline-bot", login_fail: bool = False, forced: str = "true") -> dict:
+	import os
+	import subprocess
+	import tempfile
+
+	with tempfile.TemporaryDirectory() as workdir:
+		scripts_dir = Path(workdir) / "scripts"
+		scripts_dir.mkdir()
+		(scripts_dir / "gh_helpers.sh").write_text(_GH_STUB, encoding="utf-8")
+		script = (
+			"set -euo pipefail\n"
+			f"IS_FORCED_RECLARIFY={forced}\n"
+			+ _release_block()
+			+ '\nprintf "release=%s forced=%s trusted=%s\\n" "${IS_AUTOMATED_RELEASE}" "${IS_FORCED_RECLARIFY}" "${COMMENT_ROUTE_TRUSTED}"\n'
+		)
+		env = {
+			"PATH": os.environ["PATH"],
+			"EVENT_NAME": "issue_comment",
+			"ISSUE_NUMBER": "42",
+			"COMMENT_BODY": body,
+			"COMMENT_AUTHOR_ASSOCIATION": association,
+			"COMMENT_USER_LOGIN": comment_login,
+			"STUB_LOGIN": token_login,
+			"STUB_LOGIN_FAIL": "1" if login_fail else "",
+		}
+		result = subprocess.run(["bash", "-c", script], env=env, cwd=workdir, capture_output=True, text=True, check=True)
+	last = result.stdout.strip().splitlines()[-1]
+	values = dict(part.split("=", 1) for part in last.split())
+	values["stdout"] = result.stdout
+	return values
+
+
+RELEASE_BODY = "/reclarify\n<!-- ai:pr-dependency-released:42 -->"
+
+
+def test_clarify_release_marker_clause_is_pinned_in_every_wrapper() -> None:
+	for relative_path in PHASE_WORKFLOWS["clarify"]:
+		predicate = _normalized_job_predicate(relative_path, "clarify")
+		assert RELEASE_MARKER_CLAUSE in predicate, f"{relative_path} lost the PR-dependency release clause"
+	_assert_clauses(
+		RELEASE_MARKER_CLAUSE,
+		(
+			"github.event.comment.user.type == 'User'",
+			"!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
+			"github.event.issue.pull_request == null",
+		),
+	)
+
+
+def test_clarify_release_runs_in_its_own_concurrency_group() -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8"))
+	concurrency = workflow["jobs"]["clarify"]["concurrency"]
+	assert " ".join(str(concurrency["group"]).split()) == RELEASE_CONCURRENCY_GROUP
+	assert concurrency["cancel-in-progress"] is True
+
+
+def test_clarify_release_classification_verifies_the_pipeline_login() -> None:
+	verified_owner = _run_release_block(RELEASE_BODY, "OWNER", "Pipeline-Bot")
+	assert (verified_owner["release"], verified_owner["forced"], verified_owner["trusted"]) == ("true", "false", "true")
+	assert "gate=pr_dependency_release reason=verified outcome=restart issue=42" in verified_owner["stdout"]
+
+	verified_none = _run_release_block(RELEASE_BODY, "NONE", "pipeline-bot")
+	assert (verified_none["release"], verified_none["forced"], verified_none["trusted"]) == ("true", "false", "true")
+
+	crlf = _run_release_block(RELEASE_BODY.replace("\n", "\r\n") + "\r\n", "NONE", "pipeline-bot")
+	assert crlf["release"] == "true"
+
+	mismatch_owner = _run_release_block(RELEASE_BODY, "OWNER", "maintainer")
+	assert (mismatch_owner["release"], mismatch_owner["forced"], mismatch_owner["trusted"]) == ("false", "true", "true")
+	assert "reason=author_mismatch outcome=human_reclarify" in mismatch_owner["stdout"]
+
+	mismatch_none = _run_release_block(RELEASE_BODY, "NONE", "outsider")
+	assert (mismatch_none["release"], mismatch_none["trusted"]) == ("false", "false")
+	assert "reason=author_mismatch outcome=skip" in mismatch_none["stdout"]
+
+	for association, trusted in (("OWNER", "true"), ("NONE", "false")):
+		failed = _run_release_block(RELEASE_BODY, association, "pipeline-bot", login_fail=True)
+		assert (failed["release"], failed["trusted"]) == ("false", trusted)
+		assert "reason=identity_unavailable" in failed["stdout"]
+
+	bad_login = _run_release_block(RELEASE_BODY, "NONE", "", token_login="")
+	assert (bad_login["release"], bad_login["trusted"]) == ("false", "false")
+
+	for body in (
+		"/reclarify\n<!-- ai:pr-dependency-released:43 -->",
+		RELEASE_BODY + "\nextra",
+		"/RECLARIFY\n<!-- ai:pr-dependency-released:42 -->",
+		"text\n" + RELEASE_BODY,
+	):
+		other = _run_release_block(body, "NONE", "pipeline-bot")
+		assert (other["release"], other["trusted"]) == ("false", "false"), body
+		assert "pr_dependency_release" not in other["stdout"], body
+		trusted_other = _run_release_block(body, "MEMBER", "pipeline-bot")
+		assert (trusted_other["release"], trusted_other["forced"], trusted_other["trusted"]) == ("false", "true", "true"), body
+
+
+def test_clarify_route_untrusted_comment_writes_nothing() -> None:
+	script = _clarify_route_step()["run"]
+	assert "gate=route reason=untrusted_comment_author outcome=skip issue=${ISSUE_NUMBER}" in script
+	security_hold = script[script.index("gate=security_dependency reason=held"):script.index("PR_DEPENDENCY_VERDICT=")]
+	assert security_hold.index('if [ "${COMMENT_ROUTE_TRUSTED}" = "true" ]; then') < security_hold.index("labels[]=ai:clarification")
+	pr_hold = script[script.index("gate=pr_dependency reason="):script.index("CHECK_TRIAGE_RESOLVED=")]
+	assert pr_hold.index('[ "${COMMENT_ROUTE_TRUSTED}" = "true" ]') < pr_hold.index("labels[]=ai:clarification")
+	fast_path = script[script.index("# Only a verified orchestrator fast path"):script.index("orchestrator_fast_path=true")]
+	assert '[ "${COMMENT_ROUTE_TRUSTED}" = "true" ]' in fast_path
+	assert 'echo "is_automated_release=${IS_AUTOMATED_RELEASE}" >> "$GITHUB_OUTPUT"' in script
+	step_env = _clarify_route_step()["env"]
+	assert step_env["COMMENT_USER_LOGIN"] == "${{ github.event.comment.user.login || '' }}"
+	assert step_env["COMMENT_AUTHOR_ASSOCIATION"] == "${{ github.event.comment.author_association || '' }}"
+
+
+def test_clarify_human_answer_marker_still_follows_forced_reclarify_only() -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8"))
+	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Post clarification questions")
+	assert step["env"]["CLARIFY_HUMAN_ANSWER_REQUESTED"] == "${{ steps.clarify_route.outputs.is_forced_reclarify }}"
+
+
+def test_clarify_route_restarts_a_verified_release_as_automated() -> None:
+	import json
+	import os
+	import shutil
+	import subprocess
+	import tempfile
+
+	if shutil.which("jq") is None:
+		# The route step needs jq; CI runners carry it.
+		return
+	step = _clarify_route_step()
+	with tempfile.TemporaryDirectory() as workdir:
+		root = Path(workdir)
+		(root / "scripts").mkdir()
+		(root / "scripts" / "gh_helpers.sh").write_text(_GH_STUB, encoding="utf-8")
+		host_python_dir = root / "host_python"
+		host_python_dir.mkdir()
+		for name in ("security_dependency.py", "pr_dependency.py"):
+			(host_python_dir / name).write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+		meta_path = root / "issue.json"
+		meta_path.write_text(json.dumps({
+			"number": 42, "repository_url": "https://api.github.com/repos/o/r", "state": "open",
+			"user": {"type": "User", "login": "maintainer"}, "labels": [{"name": "ai:clarification"}], "author_association": "OWNER",
+		}), encoding="utf-8")
+		for association, login, expected in (
+			("NONE", "pipeline-bot", {"is_automated_release": "true", "is_forced_reclarify": "false", "skip_codex": "false"}),
+			("NONE", "outsider", {"is_automated_release": "false", "skip_codex": "true", "orchestrator_fast_path": "false"}),
+			("OWNER", "maintainer", {"is_automated_release": "false", "is_forced_reclarify": "true", "skip_codex": "false"}),
+		):
+			output_path = root / "output"
+			output_path.write_text("", encoding="utf-8")
+			env = {
+				"PATH": os.environ["PATH"],
+				"ISSUE_META_FILE": str(meta_path),
+				"GITHUB_OUTPUT": str(output_path),
+				"CLARIFY_HOST_PYTHON_DIR": str(host_python_dir),
+				"EVENT_NAME": "issue_comment",
+				"EVENT_ACTION": "created",
+				"COMMENT_BODY": RELEASE_BODY,
+				"COMMENT_AUTHOR_ASSOCIATION": association,
+				"COMMENT_USER_LOGIN": login,
+				"STUB_LOGIN": "pipeline-bot",
+				"RUN_ID": "1",
+				"ISSUE_NUMBER": "42",
+				"CHECK_TRIAGE_RESOLVED_GATE_ENABLED": "true",
+				"DEFAULT_BRANCH": "main",
+			}
+			script = step["run"].replace("${{ github.repository }}", "o/r")
+			result = subprocess.run(["bash", "-c", script], env=env, cwd=workdir, capture_output=True, text=True, check=True)
+			outputs = dict(line.split("=", 1) for line in output_path.read_text(encoding="utf-8").splitlines() if "=" in line)
+			for key, value in expected.items():
+				assert outputs.get(key) == value, (association, login, key, outputs, result.stdout)
 
 
 def main() -> int:
