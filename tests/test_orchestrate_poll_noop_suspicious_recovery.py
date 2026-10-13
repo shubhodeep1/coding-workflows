@@ -941,7 +941,7 @@ def _noop_activity(actor: str = PIPELINE_LOGIN, before: str = "0" * 40, after: s
 
 def _run_noop_sweep(*, snapshot=None, comments=None, commits=None, pr=None,
 		wait_outcome: str = "ok", wait_total: str = "5", login: str = PIPELINE_LOGIN,
-		runs_read: str = "true", activity=None) -> dict:
+		runs_read: str = "true", activity=None, ci_name: str = "lint") -> dict:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		log = root / "log"
@@ -985,6 +985,7 @@ _pr_wait_for_required_checks() {
 	PR_CHECKS_WAIT_OUTCOME="${WAIT_OUTCOME}"
 	PR_CHECKS_LAST_TOTAL="${WAIT_TOTAL}"
 	PR_CHECKS_RUNS_READ="${WAIT_RUNS_READ}"
+	PR_CHECKS_LAST_CI_NAME="${WAIT_CI_NAME}"
 	case "${WAIT_OUTCOME}" in ok|allow_all) return 0 ;; *) return 1 ;; esac
 }
 GITHUB_REPOSITORY="o/r"
@@ -994,7 +995,7 @@ STANDALONE_PRS="$(cat "${FX}/snapshot.json")"
 STANDALONE_COUNT="$(printf '%s' "${STANDALONE_PRS}" | jq 'length')"
 """ + _noop_sweep_slice()
 		env = {**os.environ, "TRUSTED": login, "WAIT_OUTCOME": wait_outcome, "WAIT_TOTAL": wait_total,
-			"WAIT_RUNS_READ": runs_read, "PYTHONDONTWRITEBYTECODE": "1"}
+			"WAIT_RUNS_READ": runs_read, "WAIT_CI_NAME": ci_name, "PYTHONDONTWRITEBYTECODE": "1"}
 		result = subprocess.run(["bash", "-c", script, "sweep", str(root), str(log)], cwd=tmp, env=env,
 			capture_output=True, text=True)
 		assert result.returncode == 0, result.stderr + result.stdout
@@ -1109,6 +1110,16 @@ def test_noop_no_check_runs_fails_closed():
 	out = _run_noop_sweep(wait_total="0")
 	assert not out["merges"], out
 	assert len(out["alerts"]) == 1 and "reason=no_check_runs" in out["alerts"][0], out
+
+
+def test_noop_allow_all_without_ci_check_fails_closed():
+	"""Issue #7126: under the allow-all sentinel the shared gate counts no
+	check-runs, so without a named CI check nothing shows a check ran."""
+	for ci_name in ("none", ""):
+		out = _run_noop_sweep(wait_outcome="allow_all", wait_total="", ci_name=ci_name)
+		assert not out["merges"], out
+		assert len(out["alerts"]) == 1 and "reason=no_check_runs_verified" in out["alerts"][0], out
+	assert len(_run_noop_sweep(wait_outcome="allow_all", wait_total="", ci_name="lint")["merges"]) == 1
 
 
 def test_noop_unreadable_ci_runs_wait_without_paging():

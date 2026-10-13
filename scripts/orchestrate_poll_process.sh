@@ -28695,6 +28695,16 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 			# Operator sentinel (ORCH_FINAL_MERGE_REQUIRED_CHECKS=""): check-run
 			# outcomes are left to branch protection, as before. The named CI
 			# check, when configured, was still required by the wait helper.
+			# _pr_checks_completed returns before counting check-runs under
+			# this sentinel, so with no named CI check nothing shows that any
+			# check ran on this head: fail closed, page once (issue #7126).
+			case "${PR_CHECKS_LAST_CI_NAME:-none}" in
+				""|none)
+					_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: no check-run verified on ${N_HEAD_SHA} (reason=no_check_runs_verified, required-checks gate is allow-all and no CI check is configured). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+					NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+					continue
+					;;
+			esac
 			;;
 		0:ok)
 			# The shared helper counts an unreadable actions/runs listing as
