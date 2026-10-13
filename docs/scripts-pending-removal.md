@@ -193,7 +193,7 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `gh issue list --label ai:check-triage --search 37922279826 --state all -R shubhodeep1/coding-workflows` shows a closed issue whose body links run 37922279826.
   - `gh run list --workflow check-failure-triage-historical.yml --limit 5 -R shubhodeep1/coding-workflows` shows the latest runs ending in the guard job with `HISTORICAL_TRIAGE skip reason=already_filed` (no `repro` or `triage` job ran).
-  - `rg -n 'check-failure-triage-historical' .github/ docs/INVENTORY.md agents.md` lists only this workflow, its inventory line and the generated TREE block, which are removed together.
+  - `rg -n 'check-failure-triage-historical' .github/ docs/ agents.md tests/` lists only this workflow, its inventory line, the generated TREE block, its entry in `tests/test_workflow_checkout_integration_ref_audit.py` and `tests/test_check_failure_triage_historical.py` (plus that test's line in `ci.yml`), which are removed together.
 - **Owner:** @shubhodeep1
 
 ### `.github/workflows/workspace-cache-maintenance.yml`

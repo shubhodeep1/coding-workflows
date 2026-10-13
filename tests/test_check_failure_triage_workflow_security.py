@@ -2038,12 +2038,13 @@ CLOSED_MERGED = {"state": "closed", "merged": True, "merge_commit_sha": "b" * 40
 
 
 def _write_repro_group(root: Path, group: int, *, shard_logs: dict[int, str] | None = None,
-		steps_rc: int = 0, extra_step_log: str = "", single: bool = True) -> Path:
+		steps_rc: int = 0, extra_step_log: str = "", single: bool = True,
+		tested: str = f"tree=head sha={HIST_HEAD_SHA}") -> Path:
 	"""One downloaded ``historical-repro-group-<g>`` artifact, laid out as the
 	historical workflow's repro job writes it."""
 	group_dir = root / f"historical-repro-group-{group}"
 	(group_dir / "out").mkdir(parents=True)
-	(group_dir / "tested.txt").write_text(f"tree=head sha={HIST_HEAD_SHA}\n", encoding="utf-8")
+	(group_dir / "tested.txt").write_text(tested + "\n", encoding="utf-8")
 	plan = ["1\tderive\tnone\tDerive orchestrate poll test subsets"]
 	if group == 0:
 		plan.append("2\tfastfail\tnone\tOrchestrate poll implementation-failed regression fast-fail")
@@ -2197,6 +2198,19 @@ class CheckFailureTriageHistoricalModeTests(unittest.TestCase):
 		self.assertEqual(metadata["dependency_skip_count"], 0)
 		self.assertEqual(metadata["missing"], [])
 		self.assertIn("outcome: complete_non_reproduction", context)
+
+	def test_green_merge_commit_fallback_is_incomplete(self) -> None:
+		merge_tested = f"tree=merge_commit sha={'b' * 40}"
+		_, _, metadata, _ = self._run_repro(lambda root: [_write_repro_group(root, g, tested=merge_tested) for g in range(4)])
+		self.assertEqual(metadata["evidence_outcome"], "incomplete")
+		self.assertEqual(metadata["tested_tree"], "merge_commit")
+		self.assertIn("failing_head_not_tested", metadata["missing"])
+
+	def test_green_head_with_other_sha_is_incomplete(self) -> None:
+		other = f"tree=head sha={'c' * 40}"
+		_, _, metadata, _ = self._run_repro(lambda root: [_write_repro_group(root, g, tested=other) for g in range(4)])
+		self.assertEqual(metadata["evidence_outcome"], "incomplete")
+		self.assertIn("tested_sha_not_failing_head", metadata["missing"])
 
 	def test_reproduction_failure_is_reproduced(self) -> None:
 		def build(root: Path) -> None:

@@ -12,7 +12,7 @@ fetching the job log on the host. The log is redacted with
 and only the first failure window reaches the isolated diagnosis. On a 404/410
 log, it parses same-run reproduction artifacts host-side and recounts them
 (`reproduced` / `complete_non_reproduction` / `incomplete`; complete needs
-every group, shard and step and zero jq/PyYAML skips). The single-use
+the failing head SHA itself tested, every group, shard and step and zero jq/PyYAML skips). The single-use
 `check-failure-triage-historical.yml` (push to `main` + dispatch, PR #6611
 run 37922279826 / job 113792812346) drives it. Its guard dedups on trusted
 issues and caps failed runs at 3, and its `repro` matrix runs without

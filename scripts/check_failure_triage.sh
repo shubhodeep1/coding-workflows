@@ -982,7 +982,7 @@ PY
 		# The reproduction ran PR-head code: every artifact byte is untrusted
 		# data. Counts and completeness are recomputed here, never read from a
 		# summary the reproduction wrote.
-		if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${HIST_REPRO_DIR}" "${HIST_EXPECTED_GROUPS}" "${hist_context_tmp}" > "${hist_summary}" <<'PY'
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${HIST_REPRO_DIR}" "${HIST_EXPECTED_GROUPS}" "${hist_context_tmp}" "${HEAD_SHA,,}" > "${hist_summary}" <<'PY'
 import json
 import os
 import re
@@ -990,6 +990,9 @@ import stat
 import sys
 
 root, expected_groups, context_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+# Failing run head SHA (already bound to the run); a green run on any other
+# tree cannot be a complete non-reproduction.
+failing_head = sys.argv[4] if len(sys.argv) > 4 else ""
 FILE_CAP, TOTAL_CAP = 2 * 1024 * 1024, 16 * 1024 * 1024
 total_read = 0
 missing = []
@@ -1170,6 +1173,10 @@ for group in range(expected_groups):
 if len(trees) > 1:
 	note("tested_sha_mismatch")
 tested_tree, tested_sha = (sorted(trees)[0] if trees else ("", ""))
+if trees and tested_tree != "head":
+	note("failing_head_not_tested")
+elif tested_sha and tested_sha != failing_head:
+	note("tested_sha_not_failing_head")
 if totals["fail"] or nonzero:
 	outcome = "reproduced"
 elif not missing and totals["dep_skip"] == 0:
