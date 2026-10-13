@@ -239,3 +239,27 @@ def test_invalid_inputs_are_reviewed(tmp_path: Path) -> None:
 		result = subprocess.run(["bash", str(HELPER), "freshness-sync", *args], capture_output=True, text=True, check=False)
 		assert result.returncode == 1, args
 		assert "outcome=review reason=invalid_input" in result.stdout
+
+
+# --- freshness-sync after CI failed on the head (Q103, PR #7153) ---
+
+def _ci_failed_marker(*, head: str = MERGE_HEAD, pr: int = 42, author: str = "workflow-bot") -> dict:
+	return {"author_login": author, "body": f"**CI failed on the updated head `{head[:12]}`.** ...\n\n<!-- ai:freshness-ci-failed:v1 pr={pr} head={head} -->"}
+
+
+def test_a_head_whose_ci_failed_is_reviewed_without_api_calls(tmp_path: Path) -> None:
+	result, calls = _freshness(tmp_path, [_marker(), _ci_failed_marker()])
+	assert result.returncode == 1
+	assert f"REVIEW_HEAD_GATE mode=freshness_sync pr=42 head={MERGE_HEAD} outcome=review reason=ci_failed_on_head from={APPROVED} sync=1" in result.stdout
+	assert calls == []
+
+
+@pytest.mark.parametrize("marker", (
+	_ci_failed_marker(head="f" * 40),
+	_ci_failed_marker(pr=43),
+	_ci_failed_marker(author="intruder"),
+))
+def test_a_ci_failed_marker_for_another_head_pr_or_author_is_ignored(tmp_path: Path, marker: dict) -> None:
+	result, _calls = _freshness(tmp_path, [_marker(), marker])
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "reason=freshness_sync" in result.stdout

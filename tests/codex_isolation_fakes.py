@@ -38,6 +38,14 @@ if command == "build":
 	if PASSTHROUGH.get("FAKE_DOCKER_BUILD_FAIL"):
 		print("fake build failure", file=sys.stderr)
 		sys.exit(1)
+	fail_times = int(PASSTHROUGH.get("FAKE_DOCKER_BUILD_FAIL_TIMES") or 0)
+	if fail_times:
+		# This call is already logged: fail while it is among the first N builds.
+		with open(LOG, encoding="utf-8") as handle:
+			builds = sum(1 for line in handle if line.strip() and json.loads(line)["argv"][:1] == ["build"])
+		if builds <= fail_times:
+			print("fake build failure", file=sys.stderr)
+			sys.exit(1)
 	print("sha256:" + "0" * 64)
 	sys.exit(0)
 if command in ("ps", "rm", "kill"):
