@@ -930,7 +930,8 @@ def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str, str]], s
 
 	``note`` is empty for a single commit tip, ``bulk:<option>`` for a push
 	that publishes several branch tips, and ``non_branch`` for a push that
-	publishes only tags or other non-branch refs; both notes ask.
+	publishes tags or other non-branch refs (alone, or next to a branch via
+	``--tags``, ``--follow-tags`` or a ``refs/tags/`` refspec); both notes ask.
 	"""
 	try:
 		guard = _load_guard_module()
@@ -962,7 +963,7 @@ def detect_pushes(command: str, cwd: str) -> tuple[list[tuple[str, str, str]], s
 		# so a push that mixes them with a branch must still ask: the tag can
 		# point at a commit the branch stamp does not cover.
 		arguments = [a for a in getattr(invocation, "arguments", []) if isinstance(a, str)]
-		mixed_non_branch = any(a in ("--tags", "--tag", "--ta") for a in arguments) or any(
+		mixed_non_branch = any(a in ("--tags", "--tag", "--ta", "--follow-tags") for a in arguments) or any(
 			not a.startswith("-") and (d := a.removeprefix("+").split(":", 1)[-1]).startswith("refs/") and not d.startswith("refs/heads/")
 			for a in arguments
 		)

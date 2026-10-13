@@ -55,7 +55,7 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   the ref does not resolve, or the stamp records failures this change
   caused. A bulk push (`--all`, `--mirror`, `--branches`, a pattern) and a
   push that includes tags or other non-branch refs (`--tags`, a
-  `refs/tags/` refspec, also next to a branch) always ask. A `pass`,
+  `refs/tags/` refspec or `--follow-tags`, also next to a branch) always ask. A `pass`,
   `unverified` or `skipped` stamp, a non-push command and
   `CLAUDE_PREPUSH_TEST_GATE=off` give no decision. Internal errors and
   malformed payloads fail open with a `systemMessage`. The hook never runs

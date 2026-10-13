@@ -767,7 +767,7 @@ def test_hook_ignores_git_push_inside_quoted_text(tmp_path):
 	assert _hook(_push(root, "echo 'git push'"), {"TMPDIR": str(tmp_path)}) == {}
 
 
-@pytest.mark.parametrize("command", ["git push origin main refs/tags/v1", "git push --tags origin main"])
+@pytest.mark.parametrize("command", ["git push origin main refs/tags/v1", "git push --tags origin main", "git push --follow-tags origin main"])
 def test_hook_asks_for_mixed_branch_and_tag_pushes(tmp_path, command):
 	root = _repo(tmp_path, {"a.txt": ""})
 	_git(root, "tag", "v1")
