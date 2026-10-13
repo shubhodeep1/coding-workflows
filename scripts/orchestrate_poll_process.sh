@@ -28336,6 +28336,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# check must exist on the head and have succeeded.
 	PR_CHECKS_WAIT_OUTCOME=""
 	PR_CHECKS_LAST_TOTAL=""
+	PR_CHECKS_RUNS_READ=""
 	_noop_checks_rc=0
 	_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0 || _noop_checks_rc=$?
 	case "${_noop_checks_rc}:${PR_CHECKS_WAIT_OUTCOME:-}" in
@@ -28349,6 +28350,15 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 				# Three review runs since the last productive commit: an empty
 				# check-run listing is unexpected. Fail closed, page once.
 				_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: no check-runs on ${N_HEAD_SHA} (reason=no_check_runs). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+				continue
+			fi
+			# The shared helper counts an unreadable actions/runs listing as
+			# zero pending CI runs (fail-open for its other callers). Here a
+			# queued CI run may not have check-runs yet, so an unread listing
+			# is unknown: re-check next sweep without paging (issue #7126).
+			if [ "${PR_CHECKS_RUNS_READ:-}" = "false" ]; then
+				echo "::warning::PR #${N_PR}: gate D could not read CI workflow runs on ${N_HEAD_SHA} (reason=ci_runs_unreadable); re-checking next sweep."
 				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 				continue
 			fi
