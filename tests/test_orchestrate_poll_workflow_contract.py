@@ -240,7 +240,12 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	assert f"grep -qF '{STANDALONE_SWEEP_POLLER_GUARD}' scripts/orchestrate_poll_process.sh" in run
 	assert run.index("exit 0") < run.index("bash scripts/orchestrate_poll_process.sh")
 	# The poller mode runs recovery only and sits after the other sweep modes.
-	block = STANDALONE_SWEEP_POLLER_GUARD + "\n  run_standalone_stall_recovery\n  exit 0\nfi"
+	# Caps are primed first so idle-tick dispatches honour concurrency_caps.yml.
+	block = (
+		STANDALONE_SWEEP_POLLER_GUARD
+		+ '\n  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"'
+		+ "\n  run_standalone_stall_recovery\n  exit 0\nfi"
+	)
 	assert poller.count(block) == 1
 	assert poller.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then') < poller.index(block)
 	assert poller.index(block) < poller.index("# Process each tracking issue")

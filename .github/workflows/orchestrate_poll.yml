@@ -293,8 +293,10 @@ jobs:
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
+      # Idle ticks also install it while standalone stall recovery and its
+      # stall judge are on, because that judge can run on OpenCode (#7174).
       - name: Install OpenCode CLI for isolated review-blocked judge
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' || (vars.ENABLE_STANDALONE_STALL_RECOVERY != 'false' && vars.ENABLE_STALL_JUDGE != 'false')
         continue-on-error: true
         uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:

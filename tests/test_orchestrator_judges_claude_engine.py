@@ -911,13 +911,18 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	opencode = steps[names.index("Install OpenCode CLI for isolated review-blocked judge")]
-	assert opencode["if"] == "steps.find_tracking.outputs.has_work == 'true'"
+	# Idle ticks need it too for the standalone stall judge (#7174).
+	assert opencode["if"] == (
+		"steps.find_tracking.outputs.has_work == 'true' || "
+		"(vars.ENABLE_STANDALONE_STALL_RECOVERY != 'false' && vars.ENABLE_STALL_JUDGE != 'false')"
+	)
 	assert opencode["continue-on-error"] is True
 	assert opencode["uses"] == (
 		"shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f"
 	)
 	assert opencode["with"]["opencode_version"] == "${{ vars.OPENCODE_VERSION || '1.18.23' }}"
 	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Process each tracking issue")
+	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Run standalone stall recovery without active projects")
 	stage = steps[names.index("Stage workflow support files")]["run"]
 	assert "security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh" in stage
 	resolve = steps[names.index("Resolve AI engine")]
