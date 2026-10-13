@@ -536,11 +536,18 @@ def _protected_handoff_ops(ctx: dict, verdict: dict, retryable: bool = False) ->
 	if rejection["truncated"]:
 		paths_line += " (the rejection listed only the first 100 paths)"
 	name = verdict["verdict"]
+	# A retryable handoff follows a fix-up that already merged (#7287), so its
+	# text must not claim no fix-up exists.
+	lead = (
+		f"The unblock judge's earlier `{name}` fix-up merged, but implementation run {run} was rejected by the automation-path grant guard"
+		" and that is still the newest guard result, so no resume command was posted. "
+		if retryable else
+		f"The unblock judge chose `{name}`, but implementation run {run} was rejected by the automation-path grant guard. "
+		"A fix-up issue would hit the same guard, so none was created. "
+	)
 	body = "\n".join(
 		[
-			f"The unblock judge chose `{name}`, but implementation run {run} was rejected by the automation-path grant guard. "
-			"A fix-up issue would hit the same guard, so none was created. "
-			"This issue stays blocked until a person grants or makes the change.",
+			lead + "This issue stays blocked until a person grants or makes the change.",
 			"",
 			paths_line,
 			"",
@@ -576,6 +583,7 @@ def _protected_handoff_ops(ctx: dict, verdict: dict, retryable: bool = False) ->
 		"text": f"Operator handoff for #{item}: automation-path guard rejected run {run}; no fix-up created, the item stays blocked",
 	}
 	if retryable:
+		warning["text"] = f"Operator handoff for #{item}: automation-path guard rejected run {run}; merged fix-up not resumed, the item stays blocked"
 		warning["handoff_retry"] = True
 	return [
 		{"op": "operator_step", "key": f"unblock-{item}", "source": f"Unblock judge, #{item}", "steps": [step]},

@@ -489,8 +489,11 @@ unblock_rejection_snapshot()
 # the re-grant marker and the stop's resume command instead of asking the
 # judge. The implementation run checks the grant again before it commits.
 # Returns 0 when it acted (this run ends), 1 to let the judge decide.
+# UNBLOCK_REGRANT_RESULT is `regranted` or `failed` after a 0 return, so a
+# caller can tell a completed resume from a failed actuation (#7287).
 unblock_try_regrant()
 {
+	UNBLOCK_REGRANT_RESULT=""
 	local rejection_file="${RUNTIME_DIR}/automation_rejection.json" grant_file="${RUNTIME_DIR}/automation_grant.json"
 	local staged_file="${RUNTIME_DIR}/automation_staged.txt" ops_file="${RUNTIME_DIR}/regrant_ops.json" run_id reason guard_rc
 	if [ "${UNBLOCK_JUDGE_REGRANT_ENABLED:-true}" != "true" ]; then
@@ -531,9 +534,11 @@ unblock_try_regrant()
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" regrant --context-file "${RUNTIME_DIR}/context.json" \
 		--rejection-file "${rejection_file}" > "${ops_file}" || ! unblock_run_ops "${ops_file}"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} outcome=failed reason=actuation_failed"
+		UNBLOCK_REGRANT_RESULT="failed"
 		return 0
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=regrant run=${run_id} paths=$(wc -l < "${staged_file}" | tr -d ' ') outcome=regranted"
+	UNBLOCK_REGRANT_RESULT="regranted"
 	return 0
 }
 
@@ -883,6 +888,12 @@ unblock_main()
 					# A grant the current guard already accepts resumes the item
 					# (as the deterministic exit below would) instead of a handoff.
 					if unblock_try_regrant; then
+						if [ "${UNBLOCK_REGRANT_RESULT:-}" != "regranted" ]; then
+							# A failed resume keeps the fix-up wait open, so the next
+							# run checks the item again instead of a done wait hiding it.
+							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_regrant_failed run=${followup_run}"
+							return 0
+						fi
 						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge re-checked the automation-path grant instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
