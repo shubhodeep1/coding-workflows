@@ -119,7 +119,8 @@ def test_template_grants_every_permission_the_updater_needs() -> None:
 def test_verify_job_asks_for_no_job_level_permissions() -> None:
 	# Inheriting the caller's grant keeps an older caller wrapper (contents:
 	# write only) from failing the whole updater at startup; without
-	# statuses: write its status post fails and the job fails closed.
+	# statuses: write each status post retries once with GH_PAT, and the job
+	# fails closed only when both tokens are refused.
 	assert "permissions" not in _verify_job()
 	assert "permissions" not in _workflow()
 
@@ -436,6 +437,7 @@ def test_status_post_failure_blocks_the_merge(tmp_path: Path) -> None:
 	assert not any(call.startswith("pr merge") for call in calls)
 	assert "auto_merge" not in outputs
 	assert "reason=status_post_failed" in result.stdout
+	assert sum(call.startswith("api -X POST") for call in calls) == 2
 
 
 def test_status_post_retries_with_pat_when_job_token_is_refused(tmp_path: Path) -> None:
