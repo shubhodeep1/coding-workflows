@@ -12624,7 +12624,17 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "" "${default_branch}"; then
+  # Bind the required-checks read and the merge to one head (issue #7126).
+  # pr_json is the latest PR read above, so this costs no extra API call.
+  local finalize_merge_head_sha=""
+  finalize_merge_head_sha="$(_jq_field "${pr_json}" '.head.sha')"
+  if [ "${pr_state}" = "open" ] && { [ -z "${finalize_merge_head_sha}" ] || [ "${finalize_merge_head_sha}" = "null" ]; }; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "::warning::  [final-merge] PR #${final_pr} head SHA unavailable; will retry next poll." >&2
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "${finalize_merge_head_sha}" "${default_branch}"; then
     FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
@@ -12639,7 +12649,14 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   fi
 
   local merge_err=""
-  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
+  # An open PR always has a validated head here (checked above). A PR read
+  # that is not open keeps the legacy unbound attempt, whose error path
+  # records the failure.
+  local -a finalize_merge_match_arg=()
+  if [ -n "${finalize_merge_head_sha}" ] && [ "${finalize_merge_head_sha}" != "null" ]; then
+    finalize_merge_match_arg=(--match-head-commit "${finalize_merge_head_sha}")
+  fi
+  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" "${finalize_merge_match_arg[@]}" --squash --delete-branch 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
@@ -19822,12 +19839,17 @@ STALL_EOF
           [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}" \
-            && _pr_base_fresh_for_merge "${merge_pr}" \
-              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)" \
+          # Bind the checks and the merge to one head (issue #7126): the
+          # merge only applies to the commit the checks were read for.
+          local merge_head_sha
+          merge_head_sha="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && { [ -z "${merge_head_sha}" ] || [ "${merge_head_sha}" = "null" ]; }; then
+            echo "::warning::[standalone-stall] PR #${merge_pr}: head SHA unavailable; skipping merge this tick."
+          elif [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
+            && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" \
               "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"; then
-            gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
-              || gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
+            gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${merge_head_sha}" >/dev/null 2>&1 \
+              || gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${merge_head_sha}" >/dev/null 2>&1 \
               || true
           fi
         fi
@@ -23093,8 +23115,11 @@ The poller will resume processing on the next cycle."
                 echo "  [backward-scan] Backpressure active (ahead_by=${CWS_BACKPRESSURE_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
-              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+              # Bind the merge to the head the checks were read for (#7126).
+              if [ -z "${_pw_head_sha}" ] || [ "${_pw_head_sha}" = "null" ]; then
+                echo "::warning::[backward-scan] PR #${PW_PR}: head SHA unavailable; skipping merge this tick."
+              elif gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_pw_head_sha}" 2>/dev/null \
+                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_pw_head_sha}" 2>/dev/null; then
                 refresh_integration_backpressure_gate_after_merge || true
               fi
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
@@ -23790,11 +23815,16 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        ;;
 		    esac
 		  fi
+		  # Bind the merge to the head the checks were read for (#7126).
+		  if [ -z "${_rtm_head_sha}" ] || [ "${_rtm_head_sha}" = "null" ]; then
+		    echo "::warning::PR #${RTM_PR}: head SHA unavailable; skipping merge this tick."
+		    continue
+		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
-		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_rtm_head_sha}"; then
 		    echo "  PR #${RTM_PR} merge initiated."
 		    refresh_integration_backpressure_gate_after_merge || true
-		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_rtm_head_sha}"; then
 		    echo "  PR #${RTM_PR} merged directly."
 		    refresh_integration_backpressure_gate_after_merge || true
 		  else
@@ -24963,12 +24993,18 @@ sys.exit(1)
           # non-required/environmental check (e.g. CodeQL with code scanning
           # disabled) no longer deadlocks the review-blocked merge.
           _rb_merge_base="$(_jq_field "${_rb_merge_json}" '.base.ref')"
-		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
+		  # Bind the merge to the head the checks were read for (#7126); a
+		  # missing or malformed head SHA skips the merge this tick.
+		  if [ -z "${_rb_merge_sha}" ] || [ "${_rb_merge_sha}" = "null" ]; then
+		    echo "::warning::PR #${RB_PR}: head SHA unavailable; skipping merge this tick."
+		  fi
+		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && [ -n "${_rb_merge_sha}" ] && [ "${_rb_merge_sha}" != "null" ] \
+		    && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
 		    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
-		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_rb_merge_sha}"; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
 		      RB_MERGED="true"
-		    elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		    elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_rb_merge_sha}"; then
 		      echo "  PR #${RB_PR} merged directly."
 		      RB_MERGED="true"
 		    else
@@ -25021,10 +25057,15 @@ sys.exit(1)
             # Required-checks filter via the PR's base ref (see the merge)
             # branch above) — no extra API call, reuses _rb_fm_json.
             _rb_fm_base="$(_jq_field "${_rb_fm_json}" '.base.ref')"
-				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
+				# Bind the merge to the head the checks were read for (#7126).
+				if [ -z "${_rb_fm_sha}" ] || [ "${_rb_fm_sha}" = "null" ]; then
+				  echo "::warning::PR #${RB_PR}: head SHA unavailable; skipping force-merge this tick."
+				fi
+				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && [ -n "${_rb_fm_sha}" ] && [ "${_rb_fm_sha}" != "null" ] \
+				  && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
 				  && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
-				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_rb_fm_sha}" \
+				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_rb_fm_sha}"; then
 				    RB_FORCE_MERGED="true"
 				  else
 				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
@@ -25337,10 +25378,15 @@ ${RB_FIX_DESC}
                   # Required-checks filter via the PR's base ref (see the
                   # merge) branch above) — no extra API call, reuses _rb_nofix_json.
                   _rb_nofix_base="$(_jq_field "${_rb_nofix_json}" '.base.ref')"
-                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
+                  # Bind the merge to the head the checks were read for (#7126).
+                  if [ -z "${_rb_nofix_sha}" ] || [ "${_rb_nofix_sha}" = "null" ]; then
+                    echo "::warning::PR #${RB_PR}: head SHA unavailable; skipping no-fix merge this tick."
+                  fi
+                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && [ -n "${_rb_nofix_sha}" ] && [ "${_rb_nofix_sha}" != "null" ] \
+                    && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
                     && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
-                    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-                      || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_rb_nofix_sha}" \
+                      || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_rb_nofix_sha}"; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
@@ -27672,7 +27718,7 @@ echo "========================================"
 STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
-	--json number,headRefName,headRefOid,baseRefName,isDraft \
+	--json number,headRefName,headRefOid,baseRefName,isDraft,isCrossRepository,headRepositoryOwner \
 	--limit 3000 2>/dev/null || echo "[]")"
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
@@ -27898,16 +27944,36 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #       C) At least one prior `[ai-autofix]` / `[judge-fix]` commit
 #          exists on the PR (a brand-new editor that has never
 #          produced work is not eligible for force-merge).
-#       D) Gate D delegates to `_pr_checks_completed` (shared gate in
-#          scripts/pr_checks_lib.sh, required-set filter): any pending
-#          check-run blocks (advisory ones too; Gate D re-checks it next
-#          sweep without paging), a required check-run that ended failure /
-#          timed_out / action_required blocks, and a cancelled one blocks
-#          unless a newer run of the same name exists; a completed advisory
-#          check's conclusion does not.
-#     If every gate passes: `gh pr merge --squash --auto`, a Telegram
-#     DEBUG notice, and one audit-trail comment posted to the PR so the
-#     decision is visible on the thread (not only in Telegram).
+#       D) Gate D delegates to `_pr_wait_for_required_checks` (shared
+#          gate in scripts/pr_checks_lib.sh) with a zero-minute budget, so
+#          it evaluates once and never sleeps: it wraps
+#          `_pr_checks_completed` (required-set filter) and also requires
+#          the named CI check (AUTO_MERGE_REQUIRED_CI_CHECK, #6963) to exist
+#          on the head and have succeeded in a CI run on that head. A
+#          pending check-run, a queued CI run or a missing / pending named
+#          check re-checks next sweep without paging; a settled failure, or
+#          an `ok` with no check-runs at all, pages once (gate D_check).
+#     If every gate passes: `gh pr merge --squash --auto
+#     --match-head-commit <head>`, a Telegram DEBUG notice, and one
+#     audit-trail comment posted to the PR so the decision is visible on
+#     the thread (not only in Telegram).
+#
+# Trusted evidence (issue #7126). Comments and commit messages are
+# attacker-writable, so:
+#   - Only same-repository heads are eligible: `isCrossRepository` and
+#     `headRepositoryOwner` from the STANDALONE_PRS snapshot, re-checked
+#     against `.head.repo.full_name` of the Gate A read. A missing field
+#     skips the PR (fail closed) before any per-PR API call.
+#   - Noop warnings and the Gate B editor summary count only when posted
+#     by the pipeline's own login (`unblock_trusted_login`, the filter
+#     `_noop_gate_failure_alert` uses). An unresolved login skips the PR.
+#   - A productive commit needs the `[ai-autofix]` / `[judge-fix]` prefix
+#     AND the pipeline git identity (NOOP_PRODUCTIVE_COMMIT_NAME /
+#     _EMAIL) as author or committer.
+#     Before a force-merge it must also have been pushed by the pipeline
+#     login (repository activity API push actor, Gate C binding).
+#   - The snapshot head must equal the Gate A head, and the merge is bound
+#     to it, so every gate and the merge apply to one commit.
 #
 # Retry counter design. The count of noop-suspicious warning comments
 # newer than the latest [ai-autofix] / [judge-fix] commit IS the
@@ -27932,9 +27998,12 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #     but not comments.
 # The common case (PR with no noop warnings) costs just 1 comments
 # call and exits. A noop-suspicious PR additionally costs 1 commits
-# call, 1 pulls call (force-merge gate), and 1 check-runs call (force-
-# merge gate D) — gated so they only fire when the retry threshold has
-# been reached. The fingerprint-cap skip reuses the comments and commits
+# call, 1 pulls call (force-merge gate), 1 repository activity call (Gate C
+# pusher binding), and the gate D reads (check-runs,
+# branch protection, and one actions/runs?head_sha= read when a named CI
+# check is configured) — gated so they only fire when the retry threshold
+# has been reached. The fork fields ride the existing `gh pr list` call
+# and the trusted login is cached for the tick (no extra call). The fingerprint-cap skip reuses the comments and commits
 # already fetched (head SHA = last entry of the commits list) and adds at
 # most one `GET /user` per poll cycle, issued lazily only when some PR's
 # current head carries a cap marker; its result is cached for the rest
@@ -27991,6 +28060,13 @@ _noop_cap_review_support_sha() {
 	return 0
 }
 NOOP_MAX_RETRIES=3
+# Git identity of the pipeline's productive commits (issue #7126). Every
+# [ai-autofix] / [judge-fix] writer commits as this identity
+# (scripts/review_commit_changes.sh, scripts/review_rb_judge.sh, and the
+# poller's own judge-fix commits), not as the GH_PAT login, so a commit
+# message alone never counts as productive work. Constants, not env vars.
+NOOP_PRODUCTIVE_COMMIT_NAME="codex-bot"
+NOOP_PRODUCTIVE_COMMIT_EMAIL="codex@users.noreply.github.com"
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
 # stays sealed; `force-review` lets a human pin a stuck PR for manual
@@ -28037,11 +28113,23 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	N_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefOid // \"\"")"
 	N_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].baseRefName")"
 	N_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].isDraft // false")"
+	# Fork exclusion (issue #7126): a missing field reads as "unknown".
+	N_CROSS_REPO="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}] | if (.isCrossRepository | type) == \"boolean\" then (.isCrossRepository | tostring) else \"unknown\" end" 2>/dev/null || echo "unknown")"
+	N_HEAD_OWNER="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRepositoryOwner.login // \"\"" 2>/dev/null || echo "")"
 
 	if [ -z "${N_PR}" ] || [ "${N_PR}" = "null" ]; then
 		continue
 	fi
 	if [ -z "${N_HEAD}" ] || [ "${N_HEAD}" = "null" ]; then
+		continue
+	fi
+	# Only same-repository heads are eligible (issue #7126): anyone can open
+	# a fork PR and post comments on it, so neither the re-dispatch nor the
+	# force-merge fallback may act on one. Fails closed on a missing field,
+	# before any per-PR API call.
+	N_REPO_OWNER="${GITHUB_REPOSITORY%%/*}"
+	if [ "${N_CROSS_REPO}" != "false" ] || [ -z "${N_HEAD_OWNER}" ] || [ "${N_HEAD_OWNER,,}" != "${N_REPO_OWNER,,}" ]; then
+		echo "  PR #${N_PR}: skipping noop recovery (head repository not this repository / unknown)."
 		continue
 	fi
 	# A draft claude/* integration PR is owned by its project chain; do
@@ -28099,13 +28187,24 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		| jq -s 'add // []' 2>/dev/null || echo '[]')"
 	[ -n "${N_COMMENTS_JSON}" ] || N_COMMENTS_JSON='[]'
 
+	# Only warnings posted by the pipeline's own login count (issue #7126):
+	# anyone who can comment on the PR can paste the warning text. Cached
+	# for the tick; an unresolved login fails closed (no dispatch, no merge).
+	unblock_trusted_login >/dev/null
+	N_TRUSTED_LOGIN="${UNBLOCK_TRUSTED_LOGIN:-}"
+	if [ -z "${N_TRUSTED_LOGIN}" ]; then
+		echo "::warning::PR #${N_PR}: pipeline login unresolved; skipping noop recovery this cycle (fail closed)."
+		continue
+	fi
+
 	N_NOOP_LATEST_TS="$(echo "${N_COMMENTS_JSON}" | jq -r \
 		--arg lit "${NOOP_WARNING_LITERAL}" \
-		'[.[] | select((.body // "") | contains($lit))] | max_by(.created_at // "") | .created_at // empty' \
+		--arg login "${N_TRUSTED_LOGIN}" \
+		'[.[] | select(((.body // "") | contains($lit)) and ((.user.login // "") == $login))] | max_by(.created_at // "") | .created_at // empty' \
 		2>/dev/null || echo "")"
 
 	if [ -z "${N_NOOP_LATEST_TS}" ]; then
-		# No noop-suspicious warning ever posted → not a candidate.
+		# No trusted noop-suspicious warning ever posted → not a candidate.
 		continue
 	fi
 
@@ -28120,8 +28219,15 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		| jq -s 'add // []' 2>/dev/null || echo '[]')"
 	[ -n "${N_COMMITS_JSON}" ] || N_COMMITS_JSON='[]'
 
+	# A productive commit also needs the pipeline's git identity as author
+	# or committer (issue #7126); a message prefix alone is forgeable.
 	N_LATEST_PROD_TS="$(echo "${N_COMMITS_JSON}" | jq -r \
-		'[.[] | select((.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))] | max_by(.commit.committer.date // "") | .commit.committer.date // empty' \
+		--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}" \
+		--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}" \
+		'[.[] | select((.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))
+			| select(((.commit.committer.name // "") == $name and (.commit.committer.email // "") == $email)
+				or ((.commit.author.name // "") == $name and (.commit.author.email // "") == $email))]
+			| max_by(.commit.committer.date // "") | .commit.committer.date // empty' \
 		2>/dev/null || echo "")"
 
 	# Stale-warning check: if the latest noop warning predates the
@@ -28140,13 +28246,15 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	if [ -n "${N_LATEST_PROD_TS}" ]; then
 		N_NOOP_COUNT="$(echo "${N_COMMENTS_JSON}" | jq -r \
 			--arg lit "${NOOP_WARNING_LITERAL}" \
+			--arg login "${N_TRUSTED_LOGIN}" \
 			--arg since "${N_LATEST_PROD_TS}" \
-			'[.[] | select((.body // "") | contains($lit)) | select((.created_at // "") > $since)] | length' \
+			'[.[] | select(((.body // "") | contains($lit)) and ((.user.login // "") == $login)) | select((.created_at // "") > $since)] | length' \
 			2>/dev/null || echo "0")"
 	else
 		N_NOOP_COUNT="$(echo "${N_COMMENTS_JSON}" | jq -r \
 			--arg lit "${NOOP_WARNING_LITERAL}" \
-			'[.[] | select((.body // "") | contains($lit))] | length' \
+			--arg login "${N_TRUSTED_LOGIN}" \
+			'[.[] | select(((.body // "") | contains($lit)) and ((.user.login // "") == $login))] | length' \
 			2>/dev/null || echo "0")"
 	fi
 	[[ "${N_NOOP_COUNT}" =~ ^[0-9]+$ ]] || N_NOOP_COUNT=0
@@ -28228,6 +28336,27 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	N_MERGEABLE="$(echo "${N_PR_JSON}" | jq -r '.mergeable // null')"
 	N_MERGEABLE_STATE="$(echo "${N_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	N_HEAD_SHA="$(echo "${N_PR_JSON}" | jq -r '.head.sha // ""')"
+	N_HEAD_REPO_FULL="$(echo "${N_PR_JSON}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+
+	# Same-repository head, re-checked on the live PR read (issue #7126). A
+	# fork or a deleted head repository never reaches the merge. No page:
+	# this is not a stuck pipeline PR.
+	if [ -z "${N_HEAD_REPO_FULL}" ] || [ "${N_HEAD_REPO_FULL,,}" != "${GITHUB_REPOSITORY,,}" ]; then
+		echo "::warning::PR #${N_PR}: head repository is not ${GITHUB_REPOSITORY} (got '${N_HEAD_REPO_FULL:-unknown}'); skipping force-merge."
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+	# The snapshot head (read before the comments and commits) must equal
+	# the live head, so Gates B-D and the merge all apply to one commit.
+	if [[ "${N_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] && [ "${N_HEAD_SHA}" != "${N_HEAD_OID}" ]; then
+		if [ -z "${N_HEAD_OID}" ]; then
+			echo "  PR #${N_PR}: open-PR snapshot has no head SHA (live head ${N_HEAD_SHA}); re-checking next sweep."
+		else
+			echo "  PR #${N_PR}: head moved during sweep (${N_HEAD_OID} -> ${N_HEAD_SHA}); re-checking next sweep."
+		fi
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
 
 	if [ "${N_STATE}" != "open" ] || [ "${N_DRAFT}" = "true" ]; then
 		_noop_gate_failure_alert "A_state" "Noop-suspicious force-merge gate A failed for PR #${N_PR}: state=${N_STATE} draft=${N_DRAFT}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
@@ -28280,12 +28409,14 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# "Validate editor no-op disposition" step uses, so a PR the
 	# workflow flagged as noop-suspicious-but-audit-healthy here will
 	# stay flagged-but-audit-healthy in the helper too.
+	# Only a summary posted by the pipeline's own login counts (issue #7126).
 	N_LATEST_EDITOR_SUMMARY="$(echo "${N_COMMENTS_JSON}" | jq -r \
-		'[.[] | select((.body // "") | startswith("AI autofix editor summary"))] | max_by(.created_at // "") | .body // empty' \
+		--arg login "${N_TRUSTED_LOGIN}" \
+		'[.[] | select((.body // "") | startswith("AI autofix editor summary")) | select((.user.login // "") == $login)] | max_by(.created_at // "") | .body // empty' \
 		2>/dev/null || echo "")"
 
 	if [ -z "${N_LATEST_EDITOR_SUMMARY}" ]; then
-		_noop_gate_failure_alert "B_summary" "Noop-suspicious force-merge gate B failed for PR #${N_PR}: no editor summary comment found. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		_noop_gate_failure_alert "B_summary" "Noop-suspicious force-merge gate B failed for PR #${N_PR}: no editor summary comment by the pipeline account found. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
@@ -28323,9 +28454,61 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-	# Gate D: required checks must not be failing.
-	if [ -z "${N_HEAD_SHA}" ]; then
-		_noop_gate_failure_alert "D_head" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: head SHA missing. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+	# Gate C binding (issue #7126): git author / committer fields are
+	# metadata anyone with push access can set, so a qualifying commit must
+	# also have been pushed by the pipeline login. The repository activity
+	# API (newest first) records the authenticated pusher; a push by
+	# N_TRUSTED_LOGIN covers the PR commits after its `before` up to and
+	# including its `after` (a `before` outside the PR list covers from the
+	# start). Pipeline pushes use GH_PAT (review checkout token, judge-fix
+	# credential helper), the login unblock_trusted_login resolves.
+	# §14: one extra GET, only on this retry-cap path; no earlier call in
+	# the sweep returns pusher data. A failed read retries next sweep
+	# without paging; no covered commit fails closed and pages once.
+	N_HEAD_REF_URI="$(jq -rn --arg r "refs/heads/${N_HEAD}" '$r | @uri' 2>/dev/null || echo "")"
+	N_ACTIVITY_JSON=""
+	if [ -n "${N_HEAD_REF_URI}" ]; then
+		N_ACTIVITY_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/activity?ref=${N_HEAD_REF_URI}&per_page=100" 2>/dev/null || echo "")"
+	fi
+	if ! printf '%s' "${N_ACTIVITY_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		echo "::warning::PR #${N_PR}: gate C could not read push activity for ${N_HEAD} (reason=activity_unreadable); re-checking next sweep."
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+	# Both documents go through stdin: either can exceed the per-argument
+	# size limit that --argjson would hit on a long PR.
+	N_PROD_PUSHED="$(printf '%s\n%s\n' "${N_COMMITS_JSON}" "${N_ACTIVITY_JSON}" | jq -rs \
+		--arg login "${N_TRUSTED_LOGIN}" \
+		--arg ref "refs/heads/${N_HEAD}" \
+		--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}" \
+		--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}" '
+		.[0] as $commits | .[1] as $acts
+		| ([$commits | to_entries[] | {key: (.value.sha // ""), value: .key}] | from_entries) as $idx
+		| [$commits | to_entries[]
+			| select((.value.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))
+			| select(((.value.commit.committer.name // "") == $name and (.value.commit.committer.email // "") == $email)
+				or ((.value.commit.author.name // "") == $name and (.value.commit.author.email // "") == $email))
+			| .key] as $prod
+		| [$acts[] | select((.actor.login // "") == $login and (.ref // "") == $ref)
+			| select(($idx[(.after // "")] // null) != null)
+			| {b: ($idx[(.before // "")] // -1), a: $idx[.after]}] as $pushes
+		| if ([$prod[] as $k | $pushes[] | select(.b < $k and $k <= .a)] | length) > 0 then "true" else "false" end' \
+		2>/dev/null || echo "false")"
+	if [ "${N_PROD_PUSHED}" != "true" ]; then
+		# A full page may hide an older covering push (only one page is read):
+		# still fail closed and page once, but name the real cause.
+		N_C_REASON="no [ai-autofix] / [judge-fix] commit was pushed by the pipeline account"
+		if [ "$(printf '%s' "${N_ACTIVITY_JSON}" | jq 'length' 2>/dev/null || echo 0)" -ge 100 ] 2>/dev/null; then
+			N_C_REASON="no covering pipeline push in the newest 100 activity records for ${N_HEAD}; older activity was not read (reason=activity_page_full)"
+		fi
+		_noop_gate_failure_alert "C_pusher" "Noop-suspicious force-merge gate C failed for PR #${N_PR}: ${N_C_REASON}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	# Gate D: required checks, including the named CI check, passed.
+	if ! [[ "${N_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+		_noop_gate_failure_alert "D_head" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: head SHA missing or malformed. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
@@ -28338,41 +28521,105 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	fi
 	[ "${N_BASE_REF}" != "null" ] || N_BASE_REF=""
 
+	# The latest trusted noop warning must come from a review of this head
+	# (its review-autofix-failure:v1 marker names the reviewed head), so the
+	# audit Gate B validated applies to the commit being merged (issue
+	# #7126). A warning for another head is a push the review has not
+	# finished with yet: re-check next sweep without paging. A warning with
+	# no head marker cannot be bound: fail closed and page once.
+	N_NOOP_WARNING_HEAD="$(echo "${N_COMMENTS_JSON}" | jq -r \
+		--arg lit "${NOOP_WARNING_LITERAL}" \
+		--arg login "${N_TRUSTED_LOGIN}" \
+		'[.[] | select(((.body // "") | contains($lit)) and ((.user.login // "") == $login))] | max_by(.created_at // "") | (.body // "")
+			| [capture("(^|\\n)<!-- review-autofix-failure:v1 head=(?<h>[0-9a-f]{40})[ >]"; "g") | .h] | last // ""' \
+		2>/dev/null || echo "")"
+	if [ -z "${N_NOOP_WARNING_HEAD}" ]; then
+		_noop_gate_failure_alert "B_head" "Noop-suspicious force-merge gate B failed for PR #${N_PR}: the latest noop warning carries no reviewed-head marker. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+	if [ "${N_NOOP_WARNING_HEAD}" != "${N_HEAD_SHA}" ]; then
+		echo "  PR #${N_PR}: latest noop warning reviewed ${N_NOOP_WARNING_HEAD}, not head ${N_HEAD_SHA}; re-checking next sweep."
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
 	# Shared gate missing (pr_checks_lib.sh not sourced): fail closed.
 	# Paged once per PR head through _noop_gate_failure_alert, like gates A-C.
-	if ! command -v _pr_checks_completed >/dev/null 2>&1; then
+	if ! command -v _pr_checks_completed >/dev/null 2>&1 || ! command -v _pr_wait_for_required_checks >/dev/null 2>&1; then
 		_noop_gate_failure_alert "D_helper" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required-checks gate unavailable (reason=helper_unavailable). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi
 
-	# §14 audit: the PR JSON from Gate A is reused (no PR re-fetch); the
-	# paginated check-runs read moved into the shared gate, so it is still
-	# one call. The gate adds one branch-protection GET
-	# (_pr_required_check_names_for_base, fail-fast on 404) so Gate D
-	# honours server-side required contexts; no earlier call in this sweep
-	# returns protection data. Runs only on the noop retry-cap path.
-	# Three arguments always opt into the required-set filter.
-	if ! _pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}"; then
-		# A check-run still running is not a failure: skip without paging and
-		# re-check on the next sweep, so the once-per-head marker is kept for
-		# a settled failure. A failed check-runs read (query_failed /
-		# unresolved_head_sha) is not a check failure either and must not
-		# consume that marker. Otherwise page once per head (gate D_check).
-		if [ "${PR_CHECKS_LAST_REASON:-}" = "blocking" ] && [[ "${PR_CHECKS_LAST_PENDING:-0}" =~ ^[1-9][0-9]*$ ]]; then
-			echo "  PR #${N_PR}: gate D waiting for ${PR_CHECKS_LAST_PENDING} running check-run(s) on ${N_HEAD_SHA}; re-checking next sweep."
-		elif [ "${PR_CHECKS_LAST_REASON:-}" = "query_failed" ] || [ "${PR_CHECKS_LAST_REASON:-}" = "unresolved_head_sha" ]; then
-			echo "::warning::PR #${N_PR}: gate D could not read check-runs on ${N_HEAD_SHA} (reason=${PR_CHECKS_LAST_REASON}); re-checking next sweep."
-		else
-			_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required check-runs on ${N_HEAD_SHA} are not all passing (reason=${PR_CHECKS_LAST_REASON:-unknown}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
-		fi
-		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
-		continue
-	fi
+	# §14 audit: the PR JSON from Gate A is reused (no PR re-fetch). The
+	# shared gate reads the paginated check-runs and the branch-protection
+	# GET (_pr_required_check_names_for_base, fail-fast on 404), and, when a
+	# named CI check is configured (AUTO_MERGE_REQUIRED_CI_CHECK), one
+	# actions/runs?head_sha= read (_pr_head_ci_runs_pending) that binds the
+	# named check to a CI run on this head (#6963). No earlier call in this
+	# sweep returns that data. Runs only on the noop retry-cap path.
+	# The wait helper with a zero-minute budget evaluates once and never
+	# sleeps (issue #7126): it is the review auto-merge rule, so the named CI
+	# check must exist on the head and have succeeded.
+	PR_CHECKS_WAIT_OUTCOME=""
+	PR_CHECKS_LAST_TOTAL=""
+	PR_CHECKS_RUNS_READ=""
+	_noop_checks_rc=0
+	_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0 || _noop_checks_rc=$?
+	case "${_noop_checks_rc}:${PR_CHECKS_WAIT_OUTCOME:-}" in
+		0:allow_all)
+			# Operator sentinel (ORCH_FINAL_MERGE_REQUIRED_CHECKS=""): check-run
+			# outcomes are left to branch protection, as before. The named CI
+			# check, when configured, was still required by the wait helper.
+			;;
+		0:ok)
+			# The shared helper counts an unreadable actions/runs listing as
+			# zero pending CI runs (fail-open for its other callers). Here a
+			# queued CI run may not have check-runs yet, so an unread listing
+			# is unknown: re-check next sweep without paging (issue #7126).
+			# Checked before the empty-listing page, which it may explain.
+			if [ "${PR_CHECKS_RUNS_READ:-}" = "false" ]; then
+				echo "::warning::PR #${N_PR}: gate D could not read CI workflow runs on ${N_HEAD_SHA} (reason=ci_runs_unreadable); re-checking next sweep."
+				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+				continue
+			fi
+			if ! [[ "${PR_CHECKS_LAST_TOTAL:-}" =~ ^[1-9][0-9]*$ ]]; then
+				# Three review runs since the last productive commit: an empty
+				# check-run listing is unexpected. Fail closed, page once.
+				_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: no check-runs on ${N_HEAD_SHA} (reason=no_check_runs). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+				NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+				continue
+			fi
+			;;
+		*:timeout)
+			# A check-run still running, a CI run still queued, or the named
+			# CI check absent or pending is not a failure: skip without paging
+			# and re-check on the next sweep, so the once-per-head marker is
+			# kept for a settled failure.
+			echo "  PR #${N_PR}: gate D waiting (ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown} pending=${PR_CHECKS_LAST_PENDING:-0}) on ${N_HEAD_SHA}; re-checking next sweep."
+			NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+			continue
+			;;
+		*:query_failed|*:unresolved_head_sha)
+			# A failed check-runs read is not a check failure either and must
+			# not consume the marker.
+			echo "::warning::PR #${N_PR}: gate D could not read check-runs on ${N_HEAD_SHA} (reason=${PR_CHECKS_WAIT_OUTCOME}); re-checking next sweep."
+			NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+			continue
+			;;
+		*)
+			_noop_gate_failure_alert "D_check" "Noop-suspicious force-merge gate D failed for PR #${N_PR}: required check-runs on ${N_HEAD_SHA} are not all passing (reason=${PR_CHECKS_WAIT_OUTCOME:-unknown}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+			NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+			continue
+			;;
+	esac
 
 	# All gates passed → force-merge.
-	echo "  PR #${N_PR}: all force-merge gates passed. Enabling auto-merge via 'gh pr merge --auto'..."
-	if gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1; then
+	echo "  PR #${N_PR}: all force-merge gates passed. Enabling auto-merge via 'gh pr merge --auto' bound to ${N_HEAD_SHA}..."
+	# --match-head-commit: GitHub refuses the merge if the head moved after
+	# the gates read it (issue #7126).
+	if gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${N_HEAD_SHA}" >/dev/null 2>&1; then
 		NOOP_FORCE_MERGED=$((NOOP_FORCE_MERGED + 1))
 		tg_send_msg "Force-merging PR #${N_PR} after ${NOOP_MAX_RETRIES} noop-suspicious retries; reviewer audit was healthy."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "DEBUG" >/dev/null 2>&1 || true
 
@@ -28383,7 +28630,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 The editor converged ${NOOP_MAX_RETRIES} times in a row (every reviewer suggestion was either already-applied or correctly ignored), but \`EDITOR_NOOP_SUSPICIOUS=true\` blocked the normal auto-merge step. The orchestrator-poll force-merge fallback engaged because:
 
 - Reviewer audit arithmetic balanced (validated via \`scripts/validate_editor_audit.sh\` against the latest editor summary).
-- No required checks are failing on \`${N_HEAD_SHA}\`.
+- Required checks, including the named CI check, passed on \`${N_HEAD_SHA}\`; the merge is bound to that head.
 - ${N_NOOP_COUNT} noop-suspicious warning(s) since the latest \`[ai-autofix]\` / \`[judge-fix]\` commit.
 
 To pause this behavior for manual review, add the \`force-review\` label."
