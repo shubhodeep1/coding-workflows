@@ -3,7 +3,8 @@
 
 The "Verify attested release manifest" step of update_workflows.yml must sit
 between the upstream fetch and the first step that writes the consumer
-checkout, stay off unless UPDATER_VERIFY_RELEASE_MANIFEST is "true", check the
+checkout, run unless UPDATER_VERIFY_RELEASE_MANIFEST is set to a value other
+than "true" (unset or empty counts as "true"), check the
 attestation before running any code from the release tree, and fail the job
 on any rejection. The behavioural tests run the step body with bash against a
 throwaway git release repository and a fake `gh` under tmp_path.
@@ -76,17 +77,17 @@ def test_step_sits_between_fetch_and_every_mutating_step() -> None:
 		assert names.index(name) > verify_index, name
 
 
-def test_step_is_gated_on_default_off_flag() -> None:
+def test_step_is_gated_on_default_on_flag() -> None:
 	step = _step()
 	assert "if" not in step
 	assert "continue-on-error" not in step
 	env = step["env"]
-	assert env["UPDATER_VERIFY_RELEASE_MANIFEST"] == "${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'false' }}"
+	assert env["UPDATER_VERIFY_RELEASE_MANIFEST"] == "${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'true' }}"
 	assert env["UPSTREAM_SHA"] == "${{ steps.fetch.outputs.upstream_sha }}"
 	assert env["UPSTREAM_DIR"] == "${{ steps.fetch.outputs.upstream_dir }}"
 	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	run = step["run"]
-	assert '"${UPDATER_VERIFY_RELEASE_MANIFEST:-false}"' in run
+	assert '"${UPDATER_VERIFY_RELEASE_MANIFEST:-true}"' in run
 	assert SKIP_LINE in run
 
 
@@ -272,7 +273,7 @@ def _run(tmp_path: Path, upstream: Path, sha: str, asset: Path | None, flag: str
 needs_tools = pytest.mark.skipif(shutil.which("jq") is None or shutil.which("sha256sum") is None, reason="jq/sha256sum unavailable")
 
 
-@pytest.mark.parametrize("flag", [None, "false", "", "FALSE", "yes"])
+@pytest.mark.parametrize("flag", ["false", "FALSE", " false ", "yes"])
 def test_flag_off_skips_without_calling_gh(tmp_path: Path, flag: str | None) -> None:
 	upstream, sha = _release(tmp_path)
 	result, outputs, calls, reason_file = _run(tmp_path, upstream, sha, None, flag=flag)
@@ -298,6 +299,17 @@ def _assert_rejected(result, outputs, reason_file: Path, reason: str) -> None:
 	assert outputs["verified"] == "false"
 	assert outputs["reason"] == reason
 	assert reason_file.read_text(encoding="utf-8").splitlines()[0] == "ERR_RELEASE_MANIFEST_VERIFY_FAILED"
+
+
+@needs_tools
+@pytest.mark.parametrize("flag", [None, "", "TRUE"])
+def test_unset_or_empty_flag_verifies(tmp_path: Path, signed_release, flag: str | None) -> None:
+	# Default on: an unset or empty variable verifies like `true`.
+	upstream, sha, asset = signed_release
+	result, outputs, _, _ = _run(tmp_path, upstream, sha, asset, flag=flag)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert outputs["verified"] == "true"
+	assert SKIP_LINE not in result.stdout
 
 
 @needs_tools

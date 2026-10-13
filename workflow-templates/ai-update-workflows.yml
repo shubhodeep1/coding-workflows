@@ -10,18 +10,19 @@
 #   - Compares each template against the local wrapper in .github/workflows/,
 #     renders the changed wrappers with the release commit SHA, and stages
 #     only paths the signed manifest allows.
-#   - By default, delivers the changes through a pull request from the
-#     ai-sync/stable branch and enables auto-merge on it (or merges it directly
-#     when auto-merge is unavailable). A PR that branch protection blocks stays
-#     open for a human to merge.
-#   - When the UPDATER_PR_DELIVERY_ENABLED repository variable is 'true', the
-#     changes are instead delivered as a pull request from the branch
-#     auto/update-workflows-<release-sha-12>. A separate verify job then checks
-#     every file the pull request changes against the attested release
-#     manifest and posts the ai-update-workflows/verify commit status.
-#     Auto-merge is enabled only after that check passes, and only for a
-#     release whose manifest verification reported verified=true; otherwise
-#     the pull request waits for a human.
+#   - Delivers the changes as a pull request from the branch
+#     auto/update-workflows-<release-sha-12> unless the
+#     UPDATER_PR_DELIVERY_ENABLED repository variable is 'false'. A separate
+#     verify job then checks every file the pull request changes against the
+#     attested release manifest and posts the ai-update-workflows/verify
+#     commit status. Auto-merge is enabled only after that check passes, and
+#     only for a release whose manifest verification reported verified=true;
+#     otherwise the pull request waits for a human.
+#   - With UPDATER_PR_DELIVERY_ENABLED set to 'false', the changes are
+#     instead delivered through a pull request from the ai-sync/stable branch
+#     with auto-merge enabled on it (or merged directly when auto-merge is
+#     unavailable). A PR that branch protection blocks stays open for a human
+#     to merge.
 #   - Sends a Telegram alert listing which wrappers were updated.
 #
 # Permissions: contents (push the update branch), pull-requests (open and
