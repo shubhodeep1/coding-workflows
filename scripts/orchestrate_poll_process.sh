@@ -15492,8 +15492,10 @@ _plan_auto_approval_gate()
         if [ "${gate_decision}" = "approve" ] && printf '%s' "${gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
           gate_fresh_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_fresh.XXXXXX" 2>/dev/null || true)"
           gate_decision="hold"
-          if [ -z "${gate_fresh_file}" ] || [ ! -s "${gate_grant_body_file}" ] \
-            || ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${gate_fresh_file}" 2>/dev/null; then
+          if [ -z "${gate_fresh_file}" ] || [ ! -s "${gate_grant_body_file}" ]; then
+            gate_reason="pipeline_plan_grant_write_failed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=grant_body_unavailable"
+          elif ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${gate_fresh_file}" 2>/dev/null; then
             gate_reason="pipeline_plan_grant_write_failed"
             echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_read_failed"
           elif [ "$(jq -r '(.body // "") | gsub("\r"; "")' "${gate_fresh_file}" 2>/dev/null)" != "$(jq -r '(.body // "") | gsub("\r"; "")' "${gate_meta_file}" 2>/dev/null)" ]; then

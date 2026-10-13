@@ -656,8 +656,15 @@ _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 _PLAN_GRANT_ROOT_FILE_RE = re.compile(
-	r"^(?:[A-Za-z0-9][A-Za-z0-9._-]*\.(?:md|markdown|txt|json|ya?ml|toml|cfg|ini|py|sh|js|mjs|cjs|ts|tsx|jsx|lock|sql|html|css)"
+	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:md|markdown|txt|json|ya?ml|toml|cfg|ini|py|sh|js|mjs|cjs|ts|tsx|jsx|lock|sql|html|css)"
 	r"|\.(?:gitignore|gitattributes|editorconfig)|Makefile|Dockerfile)$")
+# Extensionless file names accepted as the last segment of a grant path. Any
+# other extensionless (or `.d`) last segment may be a directory, and a
+# files_touched entry without a trailing slash covers everything beneath it
+# (entry_matches), so it is never written as an "exact" grant.
+_PLAN_GRANT_BARE_FILE_RE = re.compile(
+	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile)$")
+_PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z0-9]+)$")
 
 
 def _plan_grant_path(raw: str) -> str:
@@ -666,7 +673,8 @@ def _plan_grant_path(raw: str) -> str:
 	Directories, globs, absolute or parent paths, URLs and anything outside a
 	plain path alphabet are rejected: they can never be an exact grant.
 	"""
-	path = normalize_path(_plan_path_token(raw.strip().strip("*_")))
+	# Only `*` is stripped: `_` is part of names such as `__init__.py`.
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
 	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
 		return ""
 	segments = path.split("/")
@@ -674,7 +682,12 @@ def _plan_grant_path(raw: str) -> str:
 		return ""
 	if segments[0].startswith("-") or any(char in path for char in _GLOB_CHARS):
 		return ""
+	last = segments[-1]
+	if _PLAN_GRANT_BARE_FILE_RE.match(last):
+		return path
 	if len(segments) == 1 and not _PLAN_GRANT_ROOT_FILE_RE.match(path):
+		return ""
+	if not _PLAN_GRANT_FILE_SEGMENT_RE.match(last) or last.endswith(".d"):
 		return ""
 	return path
 
