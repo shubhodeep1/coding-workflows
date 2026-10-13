@@ -531,6 +531,9 @@ jobs:
           sparse-checkout: |
             scripts/review_head_gate.sh
             scripts/gh_helpers.sh
+            scripts/review_workflow_sync_skip.sh
+            scripts/build_sync_manifest.py
+            workflow-templates/
             scripts/review_autofix_step_evaluate_gate.sh
           sparse-checkout-cone-mode: false
 

@@ -544,16 +544,31 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_memory_maintenance_contract_noop.py
 
       - name: Merged-PR commit guard hook tests (CLAUDE.md §21)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
 
       - name: Live .claude/ copies match their templates
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
 
       - name: PR-watch guard hook tests (CLAUDE.md §25)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
@@ -594,9 +609,20 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
 
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py
+
+      - name: Pre-push affected-test gate tests
+        run: |
+          set -euo pipefail
+          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
 
       - name: Claude engine selection and claude_run tests
         run: |
@@ -1241,6 +1267,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
 
+      - name: Consumer sync PR review-skip tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_workflow_sync_skip.py
+
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
           set -euo pipefail
@@ -1324,6 +1355,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Full history: tests/claude_template_drift.py diffs against the PR
+          # base SHA, which a depth-1 checkout does not contain.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1363,6 +1398,14 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
 
+      - name: Signed consumer sync manifest tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_build_sync_manifest.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_sync_manifest_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_manifest_verification.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_pull_request_delivery.py
+
       - name: Audit gate template atomicity contract test
         run: |
           set -euo pipefail
@@ -1370,6 +1413,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_identity.py
 
       - name: SessionStart hook repo-slug contract test
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py

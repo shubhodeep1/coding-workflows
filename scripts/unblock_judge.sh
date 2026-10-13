@@ -316,6 +316,10 @@ for idx, raw in enumerate(lines):
 	end = idx + 1
 	indent = base + 2
 	existing = set()
+	# A bare key's list may sit flush with the key (files_touched_scope_guard.py
+	# extract_files_touched); new entries then join it at that indent.
+	flush_allowed = raw.strip() == "files_touched:"
+	flush = None
 	for pos in range(idx + 1, len(lines)):
 		candidate = lines[pos]
 		if not candidate.strip():
@@ -323,7 +327,9 @@ for idx, raw in enumerate(lines):
 				break
 			continue
 		cand_indent = len(candidate) - len(candidate.lstrip(" "))
-		if cand_indent <= base or not candidate.strip().startswith("- "):
+		if flush is None:
+			flush = flush_allowed and cand_indent == base
+		if (cand_indent != base if flush else cand_indent <= base) or not candidate.strip().startswith("- "):
 			break
 		indent = cand_indent
 		existing.add(candidate.strip()[2:].strip())

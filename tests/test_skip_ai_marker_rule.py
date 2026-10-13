@@ -154,7 +154,9 @@ def test_every_skip_is_logged_before_the_outputs():
 	script = _gate_script()
 	assert script.index("# Say why (issue #4985") > script.index('[ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]')
 	# The Claude-fixer awaiting-session skip that set it a third time was retired.
-	assert script.count('GATE_SKIP_RECORDED="true"') == 2
+	# The third site is the consumer sync skip (workflow_sync_managed, #7128),
+	# which logs its own AUTOFIX_GATE_WORKFLOW_SYNC_SKIP line.
+	assert script.count('GATE_SKIP_RECORDED="true"') == 3
 
 
 def test_the_notice_marker_is_machine_readable():
