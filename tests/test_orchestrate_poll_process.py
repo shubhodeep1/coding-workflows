@@ -2021,10 +2021,19 @@ if args[0] == 'api':
 				issue_payload['state'] = issue_state
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
+			# Opt-in issue author fields (issue #7228) override the per-issue defaults.
+			author_entry = store.get('issue_authors', {}).get(str(issue_num))
 			if re.search(r'(?m)^\s*author \{ login \}\s*$', query):
-				issue_payload['author'] = {'login': str(issue.get('author_login', 'octocat'))}
+				if author_entry is not None:
+					issue_payload['author'] = {'login': str((author_entry.get('user') or {}).get('login', ''))}
+				else:
+					issue_payload['author'] = {'login': str(issue.get('author_login', 'octocat'))}
 			if re.search(r'(?m)^\s*authorAssociation\s*$', query):
-				issue_payload['authorAssociation'] = str(issue.get('author_association', 'OWNER'))
+				if author_entry is not None:
+					issue_payload['authorAssociation'] = str(author_entry.get('author_association', ''))
+					issue_payload['author'] = {'login': str((author_entry.get('user') or {}).get('login', ''))}
+				else:
+					issue_payload['authorAssociation'] = str(issue.get('author_association', 'OWNER'))
 			if 'labels(first:' in query:
 				label_limit = int(re.search(r'labels\(first:\s*(\d+)\)', query).group(1))
 				issue_payload['labels'] = {
@@ -2387,6 +2396,18 @@ if args[0] == 'api':
 		save()
 		sys.exit(0)
 
+	# Default-branch raw file reads (scripts/pr_dependency.py, issue #7228).
+	m_contents = re.match(r'^/?repos/[^/]+/[^/]+/contents/([^?]+)\?ref=([^&]+)$', path)
+	if m_contents:
+		store.setdefault('contents_calls', []).append(path)
+		save()
+		files = store.get('default_branch_files', {})
+		if m_contents.group(1) in files:
+			print(files[m_contents.group(1)], end='')
+			sys.exit(0)
+		print('Not Found', file=sys.stderr)
+		sys.exit(1)
+
 	m = re.search(r'/pulls/(\d+)$', path)
 	m_files = re.search(r'/pulls/(\d+)/files(\?.*)?$', path)
 	m_commits = re.search(r'/pulls/(\d+)/commits(\?.*)?$', path)
@@ -2515,7 +2536,10 @@ if args[0] == 'api':
 				'body': pr.get('body', ''),
 				'base': {
 					'ref': pr.get('baseRefName', ''),
-					'repo': {'default_branch': store.get('default_branch', 'main')},
+					'repo': {
+						'default_branch': store.get('default_branch', 'main'),
+						'full_name': pr.get('baseRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo')),
+					},
 				},
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
@@ -5763,6 +5787,84 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 		mock_gh_issue_list_label_filter=True,
 	)
 	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
+
+
+def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:
+	"""One standalone poller tick for issue #700 declaring a dependency on PR #801 (issue #7228)."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	store_extra = {
+		"issue_authors": {"700": {"user": {"login": "workflow-owner", "type": "User"}, "author_association": "OWNER"}},
+		"default_branch_files": files,
+		"authenticated_login": "pipeline-bot",
+	}
+	store_extra.update(extra or {})
+	return _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification"]},
+		issue_bodies={700: "Feature track.\n- Depends on PR: #801\n- Requires on main: scripts/ai_engine.sh contains _AI_ENGINE_EXIT_REFUSED\n"},
+		issue_comments={700: list(comments or [])},
+		prs=[{"number": 801, "state": "closed" if merged else "open", "merged": merged, "baseRefName": "main", "headRefName": "feature/pr-801"}],
+		mock_gh_issue_list_label_filter=True,
+		mock_store_extra=store_extra,
+	)
+
+
+def _pr_dependency_releases(result: dict) -> list[dict]:
+	return [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify\n<!-- ai:pr-dependency-released:700 -->")]
+
+
+def test_standalone_pr_dependency_holds_until_pr_merges_and_string_lands() -> None:
+	present = {"scripts/ai_engine.sh": "x\n_AI_ENGINE_EXIT_REFUSED=76\n"}
+
+	unmerged = _run_pr_dependency_tick(merged=False, files=present)
+	log = unmerged["stdout"] + unmerged["stderr"]
+	assert "STALL_SKIP issue=700 reason=pr_dependency_held detail=pr_unmerged action=none" in log
+	assert not _pr_dependency_releases(unmerged)
+	assert not any("/contents/" in path for path in unmerged["api_calls"])
+
+	missing = _run_pr_dependency_tick(merged=True, files={"scripts/ai_engine.sh": "no marker here\n"})
+	assert "reason=pr_dependency_held detail=required_string_missing" in missing["stdout"] + missing["stderr"]
+	assert not _pr_dependency_releases(missing)
+
+	released = _run_pr_dependency_tick(merged=True, files=present)
+	assert "STALL_SKIP issue=700 reason=pr_dependency_released action=reclarify" in released["stdout"] + released["stderr"]
+	assert len(_pr_dependency_releases(released)) == 1
+
+	marker = {"body": "/reclarify\n<!-- ai:pr-dependency-released:700 -->", "author_association": "NONE", "user": {"login": "pipeline-bot"}}
+	again = _run_pr_dependency_tick(merged=True, files=present, comments=[marker])
+	assert "reason=pr_dependency_released" not in again["stdout"] + again["stderr"]
+	assert len(_pr_dependency_releases(again)) == 1
+
+	forged = {**marker, "author_association": "OWNER", "user": {"login": "someone-else"}}
+	forged_run = _run_pr_dependency_tick(merged=True, files=present, comments=[forged])
+	assert len(_pr_dependency_releases(forged_run)) == 2
+
+
+def test_standalone_pr_dependency_fails_closed_without_identity_or_trust() -> None:
+	present = {"scripts/ai_engine.sh": "_AI_ENGINE_EXIT_REFUSED\n"}
+	no_identity = _run_pr_dependency_tick(merged=True, files=present, extra={"fail_user_lookup": True})
+	# With a tracking issue present, the unreadable pipeline login stops the
+	# whole standalone pass before the candidate loop; either way nothing is released.
+	assert "Pipeline identity unavailable; skipping standalone stall recovery" in no_identity["stdout"] + no_identity["stderr"]
+	assert not _pr_dependency_releases(no_identity)
+
+	untrusted = _run_pr_dependency_tick(
+		merged=True, files=present,
+		extra={"issue_authors": {"700": {"user": {"login": "outsider", "type": "User"}, "author_association": "NONE"}}},
+	)
+	assert "reason=pr_dependency_held detail=untrusted_author" in untrusted["stdout"] + untrusted["stderr"]
+	assert not _pr_dependency_releases(untrusted)
+
+
+def test_candidate_issue_batch_carries_issue_author_fields() -> None:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = source.index("_fetch_candidate_issue_details_graphql() {")
+	body = source[start:source.index("\n}\n", start)]
+	assert "author { login }\n          authorAssociation" in body
+	assert 'author_login: (.value.author.login // ""),' in body
+	assert 'author_association: (.value.authorAssociation // ""),' in body
+	assert "user: {login: (.author_login // \"\")}," in source
 
 
 def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:
