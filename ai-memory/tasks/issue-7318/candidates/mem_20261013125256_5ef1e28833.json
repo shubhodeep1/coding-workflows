@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The current CI run on PR #6667 (run 38396649168) failed only on the environment mismatch between the standalone sweep and the full poller, so the needed fix is in `.github/workflows/orchestrate_poll.yml`. The `.claude/settings.json` failure came from an earlier run. The parity tests on `main` now tolerate drift that is still waiting for a sync: `tests/test_pr_merge_status_guard.py:2447` and `tests/test_session_start_extract_repo_slug.py:201` call `claude_template_drift.pending_template_paths`, and `ci.yml` sets `CLAUDE_PARITY_PR_BASE_SHA` on 5 steps. `sync-claude-live-copies.yml` updates the live copy once the template reaches `main`, and the integration branch receives it through its regular sync from `main`. Pipeline editors cannot write `.claude/**`, so B would only add an operator step the automation already covers. C would undo the hook registration from #7137.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; Q1 is a lettered decision. The planner should: in `.github/workflows/orchestrate_poll.yml`, add each env key the full poller step sets but the standalone recovery sweep step lacks, using the same expressions as the full step. Keep `STANDALONE_RECOVERY_SWEEP_ONLY=true` and the sweep's existing `if:` and `continue-on-error`. Then confirm that `test_standalone_recovery_sweep_runs_without_tracking_issues` in `tests/test_orchestrate_poll_workflow_contract.py` passes on the integration-branch checkout, without relaxing its assertion. Do not edit `.claude/settings.json` or `workflow-templates/.claude/settings.json`.)\n\nESCALATION (required for any ESCALATE decision):\n(none)",
+  "fingerprint": "ada82b43988f269c4debda30ddbb45fb4fd58a24b555db3ebdb8794202de493b",
+  "lineage": {
+    "issue_number": 7318,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38399421739",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38399421739",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7318"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013125256_5ef1e28833",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7318,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38399421739"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7318",
+  "timestamps": {
+    "created_at": "2026-10-13T12:52:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
