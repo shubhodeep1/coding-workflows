@@ -342,7 +342,7 @@ gate_fetch_marker_comments()
   # shellcheck disable=SC2016
   if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f per_page=100 \
-    --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+    --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
     2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
     && [ -s "${gate_marker_comments_file}" ]; then
     gate_marker_fetch_state="ok"
@@ -1204,9 +1204,37 @@ PY
       echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
     fi
 
+    # CI already failed on this head after a freshness update
+    # (scripts/review_freshness_ci_failed.sh, Q103): a docs-only or
+    # small-diff skip would refuse the merge again with nothing to
+    # re-run review. Reuses the marker comments the freshness fast
+    # path already read; no extra API call. The fetch is cached, so
+    # calling it here only reads when no earlier gate check did. An
+    # unreadable comment list cannot rule the marker out, and only
+    # the freshness_sync route re-dispatches on failed CI, so it
+    # keeps the normal review instead of a skip.
+    FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="false"
+    if [ "${candidate_skip}" = "true" ]; then
+      gate_fetch_marker_comments
+    fi
+    if [ "${candidate_skip}" = "true" ] && [ "${gate_marker_fetch_state}" != "ok" ]; then
+      FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="true"
+      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=freshness_ci_failed_unverifiable pr=${PR_NUMBER} candidate=${candidate_skip_reason} detail=comments_${gate_marker_fetch_state}"
+    elif [ "${candidate_skip}" = "true" ] && [ "${gate_marker_fetch_state}" = "ok" ] \
+      && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] \
+      && jq -e --arg login "${gate_marker_author_login}" --arg pr "${PR_NUMBER}" --arg head "${pr_head_sha_gate}" '
+        [ .[]? | select(type == "object" and (.author_login // "") == $login)
+          | (.body // "") | select(type == "string")
+          | test("<!-- ai:freshness-ci-failed:v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
+        "${gate_marker_comments_file}" >/dev/null 2>&1; then
+      FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="true"
+      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=freshness_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+    fi
+
     if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
       && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
       && [ "${SECURITY_PASS_SKIP_SUPPRESSED}" != "true" ] \
+      && [ "${FRESHNESS_CI_FAILED_SKIP_SUPPRESSED}" != "true" ] \
       && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
       && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]; then
       DETERMINISTIC_SKIP="true"
