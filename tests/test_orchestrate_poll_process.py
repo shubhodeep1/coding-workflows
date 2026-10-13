@@ -857,7 +857,8 @@ def _run_poller(
 	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
 	# Replaces RUNTIME_DIR/tracking_issues.json; [] mirrors a cron tick with
-	# no open tracking issue (the idle-tick sweep steps, #7174).
+	# no open tracking issue (the idle-tick sweep steps, #7174, and the full
+	# poller run after the standalone probe, #7284).
 	tracking_issues_override: list | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -5354,6 +5355,23 @@ def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
 		assert "Standalone issue stall recovery" not in combined_log
 		assert "Staged-support needs-human latch release" not in combined_log
 		assert result["api_calls"].count("search/issues") == (enabled == "true")
+
+
+def test_full_poller_without_tracking_issues_runs_standalone_recovery() -> None:
+	"""Issue #7284: with no open tracking issue, orchestrate_poll.yml now runs
+	the full poller when its standalone probe finds candidates. The tracking
+	loop has nothing to do, and the post-loop sweeps still run."""
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_issues_override=[],
+		env_overrides={"ENABLE_STANDALONE_STALL_RECOVERY": "true"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Processing tracking issue" not in combined_log
+	assert "Standalone issue stall recovery" in combined_log
+	assert "UNBLOCK_SCAN " in combined_log
 
 
 def test_standalone_pr_sweep_only_mode_runs_only_the_standalone_pr_sweeps() -> None:

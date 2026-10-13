@@ -15,5 +15,6 @@ skipped when the kill switch is off. A staged poller without the mode logs a
 warning and runs nothing. The latch release and unblock scan steps that
 follow are gated on `!cancelled()` plus a successful `find_tracking`, so
 they still run when recovery or a toolchain step fails, but not when the
-tracking-issue lookup itself failed. `close_merged_issues_sweep` still runs
-only on ticks with an active project.
+tracking-issue lookup itself failed. `close_merged_issues_sweep` runs only
+when the full poller runs: on ticks with an active project, or when the #7284
+standalone probe sets `has_work=true`.
