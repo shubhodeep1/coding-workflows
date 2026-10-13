@@ -624,6 +624,55 @@ def test_isolated_run_skips_preseed_when_prebuilt_pulls() -> None:
 	_with_sandbox(_real_dockerfile(), check)
 
 
+def test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally() -> None:
+	"""A pulled prebuilt image whose hand-off falls back to a local build still gets the pre-seed.
+
+	sandbox_image.sh build falls back to an unseeded `docker build` on a label
+	mismatch or a failed re-pull; that build hits Docker Hub's 429 here, so
+	clarify_image_build must pre-seed from a mirror and build again.
+	"""
+	body = _clarify_image_build_body()
+
+	def check(sb: Sandbox) -> None:
+		stub = sb.root / "scripts" / "sandbox_image.sh"
+		stub.write_text(
+			'case "$1" in\n'
+			"\tref) echo ghcr.example/sandbox/clarify:abc ;;\n"
+			"\tbuild)\n"
+			"\t\tshift\n"
+			"\t\twhile [ \"$#\" -gt 0 ]; do\n"
+			"\t\t\tcase \"$1\" in -f) df=\"$2\"; shift 2 ;; --*) shift 2 ;; *) ctx=\"$1\"; shift ;; esac\n"
+			"\t\tdone\n"
+			"\t\texec docker build -q -f \"${df}\" \"${ctx}\" ;;\n"
+			"\t*) exit 2 ;;\n"
+			"esac\n",
+			encoding="utf-8",
+		)
+		script = sb.root / "image_build.sh"
+		script.write_text(
+			"set -euo pipefail\nsupport=scripts\nclarify_image_build()\n{\n"
+			+ body
+			+ "}\nimage=\"$(clarify_image_build)\"\nprintf 'IMAGE=%s\\n' \"${image}\"\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", "--noprofile", "--norc", str(script)],
+			cwd=sb.root,
+			env=sb.env("ghcr.example/sandbox mirror.gcr.io/library"),
+			capture_output=True,
+			text=True,
+			timeout=120,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == "IMAGE=sha256:built\n", result.stdout
+		assert "outcome=seeded source=mirror.gcr.io/library" in result.stderr
+		lines = sb.log_lines()
+		hub = [line for line in lines if line.startswith("HUB_HEAD")]
+		assert len(hub) == 1, lines  # only the unseeded hand-off build hit Docker Hub
+
+	_with_sandbox(_real_dockerfile(), check)
+
+
 def _staging_lists(text: str) -> list[str]:
 	return re.findall(r"^\s*for f in ([^;\n]+); do$", text, re.M)
 
@@ -684,6 +733,7 @@ def main() -> int:
 		test_isolated_run_preseeds_before_build,
 		test_isolated_run_build_uses_preseeded_base,
 		test_isolated_run_skips_preseed_when_prebuilt_pulls,
+		test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally,
 		test_callers_stage_the_helper,
 		test_ci_runs_this_file,
 	]

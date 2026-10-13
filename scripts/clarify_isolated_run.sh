@@ -47,10 +47,16 @@ clarify_image_build()
 	# image, so slow or unreachable mirrors must not delay it (#7215 review).
 	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
 		[[ "${clarify_prebuilt_secs}" =~ ^[1-9][0-9]{0,3}$ ]] || clarify_prebuilt_secs=60
-		clarify_prebuilt_ref="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" ref --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox" 2>/dev/null)" || clarify_prebuilt_ref=""
+		clarify_prebuilt_ref="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" ref --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox" 2>/dev/null)" || { clarify_prebuilt_ref=""; echo "SANDBOX_IMAGE family=clarify outcome=ref_failed" >&2; }
 		if [ -n "${clarify_prebuilt_ref}" ] && env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${clarify_prebuilt_secs}s" docker pull -q "${clarify_prebuilt_ref}" >/dev/null 2>&1; then
-			env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
-			return
+			# sandbox_image.sh build re-pulls and checks the input label; on a
+			# label mismatch or a failed re-pull it builds locally without the
+			# pre-seed. If that fails, fall through to pre-seed and build again.
+			local clarify_prebuilt_id=""
+			if clarify_prebuilt_id="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")" && [ -n "${clarify_prebuilt_id}" ]; then
+				printf '%s\n' "${clarify_prebuilt_id}"
+				return
+			fi
 		fi
 	fi
 	# A local build follows: seed the Dockerfile's FROM image from a Docker
