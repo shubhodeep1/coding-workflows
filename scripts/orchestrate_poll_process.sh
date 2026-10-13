@@ -22454,7 +22454,8 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       VSP_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-}"
       if [ -z "${VSP_DEFAULT_BRANCH}" ]; then
         # No `main` fallback: a failed read must not fake stale-pin evidence.
-        VSP_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo '')"
+        # Memoized per poller process (at most one GET repos/<repo>, §14).
+        VSP_DEFAULT_BRANCH="$(_review_run_default_branch)" || VSP_DEFAULT_BRANCH=""
       fi
       if [ -z "${VSP_DEFAULT_BRANCH}" ] || [ "${VSP_DEFAULT_BRANCH}" = "null" ]; then
         VSP_SKIP_REASON="default_branch_unavailable"
@@ -22479,11 +22480,18 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       fi
     fi
 
+    VSP_DEFAULT_SHA=""
+    if [ -z "${VSP_SKIP_REASON}" ]; then
+      # The once-only guard records a commit SHA; retry next tick instead of
+      # storing the branch name when the head read fails.
+      VSP_DEFAULT_SHA="$(_branch_head_sha "${VSP_DEFAULT_BRANCH}" 2>/dev/null || echo '')"
+      [ -n "${VSP_DEFAULT_SHA}" ] || VSP_SKIP_REASON="default_sha_unavailable"
+    fi
+
     if [ -n "${VSP_SKIP_REASON}" ]; then
       echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=${VSP_SKIP_REASON}"
     else
-      VSP_DEFAULT_SHA="$(_branch_head_sha "${VSP_DEFAULT_BRANCH}" 2>/dev/null || echo '')"
-      [ -n "${VSP_DEFAULT_SHA}" ] || VSP_DEFAULT_SHA="${VSP_DEFAULT_BRANCH}"
+      cp "${STATE_FILE}" "${STATE_FILE}.vsp_bak"
       jq --arg recovered_ref "${VSP_DEFAULT_SHA}" \
         '.status = "validating" |
          .validation_last_dispatch_cycle = 0 |
@@ -22495,7 +22503,15 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
          del(.validation_failure_class) |
          del(.validation_last_raw_status)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment || true
+      # The persisted state flag is the once-only guard: without it a later
+      # tick would reload the failed state and dispatch a second run, so
+      # nothing is dispatched until it lands. Retry on the next tick.
+      if ! post_state_comment; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
+      rm -f "${STATE_FILE}.vsp_bak"
       gh_retry gh issue edit "${TRACKING_NUM}" \
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:validation-failed" >/dev/null || true
@@ -22509,12 +22525,12 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       VSP_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
       [[ "${VSP_CYCLE}" =~ ^[0-9]+$ ]] && [ "${VSP_CYCLE}" -ge 1 ] || VSP_CYCLE=1
       post_tracking_comment "<!-- validation-stale-pin-recovery:${VSP_DEFAULT_SHA} -->
-## 🔁 Validation re-dispatched after stale workflow pin
+## 🔁 Validation re-armed after stale workflow pin
 
-The last validation run failed with \`raw_status=harness_error\` after an earlier poller dispatched the integration branch's own validation wrapper, which can pin an outdated \`validate.yml\`. Validation is now dispatched from the default branch's wrapper (\`${VSP_DEFAULT_BRANCH}\` at \`${VSP_DEFAULT_SHA}\`), and validate.yml still checks out \`${INTEGRATION_BRANCH_TRACKING}\`.
+The last validation run failed with \`raw_status=harness_error\` after an earlier poller dispatched the integration branch's own validation wrapper, which can pin an outdated \`validate.yml\`. The project is back in \`validating\`, and validation is dispatched from the default branch's wrapper (\`${VSP_DEFAULT_BRANCH}\` at \`${VSP_DEFAULT_SHA}\`), and validate.yml still checks out \`${INTEGRATION_BRANCH_TRACKING}\`.
 
 This recovery runs once per project. Validation counters were kept (cycle ${VSP_CYCLE}). If validation fails again, repair the cause and comment \`/revalidate\`. Set \`VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED=false\` to turn this recovery off."
-      tg_notify "Project #${TRACKING_NUM}: validation re-dispatched from the default branch after a stale integration-branch workflow pin (one-shot recovery)." "WARNING"
+      tg_notify "Project #${TRACKING_NUM}: validation re-dispatched from the default branch after a stale integration-branch workflow pin (one-shot recovery)." "DEBUG"
       echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=recovered reason=stale_integration_pin run_head_branch=${VSP_RUN_HEAD_BRANCH_STATE} default_sha=${VSP_DEFAULT_SHA}"
       if ! dispatch_validation_if_needed "${VSP_CYCLE}"; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after stale-pin recovery. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
