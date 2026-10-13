@@ -24486,6 +24486,18 @@ def _judge_checkout_repo(tmp_path: Path) -> tuple[Path, str]:
 	return repo, integration_sha
 
 
+def _judge_checkout_functions() -> str:
+	"""prepare_tracking_judge_checkout plus the helpers it calls."""
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	return "".join(
+		_extract_bash_function(poller, signature)
+		for signature in (
+			"_judge_support_parents_real() {",
+			"_judge_refresh_trusted_support() {",
+			"prepare_tracking_judge_checkout() {",
+		)
+	)
+
 def test_judge_checkout_fallback_keeps_the_targets_tracked_scripts() -> None:
 	"""Project #7126: the 0755 staging made the plain checkout fail, and the
 	fallback restored the poller's scripts/ over the integration branch, so
@@ -24495,7 +24507,7 @@ def test_judge_checkout_fallback_keeps_the_targets_tracked_scripts() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		tmp_path = Path(td)
 		repo, integration_sha = _judge_checkout_repo(tmp_path)
-		func = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "prepare_tracking_judge_checkout() {")
+		func = _judge_checkout_functions()
 		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1"\necho "rc=$? ref=${JUDGE_EXECUTION_REF}"\n'
 		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
@@ -24516,7 +24528,7 @@ def test_security_pass_judge_checkout_keeps_the_trusted_support_scripts() -> Non
 	with tempfile.TemporaryDirectory() as td:
 		repo, integration_sha = _judge_checkout_repo(Path(td))
 		(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
-		func = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "prepare_tracking_judge_checkout() {")
+		func = _judge_checkout_functions()
 		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
 		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
@@ -24544,7 +24556,7 @@ def test_security_pass_judge_checkout_refreshes_support_from_the_verified_checko
 		trusted.mkdir(parents=True)
 		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
 		(trusted / "security_audit.sh").write_text("trusted audit\n", encoding="utf-8")
-		func = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "prepare_tracking_judge_checkout() {")
+		func = _judge_checkout_functions()
 		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "true"\necho "rc=$?"\n'
 		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
@@ -24556,6 +24568,80 @@ def test_security_pass_judge_checkout_refreshes_support_from_the_verified_checko
 		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
 		assert (repo / "changelog.d" / "1-fix.md").exists()
 		assert "reason=trusted_support trusted_refreshed=2" in out, out
+
+
+def _run_judge_checkout(repo: Path, ref: str, keep: str) -> str:
+	func = _judge_checkout_functions()
+	script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1" "$2"\necho "rc=$?"\n'
+	env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+	result = subprocess.run(["bash", "-c", script, "judge", ref, keep], cwd=repo, env=env,
+		capture_output=True, text=True, check=False)
+	return result.stdout + result.stderr
+
+
+def test_security_pass_plain_checkout_also_refreshes_trusted_support() -> None:
+	"""A non-keep judge checkout leaves the tree clean, so the security pass's
+	plain checkout succeeds and switches tracked scripts to the audited
+	branch's copies. Keep mode must re-copy them from the verified checkout on
+	that path too."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, integration_sha = _judge_checkout_repo(Path(td))
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o644)
+		trusted = repo / ".codex-workflow-src" / "scripts"
+		trusted.mkdir(parents=True)
+		(trusted / "pr_checks_lib.sh").write_text("trusted copy\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, integration_sha, "true")
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "trusted copy\n", out
+		assert "outcome=plain reason=trusted_support trusted_refreshed=1" in out, out
+
+
+def test_security_pass_checkout_refuses_a_symlink_over_trusted_support() -> None:
+	"""A branch-tracked symlink where the verified checkout has a support
+	directory would redirect the copy out of the checkout: fail closed and
+	write nothing through it."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		outside = Path(td) / "outside"
+		outside.mkdir()
+		(outside / "helper.sh").write_text("outside\n", encoding="utf-8")
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "lib").symlink_to(outside)
+		subprocess.run(["git", "add", "scripts/lib"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "link"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		trusted = repo / ".codex-workflow-src" / "scripts" / "lib"
+		trusted.mkdir(parents=True)
+		(trusted / "helper.sh").write_text("trusted\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "true")
+		assert "rc=1" in out, out
+		assert "outcome=trusted_refresh_failed" in out, out
+		assert (outside / "helper.sh").read_text(encoding="utf-8") == "outside\n"
+
+
+def test_judge_checkout_fallback_removes_support_paths_the_target_deleted() -> None:
+	"""The backup restore brings back files the previous checkout tracked and
+	the target deleted; the fallback removes them, as a plain checkout would."""
+	with tempfile.TemporaryDirectory() as td:
+		repo, _ = _judge_checkout_repo(Path(td))
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		subprocess.run(["git", "checkout", "-q", "-f", "integration"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "rm", "-q", "prompts/mode-judge.txt"], cwd=repo, env=env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "drop prompt"], cwd=repo, env=env, check=True)
+		ref = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "-f", "main"], cwd=repo, env=env, check=True)
+		(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+		(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+		out = _run_judge_checkout(repo, ref, "false")
+		assert "rc=0" in out, out
+		assert not (repo / "prompts" / "mode-judge.txt").exists(), out
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
+		assert "outcome=forced kept_target=1 removed_stale=1" in out, out
 
 
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
