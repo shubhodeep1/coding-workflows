@@ -1239,6 +1239,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
 
+      - name: Consumer sync PR review-skip tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_workflow_sync_skip.py
+
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
           set -euo pipefail
@@ -1360,6 +1365,14 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
+
+      - name: Signed consumer sync manifest tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_build_sync_manifest.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_sync_manifest_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_manifest_verification.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_pull_request_delivery.py
 
       - name: Audit gate template atomicity contract test
         run: |

@@ -123,6 +123,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
+- `scripts/build_sync_manifest.py` — builds the signed consumer sync manifest (`sync-manifest.json`) in the release jobs and checks paths against its consumer allowlist.
 - `scripts/build_static_context.sh` — codex-cli phases.
 - `scripts/check_agents_md_direct_edits.py` — CI check that fails a pull request adding documentation to agents.md / AGENTS.md directly instead of an agents.d fragment (CLAUDE.md §30).
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
@@ -270,6 +271,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
+- `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
