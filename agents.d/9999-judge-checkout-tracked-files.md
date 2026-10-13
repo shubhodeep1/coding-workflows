@@ -1,0 +1,6 @@
+<!-- agents: section="Workflow architecture" -->
+Judge context checkout keeps the target's tracked files (Q113). `prepare_tracking_judge_checkout` in `scripts/orchestrate_poll_process.sh` falls back to a forced checkout when the plain one fails. The poll workflow's "Stage workflow support files" step installs every support script `0755`, so a tracked `0644` script that differs on the target (`scripts/pr_checks_lib.sh`) makes that happen on every tick in this repo. The fallback used to copy the poller's backed-up `scripts/`, `prompts/` and `.github/ai/` over the whole checkout, so the wave judge reviewed `main`'s code beside the integration branch's tests and fragments. Project #7126's judge filed restore issues #7296, #7306 and #7307 for code the branch already had. After restoring the backup, the fallback now checks the target's tracked files under those three directories back out of `HEAD`. Only support files the target does not track stay restored, which is the same state the plain checkout path leaves.
+
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `JUDGE_CONTEXT_CHECKOUT` (`scripts/orchestrate_poll_process.sh` `prepare_tracking_judge_checkout`, forced-checkout fallback only: `tracking=`, `outcome=forced|forced_overlay_kept`, `kept_target=` count of tracked files the support overlay had replaced)
+LOG_PREFIX.name=JUDGE_CONTEXT_CHECKOUT

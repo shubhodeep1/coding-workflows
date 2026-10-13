@@ -5612,6 +5612,7 @@ prepare_tracking_judge_checkout() {
   local target_branch="${default_branch:-main}"
   local target_ref=""
   local checkout_succeeded="false"
+  local _judge_overlaid=""
 
   JUDGE_EXECUTION_SOURCE="default_branch"
   JUDGE_EXECUTION_REF=""
@@ -5670,6 +5671,21 @@ prepare_tracking_judge_checkout() {
         done
         [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
         rm -rf "${_wf_backup}"
+        # Files the target ref tracks keep the target's version, as on the
+        # plain checkout path: only support files it does not track stay
+        # restored. Staging installs every support script 0755, so a
+        # tracked 0644 script (scripts/pr_checks_lib.sh) that differs on the
+        # target makes the plain checkout fail on every tick; restoring
+        # all of scripts/ then showed the judge the poller's own copies
+        # beside the target's tests, and project #7126's judge filed
+        # restore issues #7296, #7306 and #7307 for code the branch had.
+        _judge_overlaid="$(git diff --name-only -- scripts prompts .github/ai 2>/dev/null | wc -l | tr -d ' ')"
+        if git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced kept_target=${_judge_overlaid:-0}"
+        else
+          echo "::warning::Judge context for tracking #${TRACKING_NUM:-unknown}: could not put back the target's tracked scripts/prompts after the forced checkout; the judge may see the poller's copies."
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0"
+        fi
       else
         rm -rf "${_wf_backup}"
         if [ -n "${target_ref_override}" ]; then

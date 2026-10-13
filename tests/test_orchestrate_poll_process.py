@@ -24451,6 +24451,64 @@ def _extract_bash_function(script: str, signature: str) -> str:
 	return script[start:end]
 
 
+def _judge_checkout_repo(tmp_path: Path) -> tuple[Path, str]:
+	"""A repo whose integration commit changes a tracked 0644 script, checked
+	out at the base with the poll workflow's staging applied (0755 install
+	plus an untracked support-only file). Returns (repo, integration sha)."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+	def git(*args: str) -> str:
+		return subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	(repo / "scripts").mkdir()
+	(repo / "prompts").mkdir()
+	(repo / "scripts" / "pr_checks_lib.sh").write_text("main copy\n", encoding="utf-8")
+	(repo / "prompts" / "mode-judge.txt").write_text("main prompt\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("checkout", "-q", "-b", "integration")
+	(repo / "scripts" / "pr_checks_lib.sh").write_text("integration copy\n", encoding="utf-8")
+	(repo / "changelog.d").mkdir()
+	(repo / "changelog.d" / "1-fix.md").write_text("- fix\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-q", "-m", "integration work")
+	integration_sha = git("rev-parse", "HEAD")
+	git("checkout", "-q", "main")
+	# Stage workflow support files: install -m 0755 over the tracked 0644
+	# script (same content), plus a support file the repo does not track.
+	(repo / "scripts" / "pr_checks_lib.sh").chmod(0o755)
+	(repo / "scripts" / "render_prompt.sh").write_text("support only\n", encoding="utf-8")
+	return repo, integration_sha
+
+
+def test_judge_checkout_fallback_keeps_the_targets_tracked_scripts() -> None:
+	"""Project #7126: the 0755 staging made the plain checkout fail, and the
+	fallback restored the poller's scripts/ over the integration branch, so
+	the judge reviewed main's code and filed #7296, #7306 and #7307. The
+	fallback now keeps the target's tracked files and restores only support
+	files the target does not track."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp_path = Path(td)
+		repo, integration_sha = _judge_checkout_repo(tmp_path)
+		func = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "prepare_tracking_judge_checkout() {")
+		script = func + '\nTRACKING_NUM=7126\nprepare_tracking_judge_checkout "" "main" "local-only" "$1"\necho "rc=$? ref=${JUDGE_EXECUTION_REF}"\n'
+		env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		result = subprocess.run(["bash", "-c", script, "judge", integration_sha], cwd=repo, env=env,
+			capture_output=True, text=True, check=False)
+		out = result.stdout + result.stderr
+		assert "rc=0" in out, out
+		assert (repo / "scripts" / "pr_checks_lib.sh").read_text(encoding="utf-8") == "integration copy\n", out
+		assert (repo / "changelog.d" / "1-fix.md").exists()
+		assert (repo / "scripts" / "render_prompt.sh").read_text(encoding="utf-8") == "support only\n"
+		assert (repo / "prompts" / "mode-judge.txt").read_text(encoding="utf-8") == "main prompt\n"
+		assert "JUDGE_CONTEXT_CHECKOUT tracking=7126 outcome=forced kept_target=1" in out, out
+
+
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	"""Regression for PR #3991 / issue #3990: stall recovery closed a
 	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``
