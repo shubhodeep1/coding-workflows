@@ -5,13 +5,23 @@
   "entry_id": "processed_command_7318_6146123591_approved",
   "issue_number": 7318,
   "metadata": {
+    "branch": "ai/issue-7318",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "changelog.d/7318-standalone-sweep-env-parity.md"
+    ],
+    "issue_number": 7318,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7318",
+    "pr_number": 7319,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7319",
+    "run_attempt": "1",
+    "run_id": "38401595009",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38401595009"
   },
   "run_attempt": 1,
   "run_id": "38401595009",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-13T13:02:54Z",
+  "status": "completed",
+  "timestamp": "2026-10-13T13:17:45Z",
   "workflow": "implement"
 }
