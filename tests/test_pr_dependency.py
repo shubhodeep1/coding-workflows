@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -204,6 +205,8 @@ def test_gates_are_wired_with_trusted_isolated_copies():
 	assert '((.user.login // "") == $login)' in poller
 	scan = poller[poller.index("run_unblock_scan() {"):poller.index("\n}\n", poller.index("run_unblock_scan() {"))]
 	assert scan.index("reason=pr_dependency_held") < scan.index("gh workflow run unblock_judge_dispatch.yml")
+	# The hold is applied before selection, which picks at most one item per tick.
+	assert scan.index("reason=pr_dependency_held") < scan.index("python3 scripts/unblock_scan.py select")
 	assert "python3 -I -B scripts/pr_dependency.py pr-dependency" in scan
 
 
@@ -212,3 +215,108 @@ def test_helper_imports_only_the_standard_library(tmp_path: Path):
 	(tmp_path / "json.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
 	out = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "--help"], cwd=tmp_path, capture_output=True, text=True, check=False)
 	assert out.returncode == 0, out.stderr
+
+
+FAKE_GH = r"""#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+state = os.environ["FAKE_GH_STATE"]
+with open(os.path.join(state, "calls.jsonl"), "a", encoding="utf-8") as fh:
+	fh.write(json.dumps(args) + "\n")
+def load(name):
+	with open(os.path.join(state, name), encoding="utf-8") as fh:
+		return fh.read()
+if args[:1] == ["workflow"] and args[1:2] == ["run"]:
+	sys.exit(0)
+if args[:1] == ["api"]:
+	if "search/issues" in args:
+		print(load("search.json"))
+		sys.exit(0)
+	if args[1:2] == ["graphql"]:
+		print(load("graphql.json"))
+		sys.exit(0)
+	if args[-1].endswith("/pulls/801"):
+		print(load("pull.json"))
+		sys.exit(0)
+sys.exit(1)
+"""
+
+
+def _run_unblock_scan(tmp_path: Path, *, with_helper: bool = True) -> tuple[str, list[list[str]]]:
+	"""Run the poller's real run_unblock_scan against a fake gh (issue #7228)."""
+	repo = tmp_path / "repo"
+	(repo / "scripts").mkdir(parents=True)
+	for name in ("unblock_scan.py", "unblock_ledger.py") + (("pr_dependency.py",) if with_helper else ()):
+		shutil.copy(ROOT / "scripts" / name, repo / "scripts" / name)
+	state = tmp_path / "state"
+	state.mkdir()
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(FAKE_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	# Issue 700 is the oldest block, so without the hold it would take the
+	# selector's single dispatch slot; issue 701 is an ordinary blocked issue.
+	(state / "search.json").write_text(json.dumps([
+		{"number": 700, "labels": ["ai:blocked"], "pull_request": False, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z"},
+		{"number": 701, "labels": ["ai:blocked"], "pull_request": False, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z"},
+	]), encoding="utf-8")
+
+	def node(body: str, labeled_at: str) -> dict:
+		return {
+			"body": body,
+			"author": {"login": "maintainer"},
+			"authorAssociation": "OWNER",
+			"timelineItems": {"nodes": [{"createdAt": labeled_at, "label": {"name": "ai:blocked"}}]},
+			"comments": {"totalCount": 0, "nodes": []},
+		}
+
+	(state / "graphql.json").write_text(json.dumps({"data": {"repository": {
+		"i700": node("Feature track.\n- Depends on PR: #801\n- Requires on main: scripts/ai_engine.sh contains _AI_ENGINE_EXIT_REFUSED\n", "2026-01-02T00:00:00Z"),
+		"i701": node("Plain blocked issue.", "2026-01-03T00:00:00Z"),
+	}}}), encoding="utf-8")
+	(state / "pull.json").write_text(json.dumps({
+		"number": 801, "merged": False, "merged_at": None,
+		"base": {"ref": "main", "repo": {"full_name": "owner/repo", "default_branch": "main"}},
+	}), encoding="utf-8")
+	(state / "failed.txt").write_text("", encoding="utf-8")
+	poller = (ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	start = poller.index("run_unblock_scan() {")
+	(tmp_path / "scan.sh").write_text(poller[start:poller.index("\n}\n", start) + 3], encoding="utf-8")
+	driver = tmp_path / "driver.sh"
+	driver.write_text(
+		"set -uo pipefail\n"
+		f"source '{tmp_path / 'scan.sh'}'\n"
+		'gh_retry() { "$@"; }\n'
+		"_safe_gh_jq() { echo '[]'; }\n"
+		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf \'%s\' "${UNBLOCK_TRUSTED_LOGIN}"; }\n'
+		'run_unblock_scan || echo "UNBLOCK_SCAN rc=$?"\n',
+		encoding="utf-8",
+	)
+	env = dict(
+		os.environ,
+		PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		FAKE_GH_STATE=str(state),
+		GITHUB_REPOSITORY="owner/repo",
+		RUNNER_TEMP=str(tmp_path / "runner"),
+		UNBLOCK_FAILED_PROJECTS_FILE=str(state / "failed.txt"),
+		UNBLOCK_JUDGE_ENABLED="true",
+		PYTHONDONTWRITEBYTECODE="1",
+	)
+	(tmp_path / "runner").mkdir()
+	out = subprocess.run(["bash", str(driver)], cwd=repo, env=env, capture_output=True, text=True, check=False, timeout=120)
+	calls_file = state / "calls.jsonl"
+	lines = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+	calls = [json.loads(line) for line in lines if line]
+	return out.stdout + out.stderr, calls
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="run_unblock_scan needs jq")
+@pytest.mark.parametrize("with_helper", [True, False])
+def test_unblock_scan_skips_held_issue_without_starving_others(tmp_path: Path, with_helper: bool):
+	log, calls = _run_unblock_scan(tmp_path, with_helper=with_helper)
+	dispatched = [c for c in calls if c[:2] == ["workflow", "run"]]
+	assert "UNBLOCK_SCAN item=700 kind=issue outcome=skip reason=pr_dependency_held" in log, log
+	assert dispatched == [["workflow", "run", "unblock_judge_dispatch.yml", "--repo", "owner/repo", "-f", "item=701"]], log
+	assert "UNBLOCK_SCAN item=701 kind=issue outcome=dispatched" in log, log
+	# The held issue is read once (pulls/801) and never reaches the contents read.
+	assert not any(c and c[-1].startswith("repos/owner/repo/contents/") for c in calls)

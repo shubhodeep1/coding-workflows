@@ -18520,6 +18520,50 @@ run_unblock_scan() {
     return 0
   fi
   printf '%s' "${runs}" > "${work_dir}/runs.json"
+  # An issue held by its pull-request dependency (issue #7228) must not
+  # consume unblock rounds, even when clarify could not remove its block
+  # label. It is dropped from the search results before selection: the
+  # selector picks at most one item per tick, so a held issue picked and then
+  # skipped would take that slot on every tick and starve every other blocked
+  # item. The body and author come from the GraphQL batch above; the helper
+  # reads `pulls/<N>` only for an issue that declares a dependency. A missing
+  # helper or any failure keeps the issue out of this tick.
+  local _scan_pr_dependency_item _scan_pr_dependency_status _scan_pr_dependency_held="[]"
+  while IFS= read -r _scan_pr_dependency_item; do
+    [[ "${_scan_pr_dependency_item}" =~ ^[0-9]+$ ]] || continue
+    _scan_pr_dependency_status="held"
+    if [ -f scripts/pr_dependency.py ] && jq -c --arg id "${_scan_pr_dependency_item}" --arg repo "${GITHUB_REPOSITORY}" --slurpfile search "${work_dir}/search.json" '
+        .[$id] as $d
+        | {number: ($id | tonumber), body: $d.body,
+           labels: ([$search[0][]? | select(.number == ($id | tonumber)) | .labels[]?] | map({name: .})),
+           user: {login: ($d.author_login // "")},
+           author_association: ($d.author_association // ""),
+           repository_url: ("https://api.github.com/repos/" + $repo)}' \
+        "${work_dir}/details.json" > "${work_dir}/pr_dependency_issue.json" 2>/dev/null; then
+      _scan_pr_dependency_status="$(python3 -I -B scripts/pr_dependency.py pr-dependency \
+        --issue-json "${work_dir}/pr_dependency_issue.json" --repo "${GITHUB_REPOSITORY}" \
+        --issue-number "${_scan_pr_dependency_item}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" 2>/dev/null </dev/null \
+        | jq -r '.status // "held"' 2>/dev/null || echo held)"
+    fi
+    if [ "${_scan_pr_dependency_status}" != "none" ] && [ "${_scan_pr_dependency_status}" != "ready" ]; then
+      echo "UNBLOCK_SCAN item=${_scan_pr_dependency_item} kind=issue outcome=skip reason=pr_dependency_held"
+      _scan_pr_dependency_held="$(printf '%s' "${_scan_pr_dependency_held}" | jq -c --argjson n "${_scan_pr_dependency_item}" '. + [$n]')"
+    fi
+  done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" '
+      .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
+      | .number as $n
+      | select(any((.labels // [])[]?; . == "ai:orchestrator-tracking") | not)
+      | select(any(($failed[0] // [])[]?; . == $n) | not)
+      | select(($details[0][($n | tostring)].body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i"))
+      | $n' "${work_dir}/search.json" 2>/dev/null || true)
+  if [ "${_scan_pr_dependency_held}" != "[]" ]; then
+    if ! jq -c --argjson held "${_scan_pr_dependency_held}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
+      "${work_dir}/search.json" > "${work_dir}/search_unheld.json" 2>/dev/null \
+      || ! mv -f "${work_dir}/search_unheld.json" "${work_dir}/search.json"; then
+      echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=pr_dependency_filter_failed"
+      return 0
+    fi
+  fi
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
     --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
@@ -18564,36 +18608,9 @@ run_unblock_scan() {
       echo "UNBLOCK_SCAN item=${verify_item} outcome=skip reason=full_history_unavailable"
     fi
   fi
-  local dispatched=0 item kind _scan_pr_dependency_status
+  local dispatched=0 item kind
   while IFS=$'\t' read -r item kind; do
     [[ "${item}" =~ ^[0-9]+$ ]] || continue
-    # An issue held by its pull-request dependency (issue #7228) must not
-    # consume unblock rounds, even when clarify could not remove its block
-    # label. The body and author come from the GraphQL batch above; the
-    # helper reads `pulls/<N>` only for an issue that declares a dependency.
-    # A missing helper or any failure keeps the issue out of this tick.
-    if [ "${kind}" = "issue" ] && jq -e --arg id "${item}" \
-      '(.[$id].body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i")' \
-      "${work_dir}/details.json" >/dev/null 2>&1; then
-      _scan_pr_dependency_status="held"
-      if [ -f scripts/pr_dependency.py ] && jq -c --arg id "${item}" --arg repo "${GITHUB_REPOSITORY}" --slurpfile search "${work_dir}/search.json" '
-          .[$id] as $d
-          | {number: ($id | tonumber), body: $d.body,
-             labels: ([$search[0][]? | select(.number == ($id | tonumber)) | .labels[]?] | map({name: .})),
-             user: {login: ($d.author_login // "")},
-             author_association: ($d.author_association // ""),
-             repository_url: ("https://api.github.com/repos/" + $repo)}' \
-          "${work_dir}/details.json" > "${work_dir}/pr_dependency_issue.json" 2>/dev/null; then
-        _scan_pr_dependency_status="$(python3 -I -B scripts/pr_dependency.py pr-dependency \
-          --issue-json "${work_dir}/pr_dependency_issue.json" --repo "${GITHUB_REPOSITORY}" \
-          --issue-number "${item}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" 2>/dev/null \
-          | jq -r '.status // "held"' 2>/dev/null || echo held)"
-      fi
-      if [ "${_scan_pr_dependency_status}" != "none" ] && [ "${_scan_pr_dependency_status}" != "ready" ]; then
-        echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=skip reason=pr_dependency_held"
-        continue
-      fi
-    fi
     if gh_retry gh workflow run unblock_judge_dispatch.yml --repo "${GITHUB_REPOSITORY}" -f item="${item}" >/dev/null 2>&1; then
       dispatched=$((dispatched + 1))
       echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatched"
