@@ -28322,7 +28322,13 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		| if ([$prod[] as $k | $pushes[] | select(.b < $k and $k <= .a)] | length) > 0 then "true" else "false" end' \
 		2>/dev/null || echo "false")"
 	if [ "${N_PROD_PUSHED}" != "true" ]; then
-		_noop_gate_failure_alert "C_pusher" "Noop-suspicious force-merge gate C failed for PR #${N_PR}: no [ai-autofix] / [judge-fix] commit was pushed by the pipeline account. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
+		# A full page may hide an older covering push (only one page is read):
+		# still fail closed and page once, but name the real cause.
+		N_C_REASON="no [ai-autofix] / [judge-fix] commit was pushed by the pipeline account"
+		if [ "$(printf '%s' "${N_ACTIVITY_JSON}" | jq 'length' 2>/dev/null || echo 0)" -ge 100 ] 2>/dev/null; then
+			N_C_REASON="no covering pipeline push in the newest 100 activity records for ${N_HEAD}; older activity was not read (reason=activity_page_full)"
+		fi
+		_noop_gate_failure_alert "C_pusher" "Noop-suspicious force-merge gate C failed for PR #${N_PR}: ${N_C_REASON}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")"
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
 	fi

@@ -1074,6 +1074,16 @@ def test_noop_unreadable_activity_waits_without_paging():
 	assert not empty["merges"] and any("gate=C_pusher" in line for line in empty["log"]), empty
 
 
+def test_noop_full_activity_page_names_its_cause():
+	"""A full 100-record page without a covering push still fails closed and
+	pages once, but the alert names the truncated page as the cause."""
+	full = _noop_activity(actor="mallory") * 100
+	out = _run_noop_sweep(activity=full)
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "reason=activity_page_full" in out["alerts"][0], out
+	assert "reason=activity_page_full" not in _run_noop_sweep(activity=_noop_activity(actor="mallory"))["alerts"][0]
+
+
 def test_noop_unreadable_ci_runs_with_no_check_runs_waits_without_paging():
 	"""The unreadable runs listing is checked before the empty-listing page."""
 	out = _run_noop_sweep(runs_read="false", wait_total="0")
