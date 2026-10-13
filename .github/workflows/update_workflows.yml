@@ -10,7 +10,7 @@ name: Update Workflow Wrappers
         default: true
         type: boolean
       update_via_pull_request:
-        description: "Deliver updates through an ai-sync/stable pull request (true) or push directly to the default branch (false)"
+        description: "When UPDATER_PR_DELIVERY_ENABLED is false, deliver updates through an ai-sync/stable pull request (true) or push directly to the default branch (false); ignored while that variable selects the auto/update-workflows-* pull request"
         required: false
         default: true
         type: boolean
@@ -30,7 +30,7 @@ name: Update Workflow Wrappers
         default: true
         type: boolean
       update_via_pull_request:
-        description: "Deliver updates through an ai-sync/stable pull request (true) or push directly to the default branch (false)"
+        description: "When UPDATER_PR_DELIVERY_ENABLED is false, deliver updates through an ai-sync/stable pull request (true) or push directly to the default branch (false); ignored while that variable selects the auto/update-workflows-* pull request"
         required: false
         default: true
         type: boolean

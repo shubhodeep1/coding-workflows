@@ -7,11 +7,11 @@ In `update_workflows.yml`, the step "Verify signed sync manifest" (`verify_manif
 - `gh attestation verify` with the identity regex for the two release workflows on `refs/heads/stable` and `--deny-self-hosted-runners`;
 - the manifest's commit, version and exact file set, compared by an inline verifier that imports nothing from the tree it checks.
 
-"Commit and push updates" (`commit_push`) rejects any staged path outside the allowlist. It then delivers through `ai-sync/stable`:
+"Commit and push updates" (`commit_push`) rejects any staged path outside the allowlist. With `UPDATER_PR_DELIVERY_ENABLED=true` (the default) it then uses the `auto/update-workflows-*` pull request and ignores `update_via_pull_request`; with that variable `false` it delivers through `ai-sync/stable`:
 - an open PR is reused only when its tree already matches; otherwise it is closed and a new PR is opened, because a push to an open PR fires `synchronize` and the head gate would withdraw auto-merge. The branch push is leased to the tip read just before it (`reason=lease_mismatch_or_push_rejected` on a race);
 - a PR left `awaiting_merge` sends the Telegram notification at `WARNING`;
 - the updater enables auto-merge, falls back to a direct merge, or else leaves the PR `awaiting_merge`;
-- `update_via_pull_request: false` restores the direct push.
+- `update_via_pull_request: false` restores the direct push (only while `UPDATER_PR_DELIVERY_ENABLED=false`).
 
 The consumer template gates the job on `vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'` and grants `pull-requests: write`. The review gate (`scripts/review_autofix_step_evaluate_gate.sh`, before the deterministic skip) runs `scripts/review_workflow_sync_skip.sh` from the verified head-gate checkout. It skips the panel (`SKIP_REASON=workflow_sync_managed`) only for an `ai-sync/stable` head in this repository with a complete file list (rename sources included) inside the allowlist and no `force-review`, and it never sets `DETERMINISTIC_SKIP`, labels, comments, posts a status or merges. An `ai-sync/stable` head that fails that check is reviewed normally: the gate drops any deterministic skip it would otherwise get (`AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=workflow_sync_unmanaged`), so it never reaches `deterministic-skip-merge`. Both checks share one paginated `/pulls/{n}/files` read (`gate_fetch_pr_files`). The skip posts no `ai-review/head-gate` success, so a consumer that requires that check merges the sync PR by hand. Failure codes:
 - `ERR_SYNC_MANIFEST_NO_VERSION_TAG`
