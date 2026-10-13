@@ -24298,6 +24298,23 @@ def test_finalize_fallback_reads_final_pr_once():
 	assert "jq -r '.merged_at != null'" in body
 
 
+def test_restore_7126_summarize_blockers_shares_supersede_defs():
+	"""Static guard, project #7126: _summarize_final_merge_blockers applies
+	the same cancelled/superseded rules as _pr_checks_completed (#7127),
+	through PR_CHECKS_JQ_SUPERSEDE_DEFS from scripts/pr_checks_lib.sh."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(script, "_summarize_final_merge_blockers()\n{")
+	assert 'summary_supersede_defs="${PR_CHECKS_JQ_SUPERSEDE_DEFS:-}"' in body
+	assert body.count('--arg bound "__unbound__" "${summary_supersede_defs}"\'') == 2
+	assert body.count("| _mark_superseded") == 2
+	accept = (
+		'.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" '
+		'and (.conclusion != "cancelled" or (._superseded | not))'
+	)
+	assert body.count(accept) == 2
+	assert '.conclusion == "cancelled"' not in body
+
+
 def test_implementation_failed_sweep_reads_issue_once():
 	"""API-002: the implementation-failed reissue reads the issue once and
 	parses title and body locally."""
