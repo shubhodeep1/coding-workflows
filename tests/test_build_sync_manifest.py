@@ -180,7 +180,7 @@ def test_every_git_add_source_maps_to_an_allowlist_class():
 	assert file_sources == set(expected_classes), file_sources - set(expected_classes)
 	assert "git add .github/workflows/" in body
 	assert "git add -A -- CHANGELOG.md changelog.d" in body
-	assert 'git add -A -- "${{ steps.agents_assemble.outputs.agents_file }}" agents.d' in body
+	assert 'git add -A -- "${AGENTS_FILE}" agents.d' in body
 	allowed = _load_builder().STATIC_ALLOWED_PATHS
 	for entry in ("CLAUDE.md", "CHANGELOG.md", "changelog.d/*.md", "changelog.d/.gitkeep", ".gitattributes", "agents.md", "AGENTS.md", "agents.d/*.md", "package.json"):
 		assert entry in allowed

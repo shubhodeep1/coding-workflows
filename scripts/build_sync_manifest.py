@@ -252,8 +252,10 @@ def cmd_allowed_paths(args: argparse.Namespace) -> int:
 
 def cmd_check_paths(args: argparse.Namespace) -> int:
 	try:
-		allowed = Path(args.allowed_file).read_text(encoding="utf-8").splitlines()
-		paths = Path(args.paths_file).read_text(encoding="utf-8").splitlines()
+		# "\n" only: splitlines() would also split on U+2028/U+2029 and
+		# turn one PR filename into two allowlisted paths.
+		allowed = Path(args.allowed_file).read_text(encoding="utf-8").split("\n")
+		paths = Path(args.paths_file).read_text(encoding="utf-8").split("\n")
 	except (OSError, UnicodeDecodeError) as exc:
 		raise ManifestError("unreadable allowlist or path file") from exc
 	compiled = [glob_to_regex(entry) for entry in allowed if entry]

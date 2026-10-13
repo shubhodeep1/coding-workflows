@@ -164,7 +164,12 @@ def test_auto_merge_is_bound_to_head_and_gated_on_verification() -> None:
 	gate = run.index('if [ "${VERIFIED_TEXT}" = "true" ]; then')
 	pending = run.index('AUTO_MERGE="pending_verify"')
 	assert gate < pending < run.index("AUTO_MERGE=\"skipped_unverified\"")
-	assert "gh pr merge" not in run
+	# The ai-sync/stable delivery (#7128) merges its own PR, bound to the
+	# head it pushed; the auto/update-workflows-* flow never merges here.
+	sync_start = run.index('SYNC_BRANCH="ai-sync/stable"')
+	sync_end = run.index("# ── Pull-request delivery (UPDATER_PR_DELIVERY_ENABLED=true)")
+	assert "gh pr merge" not in run[:sync_start] + run[sync_end:]
+	assert run[sync_start:sync_end].count('--match-head-commit "${MERGE_HEAD_SHA}"') == 2
 	verify_steps = _doc()["jobs"]["verify"]["steps"]
 	publish = [step for step in verify_steps if step.get("id") == "verify_publish"]
 	assert len(publish) == 1

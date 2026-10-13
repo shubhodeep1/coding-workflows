@@ -67,7 +67,10 @@ def test_step_sits_between_fetch_and_every_mutating_step() -> None:
 	names = _names()
 	verify_index = names.index(STEP_NAME)
 	assert ids[verify_index] == STEP_ID
-	assert ids[verify_index - 1] == "fetch"
+	# The signed sync manifest verifier (#7128) runs between the fetch and
+	# this step; both precede every mutating step.
+	assert ids[verify_index - 1] == "verify_manifest"
+	assert ids[verify_index - 2] == "fetch"
 	assert names[verify_index + 1] == "Prepare immutable workflow wrappers"
 	for name in MUTATING_STEPS:
 		assert names.index(name) > verify_index, name
@@ -120,6 +123,10 @@ def test_only_summary_runs_after_a_failed_verification() -> None:
 		condition = str(step.get("if", ""))
 		if step.get("name") == "Summary":
 			assert condition == "always()"
+			continue
+		if step.get("name") == "Alert on sync manifest verification failure":
+			# Fixed-text raw Telegram call, no upstream code (#7128).
+			assert condition == "${{ failure() && steps.verify_manifest.outcome == 'failure' }}"
 			continue
 		for marker in ("always()", "failure()", "cancelled()"):
 			assert marker not in condition, step.get("name")

@@ -102,6 +102,22 @@ def test_gate_block_contract():
 	assert "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP" in block
 
 
+def test_unmanaged_sync_head_never_takes_the_deterministic_skip():
+	text = _gate_script_text()
+	call = "gh" + ' api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files"'
+	# One shared read for the sync check and the deterministic skip (§15).
+	assert text.count(call) == 1
+	assert text.index("gate_fetch_pr_files()") < text.index("\n# Consumer sync PRs (#7128)")
+	assert "gate_fetch_pr_files" in _sync_block(text)
+	assert 'workflow_sync_head_unmanaged="true"' in _sync_block(text)
+	guard = text.index('if [ "${workflow_sync_head_unmanaged}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then')
+	assert text.index('DET_SKIP_REASON="${candidate_skip_reason}"') < guard
+	assert guard < text.index('if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then')
+	block = text[guard:text.index("\nfi\n", guard)]
+	for line in ('DETERMINISTIC_SKIP="false"', 'SHOULD_RUN="true"', "reason=workflow_sync_unmanaged"):
+		assert line in block
+
+
 def test_head_gate_checkout_lists_the_helper_paths():
 	text = _gate_text()
 	start = text.index("      - name: Checkout head-gate helper\n")

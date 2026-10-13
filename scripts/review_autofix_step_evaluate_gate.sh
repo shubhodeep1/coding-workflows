@@ -702,6 +702,29 @@ if [ "${SHOULD_RUN}" = "true" ] \
   fi
 fi
 
+# One paginated /pulls/{n}/files read per gate run, shared by the consumer
+# sync check and the deterministic skip below (CLAUDE.md §15). The result is
+# cached, including a failed read (empty), so neither caller fetches twice.
+gate_pr_files_fetched="false"
+gate_pr_files_cache=""
+gate_fetch_pr_files()
+{
+  if [ "${gate_pr_files_fetched}" != "true" ]; then
+    gate_pr_files_fetched="true"
+    # `--paginate --jq '[…]'` emits one JSON array per page. Without
+    # `jq -s 'add // []'` the concatenated output is not one document.
+    # pipefail propagates fetch failures; callers' length checks reject
+    # partial pagination results.
+    if ! gate_pr_files_cache="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename, status: .status}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+      gate_pr_files_cache=""
+    fi
+  fi
+  pr_files_json="${gate_pr_files_cache}"
+}
+# true when an ai-sync/stable head did not qualify for the managed sync
+# skip; such a PR must not take the deterministic skip either (#7128).
+workflow_sync_head_unmanaged="false"
+
 # Consumer sync PRs (#7128): the consumer updater delivers verified
 # upstream changes through a pull request from ai-sync/stable and merges it
 # itself. When every changed path (rename sources included) is in the signed
@@ -735,8 +758,8 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
     # One paginated read; the list must be complete (count equal to the
     # PR's changed_files, below GitHub's 3000-file cap) and free of control
     # characters, since the helper reads one path per line.
-    if gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename}]' 2>/dev/null \
-      | jq -s 'add // []' 2>/dev/null \
+    gate_fetch_pr_files
+    if [ -n "${pr_files_json}" ] && printf '%s' "${pr_files_json}" \
       | jq -er --argjson n "${pr_changed_files}" '
           def ok_path: type == "string" and length > 0 and (test("[[:cntrl:]]") | not);
           if type == "array" and length == $n and length < 3000
@@ -761,6 +784,7 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
     rm -f "${workflow_sync_paths_file}"
   fi
   if [ "${SHOULD_RUN}" = "true" ]; then
+    workflow_sync_head_unmanaged="true"
     echo "AUTOFIX_GATE_WORKFLOW_SYNC_SKIP pr=${PR_NUMBER} head_ref=${pr_head_ref} outcome=review files=${workflow_sync_files} reason=${workflow_sync_reason}"
   fi
 fi
@@ -850,13 +874,8 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     FILES_SKIP_SUPPRESSED="false"
     PROTECTED_SKIP_SUPPRESSED="false"
     if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
-      # `gh api --paginate --jq '[…]'` emits one JSON array per
-      # page. Without `jq -s 'add // []'` the concatenated output
-      # is not one document. pipefail propagates fetch failures;
-      # the length check rejects partial pagination results.
-      if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, previous_filename: .previous_filename, status: .status}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
-        pr_files_json=""
-      fi
+      # Shared, cached read (gate_fetch_pr_files above).
+      gate_fetch_pr_files
       # Missing, malformed, partial, or capped API evidence never
       # authorizes a skip. Validate rename sources and destinations.
       if [[ "${pr_changed_files}" =~ ^[1-9][0-9]*$ ]] \
@@ -1198,6 +1217,18 @@ PY
 
     echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED}"
   fi
+fi
+
+# An ai-sync/stable PR that failed the managed sync check (an off-allowlist
+# path, force-review, an unverified helper or an incomplete file list) gets
+# the normal review: the deterministic skip would route it to
+# deterministic-skip-merge, which the sync check exists to prevent (#7128).
+if [ "${workflow_sync_head_unmanaged}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
+  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=workflow_sync_unmanaged pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
+  DETERMINISTIC_SKIP="false"
+  DET_SKIP_REASON=""
+  SHOULD_RUN="true"
+  SKIP_REASON=""
 fi
 
 # The no-PR claude-branch reviewer-comment route and the deterministic

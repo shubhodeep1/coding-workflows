@@ -216,8 +216,11 @@ def test_inline_matcher_agrees_with_builder(tmp_path):
 
 def test_summary_reports_verification_and_delivery():
 	block = step_block(workflow_text(), "Summary")
-	assert 'VERIFY_OUTCOME="${{ steps.verify_manifest.outcome }}"' in block
+	assert 'SYNC_VERIFY_OUTCOME="${{ steps.verify_manifest.outcome }}"' in block
 	assert "steps.verify_manifest.outputs.failure_reason_code" in block
+	# VERIFY_OUTCOME keeps its release-manifest meaning (#6960).
+	assert 'VERIFY_OUTCOME: ${{ steps.verify_release_manifest.outcome }}' in block
+	assert 'VERIFY_OUTCOME="${{ steps.verify_manifest.outcome }}"' not in block.replace("SYNC_VERIFY_OUTCOME=", "")
 	assert "steps.commit_push.outputs.sync_pr_state" in block
 	assert "steps.commit_push.outputs.sync_pr_url" in block
 	assert "source " not in block

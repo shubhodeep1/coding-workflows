@@ -1767,8 +1767,10 @@ jobs:
           set -euo pipefail
 
           FETCH_OUTCOME="${{ steps.fetch.outcome }}"
-          VERIFY_OUTCOME="${{ steps.verify_manifest.outcome }}"
-          VERIFY_REASON_CODE="${{ steps.verify_manifest.outputs.failure_reason_code }}"
+          # VERIFY_OUTCOME (env) stays the flag-gated release-manifest step;
+          # the signed sync manifest step (#7128) has its own names.
+          SYNC_VERIFY_OUTCOME="${{ steps.verify_manifest.outcome }}"
+          SYNC_VERIFY_REASON_CODE="${{ steps.verify_manifest.outputs.failure_reason_code }}"
           SYNC_PR_STATE="${{ steps.commit_push.outputs.sync_pr_state }}"
           SYNC_PR_URL="${{ steps.commit_push.outputs.sync_pr_url }}"
           RENDER_OUTCOME="${{ steps.render_wrappers.outcome }}"
@@ -1816,16 +1818,14 @@ jobs:
             exit 1
           fi
 
-          if [ "${VERIFY_OUTCOME}" = "failure" ]; then
+          if [ "${SYNC_VERIFY_OUTCOME}" = "failure" ]; then
             echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Failure reason code:** \`${VERIFY_REASON_CODE:-ERR_SYNC_MANIFEST_SIGNATURE}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \`${SYNC_VERIFY_REASON_CODE:-ERR_SYNC_MANIFEST_SIGNATURE}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason detail:** The signed sync manifest could not be verified; no upstream code ran and nothing was changed." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          # VERIFY_OUTCOME above is the signed sync manifest step; the
-          # flag-gated release-manifest step is read directly.
-          if [ "${{ steps.verify_release_manifest.outcome }}" = "failure" ]; then
+          if [ "${VERIFY_OUTCOME:-}" = "failure" ]; then
             # Same path the verify step writes (it honours the override).
             VERIFY_REASON_FILE="${UPDATER_MANIFEST_VERIFY_REASON_FILE:-${FAILURE_REASON_FILE}}"
             VERIFY_FAILURE_DETAIL=""
@@ -1878,7 +1878,7 @@ jobs:
           echo "- **Top-level CLAUDE.md synced:** ${CLAUDE_MD_CHANGED:-false}" >> "$GITHUB_STEP_SUMMARY"
           RETIRED_REMOVED_COUNT="${{ steps.retired_files.outputs.retired_removed }}"
           echo "- **Retired files removed:** ${RETIRED_REMOVED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Sync manifest verification:** ${VERIFY_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Sync manifest verification:** ${SYNC_VERIFY_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
           # The ai-sync/stable and direct-push paths report sync_pr_state;
           # the auto/update-workflows-* path reports delivery.
           if [ -n "${SYNC_PR_STATE}" ]; then
