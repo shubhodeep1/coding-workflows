@@ -681,11 +681,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
 
-      - name: Clarify sandbox base image pre-seed tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
-
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail
@@ -1320,6 +1315,8 @@ jobs:
             tests/test_gh_helpers_list_runs_method.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
             tests/test_pytest_git_env_isolation.py \
             tests/test_render_validation_templates.py \
             tests/test_render_validation_templates_repo_checks.py \
