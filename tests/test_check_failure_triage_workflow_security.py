@@ -102,6 +102,11 @@ esac
 			"GH_TOKEN": "minimal-token",
 			"GITHUB_OUTPUT": str(output_path),
 			"HEAD_SHA": head_sha,
+			# The step's env always defines these from optional inputs (empty
+			# by default); the validation block reads them under set -u.
+			"HISTORICAL_JOB_ID": "",
+			"HISTORICAL_REPRO_PREFIX": "",
+			"HISTORICAL_RUN_ID": "",
 			"MOCK_GH_CALL_COUNT": str(call_count_path),
 			"MOCK_GH_MODE": gh_mode,
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
@@ -326,7 +331,8 @@ esac
 	def test_triage_checkouts_do_not_persist_credentials(self) -> None:
 		triage_job = _workflow()["jobs"]["triage"]
 		checkouts = [step for step in triage_job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
-		self.assertEqual(len(checkouts), 3)
+		# Three normal checkouts plus the historical-mode default-branch fallback.
+		self.assertEqual(len(checkouts), 4)
 		for checkout in checkouts:
 			self.assertIn(checkout["with"]["persist-credentials"], (False, "false"))
 
