@@ -2337,6 +2337,42 @@ else
   SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="false"
 fi
 
+# One-shot recovery of projects whose validation run failed with
+# raw_status=harness_error after the poller dispatched the integration
+# branch's own validation wrapper (issue #7138). Pollers before that fix sent
+# `--ref <integration branch>`, so a stale validate.yml pin on the integration
+# branch failed every dispatch. With the switch on, such a project is reset to
+# validating once (counters kept) and re-dispatched from the default branch.
+# `false` leaves it parked for a manual /revalidate.
+if is_truthy "${VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED:-true}"; then
+  VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED="true"
+else
+  VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED="false"
+fi
+
+# Put the failure labels back after an aborted stale-pin recovery (#7138).
+# Restores ai:validation-failed and ai:harness-broken, plus the legacy
+# ai:validate-failed only when the issue carried it before (the label may not
+# exist in the repo, and an unknown label fails the whole edit). A failed
+# restore leaves the project failed with no label the /revalidate gate
+# matches, so it is logged and paged instead of being swallowed.
+# Args: <tracking issue number> <labels JSON read before the recovery>
+_vsp_restore_failure_labels() {
+  local vsp_issue="$1"
+  local vsp_prior_labels="${2:-[]}"
+  local -a vsp_add_args=(--add-label "ai:validation-failed" --add-label "ai:harness-broken")
+  if has_label "${vsp_prior_labels}" "ai:validate-failed"; then
+    vsp_add_args+=(--add-label "ai:validate-failed")
+  fi
+  if gh_retry gh issue edit "${vsp_issue}" --repo "${GITHUB_REPOSITORY}" \
+    "${vsp_add_args[@]}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::VALIDATION_STALE_PIN_RECOVERY tracking_issue=${vsp_issue} outcome=label_restore_failed"
+  tg_notify "Project #${vsp_issue}: stale-pin validation recovery was rolled back, but the failure labels could not be restored. Add ai:validation-failed to the tracking issue so /revalidate works." "WARNING" || true
+  return 1
+}
+
 # Auto release of the ai:needs-human latch that implement.yml's staged-support
 # rejection handler sets on IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT.  The
 # cause (a 3-way re-base of editor edits onto branch helpers) is gone since
@@ -13340,7 +13376,7 @@ get_last_validation_run_info() {
   [ -n "${attribution_summary}" ] || attribution_summary="tracking=${attribution_tracking} summary=unavailable"
   echo "VALIDATION_RUN_ATTRIBUTION ${attribution_summary}" >&2
   if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
-    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
+    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":"","head_branch":""}'
     return 0
   fi
 
@@ -13384,9 +13420,10 @@ get_last_validation_run_info() {
         conclusion: (if $conclusion == "" then (.conclusion // "") else $conclusion end),
         raw_status: $raw_status,
         run_url: $run_url,
-        run_timestamp: $run_timestamp
+        run_timestamp: $run_timestamp,
+        head_branch: (.head_branch // "")
       }
-    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
+    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":"","head_branch":""}'
 }
 
 # Return the conclusion of the most recent *completed* validation workflow run
@@ -13472,8 +13509,8 @@ dispatch_validation_if_needed() {
   #
   # Gate on WAVE_COMPLETE only, NOT on PROJECT_COMPLETE (and deliberately
   # not on ANY_FAILED, per the paragraph above). Validation
-  # runs against the integration branch (ref=integration_branch in
-  # dispatch_validation_workflow below), so the integration→default merge
+  # runs against the integration branch (the default-branch wrapper resolves
+  # it from tracking_issue, issue #7138), so the integration→default merge
   # is deliberately NOT a precondition for dispatching validation — that
   # merge is performed afterward by mark_validation_complete →
   # finalize_integration_merge_if_needed once the run earns the
@@ -13565,11 +13602,15 @@ dispatch_validation_if_needed() {
     echo "VALIDATION_DISPATCH_CAP outcome=redispatch ${validation_cap_redispatch_fields}"
   fi
 
-  if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
+  # Dispatch the default branch's validation wrapper (no --ref, issue #7138).
+  # validate.yml resolves the integration branch from tracking_issue and
+  # checks it out; the integration branch's own wrapper copy can carry a stale
+  # validate.yml pin (binance-blessings#249) and is never executed.
+  if dispatch_validation_workflow "${validation_cycle}" ""; then
     phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
       '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then (((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1) else 1 end)
-       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
+       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts | .validation_last_dispatch_workflow_ref = "default"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     if [ -n "${integration_branch}" ]; then
@@ -13577,7 +13618,8 @@ dispatch_validation_if_needed() {
 
 - Cycle: ${validation_cycle}
 - Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`
-- Ref: \`${integration_branch}\`"
+- Workflow ref: default branch
+- Validated ref: \`${integration_branch}\` (resolved by validate.yml from the tracking issue)"
     else
       post_tracking_comment "## 🧪 Runtime validation dispatched
 
@@ -13620,11 +13662,20 @@ mark_validation_failed() {
 		harness_reason_one_line="$(validation_reason_one_line "${reason}")"
 		echo "HARNESS_ERROR_DETECTED reason=${harness_reason_one_line}"
 
-    jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" '
+    # Record which branch's workflow file the failing run used (issue #7138):
+    # the stale-pin recovery block reads it on a later tick.
+    local harness_run_head_branch=""
+    local harness_run_id=""
+    harness_run_head_branch="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '.head_branch // ""' 2>/dev/null || echo '')"
+    harness_run_id="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '(.run_id // "") | tostring' 2>/dev/null || echo '')"
+    jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" \
+      --arg run_head_branch "${harness_run_head_branch}" --arg run_id "${harness_run_id}" '
       .status = "failed" |
       .validation_failure_reason = $reason |
       .validation_failure_class = null |
       .validation_last_raw_status = $raw_status |
+      .validation_last_run_head_branch = (if $run_head_branch == "" then null else $run_head_branch end) |
+      .validation_last_run_id = (if $run_id == "" then null else $run_id end) |
       .validation_active_fix_issues = [] |
       .validation_fix_issues_batch_cycles = 0 |
       .validation_completed_cycle = null |
@@ -21137,6 +21188,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
+  # Per-project: mark_validation_failed records this run's head_branch
+  # (issue #7138), so a previous project's run must never leak into it.
+  # Empty (not '{}') keeps validation_history_run_info_json's lazy fetch.
+  LAST_VAL_RUN_INFO=''
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ "${PROJECT_STATUS}" = "failed" ]; then
     integration_failure_recovery_rc=0
@@ -22385,6 +22440,160 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       tg_notify "/revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1." "DEBUG"
       if ! dispatch_validation_if_needed 1; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
+      fi
+      continue
+    fi
+  fi
+
+  # ---------------------------------------------------------------
+  # Stale validation-wrapper pin — one-shot automatic recovery (#7138)
+  # ---------------------------------------------------------------
+  # Pollers before issue #7138 dispatched validation with
+  # `--ref <integration branch>`, so GitHub ran the integration branch's own
+  # validation wrapper. When that copy pinned an old validate.yml, every run
+  # failed with raw_status=harness_error and mark_validation_failed parked the
+  # project for a manual /revalidate. Dispatch now uses the default branch's
+  # wrapper; this block re-dispatches such a parked project once, keeping the
+  # validation counters (the harness-error path never charged them). An
+  # operator /revalidate on the same tick is handled by the block above.
+  # Once-only guards: the state flag validation_stale_pin_recovered_ref and a
+  # marker comment by the pipeline login (covers a failed state write).
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    VSP_SKIP_REASON=""
+    VSP_DEFAULT_BRANCH=""
+    VSP_RUN_HEAD_BRANCH_STATE=""
+    if [ "${VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED:-true}" != "true" ]; then
+      VSP_SKIP_REASON="disabled"
+    elif [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+      # Automatic recovery never overrides the validation kill switch.
+      VSP_SKIP_REASON="validation_disabled"
+    elif [ "$(jq -r '.validation_last_raw_status // ""' "${STATE_FILE}" 2>/dev/null || echo '')" != "harness_error" ]; then
+      VSP_SKIP_REASON="not_harness_error"
+    elif [ -n "$(jq -r '.validation_stale_pin_recovered_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" ]; then
+      VSP_SKIP_REASON="already_recovered"
+    elif [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ] && printf '%s' "${COMMENTS:-[]}" | jq -e --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+        any(.[]?; ((.user.login // "") == $login) and ((.body // "") | startswith("<!-- validation-stale-pin-recovery:")))
+      ' >/dev/null 2>&1; then
+      VSP_SKIP_REASON="marker_present"
+    elif [ -z "${INTEGRATION_BRANCH_TRACKING:-}" ] || [ "${INTEGRATION_BRANCH_TRACKING}" = "null" ]; then
+      VSP_SKIP_REASON="no_integration_branch"
+    else
+      # No `main` fallback: a failed read must not fake stale-pin evidence.
+      # DEFAULT_BRANCH_TRACKING is not reused because earlier steps fill it
+      # with `|| echo "main"` when their read fails. Memoized per poller
+      # process (at most one GET repos/<repo>, §14).
+      VSP_DEFAULT_BRANCH="$(_review_run_default_branch)" || VSP_DEFAULT_BRANCH=""
+      if [ -z "${VSP_DEFAULT_BRANCH}" ] || [ "${VSP_DEFAULT_BRANCH}" = "null" ]; then
+        VSP_SKIP_REASON="default_branch_unavailable"
+      elif [ "${INTEGRATION_BRANCH_TRACKING}" = "${VSP_DEFAULT_BRANCH}" ]; then
+        VSP_SKIP_REASON="default_branch_project"
+      else
+        VSP_RUN_HEAD_BRANCH_STATE="$(jq -r 'if has("validation_last_run_head_branch") then (.validation_last_run_head_branch // "") else "__absent__" end' "${STATE_FILE}" 2>/dev/null || echo '__absent__')"
+        if [ "${VSP_RUN_HEAD_BRANCH_STATE}" = "__absent__" ]; then
+          # Legacy state: only pollers before #7138 omitted
+          # validation_last_dispatch_workflow_ref, and every one of them
+          # dispatched with the integration branch as ref.
+          if [ -n "$(jq -r '.validation_last_dispatch_workflow_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" ]; then
+            VSP_SKIP_REASON="no_evidence"
+          else
+            VSP_RUN_HEAD_BRANCH_STATE="legacy"
+          fi
+        elif [ -z "${VSP_RUN_HEAD_BRANCH_STATE}" ]; then
+          VSP_SKIP_REASON="no_evidence"
+        elif [ "${VSP_RUN_HEAD_BRANCH_STATE}" = "${VSP_DEFAULT_BRANCH}" ]; then
+          VSP_SKIP_REASON="run_used_default_branch"
+        fi
+      fi
+    fi
+
+    VSP_DEFAULT_SHA=""
+    if [ -z "${VSP_SKIP_REASON}" ]; then
+      # The once-only guard records a commit SHA; retry next tick instead of
+      # storing the branch name when the head read fails.
+      VSP_DEFAULT_SHA="$(_branch_head_sha "${VSP_DEFAULT_BRANCH}" 2>/dev/null || echo '')"
+      [ -n "${VSP_DEFAULT_SHA}" ] || VSP_SKIP_REASON="default_sha_unavailable"
+    fi
+
+    if [ -n "${VSP_SKIP_REASON}" ]; then
+      echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=${VSP_SKIP_REASON}"
+    else
+      cp "${STATE_FILE}" "${STATE_FILE}.vsp_bak"
+      jq --arg recovered_ref "${VSP_DEFAULT_SHA}" \
+        '.status = "validating" |
+         .validation_last_dispatch_cycle = 0 |
+         .validation_active_fix_issues = [] |
+         .validation_fix_issues_batch_cycles = 0 |
+         .validation_completed_cycle = null |
+         .validation_stale_pin_recovered_ref = $recovered_ref |
+         del(.validation_failure_reason) |
+         del(.validation_failure_class) |
+         del(.validation_last_raw_status)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      # A failed rewrite would leave the failed state without the guard flag.
+      if [ "$(jq -r '.validation_stale_pin_recovered_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" != "${VSP_DEFAULT_SHA}" ]; then
+        rm -f "${STATE_FILE}.tmp"
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
+      # Remove the failure labels before the guard flag is persisted. A
+      # leftover ai:validation-failed / ai:validate-failed label would make
+      # the next tick's validating branch call mark_validation_failed while
+      # the new run is active, after the once-only flag is spent. The edits
+      # stay `|| true` (ai:validate-failed may not exist in the repo); a fresh
+      # labels read decides instead. TRACKING_LABELS predates these edits, so
+      # this one extra read (recovery path only, once per project) is needed.
+      # A failure keeps the failed state and retries on the next tick.
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:validation-failed" >/dev/null || true
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:validate-failed" >/dev/null || true
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
+      VSP_FRESH_LABELS=""
+      if ! VSP_FRESH_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:validation-failed" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:validate-failed" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:harness-broken"; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        # Put the failure labels back so the /revalidate gate still matches.
+        _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS}" || true
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=label_write_failed"
+        continue
+      fi
+      # The persisted state flag is the once-only guard: without it a later
+      # tick would reload the failed state and dispatch a second run, so
+      # nothing is dispatched until it lands. Retry on the next tick.
+      if ! post_state_comment; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        # The labels were removed above; restore them so the failed state
+        # keeps its labels and an operator /revalidate still matches.
+        _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS}" || true
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
+      rm -f "${STATE_FILE}.vsp_bak"
+      set_tracking_phase_label "ai:validating"
+      VSP_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+      [[ "${VSP_CYCLE}" =~ ^[0-9]+$ ]] && [ "${VSP_CYCLE}" -ge 1 ] || VSP_CYCLE=1
+      post_tracking_comment "<!-- validation-stale-pin-recovery:${VSP_DEFAULT_SHA} -->
+## 🔁 Validation re-armed after stale workflow pin
+
+The last validation run failed with \`raw_status=harness_error\` after an earlier poller dispatched the integration branch's own validation wrapper, which can pin an outdated \`validate.yml\`. The project is back in \`validating\`, and validation is dispatched from the default branch's wrapper (\`${VSP_DEFAULT_BRANCH}\` at \`${VSP_DEFAULT_SHA}\`), and validate.yml still checks out \`${INTEGRATION_BRANCH_TRACKING}\`.
+
+This recovery runs once per project. Validation counters were kept (cycle ${VSP_CYCLE}). If validation fails again, repair the cause and comment \`/revalidate\`. Set \`VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED=false\` to turn this recovery off."
+      tg_notify "Project #${TRACKING_NUM}: validation re-dispatched from the default branch after a stale integration-branch workflow pin (one-shot recovery)." "DEBUG"
+      echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=recovered reason=stale_integration_pin run_head_branch=${VSP_RUN_HEAD_BRANCH_STATE} default_sha=${VSP_DEFAULT_SHA}"
+      # LAST_VAL_RAW_STATUS / LAST_VAL_CONCLUSION are set only on the
+      # validating branch and may still hold an earlier project's run; clear
+      # them so a dispatch failure is classified from this project alone.
+      LAST_VAL_RAW_STATUS=''
+      LAST_VAL_CONCLUSION=''
+      if ! dispatch_validation_if_needed "${VSP_CYCLE}"; then
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after stale-pin recovery. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi
       continue
     fi

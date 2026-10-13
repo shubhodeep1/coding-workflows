@@ -9141,7 +9141,9 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert "ai:validating" in result["tracking_labels"]
 	assert result["tracking_closed"] is False
 	assert len(result["validation_dispatches"]) == 1
-	assert result["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert result["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
+	assert result["validation_dispatches"][0]["tracking_issue"] == "192"
+	assert result["latest_state"]["validation_last_dispatch_workflow_ref"] == "default"
 	assert result["merge_calls"]
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
 	assert result["merge_calls"][0]["head"] == "main"
@@ -9188,7 +9190,7 @@ def test_complete_verdict_dispatches_validation_with_closed_wave_issue_no_pr():
 	# The fix: validation dispatches despite ANY_FAILED=true from the closed
 	# wave issue. Pre-fix this list was empty and the run deferred.
 	assert len(result["validation_dispatches"]) == 1, result["stdout"]
-	assert result["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert result["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert (
 		"deferring validate dispatch" not in result["stdout"]
 	), result["stdout"]
@@ -9465,7 +9467,7 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		"validation must dispatch under integration drift; got "
 		f"{first['validation_dispatches']!r}, stderr=\n{first['stderr']}"
 	)
-	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert first["latest_state"]["validation_last_dispatch_cycle"] == 2
 	first_tracking_comments = [
 		str((c or {}).get("body", ""))
@@ -9546,7 +9548,7 @@ def test_validation_dispatches_under_integration_drift_when_validation_enabled()
 		f"integration drift; got {first['validation_dispatches']!r}, "
 		f"stderr=\n{first['stderr']}"
 	)
-	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert first["latest_state"]["validation_last_dispatch_cycle"] == 1
 	# The old PROJECT_COMPLETE-gated deferral line must be gone.
 	assert "Preflight: PROJECT_COMPLETE=" not in (first["stdout"] + first["stderr"]), (
@@ -9572,7 +9574,7 @@ def test_validation_dispatches_under_integration_drift_when_validation_enabled()
 		f"under integration drift; got {second['validation_dispatches']!r}, "
 		f"stderr=\n{second['stderr']}"
 	)
-	assert second["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert second["validation_dispatches"][0]["ref"] is None  # default-branch wrapper (#7138)
 	assert second["latest_state"]["final_merge_status"] == "pending"
 
 
@@ -14449,6 +14451,7 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 			"status": "completed",
 			"conclusion": "failure",
 			"created_at": "2026-01-01T00:00:00Z",
+			"head_branch": "orchestrator/project-192",
 			"outputs": {"raw_status": "harness_error"},
 		}],
 	)
@@ -14457,6 +14460,10 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 	assert ls["validation_cycle"] == 2
 	assert ls["validation_recovery_count"] == 2
 	assert ls["validation_last_raw_status"] == "harness_error"
+	# Issue #7138: the failing run's workflow branch is kept for the
+	# stale-pin recovery block.
+	assert ls["validation_last_run_head_branch"] == "orchestrator/project-192"
+	assert ls["validation_last_run_id"] == "7001"
 	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
 	assert "ai:validation-failed" in result["tracking_labels"]
 	assert "ai:harness-broken" in result["tracking_labels"]
@@ -17614,6 +17621,193 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 	ls = result["latest_state"]
 	assert ls["status"] == "failed", f"Expected status=failed, got {ls['status']}"
 	assert result["validation_dispatches"] == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: one-shot recovery from a stale integration-branch validation pin (#7138)
+# ---------------------------------------------------------------------------
+
+_STALE_PIN_MAIN_SHA = "d" * 40
+
+
+def _stale_pin_state(**overrides) -> dict:
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_failure_reason"] = "Runtime validation harness error"
+	state["validation_last_run_head_branch"] = "orchestrator/project-192"
+	state.update(overrides)
+	return state
+
+
+def _run_stale_pin_poller(state: dict, **kwargs) -> dict:
+	kwargs.setdefault("tracking_labels", ["ai:validation-failed", "ai:harness-broken"])
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={"main": _STALE_PIN_MAIN_SHA},
+		**kwargs,
+	)
+
+
+def _stale_pin_marker_posted(result: dict) -> bool:
+	return any(
+		"<!-- validation-stale-pin-recovery:" in (c.get("body") or "")
+		for c in result["issues"]["192"]["comments"]
+	)
+
+
+def _assert_stale_pin_recovered(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	# Q2 A: counters are kept.
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_stale_pin_recovered_ref"]
+	assert "validation_last_raw_status" not in ls
+	assert "validation_failure_reason" not in ls
+	assert len(result["validation_dispatches"]) == 1, output
+	assert result["validation_dispatches"][0]["ref"] is None
+	assert result["validation_dispatches"][0]["tracking_issue"] == "192"
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	assert _stale_pin_marker_posted(result)
+	assert "VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=recovered" in output
+
+
+def _assert_stale_pin_skipped(result: dict, reason: str) -> None:
+	output = result["stdout"] + result["stderr"]
+	assert result["latest_state"]["status"] == "failed", output
+	assert result["validation_dispatches"] == []
+	assert not _stale_pin_marker_posted(result)
+	assert f"VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=skip reason={reason}" in output, output
+
+
+def test_stale_pin_recovery_redispatches_once_from_recorded_run_branch():
+	result = _run_stale_pin_poller(_stale_pin_state())
+	_assert_stale_pin_recovered(result)
+	assert result["latest_state"]["validation_stale_pin_recovered_ref"] == _STALE_PIN_MAIN_SHA
+	assert result["latest_state"]["validation_last_dispatch_workflow_ref"] == "default"
+
+
+def test_stale_pin_recovery_redispatches_legacy_state_without_run_branch():
+	state = _stale_pin_state()
+	del state["validation_last_run_head_branch"]
+	result = _run_stale_pin_poller(state)
+	_assert_stale_pin_recovered(result)
+	assert "run_head_branch=legacy" in result["stdout"] + result["stderr"]
+
+
+def test_stale_pin_recovery_skips_legacy_shape_written_by_fixed_poller():
+	state = _stale_pin_state(validation_last_dispatch_workflow_ref="default")
+	del state["validation_last_run_head_branch"]
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "no_evidence")
+
+
+def test_stale_pin_recovery_skips_when_already_recovered():
+	state = _stale_pin_state(validation_stale_pin_recovered_ref=_STALE_PIN_MAIN_SHA)
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "already_recovered")
+
+
+def test_stale_pin_recovery_skips_when_trusted_marker_present():
+	marker = {
+		"body": f"<!-- validation-stale-pin-recovery:{_STALE_PIN_MAIN_SHA} -->\n## 🔁 Validation re-dispatched",
+		"user": {"login": "github-actions[bot]"},
+	}
+	result = _run_stale_pin_poller(_stale_pin_state(), tracking_comments=[marker])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+	assert "outcome=skip reason=marker_present" in result["stdout"] + result["stderr"]
+
+
+def test_stale_pin_recovery_ignores_untrusted_marker():
+	marker = {
+		"body": f"<!-- validation-stale-pin-recovery:{_STALE_PIN_MAIN_SHA} -->",
+		"user": {"login": "attacker"},
+		"author_association": "NONE",
+	}
+	_assert_stale_pin_recovered(_run_stale_pin_poller(_stale_pin_state(), tracking_comments=[marker]))
+
+
+def test_stale_pin_recovery_skips_when_not_harness_error():
+	state = _stale_pin_state(validation_last_raw_status="needs_fixes")
+	_assert_stale_pin_skipped(
+		_run_stale_pin_poller(state, tracking_labels=["ai:validation-failed"]),
+		"not_harness_error",
+	)
+
+
+def test_stale_pin_recovery_skips_when_run_used_default_branch():
+	state = _stale_pin_state(validation_last_run_head_branch="main")
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "run_used_default_branch")
+
+
+def test_stale_pin_recovery_skips_when_disabled():
+	result = _run_stale_pin_poller(
+		_stale_pin_state(),
+		env_overrides={"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false"},
+	)
+	_assert_stale_pin_skipped(result, "disabled")
+
+
+def test_stale_pin_recovery_skips_when_validation_disabled():
+	result = _run_stale_pin_poller(
+		_stale_pin_state(),
+		env_overrides={"ENABLE_VALIDATION": "false"},
+	)
+	_assert_stale_pin_skipped(result, "validation_disabled")
+
+
+def test_stale_pin_recovery_skips_when_failure_label_removal_fails():
+	# The failure label must be gone before the once-only flag is persisted;
+	# otherwise the next tick would re-park the project mid-run.
+	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_edit_for=[192])
+	_assert_stale_pin_skipped(result, "label_write_failed")
+	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+	# Every edit fails, so the label restore fails too and must be surfaced.
+	assert "VALIDATION_STALE_PIN_RECOVERY tracking_issue=192 outcome=label_restore_failed" in (
+		result["stdout"] + result["stderr"]
+	)
+
+
+def test_stale_pin_recovery_skips_when_state_write_fails():
+	# No dispatch until the guard flag is persisted; retry next tick.
+	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_comment_post_for=[192])
+	_assert_stale_pin_skipped(result, "state_write_failed")
+	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+	# The removed failure labels are restored so /revalidate still matches.
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
+def test_stale_pin_recovery_skips_when_default_branch_unreadable():
+	# A failed default-branch read must not fall back to `main`.
+	result = _run_stale_pin_poller(_stale_pin_state(), default_branch_fail=True)
+	_assert_stale_pin_skipped(result, "default_branch_unavailable")
+
+
+def test_stale_pin_recovery_skips_default_branch_only_project():
+	state = _stale_pin_state(integration_branch="")
+	_assert_stale_pin_skipped(_run_stale_pin_poller(state), "no_integration_branch")
+
+
+def test_stale_pin_recovery_yields_to_operator_revalidate():
+	result = _run_stale_pin_poller(_stale_pin_state(), tracking_comments=["/revalidate"])
+	ls = result["latest_state"]
+	assert ls["status"] == "validating"
+	# The /revalidate block ran: it resets the counters.
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_recovery_count"] == 0
+	assert "validation_stale_pin_recovered_ref" not in ls
+	assert not _stale_pin_marker_posted(result)
+	assert "VALIDATION_STALE_PIN_RECOVERY" not in result["stdout"] + result["stderr"]
 
 
 # ---------------------------------------------------------------------------
