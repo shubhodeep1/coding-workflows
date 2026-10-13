@@ -1282,6 +1282,47 @@ def test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted() -
 	assert record["reason"] == "open_grant_not_exact" and body is None
 
 
+# --- Flush-left files_touched lists (#7296, Q111) ---------------------------
+
+_FLUSH_7296 = (
+	"All must pass.\n\nfiles_touched:\n- scripts/pr_checks_lib.sh\n- scripts/orchestrate_poll_process.sh\n"
+	"- scripts/implement_handle_guard_block.sh\n- changelog.d/*.md\n\nRefs #7126\n"
+)
+
+
+def test_flush_left_list_under_a_bare_key_parses() -> None:
+	assert guard.extract_files_touched(_FLUSH_7296) == [
+		"scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh",
+		"scripts/implement_handle_guard_block.sh", "changelog.d/*.md"]
+	assert guard.files_touched_block_state(_FLUSH_7296)[0] == "ok"
+	grant = guard.build_automation_grant(
+		{"number": 7296, "user": {"login": "maintainer"}, "author_association": "OWNER", "body": _FLUSH_7296}, "pipeline[bot]")
+	assert grant["reason"] == "granted"
+	assert grant["paths"] == ["scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh",
+		"scripts/implement_handle_guard_block.sh"]
+
+
+def test_flush_left_list_edges() -> None:
+	# The first entry fixes the indent: mixing stops the list.
+	assert guard.extract_files_touched("files_touched:\n  - a.py\n- b.py\n") == ["a.py"]
+	assert guard.extract_files_touched("files_touched:\n- a.py\n  - b.py\n") == ["a.py"]
+	# An indented key keeps its list flush with itself.
+	assert guard.extract_files_touched("  files_touched:\n  - a.py\n  - b.py\n") == ["a.py", "b.py"]
+	# `- files_touched:` is itself a list item: a flush `- x` is its sibling.
+	assert guard.extract_files_touched("- files_touched:\n- a.py\n") is None
+	assert guard.extract_files_touched("- files_touched:\n  - a.py\n") == ["a.py"]
+	# Prose right after the key is still malformed.
+	assert guard.files_touched_block_state("files_touched:\nsee below\n- a.py\n")[0] == "malformed"
+
+
+def test_review_reject_verify_parser_matches_the_guard() -> None:
+	# review_reject_verify.sh carries a verbatim copy of the parser.
+	import inspect
+	source = inspect.getsource(guard.extract_files_touched)
+	body = source[source.index("\tlines = text.splitlines()"):]
+	assert body in (REPO_ROOT / "scripts" / "review_reject_verify.sh").read_text(encoding="utf-8")
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

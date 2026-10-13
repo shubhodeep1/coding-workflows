@@ -834,6 +834,32 @@ def test_issue_issue_creating_verdicts_have_no_pr_provenance() -> None:
 	assert [op["op"] for op in actions.plan(_verdict("close"), _ctx("pr", pr_trusted=False))] == ["close", "add_labels", "telegram"]
 
 
+def _edit_files_touched_program() -> str:
+	text = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	start = text.index("\t\t\tedit_files_touched)")
+	start = text.index("<<'PY'\n", start) + len("<<'PY'\n")
+	return text[start:text.index("\nPY\n", start)]
+
+
+def _run_edit_files_touched(tmp_path: Path, body: str, paths: list[str]) -> str:
+	(tmp_path / "body.txt").write_text(body, encoding="utf-8")
+	(tmp_path / "paths.json").write_text(json.dumps(paths), encoding="utf-8")
+	proc = subprocess.run([sys.executable, "-", str(tmp_path / "body.txt"), str(tmp_path / "paths.json")],
+		input=_edit_files_touched_program(), capture_output=True, text=True, check=True)
+	return proc.stdout
+
+
+def test_edit_files_touched_keeps_the_list_indent(tmp_path: Path) -> None:
+	# Q111: a flush-left list (#7296) is extended flush, not split by an
+	# indented entry the parser would stop at.
+	flush = _run_edit_files_touched(tmp_path, "Fix.\n\nfiles_touched:\n- scripts/a.sh\n\nRefs #1", ["scripts/b.sh", "scripts/a.sh"])
+	assert flush == "Fix.\n\nfiles_touched:\n- scripts/a.sh\n- scripts/b.sh\n\nRefs #1\n"
+	indented = _run_edit_files_touched(tmp_path, "files_touched:\n  - a.py", ["b.py"])
+	assert indented == "files_touched:\n  - a.py\n  - b.py\n"
+	missing = _run_edit_files_touched(tmp_path, "Fix.", ["b.py"])
+	assert missing == "Fix.\n\nfiles_touched:\n  - b.py\n"
+
+
 def test_scope_override_extends_files_touched_and_reapproves() -> None:
 	ops = actions.plan(_verdict("override_guard", paths=["src/a.py"]), _ctx(stop="scope-blocked", has_plan=True))
 	assert ops[0] == {"op": "edit_files_touched", "issue": 7, "paths": ["src/a.py"]}
