@@ -17778,6 +17778,9 @@ def test_stale_pin_recovery_skips_when_state_write_fails():
 	result = _run_stale_pin_poller(_stale_pin_state(), fail_issue_comment_post_for=[192])
 	_assert_stale_pin_skipped(result, "state_write_failed")
 	assert "validation_stale_pin_recovered_ref" not in result["latest_state"]
+	# The removed failure labels are restored so /revalidate still matches.
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
 
 
 def test_stale_pin_recovery_skips_when_default_branch_unreadable():

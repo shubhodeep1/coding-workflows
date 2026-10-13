@@ -22533,8 +22533,12 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       VSP_FRESH_LABELS=""
       if ! VSP_FRESH_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
         || has_label "${VSP_FRESH_LABELS}" "ai:validation-failed" \
-        || has_label "${VSP_FRESH_LABELS}" "ai:validate-failed"; then
+        || has_label "${VSP_FRESH_LABELS}" "ai:validate-failed" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:harness-broken"; then
         mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        # Put the failure labels back so the /revalidate gate still matches.
+        gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+          --add-label "ai:validation-failed" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
         echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=label_write_failed"
         continue
       fi
@@ -22543,6 +22547,10 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       # nothing is dispatched until it lands. Retry on the next tick.
       if ! post_state_comment; then
         mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        # The labels were removed above; restore them so the failed state
+        # keeps its labels and an operator /revalidate still matches.
+        gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+          --add-label "ai:validation-failed" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
         echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
         continue
       fi
