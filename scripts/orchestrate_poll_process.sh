@@ -21509,6 +21509,18 @@ if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue the workflow skips the full poller; this is the
+# only path that runs standalone stall recovery (and the automation-path
+# plan-hold recheck) on those ticks. The workflow's complementary has_work
+# gates keep it exclusive with the full poller (#7174). Prime the phase
+# concurrency caps first, as the full poller does before recovery, so idle-tick
+# dispatches honour .github/ai/concurrency_caps.yml too.
+if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
+  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  run_standalone_stall_recovery
+  exit 0
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------

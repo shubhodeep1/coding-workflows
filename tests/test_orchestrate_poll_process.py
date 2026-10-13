@@ -856,6 +856,9 @@ def _run_poller(
 	# A coding-workflows origin skips the consumer artifact cleanup.
 	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
+	# Replaces RUNTIME_DIR/tracking_issues.json; [] mirrors a cron tick with
+	# no open tracking issue (the idle-tick sweep steps, #7174).
+	tracking_issues_override: list | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1383,7 +1386,10 @@ esac
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
 		(runtime_dir / "tracking_issues.json").write_text(
-			json.dumps([{"number": tracking_num, "title": "Test tracking"}]),
+			json.dumps(
+				[{"number": tracking_num, "title": "Test tracking"}]
+				if tracking_issues_override is None else tracking_issues_override
+			),
 			encoding="utf-8",
 		)
 
@@ -24882,6 +24888,35 @@ def test_standalone_auto_approve_holds_protected_plan_with_flag_off() -> None:
 	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in log
 
 
+def test_standalone_idle_tick_sweep_approves_held_plan_after_grant() -> None:
+	# Issue #7174: with no open tracking issue only the sweep-only mode runs.
+	# A standalone plan held for automation paths is re-checked there and is
+	# approved once its body carries an exact trusted files_touched grant.
+	def _idle_tick(body: str, author: dict) -> dict:
+		return _run_poller(
+			state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+			issue_comments={501: [_trusted_plan_comment(_PROTECTED_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+			issue_bodies={501: body},
+			issue_authors={501: author},
+			mock_gh_issue_list_label_filter=True,
+			tracking_issues_override=[],
+			env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+		)
+
+	maintainer = {"login": "maintainer", "association": "OWNER"}
+	held = _idle_tick("Fix it. No allowlist yet.", maintainer)
+	held_log = held["stdout"] + held["stderr"]
+	assert _approved_bodies(held, "501") == [], held_log
+	assert "STALL_SKIP issue=501 reason=automation_path_plan_hold phase=ai:awaiting-approval action=none" in held_log
+
+	granted_body = "Fix it.\n\nfiles_touched:\n" + "".join(f"  - {path}\n" for path in _PROTECTED_PLAN_FILES)
+	granted = _idle_tick(granted_body, maintainer)
+	granted_log = granted["stdout"] + granted["stderr"]
+	assert _approved_bodies(granted, "501"), granted_log
+	assert "reason=automation_path_plan_hold" not in granted_log
+
+
 def test_plan_gate_poller_wiring() -> None:
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"' in poller
@@ -24894,7 +24929,7 @@ def test_plan_gate_poller_wiring() -> None:
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "workflow_failure_heal.py files_touched_scope_guard.py; do" in workflow
 	assert workflow.count(
-		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}") == 4
+		"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}") == 5
 	# The staged-support latch release is intentionally not gated (AD-3: B).
 	release = poller.split("release_staged_support_needs_human_latches()", 1)[1].split("\n}\n", 1)[0]
 	assert "_plan_auto_approval_gate" not in release

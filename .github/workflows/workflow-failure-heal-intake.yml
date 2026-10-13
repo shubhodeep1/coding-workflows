@@ -92,6 +92,10 @@ jobs:
       # Heal issue creation gate (#6798 / #6871): 'false' (default) files no heal
       # issue; 'true' files one only after its scope marker verifies.
       HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}
+      # Heal-scope recovery (#7191): 'true' (with the scope guard on) lets a
+      # verified-identity report replace an open heal issue that has no scope
+      # marker instead of recording a duplicate. 'false' (default) changes nothing.
+      HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'false' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
