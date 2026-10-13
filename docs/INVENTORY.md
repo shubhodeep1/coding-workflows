@@ -221,6 +221,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr6576_shard_followup.py` — One-time follow-up for PR #6576's failed orchestrate-poll shard: fetch the log or rerun the partition, confirm on main, report once on #7072 (single-use, issue #7072).
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
+- `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
 - `scripts/release_ci_gate.sh` — Stable-release CI gate: require a successful github-actions `lint` check-run from `ci.yml` on the exact released SHA before tagging (log prefix `RELEASE_CI_GATE`, issue #6797).
@@ -399,3 +400,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `tests/inventory_exemptions.txt` — Documented inventory parity exemptions (`path | justification`).
 - `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md, README.md, and agents.md.
 - `tests/prompt_size_budget.py` — Direct-run prompt tier budget gate for mode and review prompts.
+
+## Claude hook templates
+
+Not checked by `tests/inventory_parity.py`; listed so the consumer-shipped hooks added for a plan phase have an inventory row.
+
+- `workflow-templates/.claude/hooks/prepush_affected_tests.py` — Pre-push affected-test gate: selects, runs and classifies the tests a change affects; interactive `stamp` and `PreToolUse` hook (issue #7137).
