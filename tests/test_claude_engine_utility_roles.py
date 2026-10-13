@@ -422,6 +422,11 @@ def test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role(
 	# Three steps forward the role: the resolve step, the full poller and the
 	# no-project standalone sweep (which mirrors the full poller's env, #7318).
 	assert poll.count("AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}") == 3
+	# The engine preflight, the full poller and the idle-tick standalone sweep
+	# (whose env must equal the full poller's) all forward the role variable.
+	poll_steps = {step.get("name"): step for step in yaml.safe_load(poll)["jobs"]["poll"]["steps"]}
+	for step_name in ("Resolve AI engine", "Process each tracking issue", "Run standalone stall recovery without active projects"):
+		assert poll_steps[step_name]["env"]["AI_ENGINE_ACTIVATION_VERIFY"] == "${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}"
 
 
 # --- item 3d: log analysis and utility roles -----------------------------------------
