@@ -419,7 +419,9 @@ def test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role(
 	)
 	poll = (WORKFLOWS / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
-	assert poll.count("AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}") == 2
+	# Three steps forward the role: the resolve step, the full poller and the
+	# no-project standalone sweep (which mirrors the full poller's env, #7318).
+	assert poll.count("AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}") == 3
 
 
 # --- item 3d: log analysis and utility roles -----------------------------------------
