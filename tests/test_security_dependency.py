@@ -120,7 +120,7 @@ def test_host_dependency_gates_run_in_isolated_mode():
 	assert '"${CLARIFY_HOST_PYTHON_DIR}/security_dependency.py"' in clarify_lines[0]
 	assert 'CLARIFY_HOST_PYTHON_DIR="${RUNNER_TEMP}/clarify-host-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in clarify
 	assert 'install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}"' in clarify
-	assert 'load_workflow_overlay.py|security_dependency.py)' in clarify
+	assert 'load_workflow_overlay.py|security_dependency.py|check_triage_resolution.py|workflow_failure_heal.py)' in clarify
 	for line in implement_lines:
 		assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/security_dependency.py"' in line, line
 		assert "scripts/security_dependency.py" not in line, line

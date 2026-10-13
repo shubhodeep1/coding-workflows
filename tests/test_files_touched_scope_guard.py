@@ -900,6 +900,17 @@ def test_plan_gate_cli_granted_and_ordinary_plans() -> None:
 		"denied_paths": [], "log_paths": "none"}
 
 
+def test_plan_gate_flag_defaults_on() -> None:
+	# An empty value is on, like the `|| 'true'` workflow defaults; only an
+	# explicit off value holds every automation-path plan.
+	plan = "## Files likely to change\n- `scripts/a.sh`\n\n## Functions or modules to implement\n- `scripts/b.sh`\n"
+	meta = _owner_meta("scripts/a.sh")
+	code, record = _run_plan_gate_cli(plan, "", meta)
+	assert code == 0 and record["reason"] == "granted" and record["protected_paths"] == ["scripts/a.sh"]
+	for off in ("false", "FALSE", "0", "no", "maybe"):
+		assert _run_plan_gate_cli(plan, off, meta)[1]["reason"] == "automation_path_plan_auto_approval_disabled", off
+
+
 def test_plan_gate_cli_fails_closed() -> None:
 	plan = "### Files likely to change\n- `scripts/a.sh`\n"
 	assert _run_plan_gate_cli(None, "false", None)[1]["reason"] == "plan_gate_error"
@@ -1171,6 +1182,47 @@ def test_unblock_reissue_without_block_needs_a_trusted_source() -> None:
 	assert guard.build_automation_grant(_reissue_7209("files_touched:\n  not an item\n"), PIPELINE, trusted)["reason"] == "malformed_allowlist"
 	human = dict(_reissue_7209("no block"), user={"login": "maintainer"}, author_association="OWNER")
 	assert guard.build_automation_grant(human, PIPELINE, trusted)["reason"] == "no_allowlist"
+
+
+# --- Flush-left files_touched lists (#7296, Q111) ---------------------------
+
+_FLUSH_7296 = (
+	"All must pass.\n\nfiles_touched:\n- scripts/pr_checks_lib.sh\n- scripts/orchestrate_poll_process.sh\n"
+	"- scripts/implement_handle_guard_block.sh\n- changelog.d/*.md\n\nRefs #7126\n"
+)
+
+
+def test_flush_left_list_under_a_bare_key_parses() -> None:
+	assert guard.extract_files_touched(_FLUSH_7296) == [
+		"scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh",
+		"scripts/implement_handle_guard_block.sh", "changelog.d/*.md"]
+	assert guard.files_touched_block_state(_FLUSH_7296)[0] == "ok"
+	grant = guard.build_automation_grant(
+		{"number": 7296, "user": {"login": "maintainer"}, "author_association": "OWNER", "body": _FLUSH_7296}, "pipeline[bot]")
+	assert grant["reason"] == "granted"
+	assert grant["paths"] == ["scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh",
+		"scripts/implement_handle_guard_block.sh"]
+
+
+def test_flush_left_list_edges() -> None:
+	# The first entry fixes the indent: mixing stops the list.
+	assert guard.extract_files_touched("files_touched:\n  - a.py\n- b.py\n") == ["a.py"]
+	assert guard.extract_files_touched("files_touched:\n- a.py\n  - b.py\n") == ["a.py"]
+	# An indented key keeps its list flush with itself.
+	assert guard.extract_files_touched("  files_touched:\n  - a.py\n  - b.py\n") == ["a.py", "b.py"]
+	# `- files_touched:` is itself a list item: a flush `- x` is its sibling.
+	assert guard.extract_files_touched("- files_touched:\n- a.py\n") is None
+	assert guard.extract_files_touched("- files_touched:\n  - a.py\n") == ["a.py"]
+	# Prose right after the key is still malformed.
+	assert guard.files_touched_block_state("files_touched:\nsee below\n- a.py\n")[0] == "malformed"
+
+
+def test_review_reject_verify_parser_matches_the_guard() -> None:
+	# review_reject_verify.sh carries a verbatim copy of the parser.
+	import inspect
+	source = inspect.getsource(guard.extract_files_touched)
+	body = source[source.index("\tlines = text.splitlines()"):]
+	assert body in (REPO_ROOT / "scripts" / "review_reject_verify.sh").read_text(encoding="utf-8")
 
 
 def _run_all() -> int:
