@@ -1156,7 +1156,7 @@ bypass it. Log prefix: `IMPLEMENT_AUTOMATION_PATH_GUARD`.
   (log prefix `LABEL_SYNC_DELETED`; `LABEL_SYNC_RETIRED_ABSENT` when already
   gone; the output gains a `deleted` list). Nothing creates or applies them.
 
-`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default `false`, #6838) moves
+`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default `true`, #6838) moves
 the same grant check in front of the automatic `/approved`. When on,
 `plan.yml`'s "Auto-approve clear plan" step and both poller stall-recovery
 `auto_approve` branches extract the automation paths from the plan's
@@ -1168,10 +1168,10 @@ path is ungranted, or the check cannot run, the issue stays in
 comment and a WARNING. The poller logs `STALL_SKIP ...
 reason=automation_path_ungranted|automation_path_check_unavailable` without
 counting a recovery attempt. `orchestrate_poll.yml` forwards the flag to the
-poller with a `false` default, so it checks when enabled even if the plan-step
+poller with a `true` default, so it checks even if the plan-step
 hold marker fails to post; explicitly disabling it ignores old markers.
-Direct script callers with an unset flag can still activate the gate with a
-trusted hold marker newer than the latest trusted plan comment. The extractor
+Direct script callers with an unset flag get the same `true` default
+(`scripts/orchestrate_poll_process.sh`). The extractor
 block is byte-identical in both files, and
 `tests/test_plan_auto_approve_safe_state_fetch.py` pins that.
 
@@ -2165,7 +2165,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `tests/test_release_manifest_workflow_contract.py`.
 - Fail-closed verification (#6957). The `Verify attested release manifest`
   step (`id: verify_release_manifest`) of `update_workflows.yml` acts only when
-  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `false`; off it logs
+  `UPDATER_VERIFY_RELEASE_MANIFEST=true` (default `true`; set to `false` it logs
   `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` and makes no API
   call). It resolves the `vX.Y.Z` release whose tag points at the `stable`
   commit, downloads the asset, runs `gh attestation verify` with a
@@ -2185,7 +2185,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   inline because in consumer runs the only `scripts/` copy is the release tree
   under verification. Tests `tests/test_verify_release_manifest.py` and
   `tests/test_update_workflows_manifest_verify.py`.
-- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `false`) its `Commit and push
+- With `UPDATER_PR_DELIVERY_ENABLED=true` (default `true`) its `Commit and push
   updates` step (`id: commit_push`) never pushes to the default branch: it
   commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
   the merge train ignores it) with a `Updater-Release-SHA:` trailer, pushes
@@ -2929,12 +2929,12 @@ and shipped:
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
 - `PROVIDER_OUTAGE` (`scripts/provider_outage.py`: `op=classify|open|close|mark_label|sweep|resume outcome= …`)
 - `GH_API_RETRY` (`gh_api_retry` in `scripts/gh_helpers.sh` and `scripts/gh_api_retry.py`: `outcome=retry|gave_up|permanent|skipped kind=primary|secondary|transient|permanent|breaker bucket= status= attempt=<i>/<n> wait_secs= endpoint=`)
-- `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
+- `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file|symlink|symlink_in_path|special_file|unreadable path=<path|redacted>`; the per-path report writes unsafe entries as `unsafe<TAB><category><TAB><1|2|3+>`)
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
-- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
-- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `false`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
+- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `true`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
+- `UPDATER_PR_DELIVERY` (`update_workflows.yml` "Commit and push updates", gated by `UPDATER_PR_DELIVERY_ENABLED` (default `true`): `outcome=opened|refreshed|skipped|failed reason= branch= pr= auto_merge=`)
 - `UPDATER_PR_VERIFY` (`update_workflows.yml` job `verify`, runs only after the PR path opened or refreshed a pull request: `outcome=passed reason=ok pr= head= auto_merge=enabled|failed|skipped_unverified`, `outcome=rejected reason= stage=`)
 - `VALIDATE_CHANGED_FILES_SYNTAX`
 - `VALIDATION_DISPATCH_CAP` (`scripts/orchestrate_poll_process.sh`: `outcome=redispatch|phase_cap_blocked|exhausted`, `issue=`, `cycle=`, `dispatches=`, `max=`; `exhausted` adds `last_conclusion=`)
@@ -3574,6 +3574,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/audit_consumer_drift.yml
 .github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
+.github/workflows/check-failure-triage-historical.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml

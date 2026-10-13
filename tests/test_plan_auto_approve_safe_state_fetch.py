@@ -80,10 +80,11 @@ def _auto_approve_script() -> str:
 
 def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: bool = False,
 	gate_flag: str | None = None, login: str = "pipeline-bot", comments: list | None = None,
-	posts_out: list | None = None) -> tuple[bool, str, str]:
+	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False) -> tuple[bool, str, str]:
 	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
 
-	Every other API write (the hold comment) is appended to ``posts_out``.
+	Every other API write (the hold comment) is appended to ``posts_out``;
+	issue-body PATCH calls (the Q108 pipeline plan grant) to ``patches_out``.
 	"""
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp_path = Path(workdir)
@@ -98,6 +99,9 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			'    printf "%s" "${ISSUE_RESPONSE}"\n'
 			'  elif [ "$2" = "user" ]; then\n'
 			'    printf "%s\\n" "${PIPELINE_LOGIN}"\n'
+			'  elif [ "$2" = "-X" ] && [ "$3" = "PATCH" ]; then\n'
+			'    [ "${PATCH_FAIL}" = "false" ] || return 1\n'
+			'    printf "%s\\n<<END>>\\n" "$*" >> "${PATCH_LOG}"\n'
 			'  elif [ "$2" = "--paginate" ]; then\n'
 			'    printf "%s" "${COMMENTS_RESPONSE}"\n'
 			'  else\n'
@@ -111,6 +115,7 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		plan_file.write_text(plan_text, encoding="utf-8")
 		output_path = tmp_path / "output"
 		post_log = tmp_path / "posts"
+		patch_log = tmp_path / "patches"
 		env = os.environ.copy()
 		for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
 			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY"):
@@ -121,6 +126,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			"ISSUE_RESPONSE": issue if isinstance(issue, str) else json.dumps(issue),
 			"FETCH_FAIL": str(fetch_fails).lower(),
 			"POST_LOG": str(post_log),
+			"PATCH_LOG": str(patch_log),
+			"PATCH_FAIL": str(patch_fails).lower(),
 			"COMMENTS_RESPONSE": json.dumps(comments or []),
 			"PIPELINE_LOGIN": login,
 			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
@@ -140,8 +147,14 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		# never alongside an approval.
 		assert all("<!-- ai:automation-path-plan-hold:v1 " in entry for entry in others), others
 		assert not (posted and others), posts
+		patches = [entry for entry in (patch_log.read_text(encoding="utf-8") if patch_log.exists() else "").split("\n<<END>>\n")
+			if entry.strip()]
+		# A body write only ever precedes an approval (or a failed one, which holds).
+		assert not patches or posted or patch_fails, (patches, posts)
 		if posts_out is not None:
 			posts_out.extend(others)
+		if patches_out is not None:
+			patches_out.extend(patches)
 		return posted, result.stdout, output_path.read_text(encoding="utf-8")
 
 
@@ -176,18 +189,55 @@ _GRANTED_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "logi
 	"body": "Fix it.\n\nfiles_touched:\n  - scripts/security_audit.sh\n  - .github/workflows/security-audit.yml\n"}
 
 
-def test_ungranted_security_finding_plan_is_held() -> None:
-	# Issue #6769 regression: a pipeline-authored security finding without
-	# files_touched gets the open implement-time grant, but its plan must not
-	# be auto-approved with the flag off (the default) or on.
-	for flag, reason in ((None, "automation_path_plan_auto_approval_disabled"),
-		("false", "automation_path_plan_auto_approval_disabled"), ("true", "open_grant_not_exact")):
-		posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag=flag)
-		assert not posted, (flag, stdout)
-		assert "auto_approved=false" in output
-		assert f"auto_approve_hold_reason={reason}" in output
-		assert (f"AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason={reason} outcome=defer issue=123 "
-			"paths=scripts/security_audit.sh") in stdout
+def test_ungranted_security_finding_plan_is_held_with_flag_off() -> None:
+	# Issue #6769: with the flag off, a pipeline-authored security finding
+	# without files_touched is never auto-approved and nothing is written.
+	patches: list[str] = []
+	posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag="false",
+		patches_out=patches)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=automation_path_plan_auto_approval_disabled" in output
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=automation_path_plan_auto_approval_disabled "
+		"outcome=defer issue=123 paths=scripts/security_audit.sh") in stdout
+
+
+def test_pipeline_plan_grant_is_written_before_approval() -> None:
+	# Q108: the open pipeline-author grant never approves on its own. With the
+	# flag on (unset and empty included) the step writes an exact
+	# files_touched block from the plan into the issue body, then approves.
+	for flag in (None, "", "true"):
+		patches: list[str] = []
+		posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag=flag,
+			patches_out=patches)
+		assert posted, (flag, stdout)
+		assert "auto_approved=true" in output
+		assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=written" in stdout
+		assert len(patches) == 1
+		assert patches[0].startswith("api -X PATCH repos/owner/repo/issues/123 -f body=Security finding. No files_touched block.\n\n---\n")
+		assert patches[0].endswith("<!-- ai:pipeline-plan-grant:v1 -->\nfiles_touched:\n  - scripts/security_audit.sh\n"
+			"  - tests/**\n  - changelog.d/*\n  - agents.d/*")
+
+
+def test_pipeline_plan_grant_write_failure_holds() -> None:
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag="true",
+		patch_fails=True, posts_out=posts)
+	assert not posted, stdout
+	assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=failed reason=issue_body_write_failed" in stdout
+	assert "auto_approve_hold_reason=pipeline_plan_grant_write_failed" in output
+	assert len(posts) == 1 and "could not run" in posts[0]
+
+
+def test_pipeline_plan_grant_never_written_for_a_member_issue() -> None:
+	# A maintainer-written issue without files_touched has no grant at all;
+	# the pipeline never writes one for it.
+	issue = dict(_GRANTED_ISSUE, body="Fix it. No allowlist.")
+	patches: list[str] = []
+	posted, stdout, _ = _run_auto_approve(issue, plan_text=SECURITY_FINDING_PLAN, gate_flag="true", patches_out=patches)
+	assert not posted
+	assert patches == []
+	assert "reason=no_allowlist outcome=defer" in stdout
 
 
 def test_fully_granted_plan_is_approved_only_with_flag_on() -> None:
@@ -214,9 +264,9 @@ def test_ordinary_plan_unchanged_and_missing_plan_holds() -> None:
 	assert "reason=plan_gate_error outcome=defer" in stdout
 
 
-def test_plan_gate_wiring_defaults_off() -> None:
+def test_plan_gate_wiring_defaults_on() -> None:
 	text = _workflow_text()
-	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'false' }}" in text
+	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}" in text
 	assert "clarify_isolated_run.sh files_touched_scope_guard.py; do" in text
 	block = _step_block(text, "Auto-approve clear plan")
 	assert "--plan-auto-approval-gate" in block
@@ -226,7 +276,7 @@ def test_plan_gate_wiring_defaults_off() -> None:
 
 def test_hold_posts_one_deduplicated_comment_naming_missing_paths() -> None:
 	posts: list[str] = []
-	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, posts_out=posts)
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag="false", posts_out=posts)
 	assert not posted
 	assert "automation_path_hold=true" in output
 	assert len(posts) == 1
@@ -243,11 +293,11 @@ def test_hold_posts_one_deduplicated_comment_naming_missing_paths() -> None:
 			"author_association": "OWNER", "user": {"login": "maintainer"}},
 	]
 	again: list[str] = []
-	posted, _, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=comments, posts_out=again)
+	posted, _, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=comments, gate_flag="false", posts_out=again)
 	assert not posted and again == []
 	untrusted = [comments[0], {**comments[1], "author_association": "NONE", "user": {"login": "stranger"}}]
 	third: list[str] = []
-	_run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=untrusted, posts_out=third)
+	_run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, comments=untrusted, gate_flag="false", posts_out=third)
 	assert len(third) == 1
 
 

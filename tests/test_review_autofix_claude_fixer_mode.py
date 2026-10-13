@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import (  # noqa: E402
 	REPO_ROOT,
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
+	expand_review_autofix_step_scripts,
 	expanded_review_autofix_text,
 )
 
@@ -267,6 +268,30 @@ def test_small_diff_claude_pr_takes_the_deterministic_skip():
 			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
 	assert proc.returncode == 0, proc.stderr
 	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "small_diff"
+
+
+def test_freshness_ci_failed_marker_suppresses_the_small_diff_skip():
+	"""Q103: a marked head must reach review, not a skip that never re-dispatches."""
+	marker = f"**CI failed on the updated head.**\n\n<!-- ai:freshness-ci-failed:v1 pr=42 head={HEAD} -->"
+	for comments, expect_skip in (([_c(marker)], "false"), ([_c(marker, author="intruder")], "true")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref="ai/issue-7", comments=comments, event_name="pull_request",
+				files=[{"filename": "src/app.py", "status": "modified"}],
+				pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
+		assert proc.returncode == 0, proc.stderr
+		assert out["deterministic_skip"] == expect_skip, comments
+	assert "reason=freshness_ci_failed pr=42" not in proc.stdout
+
+
+def test_unreadable_marker_comments_keep_the_normal_review():
+	"""Q103: a failed comments read cannot rule out the marker, so no skip."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="ai/issue-7", comments=[], event_name="pull_request",
+			files=[{"filename": "src/app.py", "status": "modified"}],
+			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2}, comments_fail=True)
+	assert proc.returncode == 0, proc.stderr
+	assert out["deterministic_skip"] == "false"
+	assert "reason=freshness_ci_failed_unverifiable pr=42 candidate=small_diff detail=comments_api_error" in proc.stdout
 
 
 def test_unverified_pr_head_never_enters_deterministic_merge():
@@ -959,8 +984,7 @@ def test_rb_judge_never_runs_opencode_on_host_and_defers_before_retry():
 	assert verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true') < verdict.index('break', verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true')) < verdict.index('sleep 10')
 	assert 'judge_skip_reason=isolation_unavailable' in verdict
 	assert 'rb_fix_claude_rc}" -ne 75 ] &&' not in text
-	# The step body lives in scripts/; read it with the body inlined.
-	step = _steps(yaml.safe_load(expanded_review_autofix_text()), "codex-agent")["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
+	step = expand_review_autofix_step_scripts(AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"])
 	assert 'isolation_unavailable)' in step
 	assert 'AI review/autofix — judge deferred: isolation unavailable' in step
 

@@ -2337,6 +2337,42 @@ else
   SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="false"
 fi
 
+# One-shot recovery of projects whose validation run failed with
+# raw_status=harness_error after the poller dispatched the integration
+# branch's own validation wrapper (issue #7138). Pollers before that fix sent
+# `--ref <integration branch>`, so a stale validate.yml pin on the integration
+# branch failed every dispatch. With the switch on, such a project is reset to
+# validating once (counters kept) and re-dispatched from the default branch.
+# `false` leaves it parked for a manual /revalidate.
+if is_truthy "${VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED:-true}"; then
+  VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED="true"
+else
+  VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED="false"
+fi
+
+# Put the failure labels back after an aborted stale-pin recovery (#7138).
+# Restores ai:validation-failed and ai:harness-broken, plus the legacy
+# ai:validate-failed only when the issue carried it before (the label may not
+# exist in the repo, and an unknown label fails the whole edit). A failed
+# restore leaves the project failed with no label the /revalidate gate
+# matches, so it is logged and paged instead of being swallowed.
+# Args: <tracking issue number> <labels JSON read before the recovery>
+_vsp_restore_failure_labels() {
+  local vsp_issue="$1"
+  local vsp_prior_labels="${2:-[]}"
+  local -a vsp_add_args=(--add-label "ai:validation-failed" --add-label "ai:harness-broken")
+  if has_label "${vsp_prior_labels}" "ai:validate-failed"; then
+    vsp_add_args+=(--add-label "ai:validate-failed")
+  fi
+  if gh_retry gh issue edit "${vsp_issue}" --repo "${GITHUB_REPOSITORY}" \
+    "${vsp_add_args[@]}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::VALIDATION_STALE_PIN_RECOVERY tracking_issue=${vsp_issue} outcome=label_restore_failed"
+  tg_notify "Project #${vsp_issue}: stale-pin validation recovery was rolled back, but the failure labels could not be restored. Add ai:validation-failed to the tracking issue so /revalidate works." "WARNING" || true
+  return 1
+}
+
 # Auto release of the ai:needs-human latch that implement.yml's staged-support
 # rejection handler sets on IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT.  The
 # cause (a 3-way re-base of editor edits onto branch helpers) is gone since
@@ -2393,9 +2429,10 @@ else
   ALLOW_WORKFLOW_EDITS="false"
 fi
 
-# Issue #6769: automatic /approved for plans that list automation paths stays
-# off until an operator enables this flag (see _plan_auto_approval_gate).
-AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}"
+# Issue #6769: automatic /approved for plans that list automation paths.
+# On by default; set the variable to false to hold every such plan for a
+# human /approved (see _plan_auto_approval_gate).
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"
 
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
@@ -5567,14 +5604,114 @@ resolve_branch_analysis_ref() {
   return 1
 }
 
+# True when no leading directory of the repo-relative path is a symlink, so
+# rm/cp on it cannot follow a branch-supplied link out of the checkout.
+_judge_support_parents_real() {
+  local _judge_parent_path="$1"
+  while [ "${_judge_parent_path}" != "${_judge_parent_path%/*}" ]; do
+    _judge_parent_path="${_judge_parent_path%/*}"
+    [ -L "${_judge_parent_path}" ] && return 1
+  done
+  return 0
+}
+
+# Security-pass checkouts (keep_trusted_support=true): replace every scripts/
+# and prompts/ entry that the verified support checkout (.codex-workflow-src,
+# fallback .codex-workflow-src-main) also has with that trusted copy, after a
+# plain or a forced checkout alike. Sets JUDGE_TRUSTED_REFRESHED. Returns 1
+# (fail closed) when a path the trusted checkout covers cannot be replaced: a
+# failed copy, a symlinked parent, or a symlink where the trusted checkout has
+# a directory. A support root the checked-out ref tracks is branch-supplied
+# and is not used; with no usable root it also fails closed (the poll
+# workflow always checks out .codex-workflow-src before a security pass).
+# Optional $1: the commit checked out before a plain checkout; trusted
+# scripts/ and prompts/ files that checkout deleted (tracked there, absent on
+# the target) are copied back so the security pass's assets stay present.
+_judge_refresh_trusted_support() {
+  local _judge_prev_head="${1:-}"
+  local _judge_entry _judge_root _judge_dir _judge_failed=0
+  local -a _judge_roots=()
+  JUDGE_TRUSTED_REFRESHED=0
+  for _judge_root in .codex-workflow-src .codex-workflow-src-main; do
+    if [ -d "${_judge_root}" ] && [ ! -L "${_judge_root}" ] \
+      && [ -z "$(git ls-files -- "${_judge_root}" 2>/dev/null | head -n 1)" ]; then
+      _judge_roots+=("${_judge_root}")
+    fi
+  done
+  if [ "${#_judge_roots[@]}" -eq 0 ]; then
+    echo "::error::Security-pass checkout for tracking #${TRACKING_NUM:-unknown}: no usable verified support checkout (.codex-workflow-src missing, symlinked or tracked by the audited ref); refusing to run support scripts from the audited branch." >&2
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=trusted_refresh_failed failed=0 trusted_refreshed=0 reason=no_trusted_root"
+    return 1
+  fi
+  for _judge_dir in scripts prompts; do
+    if [ -L "${_judge_dir}" ]; then
+      for _judge_root in "${_judge_roots[@]}"; do
+        if [ -e "${_judge_root}/${_judge_dir}" ]; then
+          _judge_failed=$((_judge_failed + 1))
+          break
+        fi
+      done
+    fi
+  done
+  while IFS= read -r -d '' _judge_entry; do
+    for _judge_root in "${_judge_roots[@]}"; do
+      if [ -f "${_judge_root}/${_judge_entry}" ] && [ ! -L "${_judge_root}/${_judge_entry}" ]; then
+        if _judge_support_parents_real "${_judge_entry}" && rm -f -- "${_judge_entry}" \
+          && cp -- "${_judge_root}/${_judge_entry}" "${_judge_entry}"; then
+          JUDGE_TRUSTED_REFRESHED=$((JUDGE_TRUSTED_REFRESHED + 1))
+        else
+          _judge_failed=$((_judge_failed + 1))
+        fi
+        break
+      elif [ -e "${_judge_root}/${_judge_entry}" ]; then
+        _judge_failed=$((_judge_failed + 1))
+        break
+      fi
+    done
+  done < <(find scripts prompts \( -type f -o -type l \) -print0 2>/dev/null)
+  if [ -n "${_judge_prev_head}" ]; then
+    while IFS= read -r -d '' _judge_entry; do
+      if [ -e "${_judge_entry}" ] || [ -L "${_judge_entry}" ]; then
+        continue
+      fi
+      for _judge_root in "${_judge_roots[@]}"; do
+        if [ -f "${_judge_root}/${_judge_entry}" ] && [ ! -L "${_judge_root}/${_judge_entry}" ]; then
+          if _judge_support_parents_real "${_judge_entry}" && mkdir -p -- "${_judge_entry%/*}" \
+            && cp -- "${_judge_root}/${_judge_entry}" "${_judge_entry}"; then
+            JUDGE_TRUSTED_REFRESHED=$((JUDGE_TRUSTED_REFRESHED + 1))
+          else
+            _judge_failed=$((_judge_failed + 1))
+          fi
+          break
+        fi
+      done
+    done < <(git diff --name-only -z --no-renames --diff-filter=D "${_judge_prev_head}" HEAD -- scripts prompts 2>/dev/null)
+  fi
+  if [ "${_judge_failed}" -gt 0 ]; then
+    echo "::error::Security-pass checkout for tracking #${TRACKING_NUM:-unknown}: ${_judge_failed} support path(s) could not be replaced with the verified support copy; refusing to run support scripts from the audited branch." >&2
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=trusted_refresh_failed failed=${_judge_failed} trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
+    return 1
+  fi
+  return 0
+}
+
 prepare_tracking_judge_checkout() {
   local integration_branch="$1"
   local default_branch="$2"
   local checkout_mode="${3:-api-verified}"
   local target_ref_override="${4:-}"
+  # Optional 5th argument: "true" keeps the poller's trusted support files
+  # after a plain or forced checkout, re-copied from the verified
+  # .codex-workflow-src checkout. The security pass passes it because it executes
+  # scripts/security_audit.sh and its helpers from this checkout with the
+  # poller's credentials, so the audited branch must not supply them.
+  local keep_trusted_support="${5:-false}"
   local target_branch="${default_branch:-main}"
   local target_ref=""
   local checkout_succeeded="false"
+  local _judge_overlaid=""
+  local _judge_prev_tracked="" _judge_stale_removed=0 _judge_stale_path
+  local _judge_prev_head=""
 
   JUDGE_EXECUTION_SOURCE="default_branch"
   JUDGE_EXECUTION_REF=""
@@ -5592,6 +5729,10 @@ prepare_tracking_judge_checkout() {
       return 1
     fi
   fi
+
+  # Commit before the checkout: keep mode restores trusted support files a
+  # plain checkout deletes (tracked here, absent on the target).
+  _judge_prev_head="$(git rev-parse -q --verify HEAD 2>/dev/null || true)"
 
   if [ -n "${target_ref_override}" ]; then
     if git rev-parse --verify -q "${target_ref}^{commit}" >/dev/null 2>&1 \
@@ -5625,16 +5766,66 @@ prepare_tracking_judge_checkout() {
         [ -d "${_d}" ] && cp -a "${_d}" "${_wf_backup}/${_d}" 2>/dev/null || true
       done
       [ -d ".github/ai" ] && { mkdir -p "${_wf_backup}/github_ai"; cp -a ".github/ai/." "${_wf_backup}/github_ai/" 2>/dev/null || true; }
+      # Paths the current checkout tracks: the restore below brings back the
+      # ones the target deleted, which a plain checkout would have removed.
+      _judge_prev_tracked="$(mktemp)"
+      git ls-files -z -- scripts prompts .github/ai > "${_judge_prev_tracked}" 2>/dev/null || : > "${_judge_prev_tracked}"
 
       if git checkout --detach -f -q "${target_ref}" >/dev/null 2>&1; then
-        # Force checkout succeeded — restore workflow support files
+        # Force checkout succeeded — restore workflow support files. A
+        # target-tracked symlink at a restore root is skipped and
+        # --remove-destination replaces file symlinks instead of writing
+        # through them, so the restore never writes outside the checkout.
         for _d in scripts prompts; do
-          [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
+          [ -d "${_wf_backup}/${_d}" ] && [ ! -L "${_d}" ] && { mkdir -p "${_d}"; cp -a --remove-destination "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
         done
-        [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
+        [ -d "${_wf_backup}/github_ai" ] && [ ! -L ".github/ai" ] && _judge_support_parents_real ".github/ai" \
+          && { mkdir -p ".github/ai"; cp -a --remove-destination "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
         rm -rf "${_wf_backup}"
+        # Files the target ref tracks keep the target's version, as on the
+        # plain checkout path: only support files it does not track stay
+        # restored. Staging installs every support script 0755, so a
+        # tracked 0644 script (scripts/pr_checks_lib.sh) that differs on the
+        # target makes the plain checkout fail on every tick; restoring
+        # all of scripts/ then showed the judge the poller's own copies
+        # beside the target's tests, and project #7126's judge filed
+        # restore issues #7296, #7306 and #7307 for code the branch had.
+        if [ "${keep_trusted_support}" = "true" ]; then
+          # Keep mode: the backup is the live tree, which an earlier judge
+          # checkout in this tick may have left holding another project's
+          # tracked scripts, so re-copy support files from the verified
+          # support checkout and fail closed when that is not possible.
+          if ! _judge_refresh_trusted_support; then
+            rm -f "${_judge_prev_tracked}"
+            return 1
+          fi
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=trusted_support trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
+        elif _judge_overlaid="$(git diff --name-only -- scripts prompts .github/ai 2>/dev/null | wc -l | tr -d ' ')" \
+          && git ls-files -z -- scripts prompts .github/ai | xargs -0 -r git checkout -q HEAD -- >/dev/null 2>&1; then
+          # Remove restored paths the previous checkout tracked and the
+          # target does not, as a plain checkout would.
+          # A path the verified support checkout also has is a staged
+          # support file later poller steps run (render_prompt.sh, judge
+          # prompts), so it stays.
+          while IFS= read -r -d '' _judge_stale_path; do
+            if [ -e ".codex-workflow-src/${_judge_stale_path}" ] || [ -e ".codex-workflow-src-main/${_judge_stale_path}" ]; then
+              continue
+            fi
+            if { [ -e "${_judge_stale_path}" ] || [ -L "${_judge_stale_path}" ]; } \
+              && _judge_support_parents_real "${_judge_stale_path}" && rm -f -- "${_judge_stale_path}"; then
+              _judge_stale_removed=$((_judge_stale_removed + 1))
+            fi
+          done < <(LC_ALL=C comm -z -23 <(LC_ALL=C sort -z -u "${_judge_prev_tracked}") \
+            <(git ls-files -z -- scripts prompts .github/ai 2>/dev/null | LC_ALL=C sort -z -u))
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced kept_target=${_judge_overlaid:-0} removed_stale=${_judge_stale_removed}"
+        else
+          echo "::warning::Judge context for tracking #${TRACKING_NUM:-unknown}: could not put back the target's tracked scripts/prompts after the forced checkout; the judge may see the poller's copies."
+          echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=forced_overlay_kept kept_target=0 reason=checkout_failed"
+        fi
+        rm -f "${_judge_prev_tracked}"
       else
         rm -rf "${_wf_backup}"
+        rm -f "${_judge_prev_tracked}"
         if [ -n "${target_ref_override}" ]; then
           echo "::error::Verified final-PR analysis ref '${target_ref}' could not be checked out for security-pass context." >&2
         elif [ -n "${integration_branch}" ]; then
@@ -5644,6 +5835,13 @@ prepare_tracking_judge_checkout() {
         fi
         return 1
       fi
+  elif [ "${keep_trusted_support}" = "true" ]; then
+    # A plain checkout switches tracked support scripts to the target's
+    # copies too (an earlier non-keep judge checkout in this tick leaves the
+    # tree clean, so this path is common): re-copy them from the verified
+    # support checkout before the security pass executes them.
+    _judge_refresh_trusted_support "${_judge_prev_head}" || return 1
+    echo "JUDGE_CONTEXT_CHECKOUT tracking=${TRACKING_NUM:-unknown} outcome=plain reason=trusted_support trusted_refreshed=${JUDGE_TRUSTED_REFRESHED}"
   fi
 
   JUDGE_EXECUTION_REF="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -7699,11 +7897,11 @@ run_security_pass_inline() {
   done
 
   if [ -n "${verified_analysis_ref}" ]; then
-    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
+    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}" "true"; then
       security_pass_fail_closed "engine_unavailable" "The verified final-PR checkout could not be prepared for read-only analysis." "${prior_security_status}"
       return 1
     fi
-  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only"; then
+  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "" "true"; then
     security_pass_fail_closed "engine_unavailable" "The composed project checkout could not be prepared for read-only analysis." "${prior_security_status}"
     return 1
   fi
@@ -13339,7 +13537,7 @@ get_last_validation_run_info() {
   [ -n "${attribution_summary}" ] || attribution_summary="tracking=${attribution_tracking} summary=unavailable"
   echo "VALIDATION_RUN_ATTRIBUTION ${attribution_summary}" >&2
   if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
-    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
+    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":"","head_branch":""}'
     return 0
   fi
 
@@ -13383,9 +13581,10 @@ get_last_validation_run_info() {
         conclusion: (if $conclusion == "" then (.conclusion // "") else $conclusion end),
         raw_status: $raw_status,
         run_url: $run_url,
-        run_timestamp: $run_timestamp
+        run_timestamp: $run_timestamp,
+        head_branch: (.head_branch // "")
       }
-    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
+    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":"","head_branch":""}'
 }
 
 # Return the conclusion of the most recent *completed* validation workflow run
@@ -13471,8 +13670,8 @@ dispatch_validation_if_needed() {
   #
   # Gate on WAVE_COMPLETE only, NOT on PROJECT_COMPLETE (and deliberately
   # not on ANY_FAILED, per the paragraph above). Validation
-  # runs against the integration branch (ref=integration_branch in
-  # dispatch_validation_workflow below), so the integration→default merge
+  # runs against the integration branch (the default-branch wrapper resolves
+  # it from tracking_issue, issue #7138), so the integration→default merge
   # is deliberately NOT a precondition for dispatching validation — that
   # merge is performed afterward by mark_validation_complete →
   # finalize_integration_merge_if_needed once the run earns the
@@ -13564,11 +13763,15 @@ dispatch_validation_if_needed() {
     echo "VALIDATION_DISPATCH_CAP outcome=redispatch ${validation_cap_redispatch_fields}"
   fi
 
-  if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
+  # Dispatch the default branch's validation wrapper (no --ref, issue #7138).
+  # validate.yml resolves the integration branch from tracking_issue and
+  # checks it out; the integration branch's own wrapper copy can carry a stale
+  # validate.yml pin (binance-blessings#249) and is never executed.
+  if dispatch_validation_workflow "${validation_cycle}" ""; then
     phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
       '.validation_cycle_dispatch_count = (if (.validation_last_dispatch_cycle // 0) == $cycle then (((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1) else 1 end)
-       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
+       | .validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts | .validation_last_dispatch_workflow_ref = "default"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     if [ -n "${integration_branch}" ]; then
@@ -13576,7 +13779,8 @@ dispatch_validation_if_needed() {
 
 - Cycle: ${validation_cycle}
 - Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`
-- Ref: \`${integration_branch}\`"
+- Workflow ref: default branch
+- Validated ref: \`${integration_branch}\` (resolved by validate.yml from the tracking issue)"
     else
       post_tracking_comment "## 🧪 Runtime validation dispatched
 
@@ -13619,11 +13823,20 @@ mark_validation_failed() {
 		harness_reason_one_line="$(validation_reason_one_line "${reason}")"
 		echo "HARNESS_ERROR_DETECTED reason=${harness_reason_one_line}"
 
-    jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" '
+    # Record which branch's workflow file the failing run used (issue #7138):
+    # the stale-pin recovery block reads it on a later tick.
+    local harness_run_head_branch=""
+    local harness_run_id=""
+    harness_run_head_branch="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '.head_branch // ""' 2>/dev/null || echo '')"
+    harness_run_id="$(printf '%s' "${LAST_VAL_RUN_INFO:-}" | jq -r '(.run_id // "") | tostring' 2>/dev/null || echo '')"
+    jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" \
+      --arg run_head_branch "${harness_run_head_branch}" --arg run_id "${harness_run_id}" '
       .status = "failed" |
       .validation_failure_reason = $reason |
       .validation_failure_class = null |
       .validation_last_raw_status = $raw_status |
+      .validation_last_run_head_branch = (if $run_head_branch == "" then null else $run_head_branch end) |
+      .validation_last_run_id = (if $run_id == "" then null else $run_id end) |
       .validation_active_fix_issues = [] |
       .validation_fix_issues_batch_cycles = 0 |
       .validation_completed_cycle = null |
@@ -15402,9 +15615,11 @@ _plan_auto_approval_gate_comments()
 # workflow-templates/). The plan is the newest comment carrying the
 # `<!-- ai:plan-proposal:v1 -->` marker line posted by the pipeline login, so
 # a forged marker from anyone else is ignored. scripts/files_touched_scope_guard.py
-# decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off every such
+# decides: while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off (false) every such
 # plan is held; when on, every protected path needs a trusted, exact
-# issue-body grant (the open pipeline-author grant does not count). Every
+# issue-body grant. The open pipeline-author grant does not count; instead
+# the guard proposes an exact files_touched block from the plan (Q108),
+# which is written to the issue body before the approval. Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
 # does not increment the recovery count; the implement-time guard still runs.
 # Args: <issue_num> <details_map_json> <comments_json> <phase>
@@ -15425,6 +15640,8 @@ _plan_auto_approval_gate()
   local gate_reason=""
   local gate_paths="none"
   local gate_display_paths="[]"
+  local gate_grant_body_file=""
+  local gate_fresh_file=""
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -15439,7 +15656,8 @@ _plan_auto_approval_gate()
     else
       gate_plan_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_plan.XXXXXX" 2>/dev/null || true)"
       gate_meta_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX" 2>/dev/null || true)"
-      if [ -z "${gate_plan_file}" ] || [ -z "${gate_meta_file}" ]; then
+      gate_grant_body_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_grant_body.XXXXXX" 2>/dev/null || true)"
+      if [ -z "${gate_plan_file}" ] || [ -z "${gate_meta_file}" ] || [ -z "${gate_grant_body_file}" ]; then
         gate_reason="plan_gate_error"
       elif ! printf '%s' "${comments_json:-[]}" | jq -er --arg login "${gate_login}" '
           [ .[]?
@@ -15468,14 +15686,41 @@ _plan_auto_approval_gate()
         fi
         gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --plan-auto-approval-gate \
           --plan-file "${gate_plan_file}" \
-          --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-false}" \
+          --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" \
           --issue-meta-file "${gate_meta_arg}" \
           --pipeline-login "${gate_login}" \
           --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" \
           --origin-repo "${GITHUB_REPOSITORY:-}" \
+          --pipeline-grant-body-out "${gate_grant_body_file}" \
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        # Q108: write the proposed exact grant before approving. The body the
+        # guard extended comes from this tick's batched snapshot, so it is
+        # re-read first (one REST read; no batched call carries a live body)
+        # and the write is skipped when the body changed since, so a newer
+        # edit is never overwritten. This runs at most once per issue: the
+        # written block makes later ticks take the ordinary exact grant.
+        if [ "${gate_decision}" = "approve" ] && printf '%s' "${gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
+          gate_fresh_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/plan_gate_fresh.XXXXXX" 2>/dev/null || true)"
+          gate_decision="hold"
+          if [ -z "${gate_fresh_file}" ] || [ ! -s "${gate_grant_body_file}" ]; then
+            gate_reason="pipeline_plan_grant_write_failed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=grant_body_unavailable"
+          elif ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${gate_fresh_file}" 2>/dev/null; then
+            gate_reason="pipeline_plan_grant_write_failed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_read_failed"
+          elif [ "$(jq -r '(.body // "") | gsub("\r"; "")' "${gate_fresh_file}" 2>/dev/null)" != "$(jq -r '(.body // "") | gsub("\r"; "")' "${gate_meta_file}" 2>/dev/null)" ]; then
+            gate_reason="pipeline_plan_grant_body_changed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_body_changed"
+          elif ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" -f body="$(cat "${gate_grant_body_file}")" >/dev/null 2>&1; then
+            gate_reason="pipeline_plan_grant_write_failed"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=failed reason=issue_body_write_failed"
+          else
+            gate_decision="approve"
+            echo "PIPELINE_PLAN_GRANT issue=${issue_num} source=poller outcome=written"
+          fi
+        fi
         gate_paths="$(printf '%s' "${gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
         # The hold comment names the raw plan paths (globs kept, so the
         # maintainer sees what the plan lists); log_paths strips `*?[]`.
@@ -15489,7 +15734,7 @@ _plan_auto_approval_gate()
       fi
     fi
   fi
-  rm -f "${gate_plan_file}" "${gate_meta_file}" 2>/dev/null || true
+  rm -f "${gate_plan_file}" "${gate_meta_file}" "${gate_grant_body_file}" "${gate_fresh_file}" 2>/dev/null || true
   if [ "${gate_decision}" = "approve" ]; then
     return 0
   fi
@@ -15545,7 +15790,7 @@ _plan_auto_approval_hold_notify()
       | [
         (if $reason == "automation_path_plan_auto_approval_disabled"
           then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
-          elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable"))
+          elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable", "pipeline_plan_grant_write_failed", "pipeline_plan_grant_body_changed"))
           then "**Automatic approval withheld: the automation-path grant check could not run.**"
           else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
         "",
@@ -18235,6 +18480,9 @@ run_unblock_scan() {
     [[ "${n}" =~ ^[0-9]+$ ]] || continue
     fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
       ... on Issue {
+        body
+        author { login }
+        authorAssociation
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
         comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
@@ -18259,6 +18507,9 @@ run_unblock_scan() {
         labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
         comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
         comment_count: .value.comments.totalCount,
+        body: (.value.body // null),
+        author_login: (.value.author.login // ""),
+        author_association: (.value.authorAssociation // ""),
         history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
       }})
     | from_entries' 2>/dev/null || echo '{}')"
@@ -18269,6 +18520,50 @@ run_unblock_scan() {
     return 0
   fi
   printf '%s' "${runs}" > "${work_dir}/runs.json"
+  # An issue held by its pull-request dependency (issue #7228) must not
+  # consume unblock rounds, even when clarify could not remove its block
+  # label. It is dropped from the search results before selection: the
+  # selector picks at most one item per tick, so a held issue picked and then
+  # skipped would take that slot on every tick and starve every other blocked
+  # item. The body and author come from the GraphQL batch above; the helper
+  # reads `pulls/<N>` only for an issue that declares a dependency. A missing
+  # helper or any failure keeps the issue out of this tick.
+  local _scan_pr_dependency_item _scan_pr_dependency_status _scan_pr_dependency_held="[]"
+  while IFS= read -r _scan_pr_dependency_item; do
+    [[ "${_scan_pr_dependency_item}" =~ ^[0-9]+$ ]] || continue
+    _scan_pr_dependency_status="held"
+    if [ -f scripts/pr_dependency.py ] && jq -c --arg id "${_scan_pr_dependency_item}" --arg repo "${GITHUB_REPOSITORY}" --slurpfile search "${work_dir}/search.json" '
+        .[$id] as $d
+        | {number: ($id | tonumber), body: $d.body,
+           labels: ([$search[0][]? | select(.number == ($id | tonumber)) | .labels[]?] | map({name: .})),
+           user: {login: ($d.author_login // "")},
+           author_association: ($d.author_association // ""),
+           repository_url: ("https://api.github.com/repos/" + $repo)}' \
+        "${work_dir}/details.json" > "${work_dir}/pr_dependency_issue.json" 2>/dev/null; then
+      _scan_pr_dependency_status="$(python3 -I -B scripts/pr_dependency.py pr-dependency \
+        --issue-json "${work_dir}/pr_dependency_issue.json" --repo "${GITHUB_REPOSITORY}" \
+        --issue-number "${_scan_pr_dependency_item}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" 2>/dev/null </dev/null \
+        | jq -r '.status // "held"' 2>/dev/null || echo held)"
+    fi
+    if [ "${_scan_pr_dependency_status}" != "none" ] && [ "${_scan_pr_dependency_status}" != "ready" ]; then
+      echo "UNBLOCK_SCAN item=${_scan_pr_dependency_item} kind=issue outcome=skip reason=pr_dependency_held"
+      _scan_pr_dependency_held="$(printf '%s' "${_scan_pr_dependency_held}" | jq -c --argjson n "${_scan_pr_dependency_item}" '. + [$n]')"
+    fi
+  done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" '
+      .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
+      | .number as $n
+      | select(any((.labels // [])[]?; . == "ai:orchestrator-tracking") | not)
+      | select(any(($failed[0] // [])[]?; . == $n) | not)
+      | select(($details[0][($n | tostring)].body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i"))
+      | $n' "${work_dir}/search.json" 2>/dev/null || true)
+  if [ "${_scan_pr_dependency_held}" != "[]" ]; then
+    if ! jq -c --argjson held "${_scan_pr_dependency_held}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
+      "${work_dir}/search.json" > "${work_dir}/search_unheld.json" 2>/dev/null \
+      || ! mv -f "${work_dir}/search_unheld.json" "${work_dir}/search.json"; then
+      echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=pr_dependency_filter_failed"
+      return 0
+    fi
+  fi
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
     --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
@@ -18633,6 +18928,11 @@ run_standalone_stall_recovery() {
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
+  local _pr_dependency_verdict
+  local _pr_dependency_status
+  local _pr_dependency_reason
+  local _pr_dependency_login
+  local _pr_dependency_comments_complete
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -18681,6 +18981,8 @@ run_standalone_stall_recovery() {
     else
       printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" --arg repo "${GITHUB_REPOSITORY}" '
         .[$n] | {number: ($n | tonumber), body, labels,
+          user: {login: (.author_login // "")},
+          author_association: (.author_association // ""),
           repository_url: ("https://api.github.com/repos/" + $repo)}' > "${_security_dependency_issue_file}"
     fi
     _security_dependency_verdict="$(python3 scripts/security_dependency.py security-dependency \
@@ -18716,6 +19018,63 @@ run_standalone_stall_recovery() {
           echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
         fi
         continue
+      fi
+    fi
+    # A trusted standalone issue that declares `- Depends on PR: #N` and
+    # `- Requires on main: <path> contains <string>` waits until that PR is
+    # merged into the default branch and the string is there (issue #7228).
+    # While held, stall recovery does nothing for it (no auto-answer, no
+    # approval, no recovery attempt). Once ready, the poller posts one
+    # /reclarify with a release marker; only a marker written by the
+    # pipeline login counts, and nothing is posted when the login or the
+    # complete comment history cannot be read.
+    # §14: the helper's `pulls/<N>` read is new because the candidate batch's
+    # `linked_pr` only covers PRs that close this issue, not a declared
+    # prerequisite PR; its `contents` read of the default branch has no
+    # existing source and runs only after the PR has merged. Both happen only
+    # for an issue whose body carries a declaration.
+    if jq -e '(.body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i")' \
+      "${_security_dependency_issue_file}" >/dev/null 2>&1; then
+      unblock_trusted_login >/dev/null 2>&1 || true
+      _pr_dependency_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+      _pr_dependency_verdict="$(python3 -I -B scripts/pr_dependency.py pr-dependency \
+        --issue-json "${_security_dependency_issue_file}" --repo "${GITHUB_REPOSITORY}" \
+        --issue-number "${issue_num}" --trusted-login "${_pr_dependency_login}" 2>/dev/null || echo '{"status":"held"}')"
+      _pr_dependency_status="$(printf '%s' "${_pr_dependency_verdict}" | jq -r '.status // "held"' 2>/dev/null || echo held)"
+      if [ "${_pr_dependency_status}" = "held" ] || { [ "${_pr_dependency_status}" != "ready" ] && [ "${_pr_dependency_status}" != "none" ]; }; then
+        _pr_dependency_reason="$(printf '%s' "${_pr_dependency_verdict}" | jq -r '.reason // "unverified"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
+        echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_held detail=${_pr_dependency_reason:-unverified} action=none"
+        continue
+      fi
+      if [ "${_pr_dependency_status}" = "ready" ]; then
+        if [ -z "${_pr_dependency_login}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_identity_unavailable action=none"
+          continue
+        fi
+        _pr_dependency_comments_complete="false"
+        if [ "${_standalone_staged_support_cache_available}" = "true" ] && [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -lt 100 ]; then
+          _pr_dependency_comments_complete="true"
+        fi
+        if [ "${_pr_dependency_comments_complete}" != "true" ]; then
+          if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+            || ! printf '%s' "${comments_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            comments_json='[]'
+            echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_comments_unavailable action=none"
+            continue
+          fi
+        fi
+        if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:pr-dependency-released:${issue_num} -->" --arg login "${_pr_dependency_login}" '
+          any(.[]; ((.user.login // "") == $login)
+            and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+          if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+            -f body="/reclarify
+<!-- ai:pr-dependency-released:${issue_num} -->" >/dev/null; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_released action=reclarify"
+          else
+            echo "STALL_SKIP issue=${issue_num} reason=pr_dependency_retrigger_failed action=none"
+          fi
+          continue
+        fi
       fi
     fi
     # Resolve both values through the shared Python predicates in one call so
@@ -20936,10 +21295,37 @@ if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue the workflow skips the full poller; this is the
+# only path that runs standalone stall recovery (and the automation-path
+# plan-hold recheck) on those ticks. The workflow's complementary has_work
+# gates keep it exclusive with the full poller (#7174). Prime the phase
+# concurrency caps first, as the full poller does before recovery, so idle-tick
+# dispatches honour .github/ai/concurrency_caps.yml too.
+if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
+  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  run_standalone_stall_recovery
+  exit 0
+fi
+
+# With no tracking issue, the workflow skips the full poller; this mode runs
+# only the standalone PR conflict and noop-suspicious recovery sweeps at the
+# end of this script (issue #7177). The tracking loop and the other post-loop
+# work are skipped. The workflow's complementary has_work gates keep it
+# exclusive with the inline sweeps of the full poller.
+STANDALONE_PR_SWEEP_ONLY_ACTIVE="false"
+if _is_truthy "${STANDALONE_PR_SWEEP_ONLY:-false}"; then
+  STANDALONE_PR_SWEEP_ONLY_ACTIVE="true"
+  echo "Standalone PR sweep-only mode: skipping tracking issues and the other post-loop sweeps."
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
-TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
+if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" = "true" ]; then
+  TRACKING_ISSUES='[]'
+else
+  TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
+fi
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
@@ -20953,7 +21339,9 @@ for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
     echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
   fi
 done
-prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
+  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+fi
 write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
@@ -21136,6 +21524,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
+  # Per-project: mark_validation_failed records this run's head_branch
+  # (issue #7138), so a previous project's run must never leak into it.
+  # Empty (not '{}') keeps validation_history_run_info_json's lazy fetch.
+  LAST_VAL_RUN_INFO=''
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ "${PROJECT_STATUS}" = "failed" ]; then
     integration_failure_recovery_rc=0
@@ -22384,6 +22776,160 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       tg_notify "/revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1." "DEBUG"
       if ! dispatch_validation_if_needed 1; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
+      fi
+      continue
+    fi
+  fi
+
+  # ---------------------------------------------------------------
+  # Stale validation-wrapper pin — one-shot automatic recovery (#7138)
+  # ---------------------------------------------------------------
+  # Pollers before issue #7138 dispatched validation with
+  # `--ref <integration branch>`, so GitHub ran the integration branch's own
+  # validation wrapper. When that copy pinned an old validate.yml, every run
+  # failed with raw_status=harness_error and mark_validation_failed parked the
+  # project for a manual /revalidate. Dispatch now uses the default branch's
+  # wrapper; this block re-dispatches such a parked project once, keeping the
+  # validation counters (the harness-error path never charged them). An
+  # operator /revalidate on the same tick is handled by the block above.
+  # Once-only guards: the state flag validation_stale_pin_recovered_ref and a
+  # marker comment by the pipeline login (covers a failed state write).
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    VSP_SKIP_REASON=""
+    VSP_DEFAULT_BRANCH=""
+    VSP_RUN_HEAD_BRANCH_STATE=""
+    if [ "${VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED:-true}" != "true" ]; then
+      VSP_SKIP_REASON="disabled"
+    elif [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+      # Automatic recovery never overrides the validation kill switch.
+      VSP_SKIP_REASON="validation_disabled"
+    elif [ "$(jq -r '.validation_last_raw_status // ""' "${STATE_FILE}" 2>/dev/null || echo '')" != "harness_error" ]; then
+      VSP_SKIP_REASON="not_harness_error"
+    elif [ -n "$(jq -r '.validation_stale_pin_recovered_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" ]; then
+      VSP_SKIP_REASON="already_recovered"
+    elif [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ] && printf '%s' "${COMMENTS:-[]}" | jq -e --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+        any(.[]?; ((.user.login // "") == $login) and ((.body // "") | startswith("<!-- validation-stale-pin-recovery:")))
+      ' >/dev/null 2>&1; then
+      VSP_SKIP_REASON="marker_present"
+    elif [ -z "${INTEGRATION_BRANCH_TRACKING:-}" ] || [ "${INTEGRATION_BRANCH_TRACKING}" = "null" ]; then
+      VSP_SKIP_REASON="no_integration_branch"
+    else
+      # No `main` fallback: a failed read must not fake stale-pin evidence.
+      # DEFAULT_BRANCH_TRACKING is not reused because earlier steps fill it
+      # with `|| echo "main"` when their read fails. Memoized per poller
+      # process (at most one GET repos/<repo>, §14).
+      VSP_DEFAULT_BRANCH="$(_review_run_default_branch)" || VSP_DEFAULT_BRANCH=""
+      if [ -z "${VSP_DEFAULT_BRANCH}" ] || [ "${VSP_DEFAULT_BRANCH}" = "null" ]; then
+        VSP_SKIP_REASON="default_branch_unavailable"
+      elif [ "${INTEGRATION_BRANCH_TRACKING}" = "${VSP_DEFAULT_BRANCH}" ]; then
+        VSP_SKIP_REASON="default_branch_project"
+      else
+        VSP_RUN_HEAD_BRANCH_STATE="$(jq -r 'if has("validation_last_run_head_branch") then (.validation_last_run_head_branch // "") else "__absent__" end' "${STATE_FILE}" 2>/dev/null || echo '__absent__')"
+        if [ "${VSP_RUN_HEAD_BRANCH_STATE}" = "__absent__" ]; then
+          # Legacy state: only pollers before #7138 omitted
+          # validation_last_dispatch_workflow_ref, and every one of them
+          # dispatched with the integration branch as ref.
+          if [ -n "$(jq -r '.validation_last_dispatch_workflow_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" ]; then
+            VSP_SKIP_REASON="no_evidence"
+          else
+            VSP_RUN_HEAD_BRANCH_STATE="legacy"
+          fi
+        elif [ -z "${VSP_RUN_HEAD_BRANCH_STATE}" ]; then
+          VSP_SKIP_REASON="no_evidence"
+        elif [ "${VSP_RUN_HEAD_BRANCH_STATE}" = "${VSP_DEFAULT_BRANCH}" ]; then
+          VSP_SKIP_REASON="run_used_default_branch"
+        fi
+      fi
+    fi
+
+    VSP_DEFAULT_SHA=""
+    if [ -z "${VSP_SKIP_REASON}" ]; then
+      # The once-only guard records a commit SHA; retry next tick instead of
+      # storing the branch name when the head read fails.
+      VSP_DEFAULT_SHA="$(_branch_head_sha "${VSP_DEFAULT_BRANCH}" 2>/dev/null || echo '')"
+      [ -n "${VSP_DEFAULT_SHA}" ] || VSP_SKIP_REASON="default_sha_unavailable"
+    fi
+
+    if [ -n "${VSP_SKIP_REASON}" ]; then
+      echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=${VSP_SKIP_REASON}"
+    else
+      cp "${STATE_FILE}" "${STATE_FILE}.vsp_bak"
+      jq --arg recovered_ref "${VSP_DEFAULT_SHA}" \
+        '.status = "validating" |
+         .validation_last_dispatch_cycle = 0 |
+         .validation_active_fix_issues = [] |
+         .validation_fix_issues_batch_cycles = 0 |
+         .validation_completed_cycle = null |
+         .validation_stale_pin_recovered_ref = $recovered_ref |
+         del(.validation_failure_reason) |
+         del(.validation_failure_class) |
+         del(.validation_last_raw_status)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      # A failed rewrite would leave the failed state without the guard flag.
+      if [ "$(jq -r '.validation_stale_pin_recovered_ref // ""' "${STATE_FILE}" 2>/dev/null || echo '')" != "${VSP_DEFAULT_SHA}" ]; then
+        rm -f "${STATE_FILE}.tmp"
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
+      # Remove the failure labels before the guard flag is persisted. A
+      # leftover ai:validation-failed / ai:validate-failed label would make
+      # the next tick's validating branch call mark_validation_failed while
+      # the new run is active, after the once-only flag is spent. The edits
+      # stay `|| true` (ai:validate-failed may not exist in the repo); a fresh
+      # labels read decides instead. TRACKING_LABELS predates these edits, so
+      # this one extra read (recovery path only, once per project) is needed.
+      # A failure keeps the failed state and retries on the next tick.
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:validation-failed" >/dev/null || true
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:validate-failed" >/dev/null || true
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
+      VSP_FRESH_LABELS=""
+      if ! VSP_FRESH_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:validation-failed" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:validate-failed" \
+        || has_label "${VSP_FRESH_LABELS}" "ai:harness-broken"; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        # Put the failure labels back so the /revalidate gate still matches.
+        _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS}" || true
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=label_write_failed"
+        continue
+      fi
+      # The persisted state flag is the once-only guard: without it a later
+      # tick would reload the failed state and dispatch a second run, so
+      # nothing is dispatched until it lands. Retry on the next tick.
+      if ! post_state_comment; then
+        mv "${STATE_FILE}.vsp_bak" "${STATE_FILE}"
+        # The labels were removed above; restore them so the failed state
+        # keeps its labels and an operator /revalidate still matches.
+        _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS}" || true
+        echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=skip reason=state_write_failed"
+        continue
+      fi
+      rm -f "${STATE_FILE}.vsp_bak"
+      set_tracking_phase_label "ai:validating"
+      VSP_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+      [[ "${VSP_CYCLE}" =~ ^[0-9]+$ ]] && [ "${VSP_CYCLE}" -ge 1 ] || VSP_CYCLE=1
+      post_tracking_comment "<!-- validation-stale-pin-recovery:${VSP_DEFAULT_SHA} -->
+## 🔁 Validation re-armed after stale workflow pin
+
+The last validation run failed with \`raw_status=harness_error\` after an earlier poller dispatched the integration branch's own validation wrapper, which can pin an outdated \`validate.yml\`. The project is back in \`validating\`, and validation is dispatched from the default branch's wrapper (\`${VSP_DEFAULT_BRANCH}\` at \`${VSP_DEFAULT_SHA}\`), and validate.yml still checks out \`${INTEGRATION_BRANCH_TRACKING}\`.
+
+This recovery runs once per project. Validation counters were kept (cycle ${VSP_CYCLE}). If validation fails again, repair the cause and comment \`/revalidate\`. Set \`VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED=false\` to turn this recovery off."
+      tg_notify "Project #${TRACKING_NUM}: validation re-dispatched from the default branch after a stale integration-branch workflow pin (one-shot recovery)." "DEBUG"
+      echo "VALIDATION_STALE_PIN_RECOVERY tracking_issue=${TRACKING_NUM} outcome=recovered reason=stale_integration_pin run_head_branch=${VSP_RUN_HEAD_BRANCH_STATE} default_sha=${VSP_DEFAULT_SHA}"
+      # LAST_VAL_RAW_STATUS / LAST_VAL_CONCLUSION are set only on the
+      # validating branch and may still hold an earlier project's run; clear
+      # them so a dispatch failure is classified from this project alone.
+      LAST_VAL_RAW_STATUS=''
+      LAST_VAL_CONCLUSION=''
+      if ! dispatch_validation_if_needed "${VSP_CYCLE}"; then
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after stale-pin recovery. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi
       continue
     fi
@@ -27096,14 +27642,53 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   esac
 done
 
-run_standalone_stall_recovery
+if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
+  run_standalone_stall_recovery
 
-release_staged_support_needs_human_latches
+  release_staged_support_needs_human_latches
 
-# Never ends the tick: a failure inside is logged and the sweeps below run.
-run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  # Never ends the tick: a failure inside is logged and the sweeps below run.
+  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
 
-close_merged_issues_sweep
+  close_merged_issues_sweep
+fi
+
+# _standalone_sweep_alert_level_apply / _standalone_sweep_alert_level_restore
+# The standalone PR sweeps below alert about real standalone PRs, so they must
+# not inherit the SILENT level the workflow sets when every tracking issue is a
+# smoke fixture (issue #7177). STANDALONE_SWEEP_ALERT_MSG_LEVEL (the workflow
+# passes vars.ALERT_MSG_LEVEL, default WARNING) replaces ALERT_MSG_LEVEL for the
+# two sweeps; tg_send_msg reads ALERT_MSG_LEVEL at call time. Empty keeps the
+# poller level (older workflow copies); a value outside the known levels is
+# ignored with a warning.
+_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="false"
+_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL=""
+_standalone_sweep_alert_level_apply() {
+	local requested
+	requested="$(printf '%s' "${STANDALONE_SWEEP_ALERT_MSG_LEVEL:-}" | tr '[:lower:]' '[:upper:]')"
+	if [ "${ALERT_MSG_LEVEL+set}" = "set" ]; then
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="true"
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL}"
+	else
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET="false"
+		_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL=""
+	fi
+	[ -n "${requested}" ] || return 0
+	if ! [[ "${requested}" =~ ^(DEBUG|WARNING|ERROR|CRITICAL|SILENT)$ ]]; then
+		echo "::warning::Ignoring invalid STANDALONE_SWEEP_ALERT_MSG_LEVEL; standalone PR sweeps keep the poller alert level."
+		return 0
+	fi
+	echo "Standalone PR sweeps alert level: ${requested} (poller level: ${_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL:-unset})"
+	export ALERT_MSG_LEVEL="${requested}"
+}
+_standalone_sweep_alert_level_restore() {
+	if [ "${_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL_SET}" = "true" ]; then
+		export ALERT_MSG_LEVEL="${_STANDALONE_SWEEP_PRIOR_ALERT_MSG_LEVEL}"
+	else
+		unset ALERT_MSG_LEVEL
+	fi
+}
+_standalone_sweep_alert_level_apply
 
 STANDALONE_CONFLICT_ATTEMPTS_MARKER="<!-- ai:standalone-conflict-attempts:v1 "
 
@@ -27940,3 +28525,4 @@ done
 write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."
 echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head): ${NOOP_RECOVERY_CAP_SKIPPED}."
+_standalone_sweep_alert_level_restore
