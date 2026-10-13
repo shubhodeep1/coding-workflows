@@ -1,6 +1,6 @@
 <!-- agents: section="Implement scope-lock label" -->
 Plan auto-approval gate (#6769, replacing the #6838 gate): with
-`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` off (the default), no automatic
+`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` off (`false`; the default is on), no automatic
 `/approved` is posted for a plan that lists automation paths. This covers
 `plan.yml`'s "Auto-approve clear plan" step, both stall-recovery `auto_approve`
 arms, and both `retrigger_implement` arms while the issue is in

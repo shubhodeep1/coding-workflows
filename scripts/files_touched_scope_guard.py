@@ -512,7 +512,7 @@ def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: lis
 # --- Plan auto-approval gate (issue #6769) ---------------------------------
 # Automatic `/approved` posts (plan.yml "Auto-approve clear plan" and the
 # poller's stall-recovery arms) are held for plans that list automation
-# paths. While AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is off (the default)
+# paths. While AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is false (it defaults to true)
 # every such plan is held; when it is on, every protected path the plan lists
 # needs a trusted, exact issue-body grant. The open pipeline-author grant
 # (PIPELINE_AUTHOR_OPEN_REASON) never counts as exact here, although the
@@ -636,7 +636,8 @@ def plan_gate_log_paths(paths: list[str]) -> str:
 
 
 def _flag_enabled(value: str) -> bool:
-	return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+	# On by default: an unset or empty value is on, like the workflow defaults.
+	return (value or "").strip().lower() in {"", "1", "true", "yes", "on"}
 
 
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
@@ -713,7 +714,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--issue-number", default="")
 	parser.add_argument("--plan-auto-approval-gate", action="store_true")
 	parser.add_argument("--plan-file", default="")
-	parser.add_argument("--flag-enabled", default="false")
+	parser.add_argument("--flag-enabled", default="true")
 	args = parser.parse_args(argv)
 	if args.plan_auto_approval_gate:
 		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,

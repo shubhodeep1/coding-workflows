@@ -1456,6 +1456,7 @@ jobs:
       - name: Release CI gate tests (stubbed gh; both release workflows)
         run: |
           set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_ci_gate.py
           # Security finding release-gate-ignores-actions-ci (#6797, Refs
           # #6532): both stable-tag writers must require a successful
           # github-actions `lint` check-run from ci.yml on the exact commit
