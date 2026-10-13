@@ -1130,6 +1130,14 @@ def test_origin_repo_is_passed_at_both_grant_call_sites() -> None:
 	assert 'origin_issues=\\((.origin_issues // [])' in metadata
 	unblock = (REPO_ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
 	assert '--origin-repo "${REPOSITORY}" >/dev/null 2>&1; then' in unblock
+	# Issue #7174: both plan auto-approval checks (plan.yml and the poller's
+	# stall-recovery gate) verify a pipeline-authored issue's source chain.
+	plan = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	plan_gate = plan.split("run_plan_gate() {", 1)[1].split('plan_gate_result="$(run_plan_gate)"', 1)[0]
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" \\' in plan_gate
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	poller_gate = poller.split('gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --plan-auto-approval-gate', 1)[1].split('2>/dev/null || true)"', 1)[0]
+	assert '--origin-repo "${GITHUB_REPOSITORY:-}" \\' in poller_gate
 
 
 # --- #7209: unblock-judge re-issue that edits automation paths ---
