@@ -379,3 +379,86 @@ def test_claude_workflows_default_the_wait_on_except_for_core(name: str) -> None
 
 def test_engine_smoke_keeps_the_codex_fallback_path() -> None:
 	assert re.search(r"(?m)^  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'$", _text(WORKFLOWS / "claude-engine-smoke.yml"))
+
+
+# --- Review fixes (issue #7370 review round) ----------------------------------
+
+
+def test_a_failed_replay_post_keeps_the_label_for_the_next_pass(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("issue", "5", "41"))]
+	gh.labelled = [{"number": 5}]
+	gh.issue_comments[5] = [_c("w\n<!-- ai:claude-capacity-wait:v1 stage=clarify source=none run=41 role=CLARIFY -->")]
+	gh.comment = lambda number, body: False  # type: ignore[method-assign]
+	values = _resume(gh, tmp_path)
+	# The label stays so the next pass can replay; the tracker stays open.
+	assert gh.removed == [] and gh.closed == [] and values["capacity_wait"] == "true"
+	assert "issue:5:41" not in gh.tracker_body
+
+
+def test_a_failed_label_removal_keeps_the_pr_pending(tmp_path: Path) -> None:
+	head = "c" * 40
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("pr", "8", "42"))]
+	gh.prs[8] = {"state": "open", "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
+	gh.issue_comments[8] = [_c(f"p\n<!-- review-autofix-failure:v1 head={head} reason=claude_capacity fp={'b' * 64} run=42 -->")]
+	gh.remove_label = lambda number, label: False  # type: ignore[method-assign]
+	_resume(gh, tmp_path)
+	assert gh.dispatched == [8] and gh.closed == []
+	assert "pr:8:42" not in gh.tracker_body
+
+
+def test_a_deleted_pr_or_source_comment_is_superseded(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("pr", "8", "43")), _c(_item("issue", "5", "44"))]
+	gh.prs[8] = {"_gone": True}
+	gh.labelled = [{"number": 5}]
+	gh.issue_comments[5] = [_c("w\n<!-- ai:claude-capacity-wait:v1 stage=plan source=903 run=44 role=PLAN -->")]
+	gh.comment_by_id[903] = {"_gone": True}
+	_resume(gh, tmp_path)
+	assert gh.dispatched == [] and gh.closed == [1]
+	assert gh.removed == [5]
+
+
+def test_a_wait_recorded_during_the_pass_keeps_the_tracker_open(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("run", "none", "45"))]
+	original_rerun = gh.rerun_run
+
+	def rerun_and_record(run_id: int) -> tuple[bool, int | None]:
+		gh.tracker_comments.append(_c(_item("run", "none", "46")))
+		return original_rerun(run_id)
+
+	gh.rerun_run = rerun_and_record  # type: ignore[method-assign]
+	_resume(gh, tmp_path)
+	assert gh.closed == []
+	_resume(gh, tmp_path)
+	assert gh.closed == [1] and 46 in gh.reruns
+
+
+@pytest.mark.parametrize(
+	("path", "needle"),
+	[
+		("scripts/self_heal_validation.sh", 'if [ "${_self_heal_run_rc}" -eq 80 ]; then'),
+		("scripts/validate_process.sh", "AI_ENGINE_CAPACITY_WAIT role=VALIDATE_SELF_HEAL outcome=deferred"),
+		("scripts/review_rb_judge.sh", 'if [ "${rb_judge_claude_rc}" -eq 80 ]; then'),
+		("scripts/review_rb_judge.sh", 'if [ "${rb_fix_claude_rc}" -eq 80 ]; then'),
+		("scripts/review_apply_fixes.sh", 'if [ "${cmd_rc}" -eq 80 ]; then'),
+		("scripts/summarize_reviewer_consensus.sh", 'if [ "${last_rc}" -eq 80 ]; then'),
+		("scripts/workflow_retro_fanout.sh", 'if [ "${codex_exit}" -eq 80 ]; then'),
+	],
+)
+def test_review_round_call_sites_stop_on_the_capacity_wait(path: str, needle: str) -> None:
+	assert needle in _text(REPO_ROOT / path)
+
+
+def test_log_analysis_passes_stop_on_the_capacity_wait() -> None:
+	text = _text(WORKFLOWS / "workflow-log-analysis.yml")
+	for var in ("RETRO_EXIT", "ANALYZE_EXIT", "AUDIT_EXIT", "API_EXIT"):
+		assert f'if [ "${{{var}}}" -eq 80 ]; then' in text, var
+
+
+def test_panel_slot_does_not_set_the_job_failure_reason() -> None:
+	text = _text(SCRIPTS / "review_run_reviewers.sh")
+	block = text[text.index("      80)\n        # Claude capacity wait (issue #7370)"):text.index("      75|76)")]
+	assert 'GITHUB_ENV' not in block

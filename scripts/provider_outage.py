@@ -348,8 +348,12 @@ class GitHub:
 		return self._login
 
 	def list_issues(self, label: str) -> list[dict[str, Any]] | None:
-		data = self._json(["api", f"repos/{self.repository}/issues?labels={label}&state=open&per_page=100"])
-		return data if isinstance(data, list) else None
+		# Paginated (issue #7370): the capacity-resume pass treats an issue
+		# absent from this listing as no longer waiting.
+		pages = self._json(["api", "--paginate", "--slurp", f"repos/{self.repository}/issues?labels={label}&state=open&per_page=100"])
+		if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+			return None
+		return [issue for page in pages for issue in page if isinstance(issue, dict)]
 
 	def create_issue(self, title: str, body: str) -> int | None:
 		data = self._json(["api", "-X", "POST", f"repos/{self.repository}/issues", "-f", f"title={title}", "-f", f"body={body}", "-f", f"labels[]={TRACKER_LABEL}"])
@@ -394,13 +398,22 @@ class GitHub:
 	def remove_label(self, number: int, label: str) -> bool:
 		return self._run(["api", "-X", "DELETE", f"repos/{self.repository}/issues/{number}/labels/{label}"]).returncode == 0
 
-	def get_pr(self, number: int) -> dict[str, Any] | None:
-		data = self._json(["api", f"repos/{self.repository}/pulls/{number}"])
+	def _get_or_gone(self, path: str) -> dict[str, Any] | None:
+		"""GET one object; `{"_gone": True}` on HTTP 404, None on other failures."""
+		result = self._run(["api", path])
+		if result.returncode != 0:
+			return {"_gone": True} if "HTTP 404" in (result.stderr or "") + (result.stdout or "") else None
+		try:
+			data = json.loads(result.stdout)
+		except json.JSONDecodeError:
+			return None
 		return data if isinstance(data, dict) else None
 
+	def get_pr(self, number: int) -> dict[str, Any] | None:
+		return self._get_or_gone(f"repos/{self.repository}/pulls/{number}")
+
 	def get_comment(self, comment_id: int) -> dict[str, Any] | None:
-		data = self._json(["api", f"repos/{self.repository}/issues/comments/{comment_id}"])
-		return data if isinstance(data, dict) else None
+		return self._get_or_gone(f"repos/{self.repository}/issues/comments/{comment_id}")
 
 	def rerun_run(self, run_id: int) -> tuple[bool, int | None]:
 		"""Re-run a whole workflow run; returns (ok, HTTP status on failure)."""
@@ -961,9 +974,11 @@ def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str)
 	pr = gh.get_pr(number)
 	if pr is None:
 		return "failed"
-	if str(pr.get("state") or "") != "open":
-		gh.remove_label(number, CAPACITY_WAIT_LABEL)
+	if pr.get("_gone"):
+		# Deleted or transferred PR (HTTP 404): nothing left to resume.
 		return "superseded"
+	if str(pr.get("state") or "") != "open":
+		return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 	head = str((pr.get("head") or {}).get("sha") or "").lower()
 	base_repo = (pr.get("base") or {}).get("repo") or {}
 	default_branch = str(base_repo.get("default_branch") or "")
@@ -974,11 +989,11 @@ def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str)
 	if decision == "resume":
 		if not gh.dispatch(workflow, default_branch, number):
 			return "failed"
-		gh.remove_label(number, CAPACITY_WAIT_LABEL)
-		return "dispatched"
+		# A failed removal stays pending: the next pass sees no new
+		# claude_capacity marker on the head and only removes the label.
+		return "dispatched" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 	# The head moved on or a later run decided it: nothing to replay.
-	gh.remove_label(number, CAPACITY_WAIT_LABEL)
-	return "superseded"
+	return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 
 
 def _resume_wait_issue(gh: Any, item: dict[str, str], *, login: str, labelled: set[int]) -> str:
@@ -1018,6 +1033,10 @@ def _resume_wait_issue(gh: Any, item: dict[str, str], *, login: str, labelled: s
 		source_comment = gh.get_comment(int(source))
 		if source_comment is None:
 			return "failed"
+		if source_comment.get("_gone"):
+			# The source command was deleted (HTTP 404): nothing to replay.
+			_log(f"op=capacity_resume kind=issue item={number} run={item['run']} outcome=superseded reason=source_deleted")
+			return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 		suffix = f"/repos/{gh.repository}/issues/{number}"
 		trusted = _author(source_comment) == login if stage == "clarify_respond" else _trusted_command_author(source_comment, login)
 		if not str(source_comment.get("issue_url") or "").endswith(suffix) or not trusted:
@@ -1027,11 +1046,12 @@ def _resume_wait_issue(gh: Any, item: dict[str, str], *, login: str, labelled: s
 	body = replay_body(stage, source_body, source, item["run"])
 	if body is None:
 		return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
-	# Remove the label first: the replayed command restarts the stage, and
-	# a stage that waits again adds the label back with a new run marker.
-	if not gh.remove_label(number, CAPACITY_WAIT_LABEL):
+	# Post the replay first, then remove the label: a failed post keeps the
+	# label so the next pass retries, and a failed removal is cleared on the
+	# next pass, which finds this run's replay marker and only removes it.
+	if not gh.comment(number, body):
 		return "failed"
-	return "replayed" if gh.comment(number, body) else "failed"
+	return "replayed" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 
 
 def capacity_resume(gh: Any, *, pool_available: bool, items_out: str | None, alert_out: str | None, max_dispatch: int, workflow: str, output_path: str | None = None) -> dict[str, Any]:
@@ -1104,6 +1124,12 @@ def capacity_resume(gh: Any, *, pool_available: bool, items_out: str | None, ale
 			break
 	resumed = sum(counts.values())
 	values["resumed"] = str(resumed)
+	if complete:
+		# Re-read the tracker before closing it: a wait recorded during this
+		# pass must keep the tracker open for the next pass.
+		latest = gh.comments(tracker["number"])
+		if latest is None or pending_wait_items(latest, login=login, done=done):
+			complete = False
 	if not complete:
 		_log(f"op=capacity_resume tracker={tracker['number']} outcome=partial resumed={resumed}")
 		_write_output(output_path, values)

@@ -5296,9 +5296,12 @@ run_pool_reviewer() {
       80)
         # Claude capacity wait (issue #7370): no fallback model and no
         # OpenCode retry; the slot is skipped pool-wide as capacity_wait.
+        # The slot stays fail-open, so it does not set the job-wide
+        # AUTOFIX_FAILURE_REASON: a review the other slots complete must not
+        # be labelled as waiting, and a later unrelated failure must not be
+        # read as a capacity pause. The editor/resolver set it when they stop.
         pool_last_reason="capacity_wait"
         pool_skip_reason="capacity_wait"
-        if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
         ;;
       75|76)
         # 75: Claude unavailable, fall back. 76: the capacity-only fallback

@@ -237,12 +237,14 @@ jobs:
           # review_autofix_sweep.yml). capacity_wait=true makes this tick skip
           # the pool probe outside the hourly window (its Claude roles wait
           # with CLAUDE_POOL_REASON=all_gated) and run the hourly resume pass
-          # inside it. A failed read fails open: capacity_wait=false.
+          # inside it. A failed read fails open: capacity_wait=false. Only a
+          # tracker by a repository-associated author (the GH_PAT account that
+          # opens it) counts, so an outsider's issue cannot pause the probes.
           capacity_wait=false
           if outage_trackers="$(gh_retry gh api "repos/${{ github.repository }}/issues?labels=ai:provider-outage&state=open&per_page=100" 2>/dev/null)" \
             && printf '%s' "${outage_trackers}" > "${RUNTIME_DIR}/provider_outage_trackers.json" \
             && printf '%s' "${outage_trackers}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            if printf '%s' "${outage_trackers}" | jq -e 'any(.[]; (.pull_request | not) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity ")))' >/dev/null 2>&1; then
+            if printf '%s' "${outage_trackers}" | jq -e 'any(.[]; (.pull_request | not) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity ")))' >/dev/null 2>&1; then
               capacity_wait=true
             fi
           else

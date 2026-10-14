@@ -992,6 +992,12 @@ attempt_self_heal_and_reexec()
       # No patch proposed — fall through to normal hard-fail path.
       return 0
       ;;
+    80)
+      # Claude capacity wait (issue #7370): no verdict; validate.yml maps
+      # exit 80 to a wait for the capacity-resume pass.
+      echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE_SELF_HEAL outcome=deferred stage=validate"
+      exit 80
+      ;;
     *)
       # Hard error inside self-heal helper — fall through to hard-fail.
       echo "::warning::self-heal helper exited with code ${heal_exit}; falling through to hard-fail." >&2

@@ -168,6 +168,9 @@ jobs:
           PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
           PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
           PROVIDER_OUTAGE_REVIEW_WORKFLOW: internal-review.yml
+          # Claude capacity wait (issue #7370): the same switch the review
+          # workflows read, so the capacity tracker text matches them.
+          CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
           # dry_run: report the tracker state only (no probe, dispatch,
           # label, tracker or alert writes).
           DRY_RUN: ${{ inputs.dry_run }}

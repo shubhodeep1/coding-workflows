@@ -3027,6 +3027,7 @@ def test_review_autofix_workflow_backfills_the_heal_reporter_from_main_snapshot(
 		"workflow_failure_heal.py",
 		"workflow_failure_heal_autofix_report.sh",
 		"provider_outage.py",
+		"ai_engine_fallback_report.sh",
 	]
 	steps = workflow["jobs"]["codex-agent"]["steps"]
 	names = [step.get("name") for step in steps]

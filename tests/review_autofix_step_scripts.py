@@ -51,7 +51,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Mark linked issues review-blocked (workflow failure)": ("review_autofix_step_mark_review_blocked_workflow_failure.sh", "error"),
 	"Post review-blocked comment on PR (workflow failure)": ("review_autofix_step_failure_comment.sh", "error"),
 	"Record Claude pool capacity": ("review_autofix_step_claude_pool_capacity.sh", "warning"),
-	"Defer review on Claude capacity": ("review_autofix_step_claude_capacity_wait.sh", "warning"),
+	"Defer review on Claude capacity": ("review_autofix_step_claude_capacity_wait.sh", "error"),
 	"Record Claude capacity wait": ("review_autofix_step_claude_capacity_wait.sh", "warning"),
 	"Apply fixes with editor model": ("review_autofix_step_apply_fixes_editor.sh", "error"),
 	"Restore same-head partial resume state": ("review_autofix_step_restore_partial_resume.sh", "error"),

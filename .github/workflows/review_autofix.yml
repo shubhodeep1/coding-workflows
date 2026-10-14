@@ -2306,8 +2306,8 @@ jobs:
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_capacity_wait.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::warning::review_autofix_step_claude_capacity_wait.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Defer review on Claude capacity' (fail open)."
-            exit 0
+            echo "::error::review_autofix_step_claude_capacity_wait.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Defer review on Claude capacity'."
+            exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 

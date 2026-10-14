@@ -529,6 +529,13 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 
 	rm -f "${tmp_stdout}" "${tmp_stderr}"
 
+	if [ "${last_rc}" -eq 80 ]; then
+		# Claude capacity wait (issue #7370): it cannot clear within this job,
+		# so no backoff and no failure alert; the run pauses as claude_capacity.
+		echo "summariser (${PREFIX}): Claude pool at capacity; stopping without retry." | tee -a "${log_file}" >&2
+		exit 1
+	fi
+
 	# A refused (sandbox-unavailable) attempt is usually deterministic, so cap
 	# consecutive refusals instead of spending the full backoff schedule.
 	if [ "${last_rc}" -eq "${SUMMARISER_ISOLATION_REFUSED_RC}" ]; then

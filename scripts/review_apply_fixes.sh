@@ -2356,6 +2356,16 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     exit 1
   fi
 
+  if [ "${cmd_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no retry and no failure alert; the
+    # attempt already exported AUTOFIX_FAILURE_REASON=claude_capacity.
+    echo "Editor attempt ${attempt}: Claude pool at capacity; stopping without retry."
+    emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
+    exit 1
+  fi
+
   if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
     opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
   fi
