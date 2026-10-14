@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -30,6 +31,9 @@ SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 STEP_MARKER = "- name: Enumerate open PRs and dispatch internal-review.yml"
 RUN_HEADER = "        run: |\n"
 RUN_INDENT = " " * 10
+# Lines YAML can place right after a step's block scalar: a comment or list
+# item at step-list indent, or a mapping key at step-key indent or less.
+BLOCK_END_RE = re.compile(r"^(?: {0,6}(?:#|- )| {0,8}[A-Za-z_][\w-]*:(?:\s|$))")
 
 
 def extract_step_script(text: str | None = None) -> str:
@@ -56,6 +60,7 @@ def extract_step_script(text: str | None = None) -> str:
 		elif line.strip() == "":
 			lines.append("")
 		else:
+			assert BLOCK_END_RE.match(line), f"run body ended on an unexpected line: {line!r}"
 			break
 	while lines and lines[-1] == "":
 		lines.pop()
