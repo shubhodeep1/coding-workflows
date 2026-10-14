@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:19884-19889 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The capacity-wait branch calls write_standalone_state_json (15719-15747, failures suppressed with `|| true` at 15742/15745) and then continues without confirming the updated state was persisted.\n  WHY: If the write fails, the stored comment keeps the old last_seen_phase and status_since_ts, so after the wait label is removed the stall window may not restart and recovery can fire immediately. Severity is MAJOR from the reviewers who rated it. anthropic_claude-sonnet-5_5 examined the same finding and rejected it, because the suppression is pre-existing, shared by all callers, and retried on each poll tick. z-ai_glm-5_3-flash rated its own confidence 3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Phase 1 of capacity-wait plan ... off by default ... stall recovery leaves the item alone; removing the label restarts its stall window.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh:19884-19889 (and helper at scripts/orchestrate_poll_process.sh:15719-15747)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new branch delegates persistence to write_standalone_state_json, whose `|| true` at lines 15742 and 15745 swallows every failure. There is no ::warning::, no STALL_STATE_WRITE_FAILED log line and no error propagation, so the stall-window-restart guarantee is not delivered on a write failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:19884-19888 | severity=MAJOR | confidence=4\n  PROBLEM: The `write_standalone_state_json` call is made without exit code verification.\n  WHY: If the file system operation fails, the poll loop continues with stale state metadata. In later ticks `detect_stalls` may trigger incorrect recovery or miss stall-window resets.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:19884-19889 (write_standalone_state_json at 15719-15747, suppression at 15742 and 15745) | severity=MAJOR | confidence=4\n  PROBLEM: The wait-phase branch persists state via write_standalone_state_json, which hides all PATCH/POST failures via `|| true`, then runs `continue` unconditionally.\n  WHY: The documented stall-window restart depends on the persisted last_seen_phase=ai:claude-capacity-wait. If the write fails, the old phase and status_since_ts remain, so no reset happens and stall recovery fires immediately on the next eligible tick. The review calls this a new failure mode, because the wait phase was previously skipped and never written.\n- scripts/orchestrate_poll_process.sh:19884-19889 | severity=MAJOR | confidence=4\n  PROBLEM: Under ERROR PATHS, the same wait-phase branch has no failure handling, logging or degraded-mode behavior when the write fails.\n  WHY: The operator gets no signal, and the next tick reads stale state and fires stall recovery with no actionable log line. A fix of 10 lines or fewer would log ::warning:: and STALL_STATE_WRITE_FAILED.\n- TASK_GAP:\n  Requirement: \"Phase 1 of capacity-wait plan ... off by default ... stall recovery leaves the item alone; removing the label restarts its stall window.\"\n  Expected change site: scripts/orchestrate_poll_process.sh:19884-19889 (and the helper at scripts/orchestrate_poll_process.sh:15719-15747)\n  Evidence of absence: The new branch delegates persistence to write_standalone_state_json, whose `|| true` at lines 15742 and 15745 swallows every failure. No ::warning::, no STALL_STATE_WRITE_FAILED log line, no set -e propagation. The restart guarantee is not delivered on a write failure.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:19884-19888 (write_standalone_state_json at 15740-15745) | severity=MAJOR | confidence=4\n  PROBLEM: The wait path continues without confirming the updated state was persisted, and the writer suppresses failures from both its PATCH and POST calls.\n  WHY: If writes keep failing, the stored state keeps its pre-wait phase and timestamp. When the label is removed, the old phase can be treated as stalled and recovery dispatched immediately instead of restarting the window.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:19884-19888 (write_standalone_state_json at 15740-15745) | severity=MAJOR | confidence=4\n  PROBLEM: The capacity-wait path calls write_standalone_state_json, which suppresses API failures with `|| true` at lines 15742 and 15745, so a failed write loses the state update.\n  WHY: When the label is removed, the poller reads stale state with the old last_seen_phase and status_since_ts. That can trigger immediate stall recovery and defeats the documented \"removing the label restarts the stall window\".\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:19884-19889 (write_standalone_state_json at 15740-15746) | severity=MAJOR | confidence=3\n  PROBLEM: The ai:claude-capacity-wait branch persists wait-phase state through a helper that swallows every GitHub write failure, so the caller cannot tell whether the write landed.\n  WHY: A stale persisted state means the stall window is not reset when the label is removed, so recovery dispatches immediately. The same fail-open contract applies to other write_standalone_state_json call sites in the loop (19918, 19935, 19965, 19973, 19987), so the branch inherits this convention rather than weakening a guard. The suggested fix is to log the failure in this branch only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a7a6a628d655ddb3b9ea98b3476f081a569c3c1e5d64a6028d93f7cc9263bc59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7352,
+    "run_id": "38509200874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38509200874",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014050053_d65d7be4b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7352,
+    "run_id": "38509200874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T05:00:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
