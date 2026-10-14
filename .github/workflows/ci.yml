@@ -695,16 +695,6 @@ jobs:
             tests/test_single_issue_security_pass.py \
             tests/test_review_security_hold_sweep.py
 
-      - name: Activation verification tests (port P4)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
-
-      - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
-
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         env:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
@@ -740,11 +730,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine.py
-
-      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
 
       - name: Review sandbox Claude role tests (Phase 5c)
         run: |
@@ -800,16 +785,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_budget_watch.py
-
-      - name: Validation harness sandbox tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
-
-      - name: Validation shell-quoting and credential-scrub tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py
 
       - name: Claude pool health alert tests
         run: |
@@ -898,12 +873,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
-
-      - name: Check-failure triage workflow security tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1006,6 +975,42 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+
+      # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
+      # minutes on main (run 38508333607, budget-watch issue #7366). Step
+      # timings were not readable when this was planned; these are the hooks
+      # job's heaviest subprocess-driven steps. None needs git history, the
+      # prepared .claude/ live copies or Node, which only the hooks job has.
+      - name: Activation verification tests (port P4)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
+
+      - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
+
+      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+
+      - name: Validation harness sandbox tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+      - name: Validation shell-quoting and credential-scrub tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py
+
+      - name: Check-failure triage workflow security tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
