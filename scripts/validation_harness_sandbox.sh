@@ -255,12 +255,23 @@ pidns_state_base()
 # sandbox user, creates <startedfile>. Every value is a positional argument;
 # nothing is spliced into the `sh -c` text. The `env -i` allowlist is the one
 # as_sandbox uses.
+#
+# In `auto` cgroup mode the sandbox user has a systemd user manager in the
+# host PID namespace; `systemd-run --user` through its sockets would start
+# commands outside this namespace. Before the drop, root bind-mounts
+# /dev/null over <runtime_dir>/bus and <runtime_dir>/systemd/private inside
+# the new mount namespace (unshare makes its mounts private, so the daemon
+# outside keeps its bus). A symlink there, or a failed mount, exits 125
+# before <startedfile> exists, so `run` fails with pid_namespace_launch_failed.
 as_sandbox_in_pidns()
 {
-	local pidfile="$1" started="$2"
+	local pidfile="$1" started="$2" uid runtime_dir
 	shift 2
+	uid="$(sandbox_uid || true)"
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 125
+	runtime_dir="$(sandbox_runtime_dir)"
 	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --kill-child -- "$@"' pidns "${pidfile}" \
-		sh -c 'if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift; exec "$@"' started "${started}" \
+		sh -c 'for s in "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; if [ -e "$s" ]; then mount --bind /dev/null "$s" || exit 125; fi; done; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 2; exec "$@"' started "${started}" "${runtime_dir}" \
 		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
 }
 
@@ -677,6 +688,10 @@ fi
 case "$(cat /proc/1/comm 2>/dev/null || true)" in
 	systemd|init) fail host_init_visible ;;
 esac
+# The user manager runs in the host PID namespace; its sockets must be masked.
+for sock in "/run/user/$(id -u)/bus" "/run/user/$(id -u)/systemd/private"; do
+	[ -S "${sock}" ] && fail user_manager_reachable
+done
 printf 'ok\n'
 PIDNS_PROBE
 

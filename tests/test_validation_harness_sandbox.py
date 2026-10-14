@@ -873,7 +873,7 @@ def _pidns_probe() -> str:
 
 def test_the_namespace_probe_names_each_isolation_failure() -> None:
 	probe = _pidns_probe()
-	for token in ("pid_namespace_shared", "caller_pid_visible", "host_init_visible"):
+	for token in ("pid_namespace_shared", "caller_pid_visible", "host_init_visible", "user_manager_reachable"):
 		assert f"fail {token}" in probe, token
 
 
@@ -1162,6 +1162,51 @@ def test_run_fails_closed_when_the_namespace_launch_never_starts(tmp_path: Path)
 	assert result.returncode == 3, result.stderr
 	assert "phase=run outcome=fail reason=pid_namespace_launch_failed" in result.stderr
 	assert not marker.exists()
+
+
+# The sandbox user's systemd user manager (auto cgroup mode) runs in the host
+# PID namespace; `systemd-run --user` through its sockets would start commands
+# outside the harness namespace. Root masks both sockets before the drop.
+def _pidns_launch(tmp: Path, bus: str) -> tuple[str, list[str], Path]:
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	for name, body in (("sudo", FAKE_SUDO), ("unshare", FAKE_UNSHARE),
+			("mount", '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\n')):
+		(bin_dir / name).write_text(body, encoding="utf-8")
+		(bin_dir / name).chmod(0o755)
+	runtime = tmp / "rt"
+	(runtime / "systemd").mkdir(parents=True)
+	(runtime / "systemd" / "private").write_text("", encoding="utf-8")
+	if bus == "file":
+		(runtime / "bus").write_text("", encoding="utf-8")
+	elif bus == "symlink":
+		(runtime / "bus").symlink_to(tmp / "elsewhere")
+	started = tmp / "started"
+	result = _sourced(tmp, f'''
+sandbox_runtime_dir() {{ echo "{runtime}"; }}
+SANDBOX_ENV_ARGS=("PATH=$PATH")
+rc=0
+as_sandbox_in_pidns - "{started}" true || rc=$?
+echo "rc=${{rc}}"
+''', env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MOUNT_LOG": str(tmp / "mounts")})
+	mounts = tmp / "mounts"
+	return result.stdout.strip().splitlines()[-1], mounts.read_text(encoding="utf-8").splitlines() if mounts.exists() else [], runtime
+
+
+def test_the_namespace_masks_the_user_manager_sockets_before_the_drop(tmp_path: Path) -> None:
+	rc, mounts, runtime = _pidns_launch(tmp_path, "file")
+	assert rc == "rc=0"
+	assert mounts == [f"--bind /dev/null {runtime}/bus", f"--bind /dev/null {runtime}/systemd/private"]
+	assert (tmp_path / "started").exists()
+	launcher = _function_body("as_sandbox_in_pidns")
+	assert launcher.index('mount --bind /dev/null "$s"') < launcher.index(': > "$1"')
+
+
+def test_a_symlinked_user_manager_socket_stops_the_launch(tmp_path: Path) -> None:
+	rc, mounts, _ = _pidns_launch(tmp_path, "symlink")
+	assert rc == "rc=125"
+	assert mounts == []
+	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
 
 
 # --- fallback runner isolation (#7350, finding validation-fallback-parent-credential-exposure) ---
