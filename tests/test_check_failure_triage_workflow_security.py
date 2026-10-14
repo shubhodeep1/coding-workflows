@@ -2584,9 +2584,10 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
 		dedup = script_text.split("skip reason=duplicate_open_issue", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
-		# Base-gate skips (success and pending) also report an unverified route.
+		# Base-gate skips (success, pending and the #7283 routed-head base) also
+		# report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
-		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 2)
+		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 3)
 		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<\'PY\'', script_text)
