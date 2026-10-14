@@ -188,7 +188,8 @@ unblock_wait_max_hours()
 {
 	local days="${UNBLOCK_JUDGE_WAIT_MAX_DAYS:-14}"
 	if ! [[ "${days}" =~ ^[0-9]{1,3}$ ]] || [ "$((10#${days}))" -lt 1 ]; then
-		unblock_log "item=${ITEM:-} op=wait_config outcome=default reason=invalid_max_days"
+		# stderr: callers read the hours from stdout.
+		unblock_log "item=${ITEM:-} op=wait_config outcome=default reason=invalid_max_days" >&2
 		days=14
 	fi
 	echo "$((10#${days} * 24))"
@@ -293,14 +294,16 @@ unblock_hold_condition()
 # whose wait marker was posted at $1, when it waits on a person
 # (`_UNSET_OPERATOR_STEP`); empty otherwise. The verdict comment, not the
 # fix-up, is the record: "Stays off behind `NAME` until the operator step is done."
+# Only when the newest verdict before that fix-up wait (the one that filed the
+# fix-up) is the operator_step; a later descope fix-up resumes as usual.
 unblock_operator_step_placeholder()
 {
 	jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" --arg at "$1" '
 		[.[] | select((.user.login // "") == $login and (.created_at // "") <= $at)
 			| ((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r"))) as $lines
-			| select(($lines | last // "") | test("^<!-- ai:unblock:v1 item=" + $item + " stop=[a-z-]+ fingerprint=[0-9a-f]{12} verdict=operator_step round=[1-9][0-9]* -->$"))
-			| {at: (.created_at // ""), name: ([$lines[] | (capture("^Stays off behind `(?<n>[A-Z][A-Z0-9_]{2,63})` until the operator step is done\\.$")? | .n)] | first // "")}]
-		| sort_by(.at) | last // empty | .name
+			| select(($lines | last // "") | test("^<!-- ai:unblock:v1 item=" + $item + " stop=[a-z-]+ fingerprint=[0-9a-f]{12} verdict=[a-z_]+ round=[1-9][0-9]*( override=[a-z_]+)? -->$"))
+			| {at: (.created_at // ""), operator_step: (($lines | last) | test(" verdict=operator_step ")), name: ([$lines[] | (capture("^Stays off behind `(?<n>[A-Z][A-Z0-9_]{2,63})` until the operator step is done\\.$")? | .n)] | first // "")}]
+		| sort_by(.at) | last // empty | select(.operator_step) | .name
 		| select(test("^[A-Z][A-Z0-9_]{2,63}$") and endswith("_UNSET_OPERATOR_STEP"))
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
 }
@@ -313,6 +316,11 @@ unblock_operator_step_placeholder()
 unblock_check_triage_resolved()
 {
 	local default_branch verdict status rc=0
+	# The gate's own off switch; checked here too so it costs no reads.
+	if [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		unblock_log "item=${ITEM} op=triage_resolution outcome=judge status=disabled"
+		return 1
+	fi
 	default_branch="$(git -C "${TARGET_DIR:-${SUPPORT_DIR}}" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 	if [ -z "${default_branch}" ]; then
 		default_branch="$(gh api "repos/${REPOSITORY}" --jq '.default_branch // ""' 2>/dev/null || true)"
@@ -1168,8 +1176,20 @@ unblock_main()
 				if unblock_wait_enabled; then
 					step_placeholder="$(unblock_operator_step_placeholder "${wait_at}")"
 				fi
+				# A hold already posted for this fix-up (its wait marker update failed
+				# afterwards) is not posted again: holds count toward MAX_HOLDS_PER_ITEM.
+				local prior_hold prior_hold_kind prior_hold_ref prior_hold_at
+				prior_hold=""
+				[ -n "${step_placeholder}" ] && prior_hold="$(unblock_latest_hold)"
+				if [ -n "${prior_hold}" ]; then
+					read -r _ prior_hold_kind prior_hold_ref _ prior_hold_at _ <<< "${prior_hold}"
+					if [ "${prior_hold_kind}" != "placeholder_retired" ] || [ "${prior_hold_ref}" != "${step_placeholder}" ] \
+						|| [[ "${prior_hold_at}" < "${wait_at}" ]]; then
+						prior_hold=""
+					fi
+				fi
 				if [ -n "${step_placeholder}" ]; then
-					if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} merged. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
+					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} merged. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=placeholder_retired ref=${step_placeholder} -->" >/dev/null 2>&1; then
 						# The fix-up wait stays open, so the next run tries again.
@@ -1253,8 +1273,12 @@ unblock_main()
 					return 0
 					;;
 				unknown)
-					unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_check_unavailable"
-					return 0
+					# A condition that stays unreadable still ends at the hold's lifetime.
+					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
+						unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_check_unavailable"
+						return 0
+					fi
+					hold_reason="max_days"
 					;;
 				unmet)
 					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then

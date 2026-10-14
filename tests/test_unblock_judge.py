@@ -3484,3 +3484,50 @@ def test_non_triage_issue_never_runs_the_resolution_gate(tmp_path: Path) -> None
 		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file))
 	assert "op=triage_resolution" not in result.stdout and not args_file.exists()
 	assert "outcome=acted" in result.stdout
+
+
+def test_invalid_max_days_falls_back_to_fourteen_days(tmp_path: Path) -> None:
+	# The fallback warning must not leak into the hours the callers read.
+	result, state = _judge(tmp_path, ISSUE, comments=[_hold_comment("item_closed", "50")], issues={"50": {"state": "open"}},
+		UNBLOCK_JUDGE_WAIT_MAX_DAYS="abc")
+	assert "op=hold hold=item_closed ref=50 outcome=holding" in result.stdout, result.stdout + result.stderr
+	verdict = {"verdict": "wait", "reason": "r", "wait_for": {"kind": "item_closed", "item": 50}}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict, UNBLOCK_JUDGE_WAIT_MAX_DAYS="0")
+	assert "verdict=wait op=hold hold=item_closed ref=50 outcome=held" in result.stdout, result.stdout + result.stderr
+	assert "decides again after 14 days" in state["comments"][0]["body"]
+
+
+def test_an_unreadable_hold_still_expires_after_the_max_days(tmp_path: Path) -> None:
+	old = _hold_comment("item_closed", "50", created_at="2026-09-01T00:00:00Z")
+	result, state = _judge(tmp_path, ISSUE, comments=[old], issues={"50": {}},
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"})
+	assert "outcome=expired reason=max_days" in result.stdout and "outcome=acted" in result.stdout, result.stdout
+
+
+def test_a_later_descope_fixup_does_not_hold_on_an_older_operator_step(tmp_path: Path) -> None:
+	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	comments[0]["created_at"] = "2026-10-04T09:00:00Z"
+	comments.insert(1, _comment("## Unblock judge: `descope` (round 2)\n\n" + ledger.marker(7, "blocked", FP, "descope", 2),
+		BOT, "2026-10-04T09:30:00Z"))
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
+	assert "fixup=50 outcome=followup" in result.stdout and "op=hold" not in result.stdout, result.stdout
+
+
+def test_an_operator_step_hold_is_not_posted_twice(tmp_path: Path) -> None:
+	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	comments.append(_hold_comment("placeholder_retired", "DOC_SYNC_UNSET_OPERATOR_STEP", created_at="2026-10-04T10:00:05Z"))
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
+	assert "fixup=50 op=hold hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=held" in result.stdout, result.stdout
+	assert state["comments"] == []
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+
+
+def test_disabled_triage_gate_is_not_run(tmp_path: Path) -> None:
+	support, target = _triage_support(tmp_path)
+	args_file = tmp_path / "triage_args.json"
+	result, _ = _judge(tmp_path, TRIAGE_ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file), CHECK_TRIAGE_RESOLVED_GATE_ENABLED="false")
+	assert "op=triage_resolution outcome=judge status=disabled" in result.stdout and not args_file.exists()
+	assert "outcome=acted" in result.stdout
