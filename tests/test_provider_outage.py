@@ -379,3 +379,52 @@ def test_stale_probe_cache_is_re_probed(tmp_path: Path, monkeypatch: pytest.Monk
 	monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
 	result = po.cached_probe(str(cache), lambda method, *_a: (200, b"{}"))
 	assert result["outcome"] == "up"
+
+
+# --- Claude capacity wait (issue #7251, capacity-wait Phase 1) -----------------
+
+_CAPACITY_NOW = po.dt.datetime(2026, 10, 14, 3, 0, tzinfo=po.dt.timezone.utc)
+_FALLBACK_BODY = (
+	"<!-- ai:provider-outage:v1 kind=capacity provider=claude-pool status=all_gated opened_at=2026-10-14T03:00:00Z -->\n"
+	"Every Claude pool account was at its usage gate (`all_gated`); roles fell back to codex/OpenCode. "
+	"Reviews continue. This issue closes on the next run that gets a Claude account.\n\n"
+	"<!-- ai:provider-outage-resume:v1 prs= labels= release_runs= -->\n"
+)
+_FALLBACK_ALERT = (
+	"Claude pool capacity: every account is at its usage gate (all_gated) in o/r; "
+	"roles fall back to codex/OpenCode. Tracker #7."
+)
+
+
+@pytest.mark.parametrize("value", [None, "", "false", "FALSE"])
+def test_capacity_text_is_unchanged_while_wait_is_off(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+	if value is None:
+		monkeypatch.delenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", raising=False)
+	else:
+		monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
+	assert po._capacity_wait_enabled() is False
+	assert po.tracker_body("capacity", "claude-pool", "all_gated", _CAPACITY_NOW) == _FALLBACK_BODY
+	assert po.open_alert_text("capacity", "claude-pool", "all_gated", "o/r", 7) == _FALLBACK_ALERT
+
+
+@pytest.mark.parametrize("value", ["true", "True", "TRUE"])
+def test_capacity_text_says_work_is_waiting_when_wait_is_on(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
+	assert po._capacity_wait_enabled() is True
+	body = po.tracker_body("capacity", "claude-pool", "all_gated", _CAPACITY_NOW)
+	assert body.startswith("<!-- ai:provider-outage:v1 kind=capacity provider=claude-pool status=all_gated ")
+	assert "work is waiting, not falling back" in body and "resumed hourly" in body
+	assert "fell back to codex" not in body
+	alert = po.open_alert_text("capacity", "claude-pool", "all_gated", "o/r", 7)
+	assert "work is waiting, not falling back" in alert and "Tracker #7." in alert
+	# The outage text never depends on the capacity-wait switch.
+	monkeypatch.delenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED")
+	outage_off = po.tracker_body("outage", "openrouter", "402", _CAPACITY_NOW)
+	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
+	assert po.tracker_body("outage", "openrouter", "402", _CAPACITY_NOW) == outage_off
+
+
+def test_invalid_capacity_wait_value_is_off_with_a_warning(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", "yes")
+	assert po._capacity_wait_enabled() is False
+	assert "invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED" in capsys.readouterr().err
