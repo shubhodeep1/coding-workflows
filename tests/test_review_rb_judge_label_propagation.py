@@ -425,6 +425,7 @@ def _run_close_and_reissue(
 	reissue_preserve_baseline_enabled: str = "false",
 	repo_files: dict[str, str] | None = None,
 	pr_view_head_ref_oid: str | None = None,
+	judged_head_sha: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
 	issue_create_should_fail: bool = False,
@@ -441,7 +442,11 @@ def _run_close_and_reissue(
 	``api_responses`` seeds the mock ``gh api`` substring-matched
 	responses (for example ``{"pulls/42/files": [...]}``);
 	``path_prefix`` is a directory put on ``PATH`` ahead of the mock
-	``gh`` (for example a ``git`` shim that makes one lookup fail)."""
+	``gh`` (for example a ``git`` shim that makes one lookup fail).
+	``judged_head_sha`` sets ``RB_JUDGED_HEAD_SHA`` (the head the judge
+	evaluated, which the spot-fix baseline uses); ``None`` uses the
+	resolved head and ``"__REPO_HEAD__"`` the bootstrapped repo head
+	(an ``extra_env`` value of ``"__REPO_HEAD__"`` resolves the same way)."""
 	branch = _extract_close_and_reissue_branch()
 
 	with tempfile.TemporaryDirectory(prefix="test_review_rb_judge_") as td:
@@ -457,6 +462,7 @@ def _run_close_and_reissue(
 		if issue_create_should_fail:
 			mock_state["issue_create_should_fail"] = True
 		run_cwd = tmp_path
+		resolved_judged_head = ""
 		repo_head_before = ""
 		repo_branch_before = ""
 		if repo_files is not None:
@@ -465,11 +471,17 @@ def _run_close_and_reissue(
 			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
 				resolved_head_ref_oid = repo_head_before.upper()
 			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
+			resolved_judged_head = resolved_head_ref_oid
 			if precreate_baseline_branch:
 				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
 		elif pr_view_head_ref_oid is not None:
 			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+			resolved_judged_head = pr_view_head_ref_oid
+		if judged_head_sha == "__REPO_HEAD__":
+			resolved_judged_head = repo_head_before
+		elif judged_head_sha is not None:
+			resolved_judged_head = judged_head_sha
 		if api_responses:
 			mock_state["api_responses"] = dict(api_responses)
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
@@ -516,9 +528,10 @@ def _run_close_and_reissue(
 			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
+			"RB_JUDGED_HEAD_SHA": resolved_judged_head,
 		}
 		if extra_env:
-			env.update({str(k): str(v) for k, v in extra_env.items()})
+			env.update({str(k): (repo_head_before if v == "__REPO_HEAD__" else str(v)) for k, v in extra_env.items()})
 		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
@@ -691,6 +704,10 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 		},
 	)
 
+	assert not state.get("pr_view_args"), (
+		"spot-fix baseline must use RB_JUDGED_HEAD_SHA, not a live `gh pr view` re-read: "
+		f"{state.get('pr_view_args')}"
+	)
 	creates = state.get("issue_create_args", [])
 	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
 	body = creates[0][creates[0].index("--body") + 1]
