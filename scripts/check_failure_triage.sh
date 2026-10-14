@@ -791,6 +791,17 @@ else
 		fi
 		exit 0
 	fi
+	# Issue #7283: pull-request CI now runs on a fix PR routed to a failing PR's
+	# ai/issue-<n> head, but push CI never runs on that branch, so it has no base
+	# run to compare with. The routed fix PR's own review/autofix loop owns its
+	# failure, and the base branch's failure already has its triage issue.
+	if [ "${base_gate_reason}" = "no_completed_base_run" ] && [[ "${BASE_REF}" =~ ^ai/issue-[1-9][0-9]*$ ]]; then
+		log "skip reason=routed_head_base base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+			triage_report_routing_unverified
+		fi
+		exit 0
+	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
 fi
 

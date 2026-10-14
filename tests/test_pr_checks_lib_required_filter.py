@@ -533,14 +533,17 @@ def test_invalid_ci_check_name_in_a_consumer_fails_closed() -> None:
 
 
 def test_ci_check_default_applies_only_to_bases_ci_runs_on() -> None:
-	"""ci.yml's pull_request trigger covers main, stable and orchestrator/project-* only."""
+	"""ci.yml's pull_request trigger covers every base since issue #7283, so in
+	this repo the `lint` default applies to every base, including a fix PR
+	routed to a failing PR's ai/issue-* head. Consumers stay off."""
 	cases = [
 		(THIS_REPO_ENV, "", "lint"),
 		(THIS_REPO_ENV, "main", "lint"),
 		(THIS_REPO_ENV, "stable", "lint"),
 		(THIS_REPO_ENV, "orchestrator/project-42", "lint"),
-		(THIS_REPO_ENV, "ai/issue-9", "none"),
-		(THIS_REPO_ENV, "release/v1", "none"),
+		(THIS_REPO_ENV, "ai/issue-9", "lint"),
+		(THIS_REPO_ENV, "release/v1", "lint"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "none"}, "ai/issue-9", "none"),
 		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "lint"}, "ai/issue-9", "lint"),
 		(REPO_ENV, "main", "none"),
 	]
@@ -550,7 +553,9 @@ def test_ci_check_default_applies_only_to_bases_ci_runs_on() -> None:
 		assert res.stdout.strip() == expected, (env.get("AUTO_MERGE_REQUIRED_CI_CHECK"), base, res.stdout)
 	gate, name, state = _ci_side_channel(_page([_ci_run("CI", "completed", "success")]), THIS_REPO_ENV,
 		args='5 "abc1234" "ai/issue-9"')
-	assert (gate, name, state) == ("0:ok", "none", "disabled"), (gate, name, state)
+	# No `lint` check-run in the listing: the side channel names the required
+	# check and reports it absent; the gate result itself is unchanged.
+	assert (gate, name, state) == ("0:ok", "lint", "absent"), (gate, name, state)
 
 
 def main() -> int:

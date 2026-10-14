@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -269,7 +270,7 @@ def _runs(*entries: tuple[str, str, str]) -> str:
 
 
 def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None,
-		ci_runs_sequence: list[str] | None = None) -> tuple[int, str]:
+		ci_runs_sequence: list[str] | None = None, base: str = "main") -> tuple[int, str]:
 	"""Each check-runs read returns the next fixture; the last one repeats.
 
 	ci_runs_sequence does the same for the actions/runs?head_sha= read.
@@ -300,7 +301,7 @@ _safe_gh_jq() {{
   esac
 }}
 source {str(LIB)!r}
-_pr_wait_for_required_checks 7 {HEAD} main {max_minutes}; rc=$?
+_pr_wait_for_required_checks 7 {HEAD} {shlex.quote(base)} {max_minutes}; rc=$?
 printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 """
 	full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PR_CHECKS_REPOSITORY": "owner/repo",
@@ -531,6 +532,22 @@ class RequiredCiCheckWait(unittest.TestCase):
 		rc, out = _wait([other], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""}, ci_runs_sequence=CI_DONE)
 		self.assertEqual(rc, 1, out)
 		self.assertIn("ci_state=absent", out)
+
+	def test_routed_fix_pr_waits_for_its_own_ci_lint(self) -> None:
+		"""Issue #7283: a fix PR routed to a failing PR's head branch (base
+		ai/issue-<n>) gets its own CI run, and its merge waits for `lint`."""
+		routed = "ai/issue-6564"
+		rc, out = _wait([EMPTY], max_minutes="0", env=THIS_REPO, ci_runs_sequence=CI_DONE, base=routed)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_check=lint ci_state=absent", out)
+		rc, out = _wait([LINT_RUNNING, GREEN], env=THIS_REPO, ci_runs_sequence=CI_DONE, base=routed)
+		self.assertEqual(rc, 0, out)
+		self.assertIn("ci_check=lint ci_state=success", out)
+		failed = _runs(("CI", "completed", "success"), ("lint", "completed", "failure"))
+		rc, out = _wait([failed], env=THIS_REPO, ci_runs_sequence=CI_DONE, base=routed)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=failed", out)
 
 	def test_unreadable_runs_listing_never_trusts_a_success(self) -> None:
 		rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=["not json"])

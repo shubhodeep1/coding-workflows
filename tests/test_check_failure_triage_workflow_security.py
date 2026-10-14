@@ -1868,6 +1868,23 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 				self.assertEqual(outputs.get("ready"), "true")
 				self.assertEqual(metadata.get("generation"), "1")
 
+	def test_routed_head_base_without_push_ci_skips(self) -> None:
+		"""Issue #7283: a fix PR into an ai/issue-<n> head has no push CI run on
+		its base; its own review/autofix loop owns the failure."""
+		for base in ({"ref": "ai/issue-6564", "workflow_id": "9", "conclusion": ""}, {"ref": "ai/issue-6564", "workflow_id": "9"}):
+			with self.subTest(base=base):
+				proc, outputs, metadata = _run_collect_stage(parent_body=PLAIN_SOURCE, base=base)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE skip reason=routed_head_base base=ai/issue-6564 pr=17 check=CI", proc.stdout)
+				self.assertNotIn("ready", outputs)
+				self.assertEqual(metadata, {})
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE, base={"ref": "ai/issue-6564", "workflow_id": "9", "conclusion": "failure"},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=ai/issue-6564 base_conclusion=failure", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
 	def test_unusable_details_url_files_with_a_specific_reason(self) -> None:
 		for url, expected in (
 			("", "reason=details_url_unavailable"),
@@ -2567,9 +2584,10 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
 		dedup = script_text.split("skip reason=duplicate_open_issue", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
-		# Base-gate skips (success and pending) also report an unverified route.
+		# Base-gate skips (success, pending and the #7283 routed-head base) also
+		# report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
-		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 2)
+		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 3)
 		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<\'PY\'', script_text)
