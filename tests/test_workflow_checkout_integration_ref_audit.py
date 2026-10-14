@@ -295,14 +295,15 @@ def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
 	}
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
 		for mode, reason in failures.items():
-			for routing in ("true", "TRUE", "1", "yes", "on"):
+			# Unset routes by default, like scripts/resolve_integration_ref.sh.
+			for routing in ("true", "TRUE", "1", "yes", "on", None):
 				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
 				label = f"{workflow_name} mode={mode} routing={routing}"
 				assert rc != 0, f"{label}: expected failure\n{out}"
 				assert "ref=" not in gh_output, f"{label}: wrote a ref: {gh_output!r}"
 				assert f"INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason={reason}" in out, f"{label}\n{out}"
 				assert "STUB_RESOLVER_RAN" not in out, f"{label}: ran an unpinned resolver"
-			for routing in ("false", None):
+			for routing in ("false", "OFF", "0", "maybe"):
 				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
 				label = f"{workflow_name} mode={mode} routing={routing}"
 				assert rc == 0, f"{label}: expected the fallback\n{out}"

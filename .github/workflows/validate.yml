@@ -175,7 +175,7 @@ jobs:
           # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
           # are unchanged.
           resolver_ci_triage_routing_on=false
-          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" in
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
