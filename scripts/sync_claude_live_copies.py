@@ -18,8 +18,10 @@ Subcommands:
           the live copy did not, that differ now and are not allowlisted.
   sync    plan, carry forward still-drifted copies from the previous sync
           branch when they match their current templates, and commit the copies
-          on SYNC_BRANCH (default `ai/sync-claude-live-copies`, recreated from
-          the pushed commit). Lease-check the push and open a pull request into
+          on SYNC_BRANCH (default `ai/sync-claude-live-copies`; a new branch
+          starts at the pushed commit, an existing one gets a commit whose
+          parents are its old tip and the pushed commit, so the push
+          fast-forwards). Lease-check the push and open a pull request into
           BASE_BRANCH unless one is already open. --dry-run stops after the copy.
           --keep-committed-security-paths with --dry-run leaves hooks and
           settings.json untouched so CI checks the committed live copies.
@@ -518,7 +520,10 @@ def _commit_and_push(root: Path, branch: str, after: str, relatives: list[str], 
 			merged = _git(root, *SYNC_COMMIT_IDENTITY, "commit-tree", tree, "-p", previous_sha, "-p", after, "-m", message).stdout.strip()
 			_git(root, "reset", "-q", "--soft", merged)
 			log(f"fast_forward branch={branch} previous={previous_sha[:12]} after={after[:12]}")
-	except (subprocess.CalledProcessError, OSError):
+	except subprocess.CalledProcessError as exc:
+		log(f"error reason=git_stage_failed detail={_push_failure_detail(exc.stderr)}")
+		return False
+	except OSError:
 		log("error reason=git_stage_failed")
 		return False
 	try:
