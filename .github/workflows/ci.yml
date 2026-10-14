@@ -981,6 +981,10 @@ jobs:
       # timings were not readable when this was planned; these are the hooks
       # job's heaviest subprocess-driven steps. None needs git history, the
       # prepared .claude/ live copies or Node, which only the hooks job has.
+      # Three of those six steps (the Claude-engine judges, the validation
+      # harness sandbox and the check-failure triage security tests) moved on
+      # to tests-release-and-log-analysis after this job took 15m19s of its
+      # 20 minutes on main (run 38564033998, budget-watch issue #7383).
       - name: Activation verification tests (port P4)
         run: |
           set -euo pipefail
@@ -996,26 +1000,10 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py
 
-      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
-
-      - name: Validation harness sandbox tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
-
       - name: Validation shell-quoting and credential-scrub tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py
-
-      - name: Check-failure triage workflow security tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1801,6 +1789,29 @@ jobs:
           python3 -m coverage erase
           python3 -m coverage run tests/test_semantic_cache.py
           python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
+
+      # Moved from tests-heal-plan-and-validation, which took 15m19s of its
+      # 20 minutes on main (run 38564033998, budget-watch issue #7383). Step
+      # timings were not readable when this was planned; these are that job's
+      # most subprocess-heavy steps (bash or git per test case). This job
+      # measured 535-604s on 2026-10-12, the only job with measured headroom.
+      # None of the three needs Node or the prepared .claude/ live copies, and
+      # this job already has full git history and the same pip set.
+      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+
+      - name: Validation harness sandbox tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+      - name: Check-failure triage workflow security tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
