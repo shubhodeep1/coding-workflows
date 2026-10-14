@@ -122,8 +122,18 @@ def test_recent_or_undated_marker_is_too_recent() -> None:
 def test_backfill_comment_is_not_counted_as_failure_or_success() -> None:
 	body = heal.render_non_retryable_backfill_comment("12", HEAD, REASON, "777")
 	assert not any(marker in body for marker in heal.AUTOFIX_FAILURE_COMMENT_MARKERS + heal.AUTOFIX_SUCCESS_COMMENT_MARKERS)
-	assert heal._FAILURE_MARKER_RE.search(body) is None
+	assert heal.FAILURE_MARKER_TAG not in body and heal.FAILURE_CAP_MARKER_TAG not in body
 	assert heal._NON_RETRYABLE_MARKER_RE.search(body) is None
+
+
+def test_inline_quoted_marker_does_not_pick_the_run() -> None:
+	# A marker quoted inline (e.g. a "First error" code span) before the real
+	# trailing marker must not decide which run is backfilled.
+	quoted = heal.render_failure_marker(HEAD, REASON, FP, False, run_id="666", support_sha=SUPPORT)
+	real = heal.render_failure_marker(HEAD, REASON, FP, False, run_id="777", support_sha=SUPPORT)
+	comment = _comment(f"AI review/autofix failed\n\n**First error:** `{quoted}`\n\n{real}")
+	result = _select([comment])
+	assert result["eligible"] is True and result["run"] == "777"
 
 
 def _pr_node(number: int, comments: list[dict], *, cross: bool = False, head: str = HEAD) -> dict:

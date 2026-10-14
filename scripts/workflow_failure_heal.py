@@ -3231,6 +3231,11 @@ NON_RETRYABLE_BACKFILL_MARKER_TAG = "ai:workflow-heal-non-retryable-backfill:v1"
 _NON_RETRYABLE_BACKFILL_MARKER_RE = re.compile(r"<!--\s*" + re.escape(NON_RETRYABLE_BACKFILL_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES = 60
 _BACKFILL_RUN_ID_RE = re.compile(r"^[0-9]{1,20}$")
+# Backfill-local, own-line marker patterns built from the public tags: a marker
+# quoted inline in PR-influenced text (a "First error" code span) must not pick
+# the run, and the selector does not depend on shared private regexes.
+_BACKFILL_FAILURE_MARKER_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+_BACKFILL_FAILURE_CAP_MARKER_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 
 
 def render_non_retryable_backfill_marker(pr_number: Any, head_sha: str, reason: str, run_id: Any) -> str:
@@ -3295,14 +3300,14 @@ def select_non_retryable_backfill_candidate(
 	deciding: tuple[dict[str, Any], dict[str, str]] | None = None
 	for comment in reversed(trusted):
 		body = sanitize_text(comment.get("body"))
-		match = _FAILURE_MARKER_RE.search(body)
+		match = _BACKFILL_FAILURE_MARKER_RE.search(body)
 		if match is not None:
 			fields = _marker_fields(match)
 			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON or fields.get("head", "").lower() != head:
 				continue
 			deciding = (comment, fields)
 			break
-		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _FAILURE_CAP_MARKER_RE.search(body):
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _BACKFILL_FAILURE_CAP_MARKER_RE.search(body):
 			continue
 		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
 			result["reason"] = "superseded"
