@@ -2097,9 +2097,12 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   Logs add `CLAUDE_LIVE_SYNC authorized`, `held`, and `converted_to_draft`;
   the history cap defaults to 30 distinct commits per run
   (`CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS`).
-  Branch replacement is lease-checked; push or PR API failures fail the job
-  with a structured `CLAUDE_LIVE_SYNC error` line, leaving the branch for a
-  later sync attempt.
+  An existing sync branch is never force-pushed (the ruleset refuses
+  non-fast-forward pushes): the refresh commit's parents are the old tip and
+  the pushed `main` commit (`CLAUDE_LIVE_SYNC fast_forward`). Pushes stay
+  lease-checked; push or PR API failures fail the job with a structured
+  `CLAUDE_LIVE_SYNC error` line (git's error text in `detail=` for a push),
+  leaving the branch for a later sync attempt.
   Its existing-PR lookup accepts only an open PR from this repository's sync
   branch into the configured base branch, even when other PRs are returned.
   It fails open on an unusable `before` commit: no sync is attempted, and
