@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/verify_integration_fingerprints.py:779-782 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The second-parent check in `_is_must_contain_resolver_union_merge_false_positive` passes vacuously when `other_line == merged_line`, because `_only_inserts` returns `[]` (not None) and every inserted run is a substring of the line itself.\n  WHY: A resolver that takes the other side's line verbatim can pass the gate with only a warning. Severity disagreement: sonnet, gemini and qwen rated it MAJOR, while glm rated it NIT (confidence 3) and argued that no revert is demonstrated. The highest rating is used. All four suggest adding `other_line != merged_line`.\n- scripts/verify_integration_fingerprints.py:739-747 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The resolver-union check searches history with `git log -S<literal> --first-parent --max-count=1`, but a valid union keeps the whole captured literal intact. Its occurrence count does not change across the resolver commit, so that commit is not a pickaxe hit.\n  WHY: The search lands on the earlier sub-issue commit instead, so the helper returns None and the original missing-pattern violation stands and blocks the wave.\n- scripts/verify_integration_fingerprints.py:779-782 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `all(run in other_line for run in inserted)` is a per-run substring test, so short runs such as \"|\" or \" \" are substrings of almost any line.\n  WHY: Text the resolver added itself can pass, which weakens the \"resolver added nothing of its own\" guarantee. Only very short inserted runs reach this case.\n- scripts/verify_integration_fingerprints.py:662-678 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: `difflib.SequenceMatcher(autojunk=False)` runs on every line longer than the captured literal, with no cheap pre-filter.\n  WHY: The cost is roughly quadratic in line length, but the impact is bounded: the check runs only on a resolver-merge pickaxe hit and results are cached.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/verify_integration_fingerprints.py:`_is_must_contain_resolver_union_merge_false_positive` loop over `other_lines` | severity=MAJOR | confidence=4\n  PROBLEM: The second-parent check passes trivially when `other_line` is identical to `merged_line`, so a resolver that took the other side's line verbatim is accepted.\n  WHY: The gate is meant to fail closed when the resolver reverts sub-issue intent. This case passes with only a `FINGERPRINT_RESOLVER_UNION_MERGE_V1` warning. `test_resolver_that_kept_only_the_other_side_still_fails` does not cover it. Suggested fix: require `other_line != merged_line` and add a regression test.\n- scripts/verify_integration_fingerprints.py:same loop, `all(run in other_line for run in inserted)` | severity=NIT | confidence=2\n  PROBLEM: The substring test per inserted run lets short runs pass if they occur anywhere in the second-parent line.\n  WHY: The \"resolver added nothing of its own\" guarantee is weaker than the docstring states.\n- scripts/verify_integration_fingerprints.py:`merged_line` loop calling `_only_inserts` | severity=NIT | confidence=2\n  PROBLEM: difflib runs on every longer line with no pre-filter.\n  WHY: Impact is bounded by the narrow trigger and by caching.\n- HARDENING_SUGGESTIONS: add `other_line != merged_line and` to the condition, plus one regression test. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/verify_integration_fingerprints.py:780-781 | severity=MAJOR | confidence=4\n  PROBLEM: The logic accepts a union merge when `other_line` is byte-identical to `merged_line`.\n  WHY: `_only_inserts` returns an empty list, so the `all(...)` check is True and a resolver that reverts sub-issue changes passes the gate.\n- scripts/verify_integration_fingerprints.py:662-678 | severity=NIT | confidence=2\n  PROBLEM: `_only_inserts` uses `difflib.SequenceMatcher(autojunk=False)` on long strings without pre-filtering.\n  WHY: This could be slow for long lines, though caching mitigates it.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/verify_integration_fingerprints.py:739-747 | severity=MAJOR | confidence=4\n  PROBLEM: `git log -S<literal> --first-parent --max-count=1` does not hit the resolver commit, because a valid union keeps the whole literal and its occurrence count is unchanged.\n  WHY: The search reaches the earlier sub-issue commit instead, so the helper returns None and the original violation blocks the wave.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/verify_integration_fingerprints.py:779-780 | severity=MAJOR | confidence=4\n  PROBLEM: The second-parent check is vacuous when `other_line == merged_line`, because `_only_inserts` returns `[]` for equal strings and `all(...)` is trivially True.\n  WHY: A resolver that takes the other side's line verbatim passes with only a warning. The example is a sub-issue that changed \"foo bar\" to \"foobar\", with the resolver taking \"foo bar\". The existing test does not cover it. Fix: add `other_line != merged_line`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/verify_integration_fingerprints.py:779-782 | severity=NIT | confidence=3\n  PROBLEM: The second-parent containment sub-check is vacuous when `other_line == merged_line`, so a verbatim take of the other side passes it.\n  WHY: No runtime failure is demonstrated, because the captured line is still kept whole. Adding `and other_line != merged_line` would tighten the check and leave the legitimate union path unaffected.\n- HARDENING_SUGGESTIONS: add `other_line != merged_line and` at line 780, plus an optional regression test. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "14993469a3f6f8d9af7326dc7fe955b53b00c5aa9b88f8b8078080c42c0cbaef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7389,
+    "run_id": "38617577630",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38617577630",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014190851_dff6ebd9a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7389,
+    "run_id": "38617577630"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T19:08:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
