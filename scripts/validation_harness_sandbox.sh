@@ -32,7 +32,7 @@
 # PID namespace (finding validation-harness-credential-inheritance, project
 # security pass for #6664): the harness and the namespace self-check start
 # inside a new PID and mount namespace created by root (`unshare --pid --fork
-# --mount-proc --kill-child`) before dropping to the sandbox user, so a test
+# --mount-proc --propagation private --kill-child`) before dropping to the sandbox user, so a test
 # cannot list runner processes or read their /proc entries. When no namespace
 # can be created every phase fails closed (pid_namespace_unavailable,
 # pid_namespace_launch_failed); there is no launch without it. Root records
@@ -222,7 +222,7 @@ as_sandbox()
 # Prove a PID namespace can be created; never fall back to a launch without one.
 pidns_supported()
 {
-	sudo -n unshare --pid --fork --mount-proc --kill-child -- true >/dev/null 2>&1 \
+	sudo -n unshare --pid --fork --mount-proc --propagation private --kill-child -- true >/dev/null 2>&1 \
 		|| sandbox_fail "$1" pid_namespace_unavailable
 }
 
@@ -259,10 +259,13 @@ pidns_state_base()
 # In `auto` cgroup mode the sandbox user has a systemd user manager in the
 # host PID namespace; `systemd-run --user` through its sockets would start
 # commands outside this namespace. Before the drop, root bind-mounts
-# /dev/null over <runtime_dir>/bus and <runtime_dir>/systemd/private inside
-# the new mount namespace (unshare makes its mounts private, so the daemon
-# outside keeps its bus). A symlink there, or a failed mount, exits 125
-# before <startedfile> exists, so `run` fails with pid_namespace_launch_failed.
+# /dev/null over every socket under <runtime_dir> except docker.sock inside
+# the new mount namespace (`--propagation private`, so the daemon outside
+# keeps its bus). Every socket is found with `find`, not a fixed list: the
+# sandbox user owns <runtime_dir> and could rename `systemd/` to hide
+# `private` from a fixed path. A symlink at <runtime_dir>, bus or
+# systemd/private, or a failed mount, exits 125 before <startedfile>
+# exists, so `run` fails with pid_namespace_launch_failed.
 as_sandbox_in_pidns()
 {
 	local pidfile="$1" started="$2" uid runtime_dir
@@ -270,8 +273,9 @@ as_sandbox_in_pidns()
 	uid="$(sandbox_uid || true)"
 	[[ "${uid}" =~ ^[0-9]+$ ]] || return 125
 	runtime_dir="$(sandbox_runtime_dir)"
-	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --kill-child -- "$@"' pidns "${pidfile}" \
-		sh -c 'for s in "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; if [ -e "$s" ]; then mount --bind /dev/null "$s" || exit 125; fi; done; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 2; exec "$@"' started "${started}" "${runtime_dir}" \
+	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --propagation private --kill-child -- "$@"' pidns "${pidfile}" \
+		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
+		'for s do mount --bind /dev/null "$s" || exit 1; done' \
 		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
 }
 
@@ -688,10 +692,12 @@ fi
 case "$(cat /proc/1/comm 2>/dev/null || true)" in
 	systemd|init) fail host_init_visible ;;
 esac
-# The user manager runs in the host PID namespace; its sockets must be masked.
-for sock in "/run/user/$(id -u)/bus" "/run/user/$(id -u)/systemd/private"; do
-	[ -S "${sock}" ] && fail user_manager_reachable
-done
+# The user manager runs in the host PID namespace; every socket under the
+# runtime dir except docker.sock (wherever it was moved) must be masked.
+rt="/run/user/$(id -u)"
+if [ -d "${rt}" ] && [ -n "$(find "${rt}" -xdev -type s ! -path "${rt}/docker.sock" -print -quit 2>/dev/null)" ]; then
+	fail user_manager_reachable
+fi
 printf 'ok\n'
 PIDNS_PROBE
 

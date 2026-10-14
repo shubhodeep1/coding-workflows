@@ -13,6 +13,7 @@ import io
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -844,7 +845,8 @@ def test_an_unrecognized_cgroup_mode_is_logged_and_uses_auto(tmp_path: Path) -> 
 
 def test_the_harness_launches_only_inside_a_pid_namespace() -> None:
 	launcher = _function_body("as_sandbox_in_pidns")
-	assert "exec unshare --pid --fork --mount-proc --kill-child -- " in launcher
+	assert "exec unshare --pid --fork --mount-proc --propagation private --kill-child -- " in launcher
+	assert "unshare --pid --fork --mount-proc --propagation private --kill-child -- true" in _function_body("pidns_supported")
 	assert 'sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"' in launcher
 	run = _function_body("cmd_run")
 	assert 'as_sandbox_in_pidns "${pidfile}" "${started}" setsid --wait bash -c' in run
@@ -1167,18 +1169,25 @@ def test_run_fails_closed_when_the_namespace_launch_never_starts(tmp_path: Path)
 # The sandbox user's systemd user manager (auto cgroup mode) runs in the host
 # PID namespace; `systemd-run --user` through its sockets would start commands
 # outside the harness namespace. Root masks both sockets before the drop.
-def _pidns_launch(tmp: Path, bus: str) -> tuple[str, list[str], Path]:
+def _mksock(path: Path) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	os.mknod(path, stat.S_IFSOCK | 0o600)
+
+
+def _pidns_launch(tmp: Path, bus: str, private: str = "systemd/private", mount_exit: int = 0) -> tuple[str, list[str], Path]:
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	for name, body in (("sudo", FAKE_SUDO), ("unshare", FAKE_UNSHARE),
-			("mount", '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\n')):
+			("mount", f'#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\nexit {mount_exit}\n')):
 		(bin_dir / name).write_text(body, encoding="utf-8")
 		(bin_dir / name).chmod(0o755)
 	runtime = tmp / "rt"
-	(runtime / "systemd").mkdir(parents=True)
-	(runtime / "systemd" / "private").write_text("", encoding="utf-8")
-	if bus == "file":
-		(runtime / "bus").write_text("", encoding="utf-8")
+	runtime.mkdir()
+	_mksock(runtime / private)
+	_mksock(runtime / "docker.sock")
+	(runtime / "notes.txt").write_text("", encoding="utf-8")
+	if bus == "socket":
+		_mksock(runtime / "bus")
 	elif bus == "symlink":
 		(runtime / "bus").symlink_to(tmp / "elsewhere")
 	started = tmp / "started"
@@ -1190,16 +1199,32 @@ as_sandbox_in_pidns - "{started}" true || rc=$?
 echo "rc=${{rc}}"
 ''', env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MOUNT_LOG": str(tmp / "mounts")})
 	mounts = tmp / "mounts"
-	return result.stdout.strip().splitlines()[-1], mounts.read_text(encoding="utf-8").splitlines() if mounts.exists() else [], runtime
+	return result.stdout.strip().splitlines()[-1], sorted(mounts.read_text(encoding="utf-8").splitlines()) if mounts.exists() else [], runtime
 
 
 def test_the_namespace_masks_the_user_manager_sockets_before_the_drop(tmp_path: Path) -> None:
-	rc, mounts, runtime = _pidns_launch(tmp_path, "file")
+	rc, mounts, runtime = _pidns_launch(tmp_path, "socket")
 	assert rc == "rc=0"
+	# Every socket except docker.sock; regular files are left alone.
 	assert mounts == [f"--bind /dev/null {runtime}/bus", f"--bind /dev/null {runtime}/systemd/private"]
 	assert (tmp_path / "started").exists()
 	launcher = _function_body("as_sandbox_in_pidns")
-	assert launcher.index('mount --bind /dev/null "$s"') < launcher.index(': > "$1"')
+	assert launcher.index('find "$2" -xdev -type s ! -path "$2/docker.sock"') < launcher.index(': > "$1"')
+
+
+def test_a_renamed_user_manager_socket_is_still_masked(tmp_path: Path) -> None:
+	# The sandbox user owns the runtime dir and can rename systemd/; the mask
+	# finds sockets wherever they are, not at fixed paths.
+	rc, mounts, runtime = _pidns_launch(tmp_path, "none", private="systemd2/private")
+	assert rc == "rc=0"
+	assert mounts == [f"--bind /dev/null {runtime}/systemd2/private"]
+
+
+def test_a_failed_socket_mask_stops_the_launch(tmp_path: Path) -> None:
+	rc, mounts, _ = _pidns_launch(tmp_path, "socket", mount_exit=1)
+	assert rc == "rc=125"
+	assert mounts, "the mask was attempted"
+	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
 
 
 def test_a_symlinked_user_manager_socket_stops_the_launch(tmp_path: Path) -> None:
