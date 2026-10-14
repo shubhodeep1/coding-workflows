@@ -177,6 +177,7 @@ class FakeGitHub:
 		self.prs: dict[int, dict[str, Any]] = {}
 		self.posted: list[tuple[int, str]] = []
 		self.removed: list[int] = []
+		self.added: list[int] = []
 		self.dispatched: list[int] = []
 		self.reruns: list[int] = []
 		self.rerun_status: dict[int, int] = {}
@@ -207,6 +208,10 @@ class FakeGitHub:
 
 	def remove_label(self, number: int, label: str) -> bool:
 		self.removed.append(number)
+		return True
+
+	def add_label(self, number: int, label: str) -> bool:
+		self.added.append(number)
 		return True
 
 	def dispatch(self, workflow: str, ref: str, number: int) -> bool:
@@ -551,3 +556,45 @@ def test_pool_window_also_opens_an_hour_after_the_last_pass() -> None:
 	assert "provider_outage_trackers.json" in step
 	assert "ai:claude-capacity-wait-probe:v1" in step
 	assert "-ge 3300 ]" in step
+
+
+# --- Review fixes (issue #7370 review round 4) --------------------------------
+
+
+def test_a_failed_pr_dispatch_restores_the_label_for_the_next_pass(tmp_path: Path) -> None:
+	head = "e" * 40
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("pr", "8", "71"))]
+	gh.prs[8] = {"state": "open", "labels": [{"name": po.CAPACITY_WAIT_LABEL}], "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
+	gh.issue_comments[8] = [_c(f"p\n<!-- review-autofix-failure:v1 head={head} reason=claude_capacity fp={'b' * 64} run=71 -->")]
+	gh.dispatch = lambda workflow, ref, number: False  # type: ignore[method-assign]
+	_resume(gh, tmp_path)
+	assert gh.removed == [8] and gh.added == [8] and gh.closed == []
+	assert "pr:8:71" not in gh.tracker_body
+
+
+def test_a_failed_label_listing_does_not_fail_issue_items(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("issue", "5", "72"))]
+	gh.issue_comments[5] = [_c("w\n<!-- ai:claude-capacity-wait:v1 stage=clarify source=none run=72 role=CLARIFY -->")]
+	original = gh.list_issues
+	gh.list_issues = lambda label: original(label) if label == po.TRACKER_LABEL else None  # type: ignore[method-assign]
+	_resume(gh, tmp_path)
+	assert [entry for entry in gh.posted if entry[0] == 5] and gh.closed == [1]
+
+
+def test_check_triage_wait_exports_no_job_state() -> None:
+	text = _text(SCRIPTS / "check_failure_triage.sh")
+	assert "GITHUB_ENV" not in text
+	assert 'log "skip reason=claude_capacity_wait"' in text
+
+
+def test_security_audit_workflow_defers_on_a_capacity_wait() -> None:
+	text = _text(WORKFLOWS / "security-audit.yml")
+	assert 'if [ "${security_audit_rc}" -eq 80 ]; then' in text
+	assert "env.AUDIT_DATA_SHA != '' && env.CLAUDE_CAPACITY_WAIT != 'true'" in text
+
+
+def test_pool_health_alert_sends_waiting_items_outside_the_minute_window() -> None:
+	text = _text(SCRIPTS / "claude_pool_health_alert.sh")
+	assert 'if [ "${minute}" -ge "${window}" ] && [ "${waiting_count}" -eq 0 ]; then' in text

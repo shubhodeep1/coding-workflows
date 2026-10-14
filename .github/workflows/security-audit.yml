@@ -386,14 +386,25 @@ jobs:
         run: |
           set -euo pipefail
           # The single-issue security pass reads the summary line from this log.
-          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh" 2>&1 | tee "${RUNNER_TEMP}/security_audit_run.log"
+          security_audit_rc=0
+          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh" 2>&1 | tee "${RUNNER_TEMP}/security_audit_run.log" || security_audit_rc=$?
+          if [ "${security_audit_rc}" -eq 80 ]; then
+            # Claude capacity wait (issue #7370): no codex and no result. The
+            # report step skips, so a single-issue pass stays pending and is
+            # re-dispatched once its pending marker goes stale; the scheduled
+            # audit runs again on its next trigger.
+            echo "AI_ENGINE_CAPACITY_WAIT role=SECURITY_AUDIT outcome=deferred stage=security_audit"
+            echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          exit "${security_audit_rc}"
 
       - name: Report single-issue security pass
         # Port P1 (replace-claude-sessions plan, Phase 8a): an audit dispatched
         # for a standalone PR posts its result on the PR (clean, findings or
         # failed, for the audited commit) and re-runs that PR's review on
         # clean, failed or unverifiable finding IDs. Never fails the run.
-        if: always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != ''
+        if: always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != '' && env.CLAUDE_CAPACITY_WAIT != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}

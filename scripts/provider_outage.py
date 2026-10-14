@@ -400,6 +400,9 @@ class GitHub:
 		allow_edits = "true" if _bool_env("ALLOW_WORKFLOW_EDITS", False) else "false"
 		return self._run(["workflow", "run", workflow, "--repo", self.repository, "--ref", ref, "-f", f"pr_number={pr_number}", "-f", f"allow_workflow_edits={allow_edits}"]).returncode == 0
 
+	def add_label(self, number: int, label: str) -> bool:
+		return self._run(["api", "-X", "POST", f"repos/{self.repository}/issues/{number}/labels", "-f", f"labels[]={label}"]).returncode == 0
+
 	def remove_label(self, number: int, label: str) -> bool:
 		# HTTP 404 means the label is already gone (issue #7370): the goal is
 		# met, so a missing label never leaves a resume item pending.
@@ -1014,7 +1017,13 @@ def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str)
 		# dispatch leaves an unlabelled PR the regular review sweep picks up.
 		if not gh.remove_label(number, CAPACITY_WAIT_LABEL):
 			return "failed"
-		return "dispatched" if gh.dispatch(workflow, default_branch, number) else "failed"
+		if gh.dispatch(workflow, default_branch, number):
+			return "dispatched"
+		# Put the label back so the next pass retries the dispatch: an
+		# unlabelled PR counts as already dispatched (see above).
+		if not gh.add_label(number, CAPACITY_WAIT_LABEL):
+			_log(f"op=capacity_resume kind=pr item={number} run={item['run']} outcome=label_restore_failed")
+		return "failed"
 	# The head moved on or a later run decided it: nothing to replay.
 	return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 
@@ -1130,10 +1139,11 @@ def capacity_resume(gh: Any, *, pool_available: bool, items_out: str | None, ale
 			outcome = _resume_wait_pr(gh, item, login=login, workflow=workflow)
 		elif kind == "issue" and item["item"].isdigit():
 			if labelled_issues is None:
+				# The listing only feeds a log line (an unlabelled issue is
+				# still checked), so a failed read must not fail the item.
 				listing = gh.list_issues(CAPACITY_WAIT_LABEL)
-				labelled_issues = {entry["number"] for entry in listing or [] if isinstance(entry, dict) and isinstance(entry.get("number"), int)} if listing is not None else None
-			if labelled_issues is not None:
-				outcome = _resume_wait_issue(gh, item, login=login, labelled=labelled_issues)
+				labelled_issues = {entry["number"] for entry in listing or [] if isinstance(entry, dict) and isinstance(entry.get("number"), int)}
+			outcome = _resume_wait_issue(gh, item, login=login, labelled=labelled_issues)
 		elif kind == "run" and item["run"].isdigit():
 			ok, status = gh.rerun_run(int(item["run"]))
 			if ok:

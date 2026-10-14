@@ -1490,10 +1490,9 @@ if [ -f "${ISOLATED_HELPER}" ] && [ ! -L "${ISOLATED_HELPER}" ] &&
 			bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CHECK_TRIAGE) || triage_rc=$?
 		if [ "${triage_rc}" -eq 80 ]; then
 			# Claude capacity wait (issue #7370): file nothing, run no codex.
+			# Prepare-only mode writes no ready=true output, so the posting
+			# step is skipped; this helper never exports state to later steps.
 			log "skip reason=claude_capacity_wait"
-			if [ -n "${GITHUB_ENV:-}" ]; then
-				echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}" 2>/dev/null || true
-			fi
 			exit 0
 		fi
 		if [ "${triage_rc}" -eq 75 ]; then

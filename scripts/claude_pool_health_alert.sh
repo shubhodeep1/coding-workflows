@@ -119,7 +119,10 @@ fi
 window="${CLAUDE_POOL_HEALTH_WINDOW_MINUTES:-5}"
 [[ "${window}" =~ ^[0-9]+$ ]] || window=5
 minute=$((10#$(date -u +%M)))
-if [ "${minute}" -ge "${window}" ]; then
+# The capacity-resume step sets CLAUDE_CAPACITY_WAIT_ITEMS only when it ran,
+# i.e. in orchestrate_poll.yml's pool_window (which also opens an hour after
+# the last pass), so its waiting-items notice is not dropped here (#7370).
+if [ "${minute}" -ge "${window}" ] && [ "${waiting_count}" -eq 0 ]; then
 	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" outside_window
 	exit 0
 fi
