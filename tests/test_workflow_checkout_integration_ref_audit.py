@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -199,11 +204,122 @@ def test_required_workflows_fail_closed_on_ci_triage_routing_refusal() -> None:
 		assert "${{ steps.refctx" not in step, f"{workflow_name} refctx interpolates its own output"
 
 
+# Issue #7283: a fake `git` for the resolver staging block. FAKE_GIT_MODE:
+# ok (every call succeeds), clone_fail (every clone fails), fetch_fail (the
+# pinned fetch fails), fallback_only (the first clone fails, the second
+# succeeds) and no_script (clones succeed without the resolver script).
+_FAKE_GIT = """#!/usr/bin/env bash
+args=("$@")
+sub=""
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  case "${args[$i]}" in
+    -c|-C) i=$((i + 2)); continue ;;
+    clone|fetch|checkout) sub="${args[$i]}"; break ;;
+  esac
+  i=$((i + 1))
+done
+case "$sub" in
+  clone)
+    n="$(cat "$FAKE_GIT_STATE" 2>/dev/null || echo 0)"
+    echo "$((n + 1))" > "$FAKE_GIT_STATE"
+    case "$FAKE_GIT_MODE" in
+      clone_fail) exit 128 ;;
+      fallback_only) [ "$n" -eq 0 ] && exit 128 ;;
+    esac
+    dest="${args[${#args[@]}-1]}"
+    mkdir -p "$dest/scripts"
+    if [ "$FAKE_GIT_MODE" != no_script ]; then
+      printf '#!/usr/bin/env bash\\necho STUB_RESOLVER_RAN >&2\\nexit 0\\n' > "$dest/scripts/resolve_integration_ref.sh"
+    fi
+    exit 0 ;;
+  fetch) [ "$FAKE_GIT_MODE" = fetch_fail ] && exit 1; exit 0 ;;
+esac
+exit 0
+"""
+
+
+def _refctx_run_body(workflow_name: str) -> str:
+	step = _refctx_step(_workflow_text(workflow_name))
+	lines = step.splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip() == "run: |")
+	body = textwrap.dedent("\n".join(lines[start + 1:])) + "\n"
+
+	def _sub(match: re.Match[str]) -> str:
+		return "consumer/repo" if "github.repository" in match.group(0) else "a" * 40
+
+	return re.sub(r"\$\{\{[^}]*\}\}", _sub, body)
+
+
+def _run_refctx(workflow_name: str, mode: str, routing: str | None) -> tuple[int, str, str]:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		fake_git = bin_dir / "git"
+		fake_git.write_text(_FAKE_GIT, encoding="utf-8")
+		fake_git.chmod(0o755)
+		output = tmp_path / "github_output"
+		output.write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
+			"ISSUE_NUMBER": "5",
+			"TRACKING_ISSUE": "5",
+			"RUNNER_TEMP": str(tmp_path),
+			"GITHUB_OUTPUT": str(output),
+			"GITHUB_RUN_ID": "1",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GH_TOKEN": "x",
+			"RETARGET_DEFAULT_BRANCH": "main",
+			"FAKE_GIT_MODE": mode,
+			"FAKE_GIT_STATE": str(tmp_path / "clone_count"),
+		}
+		if routing is not None:
+			env["CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED"] = routing
+		res = subprocess.run(
+			["bash", "-c", _refctx_run_body(workflow_name)],
+			env=env, capture_output=True, text=True, timeout=60,
+		)
+		return res.returncode, res.stdout + res.stderr, output.read_text(encoding="utf-8")
+
+
+def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
+	"""Issue #7283: with CI-triage routing on, a resolver that cannot be
+	staged, pinned or found fails the step without writing a ref; with it
+	off, the default-branch fallback is unchanged."""
+	failures = {
+		"clone_fail": "stage_failed",
+		"no_script": "script_missing",
+		"fetch_fail": "pin_failed",
+		"fallback_only": "pin_failed",
+	}
+	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
+		for mode, reason in failures.items():
+			for routing in ("true", "TRUE", "1", "yes", "on"):
+				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
+				label = f"{workflow_name} mode={mode} routing={routing}"
+				assert rc != 0, f"{label}: expected failure\n{out}"
+				assert "ref=" not in gh_output, f"{label}: wrote a ref: {gh_output!r}"
+				assert f"INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason={reason}" in out, f"{label}\n{out}"
+				assert "STUB_RESOLVER_RAN" not in out, f"{label}: ran an unpinned resolver"
+			for routing in ("false", None):
+				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
+				label = f"{workflow_name} mode={mode} routing={routing}"
+				assert rc == 0, f"{label}: expected the fallback\n{out}"
+				assert "ref=\n" in gh_output, f"{label}: no fallback ref: {gh_output!r}"
+				assert "resolver_unavailable" not in out, f"{label}\n{out}"
+				ran = "STUB_RESOLVER_RAN" in out
+				assert ran == (mode in ("fetch_fail", "fallback_only")), f"{label}: resolver ran={ran}\n{out}"
+		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true")
+		assert rc == 0 and "STUB_RESOLVER_RAN" in out, f"{workflow_name} ok path\n{out}"
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
 	test_required_workflows_enforce_integration_ref_contract()
 	test_required_workflows_fail_closed_on_ci_triage_routing_refusal()
+	test_required_workflows_fail_closed_when_resolver_staging_fails()
 	return 0
 
 

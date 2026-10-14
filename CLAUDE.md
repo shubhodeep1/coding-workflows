@@ -924,8 +924,17 @@ confirmation safeguard remains active in both cases.
 Per §15, the guard issues **one** API call per guarded command — a single
 `state=all` request answers both the merged and the open question — and
 caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
-satisfy an *allow*; a *block* is always re-verified against a live call first,
-so opening a new PR clears the guard immediately instead of after the TTL.
+satisfy an *allow* for a bare `git commit` only; a *block* is always
+re-verified against a live call first, so opening a new PR clears the guard
+immediately instead of after the TTL.
+
+A push never reads the cache, because a cached answer may predate a merge and
+a push is where the work strands. A `git push` or an MCP push always takes PR
+state from a live lookup. When one command guards the same branch more than
+once, a push reuses only a snapshot that came from a live lookup in the same
+hook run; a snapshot an earlier `git commit` in that command took from the
+cache is queried again once. A failed push lookup follows §21.C and never
+falls back to cached data.
 
 The git-history fallback in §21.C issues no GitHub API calls at all: one
 `git ls-remote` for the branch and one `git fetch` for the default branch

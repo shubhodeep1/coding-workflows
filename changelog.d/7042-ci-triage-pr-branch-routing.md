@@ -10,7 +10,7 @@ With the variable on, the resolver routes an issue to the PR's head branch, but 
 - the live PR: open, head and base in this repository;
 - the branch itself.
 
-If any check fails, the resolver exits `3`. Clarify, plan, implement, clarify-respond and validate then fail the step with `::error::CI_TRIAGE_PR_BRANCH_ROUTING ... outcome=refused reason=<token>` instead of falling back to the default branch. Every other resolver failure keeps its default-branch fallback, and an explicit `Integration branch:` line still wins.
+If any check fails, the resolver exits `3`. Clarify, plan, implement, clarify-respond and validate then fail the step with `::error::CI_TRIAGE_PR_BRANCH_ROUTING ... outcome=refused reason=<token>` instead of falling back to the default branch. Every other resolver failure keeps its default-branch fallback (since #7283, a resolver that cannot be staged, pinned or found fails the step while the variable is on), and an explicit `Integration branch:` line still wins.
 
 | The numbers that matter | Value |
 | --- | --- |
@@ -20,4 +20,4 @@ If any check fails, the resolver exits `3`. Clarify, plan, implement, clarify-re
 
 What this means for operators:
 - Re-run planning for #6815 (`/reclarify` or `/answer`); set `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=false` to keep the default branch.
-- Known gaps: a fix PR merged into the routed branch does not close the triage issue, and `ci.yml` does not run on PRs into that branch. Its tests run through the routed PR's own CI.
+- Known gap: a fix PR merged into the routed branch does not close the triage issue. Since #7283, `ci.yml` runs on PRs into that branch and the auto-merge wait requires their `lint`.
