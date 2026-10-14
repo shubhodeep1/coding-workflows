@@ -3089,7 +3089,7 @@ post_tracking_comment() {
       if printf '%s\n\n_Repeated %s times, last %s UTC._' "${comment_body}" "${repeat_count}" "$(date -u '+%Y-%m-%d %H:%M')" \
           | jq -Rs '{body: .}' > "${payload_file}" 2>/dev/null \
         && gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${repeat_id}" \
-          --method PATCH --input "${payload_file}" >/dev/null 2>&1; then
+          --method PATCH --input "${payload_file}" >/dev/null; then
         jq --argjson id "${repeat_id}" --slurpfile p "${payload_file}" 'map(if .id == $id then .body = $p[0].body else . end)' \
           "${recent_file}" > "${recent_file}.tmp" 2>/dev/null && mv "${recent_file}.tmp" "${recent_file}"
         echo "TRACKING_COMMENT_REPEAT tracking_issue=${TRACKING_NUM} comment=${repeat_id} count=${repeat_count} outcome=updated"
@@ -3103,7 +3103,8 @@ post_tracking_comment() {
   response_file="$(mktemp "${TMPDIR:-/tmp}/comment_response.XXXXXX")"
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
     --method POST \
-    --input "${payload_file}" > "${response_file}" 2>/dev/null || true
+    --input "${payload_file}" > "${response_file}" \
+    || echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing." >&2
   posted_id="$(jq -r '.id // empty' "${response_file}" 2>/dev/null || true)"
   if [ -n "${recent_file}" ] && [[ "${posted_id}" =~ ^[1-9][0-9]*$ ]]; then
     jq --argjson id "${posted_id}" --slurpfile p "${payload_file}" '(. + [{id: $id, body: $p[0].body}]) | .[-20:]' \
@@ -3316,7 +3317,7 @@ post_state_comment() {
     if [ "${STATE_COMMENT_CAP_HIT}" = "true" ] && [ "${cap_retry_done}" != "true" ]; then
       cap_retry_done="true"
       echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} trigger=comment_cap"
-      prune_state_comment_chains || true
+      prune_state_comment_chains refresh || true
       continue
     fi
     echo "::error::Failed to post V2 state chunk ${idx}/${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
@@ -3355,15 +3356,22 @@ post_state_comment() {
 # ORCH_STATE_PRUNE_MAX_DELETES (default 50) per tracking issue per run, so a
 # large backlog drains over several runs. Best effort: never fails the caller.
 # ORCH_STATE_PRUNE_ENABLED=false turns it off.
+# With the argument `refresh` (a state write met the comment cap) the cached
+# plan does not cover chains written earlier in this run, so the issue's
+# comments are read again (one paginated GET; COMMENTS is a start-of-run
+# snapshot and no cached read covers later writes), the plan is recomputed and
+# the delete budget starts over. A failed re-read falls back to COMMENTS.
 # Logs: STATE_PRUNE tracking_issue=<n> deleted=<n> failed=<n> remaining=<n> outcome=done|budget_exhausted|skip [reason=]
 prune_state_comment_chains() {
+  local refresh="${1:-}" raw_file
   local enabled max_deletes base plan_file done_file comments_file plan_json ids id deleted=0 failed=0 used remaining
   enabled="$(printf '%s' "${ORCH_STATE_PRUNE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
   case "${enabled}" in
     false|0|no|off) return 0 ;;
   esac
   [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] || return 0
-  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM}" ]; then
+  if [ "${refresh}" != "refresh" ] \
+    && { [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM}" ]; }; then
     echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
     return 0
   fi
@@ -3377,9 +3385,26 @@ prune_state_comment_chains() {
   base="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/state_prune_${TRACKING_NUM}"
   plan_file="${base}.plan"
   done_file="${base}.done"
+  if [ "${refresh}" = "refresh" ]; then
+    rm -f "${plan_file}"
+    : > "${done_file}"
+  fi
   if [ ! -s "${plan_file}" ]; then
     comments_file="$(mktemp "${TMPDIR:-/tmp}/state_prune_comments.XXXXXX")"
-    printf '%s' "${COMMENTS}" > "${comments_file}"
+    raw_file="$(mktemp "${TMPDIR:-/tmp}/state_prune_raw.XXXXXX")"
+    if [ "${refresh}" = "refresh" ] \
+      && gh_retry_to_file "${raw_file}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" \
+      && jq -s 'add // []' "${raw_file}" > "${comments_file}" 2>/dev/null \
+      && jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
+      :
+    elif [ "${COMMENTS_FETCH_OK:-false}" = "true" ] && [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ]; then
+      printf '%s' "${COMMENTS}" > "${comments_file}"
+    else
+      rm -f "${comments_file}" "${raw_file}"
+      echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+      return 0
+    fi
+    rm -f "${raw_file}"
     if ! plan_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_state_v2.py prune-plan \
         --comments-json "${comments_file}" --login "${UNBLOCK_TRUSTED_LOGIN}" \
         --keep-recent 1 --keep-not-status failed 2>/dev/null)" \

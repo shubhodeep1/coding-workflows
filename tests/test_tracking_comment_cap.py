@@ -123,6 +123,12 @@ set -euo pipefail
 unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="${MOCK_LOGIN}"; }
 _mirror_task_state_files_from_state() { :; }
 record_poll_progress_if_advanced() { :; }
+# gh_retry_to_file <out> gh api --paginate <endpoint>: the cap-triggered re-read.
+gh_retry_to_file() {
+	echo "GET refresh" >> "${MOCK_DIR}/calls"
+	[ "${MOCK_REFRESH_FAILS:-0}" = "0" ] || return 1
+	printf '%s' "${MOCK_REFRESH_COMMENTS:-${COMMENTS}}" > "$1"
+}
 # gh_retry gh api <endpoint> [args...]: records "METHOD endpoint" and answers.
 gh_retry() {
 	shift 2
@@ -282,9 +288,39 @@ def test_state_write_at_the_comment_cap_prunes_and_retries_once(tmp_path: Path) 
 	assert result.returncode == 0, result.stderr
 	calls = _calls(mock)
 	assert calls[0] == "POST repos/o/r/issues/40/comments cap"
-	assert calls[1:5] == [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)]
-	assert calls[5] == "POST repos/o/r/issues/40/comments"
+	assert calls[1] == "GET refresh"
+	assert calls[2:6] == [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)]
+	assert calls[6] == "POST repos/o/r/issues/40/comments"
 	assert "STATE_PRUNE tracking_issue=40 trigger=comment_cap" in result.stdout
+
+
+def test_cap_prune_rereads_comments_written_after_the_plan(tmp_path: Path) -> None:
+	# The run's COMMENTS has one chain, so the first prune caches an empty plan.
+	# Chains written later in the run only show up in the re-read at the cap.
+	start = _chain(10, {"status": "in_progress"})
+	later = start + _chain(20, {"status": "in_progress"}) + _chain(30, {"status": "in_progress"})
+	script = "prune_state_comment_chains\nprune_state_comment_chains refresh\n"
+	result, mock = _run_poller_functions(tmp_path, script, start, MOCK_REFRESH_COMMENTS=json.dumps(later))
+	assert result.returncode == 0, result.stderr
+	assert _calls(mock) == ["GET refresh", "DELETE repos/o/r/issues/comments/10", "DELETE repos/o/r/issues/comments/20"]
+
+
+def test_cap_prune_falls_back_to_run_comments_when_the_reread_fails(tmp_path: Path) -> None:
+	result, mock = _run_poller_functions(tmp_path, "prune_state_comment_chains refresh", _three_old_chains(),
+		MOCK_REFRESH_FAILS="1")
+	assert result.returncode == 0, result.stderr
+	assert _calls(mock) == ["GET refresh"] + [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)]
+
+
+def test_direct_tracking_posts_do_not_end_the_run() -> None:
+	# Judge verdict, judge override and the two "Project Failed" posts (Q139).
+	text = POLLER.read_text(encoding="utf-8")
+	warning = '|| echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing."'
+	assert text.count(warning) >= 4
+	for anchor in ('-f body="${JUDGE_COMMENT}" >/dev/null \\', "Judge verdict overridden:", "Manual intervention required.\" >/dev/null \\",
+		"**Assessment:** ${JUDGE_ASSESSMENT}\" >/dev/null \\"):
+		start = text.index(anchor)
+		assert warning in text[start:start + 600], anchor
 
 
 def test_state_write_stops_after_one_retry_at_the_cap(tmp_path: Path) -> None:
