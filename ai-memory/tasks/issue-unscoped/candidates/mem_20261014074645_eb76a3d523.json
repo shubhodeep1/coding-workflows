@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the PR is not merged, the live head is a valid SHA, and it differs from RB_JUDGED_HEAD_SHA: Write judge_action=skip and judge_skip_reason=stale_head ... Exit 0 before posting any action comment, label, status or close.\"\n  expected_change_site: scripts/review_rb_judge.sh, post-judge live-head guard (scripts/review_rb_judge.sh:1921-1941)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: scripts/review_rb_judge.sh:1921-1941 (lines 1936-1939) exempts a differing live head when it equals INITIAL_HEAD_SHA and is an ancestor of the judged head, tests/test_review_rb_judge_head_binding.py:275-290 (test_live_head_ancestor_of_judged_head_proceeds_and_descendant_is_stale) asserts that case proceeds; contradicts the unconditional spec. qwen_qwen3_7-plus disagreed in a note, calling the exemption intentional and correct.\n- requirement: \"In the `close_and_reissue` spot-fix branch, use `RB_JUDGED_HEAD_SHA` as `RB_HEAD_SHA`.\"\n  expected_change_site: scripts/review_rb_judge.sh, close_and_reissue spot-fix baseline selection\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: scripts/review_rb_judge.sh lines 3046, 3051-3052 replace RB_JUDGED_HEAD_SHA with RB_LIVE_HEAD_SHA when they differ, tests/test_review_rb_judge_head_binding.py:366-396 asserts the live-head baseline.\n- requirement: \"Add a changelog fragment `changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md` (CLAUDE.md \u00a720 format).\"\n  expected_change_site: changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md:4 (lead paragraph)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md:4 lead runs 13 sentences against the 3-5 sentence CLAUDE.md \u00a720.D/\u00a720.E requirement and holds contributor-only detail, and the fragment has no \"### For contributors\" subsection. Severity disagreement: MAJOR (minimax) vs NIT (gpt-6-luna, qwen).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"If the PR is not merged, the live head is a valid SHA, and it differs from RB_JUDGED_HEAD_SHA: Write judge_action=skip and judge_skip_reason=stale_head to GITHUB_OUTPUT. Log one line: RB_JUDGE_STALE_HEAD pr=<n> judged_head=<sha> live_head=<sha> action=<RB_ACTION>. Exit 0 before posting any action comment, label, status or close.\"\n  Expected change site: scripts/review_rb_judge.sh:1921-1941\n  Evidence of absence: The guard exempts a differing live head when RB_JUDGED_HEAD_SHA_LC matches 40-hex, RB_LIVE_HEAD_SHA equals RB_INITIAL_HEAD_SHA_LC, and it is an ancestor of RB_JUDGED_HEAD_SHA_LC. The spec mandates skipping on any difference. tests/test_review_rb_judge_head_binding.py::test_live_head_ancestor_of_judged_head_proceeds_and_descendant_is_stale asserts that this case proceeds. The deviation is defensible but unauthorised by the issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Add a changelog fragment `changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md` (CLAUDE.md \u00a720 format).\"\n  Expected change site: changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md, lead paragraph\n  Evidence of absence: The lead at changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md:4 runs to 13 sentences. CLAUDE.md \u00a720.D requires 3-5 sentences, and contributor-only detail belongs in a \"### For contributors\" subsection, which is missing.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"If the PR is not merged, the live head is a valid SHA, and it differs from RB_JUDGED_HEAD_SHA,\" skip with `judge_skip_reason=stale_head` before taking action.\n  Expected change site: scripts/review_rb_judge.sh, post-judge live-head guard\n  Evidence of absence: Lines 1936-1939 exempt a differing live head equal to INITIAL_HEAD_SHA and an ancestor of the judged head. tests/test_review_rb_judge_head_binding.py:275-290 expects that case to proceed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"In the `close_and_reissue` spot-fix branch, use `RB_JUDGED_HEAD_SHA` as `RB_HEAD_SHA`.\"\n  Expected change site: scripts/review_rb_judge.sh, close_and_reissue spot-fix baseline selection\n  Evidence of absence: Line 3046 assigns RB_JUDGED_HEAD_SHA, but lines 3051-3052 replace it with RB_LIVE_HEAD_SHA when they differ. tests/test_review_rb_judge_head_binding.py:366-396 asserts the live-head baseline.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add a changelog fragment \u2026 (CLAUDE.md \u00a720 format).\"\n  Expected change site: changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md\n  Evidence of absence: Line 4 is a 13-sentence lead with contributor-facing details. CLAUDE.md \u00a720.D requires 3-5 sentences, and there is no \"For contributors\" subsection.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md:4 | severity=NIT | confidence=3\n  PROBLEM: The lead paragraph runs to 13 sentences, exceeding the \u00a720.D/\u00a720.E limit of 3-5, and carries contributor-only implementation detail that belongs in a \"For contributors\" subsection.\n  WHY: It does not affect runtime or the changelog assembler, but it deviates from the documented format.\n- Note: the gpt-6-luna TASK_GAP on the stale-head exemption is judged intentional and correct (narrow, tested, handles the unpushed-commit case), not a defect.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ccc45773b254c5cf2f843db7014b9766d9e30726f1b7b209fce46acc65d0ca76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7364,
+    "run_id": "38526893061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38526893061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014074645_eb76a3d523",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7364,
+    "run_id": "38526893061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T07:46:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
