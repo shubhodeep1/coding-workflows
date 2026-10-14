@@ -2696,7 +2696,7 @@ def test_security_audit_target_ref_routes_through_the_integration_ref_resolver()
 			"args = [a for a in sys.argv[1:] if a != '-i']\n"
 			"path = args[1] if len(args) > 1 else ''\n"
 			"if path == 'repos/owner/repo/issues/101':\n"
-			f"\tprint({body!r})\n"
+			f"\tprint({body!r} if '--jq' in args else json.dumps({{'body': {body!r}, 'labels': []}}))\n"
 			"\tsys.exit(0)\n"
 			"if path.startswith('repos/owner/repo/git/ref/heads/'):\n"
 			"\tprint(json.dumps({'ref': 'x'}))\n"
