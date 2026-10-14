@@ -267,7 +267,10 @@ pidns_state_base()
 # systemd/private, or a failed mount, exits 125 before <startedfile>
 # exists, so `run` fails with pid_namespace_launch_failed. An entry that
 # vanishes between `find` and `mount` (a containerd shim socket) holds no
-# socket and is skipped, so it cannot fail the launch.
+# socket and is skipped, so it cannot fail the launch. A socket renamed in
+# that window is skipped at its old name too, so after the mask root lists
+# the sockets again and exits 125 when any one other than docker.sock is
+# left unmasked (a bind-mounted /dev/null is no longer a socket).
 as_sandbox_in_pidns()
 {
 	local pidfile="$1" started="$2" uid runtime_dir
@@ -276,8 +279,8 @@ as_sandbox_in_pidns()
 	[[ "${uid}" =~ ^[0-9]+$ ]] || return 125
 	runtime_dir="$(sandbox_runtime_dir)"
 	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --propagation private --kill-child -- "$@"' pidns "${pidfile}" \
-		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
-		'for s do [ -e "$s" ] || continue; mount --bind /dev/null "$s" || exit 1; done' \
+		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; if [ -n "$(find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -print -quit)" ]; then exit 125; fi; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
+		'for s do [ -e "$s" ] || continue; mount --bind /dev/null "$s" || { if [ -e "$s" ]; then exit 1; fi; }; done' \
 		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
 }
 

@@ -1174,11 +1174,22 @@ def _mksock(path: Path) -> None:
 	os.mknod(path, stat.S_IFSOCK | 0o600)
 
 
-def _pidns_launch(tmp: Path, bus: str, private: str = "systemd/private", mount_exit: int = 0) -> tuple[str, list[str], Path]:
+# Fake `mount --bind /dev/null <path>` ($3 is the path): `mask` replaces the
+# socket with a regular file, as a real bind mount hides it; `fail` refuses;
+# `noop` succeeds without masking; `vanish` loses the race (path gone, exit 1).
+FAKE_MOUNT_ACTIONS = {
+	"mask": 'rm -f "$3" && : > "$3"; exit 0',
+	"fail": "exit 1",
+	"noop": "exit 0",
+	"vanish": 'rm -f "$3"; exit 1',
+}
+
+
+def _pidns_launch(tmp: Path, bus: str, private: str = "systemd/private", mount_mode: str = "mask") -> tuple[str, list[str], Path]:
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	for name, body in (("sudo", FAKE_SUDO), ("unshare", FAKE_UNSHARE),
-			("mount", f'#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\nexit {mount_exit}\n')):
+			("mount", f'#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\n{FAKE_MOUNT_ACTIONS[mount_mode]}\n')):
 		(bin_dir / name).write_text(body, encoding="utf-8")
 		(bin_dir / name).chmod(0o755)
 	runtime = tmp / "rt"
@@ -1221,7 +1232,7 @@ def test_a_renamed_user_manager_socket_is_still_masked(tmp_path: Path) -> None:
 
 
 def test_a_failed_socket_mask_stops_the_launch(tmp_path: Path) -> None:
-	rc, mounts, _ = _pidns_launch(tmp_path, "socket", mount_exit=1)
+	rc, mounts, _ = _pidns_launch(tmp_path, "socket", mount_mode="fail")
 	assert rc == "rc=125"
 	assert mounts, "the mask was attempted"
 	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
@@ -1244,6 +1255,22 @@ def test_a_socket_that_vanishes_before_the_mask_is_skipped(tmp_path: Path) -> No
 		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MOUNT_LOG": str(tmp_path / "mounts")})
 	assert result.returncode == 0, result.stderr
 	assert (tmp_path / "mounts").read_text(encoding="utf-8").splitlines() == [f"--bind /dev/null {present}"]
+
+
+def test_a_socket_left_unmasked_stops_the_launch(tmp_path: Path) -> None:
+	# A socket renamed between `find` and `mount` is skipped at its old name;
+	# the recheck after the mask must still refuse the launch.
+	rc, mounts, _ = _pidns_launch(tmp_path, "socket", mount_mode="noop")
+	assert rc == "rc=125"
+	assert mounts, "the mask was attempted"
+	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
+
+
+def test_a_socket_removed_between_check_and_mount_does_not_fail_the_launch(tmp_path: Path) -> None:
+	rc, mounts, runtime = _pidns_launch(tmp_path, "socket", mount_mode="vanish")
+	assert rc == "rc=0"
+	assert mounts == [f"--bind /dev/null {runtime}/bus", f"--bind /dev/null {runtime}/systemd/private"]
+	assert (tmp_path / "started").exists()
 
 
 def test_a_symlinked_user_manager_socket_stops_the_launch(tmp_path: Path) -> None:
