@@ -2870,7 +2870,7 @@ and shipped:
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `UNBLOCK_SCAN` (`run_unblock_scan` in `scripts/orchestrate_poll_process.sh`: `candidates= dispatched= skipped= outcome=idle|done|skip reason=`, and `item= kind= outcome=dispatched|dispatch_failed`)
 - `UNBLOCK_JUDGE` (`scripts/unblock_judge.sh`: `item= kind= stop= fingerprint= verdict= round= outcome=acted|waiting|followup|skip reason=`, and `op= outcome=failed` per failed operation; `op=regrant run= paths= outcome=regranted`, `op=regrant [run=] outcome=skip reason=still_denied|already_regranted|not_automation_path|missing|truncated|malformed|grant_unavailable|rejection_unreadable|disabled`, `op=regrant run= outcome=failed reason=actuation_failed`; `origin= outcome=escalated reason=fixup_blocked`, `origin= outcome=skip reason=fixup_escalated`, `origin= outcome=failed reason=fixup_escalation_failed`)
-- `UNBLOCK_PROJECT` (`handle_unblock_judge_project_hooks`: `tracking_issue= action=abandoned|fixup id= item= issue= outcome=`)
+- `UNBLOCK_PROJECT` (`handle_unblock_judge_project_hooks`: `tracking_issue= action=abandoned|fixup id= item= issue= outcome= [retarget=true|false]`; `outcome=superseded` marks a re-issued original `skipped`)
 - `UNBLOCK_HANDOVER` (poller and `review_autofix.yml`: `tracking_issue=|pr= stop=judge_output|rb_judge reason= failures= outcome=counted|failed|labelled`)
 - `UNBLOCK_BULK_DELETE_OVERRIDE` (`implement.yml` "Unblock judge bulk-delete override" and the destructive guard: `outcome=enabled|skip reason= marker=`, `applied deletions=`)
 - `JUDGE_INTERIM_PASS_OK`
