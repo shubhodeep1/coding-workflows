@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+# Resolve support helpers from this script's own directory unless the
+# workflow passed an absolute SUPPORT_SCRIPTS_DIR: a relative default resolves
+# against the PR checkout, whose copies of the sandbox and engine helpers are
+# untrusted (finding review-interim-judge-host-opencode).
+_self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+	echo "::warning::review_run_judge_interim: SUPPORT_SCRIPTS_DIR is unset or not absolute; using this script's own directory." >&2
+	SUPPORT_SCRIPTS_DIR="${_self_dir}"
+fi
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
 	if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
 		SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
@@ -281,7 +289,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
 	judge_interim_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-6-sol}" 1 config_writer_missing || true
 	judge_interim_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
@@ -305,25 +313,55 @@ if ! opencode_require_bootstrap review_run_judge_interim reviewer "${MODEL_EDITO
 	exit 0
 fi
 
-judge_interim_opencode_cmd=(
-	bash -c
-	# shellcheck disable=SC2016
-	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-	opencode-judge-interim
-	"${OPENCODE_HELPERS_PATH}"
-	reviewer
-	"${MODEL_EDITOR:-openai/gpt-6-sol}"
-	"${JUDGE_INTERIM_REASONING}"
-	"${JUDGE_INTERIM_OPENCODE_CONFIG}"
-	"${JUDGE_INTERIM_OPENCODE_WORKSPACE}"
-)
+# The prompt carries PR-derived text, so the model runs only in the
+# credential-free, network-isolated review sandbox (read-only role
+# JUDGE_INTERIM), never as a host OpenCode process that could read the
+# credential-bearing checkout (sibling of findings
+# review-summarizer-host-fallback / review-smoke-host-opencode).  An
+# unavailable sandbox refuses the call; the interim judge stays fail-open.
+judge_interim_sandbox_sh="${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh"
+judge_interim_sandbox_root=""
+judge_interim_sandbox_cleanup()
+{
+	[ -n "${judge_interim_sandbox_root:-}" ] || return 0
+	if ! REVIEW_SANDBOX_ROOT="${judge_interim_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s \
+		bash "${judge_interim_sandbox_sh}" cleanup >/dev/null 2>&1; then
+		echo "::warning::judge_interim: review sandbox cleanup failed." >&2
+	fi
+	judge_interim_sandbox_root=""
+}
+trap judge_interim_sandbox_cleanup EXIT
+judge_interim_isolation_refuse()
+{
+	echo "::error::REVIEW_UTILITY_ISOLATION role=JUDGE_INTERIM engine=codex outcome=refused reason=$1" >&2
+	judge_interim_log_fail "isolation_unavailable" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
+	exit 0
+}
 
-if timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}" \
-	"${judge_interim_opencode_cmd[@]}" \
-	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
+: > "${RAW_OUTPUT_FILE}"
+: > "${STDERR_FILE}"
+if [ ! -f "${judge_interim_sandbox_sh}" ] || [ -L "${judge_interim_sandbox_sh}" ]; then
+	judge_interim_isolation_refuse sandbox_unavailable
+fi
+if ! judge_interim_sandbox_root="$(timeout --signal=TERM --kill-after=10s -- 600s \
+	bash "${judge_interim_sandbox_sh}" prepare-ephemeral codex 2>>"${STDERR_FILE}")" \
+	|| [ -z "${judge_interim_sandbox_root}" ]; then
+	judge_interim_sandbox_root=""
+	judge_interim_isolation_refuse sandbox_unavailable
+fi
+
+if REVIEW_SANDBOX_ROOT="${judge_interim_sandbox_root}" timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}" \
+	bash "${judge_interim_sandbox_sh}" run "${PROMPT_FILE}" "${RAW_OUTPUT_FILE}" \
+	"${MODEL_EDITOR:-openai/gpt-6-sol}" "${JUDGE_INTERIM_REASONING}" "${JUDGE_INTERIM_OPENCODE_CONFIG}" \
+	codex JUDGE_INTERIM read \
+	< "${PROMPT_FILE}" >/dev/null 2>> "${STDERR_FILE}"; then
 	cmd_rc=0
 else
 	cmd_rc=$?
+fi
+judge_interim_sandbox_cleanup
+if [ "${cmd_rc}" -eq 2 ]; then
+	judge_interim_isolation_refuse sandbox_helper_outdated
 fi
 
 judge_interim_clean_output="${RAW_OUTPUT_FILE}.ansi-clean"
