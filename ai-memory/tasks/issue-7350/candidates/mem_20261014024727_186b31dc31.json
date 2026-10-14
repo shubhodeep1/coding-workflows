@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The requested control already exists on the default branch. What should this issue deliver?\nChoices:\n- A: Add regression tests only (RECOMMENDED). They would pin that, without the trusted driver, the fallback runner from `RUNTIME_DIR` is started only through `validation_harness_sandbox.sh run`, after the self-check and under the credential scrub. They would also pin that `cmd_run` copies an entry from outside the workspace into the sandbox and never runs it on the host. No change to how the fallback behaves.\n- B: Close as already fixed and make no code change. The PR or comment would cite the existing launch path and tests as evidence.\n- C: Remove the fallback runner. When `scripts/validate_driver.sh` is absent, validation would stop with `harness_error` instead of running the fallback, plus the tests from A. This changes behaviour for consumers without a driver; validation fails for them until the driver is present.",
+  "fingerprint": "a17ef624489da715c8af9a32ed3c2e0e07fdb8499db4e11cbb1412b4829d0cb8",
+  "lineage": {
+    "issue_number": 7350,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38502348482",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38502348482",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261014024727_186b31dc31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7350,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38502348482"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7350 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-14T02:47:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
