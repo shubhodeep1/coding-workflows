@@ -222,7 +222,8 @@ fi
 
 _post_attempt_marker()
 {
-	local number="$1" reason="$2" attempts="$3" marker body_file
+	local number="$1" reason="$2" attempts="$3" marker body_file summary action
+	ATTEMPT_MARKER_POSTED=false
 	reason="$(printf '%s' "${reason}" | tr -cd 'a-z0-9_' | head -c 60)"
 	[[ "${reason}" =~ ^[a-z] ]] || reason="intake_failed"
 	marker="$(python3 "${HEAL_PY}" heal-scope-recovery scan-marker --reason "${reason}" --run-id "${RUN_ID}" 2>/dev/null || true)"
@@ -231,27 +232,36 @@ _post_attempt_marker()
 		return 0
 	fi
 	body_file="${RUNTIME_DIR}/recovery_scan_marker_${number}.md"
+	summary="The heal-scope recovery scan could not replace this issue"
+	action="It needs a fresh authenticated failure report or a person."
+	if [ "${reason}" = "close_failed" ]; then
+		# Already replaced: only the close of this original issue is missing.
+		summary="This issue is already replaced, but the heal-scope recovery scan could not close it"
+		action="It is already replaced; close it by hand."
+	fi
 	{
-		echo "The heal-scope recovery scan could not replace this issue (reason \`${reason}\`). Attempt $((attempts + 1)) of ${MAX_ATTEMPTS}."
+		echo "${summary} (reason \`${reason}\`). Attempt $((attempts + 1)) of ${MAX_ATTEMPTS}."
 		echo
 		echo "Scan run: ${RUN_URL}"
 		echo
 		echo "${marker}"
 	} > "${body_file}"
 	if gh_retry gh api "repos/${SELF_REPO}/issues/${number}/comments" -F body=@"${body_file}" >/dev/null 2>&1; then
+		ATTEMPT_MARKER_POSTED=true
 		log "heal_scope_recovery outcome=attempt_failed reason=${reason} issue=${number} attempts=$((attempts + 1)) max=${MAX_ATTEMPTS} marker=posted"
 	else
 		log "heal_scope_recovery outcome=attempt_failed reason=${reason} issue=${number} attempts=$((attempts + 1)) max=${MAX_ATTEMPTS} marker=failed"
 		return 0
 	fi
 	if [ $((attempts + 1)) -ge "${MAX_ATTEMPTS}" ]; then
-		tg_send_msg "Workflow failure heal: the heal-scope recovery scan stopped trying https://github.com/${SELF_REPO}/issues/${number} after ${MAX_ATTEMPTS} attempts (last reason ${reason}). It needs a fresh authenticated failure report or a person."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		tg_send_msg "Workflow failure heal: the heal-scope recovery scan stopped trying https://github.com/${SELF_REPO}/issues/${number} after ${MAX_ATTEMPTS} attempts (last reason ${reason}). ${action}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 	fi
 }
 
 PROCESSED=0
 EXAMINED=0
 DEFERRED=0
+ATTEMPT_MARKER_POSTED=false
 INTAKE_FAILURES=0
 # The loop reads fd 3 so nothing it runs can consume the candidate list.
 while IFS= read -r -u 3 candidate; do
@@ -294,6 +304,11 @@ while IFS= read -r -u 3 candidate; do
 				# An attempt marker bounds the retries; the last one sends a
 				# single WARNING and drops the issue from the candidate list.
 				_post_attempt_marker "${NUMBER}" "close_failed" "${ATTEMPTS}"
+				if [ "${ATTEMPT_MARKER_POSTED}" != "true" ]; then
+					# Neither the close nor the marker landed, so no attempt was
+					# counted: warn instead of retrying silently every hour.
+					tg_send_msg "Workflow failure heal: the recovery scan could not close already-replaced https://github.com/${SELF_REPO}/issues/${NUMBER} or record the attempt; close it by hand."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+				fi
 			fi
 			continue
 		fi

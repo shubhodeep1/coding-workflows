@@ -76,6 +76,8 @@ if path.endswith("/actions/workflows/workflow-failure-heal-intake.yml/runs"):
 		fail()
 	out({"workflow_runs": state.get("runs", [])})
 if path.endswith("/comments") and any(a.startswith("body=@") for a in args):
+	if state.get("comment_post_fail"):
+		fail()
 	body = open(next(a for a in args if a.startswith("body=@"))[len("body=@"):]).read()
 	state.setdefault("posted", []).append({"path": path, "body": body})
 	out("{}")
@@ -398,3 +400,17 @@ def test_scan_deferral_gives_the_slot_back_to_a_later_candidate() -> None:
 		# The deferral released the one per-tick slot, so #32 ran too.
 		assert "WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE=32" in intake_env.read_text(encoding="utf-8")
 		assert "deferred=2 " in result.stdout
+
+
+def test_scan_warns_when_neither_the_close_nor_the_attempt_marker_lands() -> None:
+	comments_path = f"repos/{SELF_REPO}/issues/31/comments"
+	marker = {"id": 2, "body": "replaced\n\n" + heal.render_heal_scope_recovery_marker(901, SELF_REPO), "user": {"login": LOGIN}}
+	with tempfile.TemporaryDirectory(prefix="heal-scan-close-marker-fail-") as tmp_name:
+		state = _state([_heal_issue(31)], {comments_path: [marker]})
+		state["close_fail"] = True
+		state["comment_post_fail"] = True
+		result, _, _, _, tg_log = _run(Path(tmp_name), state)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "attempt_failed reason=close_failed issue=31 attempts=1 max=3 marker=failed" in result.stdout
+		warnings = [line for line in tg_log.read_text(encoding="utf-8").splitlines() if line.startswith("WARNING\t")]
+		assert len(warnings) == 1 and "close it by hand" in warnings[0]

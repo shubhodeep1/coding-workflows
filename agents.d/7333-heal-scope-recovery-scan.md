@@ -52,7 +52,9 @@ cannot starve later candidates. An open
 issue that already carries a trusted recovery marker (a failed close after
 `outcome=replaced`) is closed by the scan (`reason=already_replaced close=done|failed`;
 a failed close leaves an attempt marker with `reason=close_failed`, so the
-attempt cap bounds the retries and only the last attempt sends a WARNING).
+attempt cap bounds the retries and only the last attempt sends a WARNING,
+which says to close it by hand; when the marker cannot be posted either, the
+run sends a WARNING because no attempt was counted).
 `HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off with recovery.
 
 Non-retryable reports and recovery (#7333 gap 2): a verified (OIDC)
