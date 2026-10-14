@@ -67,9 +67,11 @@ const JWKS_REFRESH_FLOOR_MS = 60 * 1000;
  * tests/test_claude_pool_token.py keeps this list equal to that set.
  */
 export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
+	"check_failure_triage.yml",
 	"clarify.yml",
 	"claude-engine-smoke.yml",
 	"implement.yml",
+	"issue_pr_status.yml",
 	"orchestrate.yml",
 	"orchestrate_clarify_respond.yml",
 	"orchestrate_poll.yml",
@@ -77,6 +79,10 @@ export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
 	"review_autofix.yml",
 	"security-audit.yml",
 	"unblock_judge.yml",
+	"validate.yml",
+	"validation-refresh.yml",
+	"workflow-failure-heal-intake.yml",
+	"workflow-log-analysis.yml",
 ]);
 export const TRUSTED_BRANCH_REF = "refs/heads/main";
 /**

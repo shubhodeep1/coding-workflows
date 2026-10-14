@@ -478,6 +478,7 @@ jobs:
             tests/test_validate_lint_graceful_shutdown_hooks.py \
             tests/test_validate_lint_init_true.py \
             tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_manifest_shell_safety.py \
             tests/test_validate_process_render_recovery.py \
             tests/test_validation_import_audit_stdlib.py \
             tests/test_verify_integration_fingerprints_partial_removal.py \
@@ -697,7 +698,7 @@ jobs:
       - name: Activation verification tests (port P4)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
 
       - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
         run: |
@@ -724,6 +725,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
 
       - name: Isolated agent container tests (codex_isolated_exec.sh)
         # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
