@@ -1455,6 +1455,7 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
 	"ai:needs-human",
+	"ai:claude-capacity-wait",
 	"ai:blocked",
 	"ai:clarify-failed",
 	"ai:clarify-respond-failed",
@@ -1521,6 +1522,8 @@ BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_
 # STALL_RECOVERY_ACTIONS["ai:review-blocked"] below.
 DEDICATED_HANDLER_PHASES: set[str] = {
 	"ai:needs-human",
+	# Claude pool capacity wait (issue #7251): the hourly resume pass owns it.
+	"ai:claude-capacity-wait",
 	"ai:blocked",
 	"ai:implementation-failed",
 	"ai:validating",

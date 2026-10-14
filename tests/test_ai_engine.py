@@ -1145,3 +1145,268 @@ def test_report_refuses_symlinked_or_missing_records(tmp_path: Path) -> None:
 	records.symlink_to(target)
 	linked = subprocess.run(["bash", str(REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh")], capture_output=True, text=True, env=env, check=False)
 	assert linked.returncode == 0 and "skip reason=records_symlink" in linked.stdout
+
+
+# --- Claude capacity wait (issue #7251, capacity-wait Phase 1) -----------------
+
+
+@pytest.mark.parametrize("reason", CAPACITY_REASONS)
+@pytest.mark.parametrize("value", ["true", "TRUE", "True"])
+def test_capacity_wait_turns_a_capacity_fallback_into_exit_80(sandbox: dict, reason: str, value: str) -> None:
+	notes = sandbox["tmp"] / "tg.txt"
+	script = (
+		f'tg_send_msg() {{ printf "%s|%s\\n" "$1" "$2" >> {shlex.quote(str(notes))}; }}; '
+		f'ai_engine_fallback PLAN {reason}; echo "RC=${{AI_ENGINE_FALLBACK_EXIT}}"'
+	)
+	result = _bash(sandbox, script, CLAUDE_POOL_CAPACITY_WAIT_ENABLED=value)
+	assert _rc(result) == 80, result.stderr
+	assert f"AI_ENGINE_CAPACITY_WAIT role=PLAN reason={reason}" in result.stderr
+	assert "AI_ENGINE_FALLBACK_REFUSED" not in result.stderr
+	[record] = _records(sandbox)
+	assert record[2:] == ["PLAN", reason, "capacity", "wait", "capacity"]
+	# No codex runs, so no codex-fallback note and no note marker.
+	assert not notes.exists()
+	assert not (sandbox["runner_temp"] / "ai-engine-fallback-notified").exists()
+
+
+@pytest.mark.parametrize("reason", CAPACITY_REASONS)
+@pytest.mark.parametrize("value", [None, "", "false", "FALSE", "yes", "1"])
+def test_capacity_wait_off_keeps_the_codex_fallback(sandbox: dict, reason: str, value: str | None) -> None:
+	extra = {} if value is None else {"CLAUDE_POOL_CAPACITY_WAIT_ENABLED": value}
+	result = _bash(sandbox, f'tg_send_msg() {{ :; }}; ai_engine_fallback PLAN {reason}; echo "RC=${{AI_ENGINE_FALLBACK_EXIT}}"', **extra)
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_CAPACITY_WAIT" not in result.stderr
+	assert _records(sandbox)[-1][5] == "codex"
+	invalid = value not in (None, "", "false", "FALSE")
+	assert ("invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED; capacity wait off." in result.stderr) is invalid
+
+
+def test_capacity_wait_never_overrides_the_always_policy(sandbox: dict) -> None:
+	result = _bash(sandbox, 'tg_send_msg() { :; }; ai_engine_fallback PLAN all_gated; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"',
+		CLAUDE_POOL_CAPACITY_WAIT_ENABLED="true", AI_ENGINE_FALLBACK_POLICY="always")
+	assert _rc(result) == 75
+	assert _records(sandbox)[-1][5:] == ["codex", "always"]
+
+
+@pytest.mark.parametrize("reason", NON_CAPACITY_REASONS)
+def test_capacity_wait_leaves_non_capacity_reasons_refused(sandbox: dict, reason: str) -> None:
+	result = _bash(sandbox, f'ai_engine_fallback PLAN {reason}; echo "RC=${{AI_ENGINE_FALLBACK_EXIT}}"', CLAUDE_POOL_CAPACITY_WAIT_ENABLED="true")
+	assert _rc(result) == 76
+	assert _records(sandbox)[-1][5] == "refused"
+
+
+def test_capacity_wait_demoted_capacity_reason_is_refused(sandbox: dict) -> None:
+	result = _bash(sandbox, 'ai_engine_fallback PLAN all_gated non_capacity; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"', CLAUDE_POOL_CAPACITY_WAIT_ENABLED="true")
+	assert _rc(result) == 76
+
+
+def test_claude_run_every_account_at_usage_limit_waits_when_enabled(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_LIMIT_a", B="TOK_LIMIT_b")
+	result = _claude_run(sandbox, CLAUDE_POOL_CAPACITY_WAIT_ENABLED="true")
+	assert _rc(result) == 80, result.stderr
+	assert "AI_ENGINE_CAPACITY_WAIT role=PLAN reason=all_usage_limit" in result.stderr
+
+
+def test_claude_run_all_gated_pool_waits_when_enabled(sandbox: dict) -> None:
+	result = _claude_run(sandbox, CLAUDE_POOL_REASON="all_gated", CLAUDE_POOL_CAPACITY_WAIT_ENABLED="true")
+	assert _rc(result) == 80, result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_selected_capacity_wait_never_runs_codex(sandbox: dict) -> None:
+	result = _selected(sandbox, 80, AI_ENGINE_PLAN="claude")
+	assert _rc(result) == 80
+	assert _selected_value(result) == "claude"
+	assert not (sandbox["tmp"] / "selected-codex.txt").exists()
+
+
+def test_capacity_wait_constants_and_switch_default() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine.sh").read_text(encoding="utf-8")
+	assert "_AI_ENGINE_EXIT_WAIT=80" in text
+	assert '"${CLAUDE_POOL_CAPACITY_WAIT_ENABLED:-}"' in text
+
+
+def _fake_wait_gh(bin_dir: Path, log: Path, comments_dir: Path, login: str = "pipeline-bot") -> None:
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env bash\n"
+		f'printf "%s\\n" "$*" >> {shlex.quote(str(log))}\n'
+		'if [ "$1 $2" = "api user" ]; then\n'
+		'\t[ "${FAKE_GH_USER_FAIL:-}" = "1" ] && exit 1\n'
+		f'\techo {shlex.quote(login)}; exit 0\n'
+		'fi\n'
+		'for arg in "$@"; do\n'
+		'\tif [[ "${arg}" =~ ^repos/[^/]+/[^/]+/issues/([0-9]+)/comments\\?per_page=100$ ]]; then\n'
+		f'\t\tf={shlex.quote(str(comments_dir))}/"${{BASH_REMATCH[1]}}.json"\n'
+		'\t\tif [ -f "$f" ]; then cat "$f"; else echo "[[]]"; fi; exit 0\n'
+		'\tfi\n'
+		'done\n'
+		'prev=""; target=""\n'
+		'for arg in "$@"; do\n'
+		'\tif [[ "${arg}" =~ ^repos/[^/]+/[^/]+/issues/([0-9]+)/comments$ ]]; then target="${BASH_REMATCH[1]}"; fi\n'
+		'\tif [ "${prev}" = "-f" ] && [ "${arg#body=}" != "${arg}" ] && [ -n "${target}" ]; then\n'
+		f'\t\tprintf "%s\\t%s\\n" "${{target}}" "$(printf "%s" "${{arg#body=}}" | tail -n 1)" >> {shlex.quote(str(log))}.posts\n'
+		'\tfi\n'
+		'\tprev="${arg}"\n'
+		'done\n'
+		"exit 0\n",
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+
+
+def _fake_tracker(tmp_path: Path, opened: bool, tracker: str = "900") -> Path:
+	stub = tmp_path / "fake_provider_outage.py"
+	stub.write_text(
+		"import sys\n"
+		f"log = open({str(tmp_path / 'tracker-calls.txt')!r}, 'a')\n"
+		"log.write(' '.join(sys.argv[1:]) + '\\n')\n"
+		"args = sys.argv[1:]\n"
+		"alert = args[args.index('--alert-out') + 1]\n"
+		+ (f"open(alert, 'w').write('opened')\nprint('PROVIDER_OUTAGE op=open outcome=opened')\nprint('alert=1 outcome=opened tracker={tracker}')\n"
+		   if opened else f"print('alert=0 outcome=already_open tracker={tracker}')\n"),
+		encoding="utf-8",
+	)
+	return stub
+
+
+def _run_wait_report(tmp_path: Path, records: str, opened: bool = True, comments: dict | None = None, tracker: str = "900", **extra: str):
+	bin_dir = tmp_path / "wbin"
+	bin_dir.mkdir(exist_ok=True)
+	log = tmp_path / "wait-gh.log"
+	comments_dir = tmp_path / "comments"
+	comments_dir.mkdir(exist_ok=True)
+	for number, items in (comments or {}).items():
+		(comments_dir / f"{number}.json").write_text(json.dumps([items]), encoding="utf-8")
+	_fake_wait_gh(bin_dir, log, comments_dir)
+	runner_temp = tmp_path / "rt-wait"
+	runner_temp.mkdir(exist_ok=True)
+	(runner_temp / "ai-engine-fallback-records.tsv").write_text(records, encoding="utf-8")
+	env = {
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"HOME": str(tmp_path),
+		"RUNNER_TEMP": str(runner_temp),
+		"GITHUB_REPOSITORY": "owner/consumer",
+		"GITHUB_RUN_ID": "42",
+		"GITHUB_WORKFLOW_REF": "owner/consumer/.github/workflows/ai-plan.yml@refs/heads/main",
+		"REPORT_WORKFLOW_NAME": "Plan",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"CLAUDE_CAPACITY_WAIT_TRACKER_PY": str(_fake_tracker(tmp_path, opened, tracker)),
+		**extra,
+	}
+	result = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh")],
+		capture_output=True, text=True, env=env, cwd=tmp_path, timeout=120, check=False,
+	)
+	posts_path = Path(f"{log}.posts")
+	posts = posts_path.read_text(encoding="utf-8").splitlines() if posts_path.exists() else []
+	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	return result, calls, posts
+
+
+WAIT_RECORD = _record("PLAN", "all_gated", "capacity", "wait")
+
+
+def test_report_records_a_capacity_wait_on_the_item_and_tracker(tmp_path: Path) -> None:
+	result, calls, posts = _run_wait_report(
+		tmp_path, WAIT_RECORD + _record("CLARIFY", "all_usage_limit", "capacity", "wait"),
+		CLAUDE_CAPACITY_WAIT_ITEM_KIND="issue", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="7", CLAUDE_CAPACITY_WAIT_STAGE="planning",
+		CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT="123",
+	)
+	assert result.returncode == 0, result.stderr
+	assert any("issues/7/labels" in call and "labels[]=ai:claude-capacity-wait" in call for call in calls)
+	assert posts == [
+		# The tracker records the run first; the item is labelled only after.
+		"900\t<!-- ai:claude-capacity-wait-item:v1 kind=issue item=7 workflow=ai-plan.yml run=42 role=PLAN,CLARIFY -->",
+		"7\t<!-- ai:claude-capacity-wait:v1 stage=planning source=123 run=42 role=PLAN,CLARIFY -->",
+	]
+	tracker_call = (tmp_path / "tracker-calls.txt").read_text(encoding="utf-8")
+	assert "open --repo owner/consumer --kind capacity --provider claude-pool --status all_gated" in tracker_call
+	assert ("AI_ENGINE_FALLBACK_REPORT wait item=issue:7 roles=PLAN,CLARIFY label=applied marker=posted "
+		"tracker=900 tracker_marker=posted alert=sent") in result.stdout
+	assert "outcome=none records=2 codex_fallbacks=0 waits=2" in result.stdout
+	# No heal dispatch for a wait.
+	assert not any("dispatches" in call for call in calls)
+
+
+def test_report_wait_deduplicates_on_markers_by_the_pipeline_login_only(tmp_path: Path) -> None:
+	mine_item = {"user": {"login": "pipeline-bot"}, "body": "x\n<!-- ai:claude-capacity-wait:v1 stage=none source=none run=42 role=PLAN -->"}
+	mine_tracker = {"user": {"login": "pipeline-bot"}, "body": "<!-- ai:claude-capacity-wait-item:v1 kind=pr item=8 workflow=x run=42 role=PLAN -->"}
+	result, _, posts = _run_wait_report(
+		tmp_path, WAIT_RECORD, opened=False, comments={8: [mine_item], 900: [mine_tracker]},
+		CLAUDE_CAPACITY_WAIT_ITEM_KIND="pr", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="8",
+	)
+	assert result.returncode == 0, result.stderr
+	assert posts == []
+	assert "marker=present tracker=900 tracker_marker=present alert=none" in result.stdout
+
+	forged_item = dict(mine_item, user={"login": "someone-else"})
+	forged_tracker = dict(mine_tracker, user={"login": "someone-else"})
+	other = tmp_path / "forged"
+	other.mkdir()
+	result, _, posts = _run_wait_report(
+		other, WAIT_RECORD, opened=False, comments={8: [forged_item], 900: [forged_tracker]},
+		CLAUDE_CAPACITY_WAIT_ITEM_KIND="pr", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="8",
+	)
+	assert len(posts) == 2
+	assert "marker=posted tracker=900 tracker_marker=posted" in result.stdout
+
+
+def test_report_wait_without_an_item_only_records_on_the_tracker(tmp_path: Path) -> None:
+	result, calls, posts = _run_wait_report(tmp_path, WAIT_RECORD, CLAUDE_CAPACITY_WAIT_ITEM_KIND="issue", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="abc")
+	assert result.returncode == 0, result.stderr
+	assert not any("/labels" in call for call in calls)
+	assert posts == ["900\t<!-- ai:claude-capacity-wait-item:v1 kind=run item=none workflow=ai-plan.yml run=42 role=PLAN -->"]
+	assert "wait item=run:none roles=PLAN label=skipped marker=skipped" in result.stdout
+
+
+def test_report_wait_identity_failure_records_nothing(tmp_path: Path) -> None:
+	result, calls, posts = _run_wait_report(
+		tmp_path, WAIT_RECORD, CLAUDE_CAPACITY_WAIT_ITEM_KIND="issue", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="7", FAKE_GH_USER_FAIL="1",
+	)
+	assert result.returncode == 0
+	assert "wait outcome=skip reason=identity_unavailable" in result.stdout
+	assert posts == []
+	assert not any("/labels" in call for call in calls)
+	assert not (tmp_path / "tracker-calls.txt").exists()
+
+
+def test_report_wait_and_refused_pairs_are_reported_separately(tmp_path: Path) -> None:
+	result, calls, _ = _run_wait_report(tmp_path, WAIT_RECORD + _record("PLAN", "no_credential", "non_capacity", "refused"))
+	assert result.returncode == 0, result.stderr
+	assert sum("dispatches" in call for call in calls) == 1
+	assert "outcome=reported pairs=1 dispatched=1 records=2 codex_fallbacks=0 waits=1" in result.stdout
+
+
+def test_report_ignores_a_wait_record_with_a_non_capacity_class(tmp_path: Path) -> None:
+	result, calls, _ = _run_wait_report(tmp_path, _record("PLAN", "no_credential", "non_capacity", "wait"))
+	assert result.returncode == 0
+	assert "outcome=none records=1 codex_fallbacks=0 waits=0" in result.stdout
+	assert calls == []
+
+
+def test_report_wait_does_not_label_the_item_when_the_tracker_record_fails(tmp_path: Path) -> None:
+	# provider_outage.py open failed (no tracker number): a label without a
+	# tracker marker would hide the item from stall recovery and from the
+	# resume pass, so the item is not labelled.
+	result, calls, posts = _run_wait_report(
+		tmp_path, WAIT_RECORD, tracker="", CLAUDE_CAPACITY_WAIT_ITEM_KIND="issue", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="7",
+	)
+	assert result.returncode == 0, result.stderr
+	assert not any("/labels" in call for call in calls)
+	assert posts == ["7\t<!-- ai:claude-capacity-wait:v1 stage=none source=none run=42 role=PLAN -->"]
+	assert "label=skipped marker=posted tracker=none tracker_marker=failed" in result.stdout
+	assert "not labelled ai:claude-capacity-wait because the tracker record failed" in result.stdout
+
+
+def test_report_wait_alert_names_an_unavailable_tracker(tmp_path: Path) -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	assert 'tracker_ref="tracker unavailable (lookup or create failed)"' in text
+	assert "tracker #none" not in text
+
+
+@pytest.mark.parametrize("value", [" true", "true ", "\tTRUE\n"])
+def test_capacity_wait_switch_trims_whitespace_like_provider_outage(sandbox: dict, value: str) -> None:
+	result = _bash(sandbox, 'tg_send_msg() { :; }; ai_engine_fallback PLAN all_gated; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"', CLAUDE_POOL_CAPACITY_WAIT_ENABLED=value)
+	assert _rc(result) == 80, result.stderr
+	assert "invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED" not in result.stderr
