@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (destination selection for \"Workflow failure heal contract and driver tests\", lines 1318-1327) and changelog.d/7387-ci-heal-job-workflow-heal-step-move.md\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The comment says step timings were not readable and picks tests-promote-stall-and-review by test/subprocess count and absence of a budget-watch warning, which only fires at 75% of the timeout, so the diff gives no measured headroom comparison; changelog.d/7383-ci-heal-job-rebalance.md gave measured headroom and this one does not; only one step moved although the issue says \"steps\". Severity disagreement: sonnet-5_5 rated NIT (confidence 3), luna rated MAJOR (confidence 5); highest used.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: the justification comment in `.github/workflows/ci.yml` (about lines 1318-1327) and `changelog.d/7387-ci-heal-job-workflow-heal-step-move.md`.\n  Evidence of absence: The comment says step timings were not readable and picks the step \"by test count and subprocess count\". budget-watch only warns at 75% of the timeout, so it shows the job stayed under 15 minutes, not that it has the most headroom. `tests-promote-stall-and-review` runs roughly 55 steps and no duration is recorded. `changelog.d/7383-ci-heal-job-rebalance.md` gave measured headroom and this one gives none. The issue says \"steps\" and only one step moved. Documentation and verification gap, not a runtime defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the destination selection for `Workflow failure heal contract and driver tests` at lines 1318-1327.\n  Evidence of absence: The diff says the run's step timings were not readable and selects `tests-promote-stall-and-review` based on test/subprocess counts and the absence of a budget-watch warning, rather than comparing job headroom. The timing note at `.github/workflows/ci.yml` lines 1813-1819 records 535-604 seconds of headroom for `tests-release-and-log-analysis` before later moves, but the diff provides no current timing comparison establishing which job has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51894a26d55dea595af437e38d1325caa0e63cb4057d548130d1eaca1e92cddb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7388,
+    "run_id": "38599514237",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38599514237",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014165737_3937e9eae6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7388,
+    "run_id": "38599514237"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T16:57:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
