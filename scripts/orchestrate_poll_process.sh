@@ -3072,10 +3072,81 @@ post_tracking_comment() {
     return 0
   fi
   rm -f "${payload_err_file}"
+  # A repeat of one of the pipeline's recent comments updates that comment's
+  # count instead of posting again (Q141). Commands (a leading `/`) always
+  # post: an edit would not trigger their workflow.
+  local recent_file="" repeat_json repeat_id repeat_count repeat_body_file response_file posted_id
+  # Resolve the login in this shell so the result is cached for later calls
+  # (_tracking_comment_recent_file runs in a command substitution).
+  unblock_trusted_login >/dev/null || true
+  if [[ ! "${comment_body}" =~ ^[[:space:]]*/ ]] && recent_file="$(_tracking_comment_recent_file)"; then
+    repeat_body_file="$(mktemp "${TMPDIR:-/tmp}/comment_repeat_body.XXXXXX")"
+    printf '%s' "${comment_body}" > "${repeat_body_file}"
+    repeat_json="$(jq -c --rawfile b "${repeat_body_file}" "${TRACKING_COMMENT_REPEAT_JQ_DEFS}"'
+      [.[] | select((.body | repeat_base) == $b)] | last // empty | {id, count: (.body | repeat_count)}' "${recent_file}" 2>/dev/null || true)"
+    rm -f "${repeat_body_file}"
+    repeat_id="$(printf '%s' "${repeat_json}" | jq -r '.id // empty' 2>/dev/null || true)"
+    repeat_count="$(printf '%s' "${repeat_json}" | jq -r '.count // empty' 2>/dev/null || true)"
+    if [[ "${repeat_id}" =~ ^[1-9][0-9]*$ ]] && [[ "${repeat_count}" =~ ^[1-9][0-9]*$ ]]; then
+      repeat_count=$((repeat_count + 1))
+      if printf '%s\n\n_Repeated %s times, last %s UTC._' "${comment_body}" "${repeat_count}" "$(date -u '+%Y-%m-%d %H:%M')" \
+          | jq -Rs '{body: .}' > "${payload_file}" 2>/dev/null \
+        && gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${repeat_id}" \
+          --method PATCH --input "${payload_file}" >/dev/null; then
+        jq --argjson id "${repeat_id}" --slurpfile p "${payload_file}" 'map(if .id == $id then .body = $p[0].body else . end)' \
+          "${recent_file}" > "${recent_file}.tmp" 2>/dev/null && mv "${recent_file}.tmp" "${recent_file}"
+        echo "TRACKING_COMMENT_REPEAT tracking_issue=${TRACKING_NUM} comment=${repeat_id} count=${repeat_count} outcome=updated"
+        rm -f "${payload_file}"
+        return 0
+      fi
+      echo "TRACKING_COMMENT_REPEAT tracking_issue=${TRACKING_NUM} comment=${repeat_id} count=${repeat_count} outcome=update_failed"
+      printf '%s' "${comment_body}" | jq -Rs '{body: .}' > "${payload_file}" 2>/dev/null || true
+    fi
+  fi
+  response_file="$(mktemp "${TMPDIR:-/tmp}/comment_response.XXXXXX")"
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
     --method POST \
-    --input "${payload_file}" >/dev/null || true
-  rm -f "${payload_file}"
+    --input "${payload_file}" > "${response_file}" \
+    || echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing." >&2
+  posted_id="$(jq -r '.id // empty' "${response_file}" 2>/dev/null || true)"
+  if [ -n "${recent_file}" ] && [[ "${posted_id}" =~ ^[1-9][0-9]*$ ]]; then
+    jq --argjson id "${posted_id}" --slurpfile p "${payload_file}" '(. + [{id: $id, body: $p[0].body}]) | .[-20:]' \
+      "${recent_file}" > "${recent_file}.tmp" 2>/dev/null && mv "${recent_file}.tmp" "${recent_file}"
+  fi
+  rm -f "${payload_file}" "${response_file}"
+}
+
+# jq definitions for the repeat footer post_tracking_comment writes.
+TRACKING_COMMENT_REPEAT_JQ_DEFS='
+  def repeat_footer_re: "\n\n_Repeated [0-9]+ times, last [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} UTC\\._$";
+  def repeat_base: sub(repeat_footer_re; "");
+  def repeat_count: ((capture("\n\n_Repeated (?<n>[0-9]+) times, last [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} UTC\\._$")? | .n | tonumber) // 1);
+'
+
+# _tracking_comment_recent_file
+#
+# Prints the path of this run's list of the pipeline's newest 20 comments on
+# TRACKING_NUM ({id, body}, oldest first), built once from COMMENTS and kept
+# current by post_tracking_comment. State chains and marker-only comments
+# (`<!-- tg_cleanup:... -->` and similar) do not count toward the 20. No API
+# calls. Fails (status 1) when COMMENTS is unavailable or belongs to another
+# issue, or the pipeline login is unknown; the caller then just posts.
+_tracking_comment_recent_file() {
+  local recent_file
+  [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "${COMMENTS_FETCH_OK:-false}" = "true" ] && [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ] || return 1
+  unblock_trusted_login >/dev/null
+  [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ] || return 1
+  recent_file="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/tracking_recent_${TRACKING_NUM}.json"
+  if [ ! -s "${recent_file}" ]; then
+    printf '%s' "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+      [.[]? | select((.user.login // "") == $login and (.id | type) == "number")
+        | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE")) | not)
+        | select(((.body // "") | test("^\\s*<!--[^\\n]*-->\\s*$")) | not)
+        | {id, body: (.body // "")}]
+      | .[-20:]' > "${recent_file}" 2>/dev/null || { rm -f "${recent_file}"; return 1; }
+  fi
+  printf '%s' "${recent_file}"
 }
 
 post_issue_comment_json() {
@@ -3230,24 +3301,160 @@ post_state_comment() {
     return 1
   fi
   chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || echo "")"
-  idx=0
-  while IFS= read -r chunk_file; do
-    [ -n "${chunk_file}" ] || continue
-    idx=$((idx + 1))
-    if ! _post_state_comment_v2_chunk "${chunk_file}"; then
-      echo "::error::Failed to post V2 state chunk ${idx}/${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
-      rm -rf "${pack_dir}"
-      return 1
+  local cap_retry_done="false" chunk_failed
+  while true; do
+    STATE_COMMENT_CAP_HIT="false"
+    chunk_failed="false"
+    idx=0
+    while IFS= read -r chunk_file; do
+      [ -n "${chunk_file}" ] || continue
+      idx=$((idx + 1))
+      if ! _post_state_comment_v2_chunk "${chunk_file}"; then
+        chunk_failed="true"
+        break
+      fi
+    done <<< "${chunk_files}"
+    [ "${chunk_failed}" = "true" ] || break
+    # GitHub refuses new comments on an issue with 2500 of them. Deleting
+    # superseded state chains frees room, so the write is tried once more.
+    if [ "${STATE_COMMENT_CAP_HIT}" = "true" ] && [ "${cap_retry_done}" != "true" ]; then
+      cap_retry_done="true"
+      echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} trigger=comment_cap"
+      prune_state_comment_chains refresh || true
+      continue
     fi
-  done <<< "${chunk_files}"
+    echo "::error::Failed to post V2 state chunk ${idx}/${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  done
   if [ "${idx}" -ne "${total}" ]; then
     echo "::error::orchestrate_state_v2 pack manifest mismatch for issue #${TRACKING_NUM}: posted ${idx} chunk(s) but manifest declared ${total} (raw_bytes=${raw_bytes}); treating V2 write as failed to avoid persisting a torn chain." >&2
     rm -rf "${pack_dir}"
     return 1
   fi
   rm -rf "${pack_dir}"
+  prune_state_comment_chains || true
   _mirror_task_state_files_from_state
   record_poll_progress_if_advanced || true
+  return 0
+}
+
+# prune_state_comment_chains
+#
+# Deletes the poller's own superseded state comments on the tracking issue
+# (Q140). Every state write posts a new V2 chain of one or more comments and
+# nothing removed the old ones, so a busy project reached GitHub's
+# 2500-comment cap (tele-funtoken-msg-scoring#3928: 1791 of its 2500 comments
+# were state chains) and every later write and comment failed.
+#
+# Keeps the newest complete chain in COMMENTS (plus the one just written) and
+# the newest complete chain whose status is not `failed`, which
+# integration-failure recovery reads (`extract --skip-status failed`); every
+# other reader uses only the newest chain. Incomplete chains newer than the
+# newest complete one are kept. The plan comes from
+# `orchestrate_state_v2.py prune-plan` over COMMENTS by UNBLOCK_TRUSTED_LOGIN
+# and is computed once per tracking issue per run (COMMENTS does not change
+# within the run, and chains written during it are newer than the plan's
+# boundary). API calls: one DELETE per comment, at most
+# ORCH_STATE_PRUNE_MAX_DELETES (default 50) per tracking issue per run, so a
+# large backlog drains over several runs. Best effort: never fails the caller.
+# ORCH_STATE_PRUNE_ENABLED=false turns it off.
+# With the argument `refresh` (a state write met the comment cap) the cached
+# plan does not cover chains written earlier in this run, so the issue's
+# comments are read again (one paginated GET; COMMENTS is a start-of-run
+# snapshot and no cached read covers later writes), the plan is recomputed and
+# the delete budget starts over. A failed re-read falls back to COMMENTS.
+# Logs: STATE_PRUNE tracking_issue=<n> deleted=<n> failed=<n> remaining=<n> outcome=done|budget_exhausted|skip [reason=]
+prune_state_comment_chains() {
+  local refresh="${1:-}" raw_file
+  local enabled max_deletes base plan_file done_file tried_file deleted_file comments_file plan_json ids id deleted=0 failed=0 used remaining
+  enabled="$(printf '%s' "${ORCH_STATE_PRUNE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${enabled}" in
+    false|0|no|off) return 0 ;;
+  esac
+  [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] || return 0
+  if [ "${refresh}" != "refresh" ] \
+    && { [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM}" ]; }; then
+    echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+    echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} outcome=skip reason=login_unavailable"
+    return 0
+  fi
+  max_deletes="${ORCH_STATE_PRUNE_MAX_DELETES:-50}"
+  [[ "${max_deletes}" =~ ^[0-9]+$ ]] || max_deletes=50
+  base="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/state_prune_${TRACKING_NUM}"
+  plan_file="${base}.plan"
+  done_file="${base}.done"
+  # Ids deleted before a refresh: still skipped, but outside the new budget.
+  # Only successful deletes carry over, so a failed DELETE (the comment still
+  # exists) is retried by the cap-time refresh.
+  tried_file="${base}.tried"
+  deleted_file="${base}.deleted"
+  if [ "${refresh}" = "refresh" ]; then
+    rm -f "${plan_file}"
+    cat "${deleted_file}" >> "${tried_file}" 2>/dev/null || true
+    : > "${deleted_file}"
+    : > "${done_file}"
+  fi
+  if [ ! -s "${plan_file}" ]; then
+    comments_file="$(mktemp "${TMPDIR:-/tmp}/state_prune_comments.XXXXXX")"
+    raw_file="$(mktemp "${TMPDIR:-/tmp}/state_prune_raw.XXXXXX")"
+    if [ "${refresh}" = "refresh" ] \
+      && gh_retry_to_file "${raw_file}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" \
+      && jq -s 'add // []' "${raw_file}" > "${comments_file}" 2>/dev/null \
+      && jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
+      :
+    elif [ "${COMMENTS_FETCH_OK:-false}" = "true" ] && [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ]; then
+      printf '%s' "${COMMENTS}" > "${comments_file}"
+    else
+      rm -f "${comments_file}" "${raw_file}"
+      echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+      return 0
+    fi
+    rm -f "${raw_file}"
+    if ! plan_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_state_v2.py prune-plan \
+        --comments-json "${comments_file}" --login "${UNBLOCK_TRUSTED_LOGIN}" \
+        --keep-recent 1 --keep-not-status failed 2>/dev/null)" \
+      || ! jq -e '.delete | type == "array"' <<< "${plan_json}" >/dev/null 2>&1; then
+      rm -f "${comments_file}"
+      echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} outcome=skip reason=plan_failed"
+      return 0
+    fi
+    rm -f "${comments_file}"
+    jq -r '.delete[]' <<< "${plan_json}" > "${plan_file}"
+    if [ ! -s "${plan_file}" ]; then
+      # A non-empty plan file marks the plan as computed for this run.
+      printf 'none\n' > "${plan_file}"
+      echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} deleted=0 failed=0 remaining=0 outcome=done"
+      return 0
+    fi
+  fi
+  touch "${done_file}" "${tried_file}"
+  used="$(wc -l < "${done_file}" | tr -d '[:space:]')"
+  ids="$(grep -vxF -f "${done_file}" -f "${tried_file}" "${plan_file}" | grep -E '^[1-9][0-9]*$' || true)"
+  [ -n "${ids}" ] || return 0
+  while IFS= read -r id; do
+    [ "${used}" -lt "${max_deletes}" ] || break
+    # Recorded before the call, so a comment is tried at most once per run.
+    printf '%s\n' "${id}" >> "${done_file}"
+    used=$((used + 1))
+    if gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" >/dev/null 2>&1; then
+      deleted=$((deleted + 1))
+      printf '%s\n' "${id}" >> "${deleted_file}"
+    else
+      failed=$((failed + 1))
+      echo "::warning::STATE_PRUNE could not delete comment ${id} on issue #${TRACKING_NUM}" >&2
+    fi
+  done <<< "${ids}"
+  remaining="$(grep -vxF -f "${done_file}" -f "${tried_file}" "${plan_file}" | grep -cE '^[1-9][0-9]*$' || true)"
+  if [ "${remaining:-0}" -gt 0 ]; then
+    echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} deleted=${deleted} failed=${failed} remaining=${remaining} outcome=budget_exhausted"
+  else
+    echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} deleted=${deleted} failed=${failed} remaining=0 outcome=done"
+  fi
   return 0
 }
 
@@ -3307,6 +3514,9 @@ _post_state_comment_v2_chunk() {
   set -e
   rm -f "${payload_file}"
   if [ "${gh_rc}" -ne 0 ]; then
+    if grep -qiE 'Commenting is disabled on issues with more than [0-9]+ comments' "${diag_file}" 2>/dev/null; then
+      STATE_COMMENT_CAP_HIT="true"
+    fi
     {
       echo "::error::_post_state_comment_v2_chunk: gh api POST /comments failed (rc=${gh_rc}) for issue #${TRACKING_NUM:-?} chunk ${chunk_file##*/}"
       echo "----- gh api stdout/stderr (truncated to 4 KiB) -----"
@@ -18568,6 +18778,7 @@ UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_proj
 # smallest existing call that supplies both (§14).
 handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
+  local req_reissue filed_num reissue_retarget repair_resume
   local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
   local close_reason close_marker close_stop
   local -a unblock_fixup_security_label_args=()
@@ -18654,7 +18865,56 @@ handle_unblock_judge_project_hooks() {
       echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup comment=$(jq -r 'if (.comment_id | type) == "number" then .comment_id else "unknown" end' <<< "${request}") outcome=invalid_request"
       continue
     fi
-    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+    # A non-security `reissue` closes the original item (unblock_actions.py),
+    # so its replacement takes the original's wave entry, as stall recovery's
+    # close_and_reissue does. A security original stays open and keeps its
+    # entry; its successor is appended like any fix-up. The title prefix is
+    # written by unblock_actions.py, never by the model.
+    req_reissue="false"
+    if [[ "${req_title}" == "Re-issue of #${req_item}:"* ]] && ! grep -q '^<!-- ai:security-finding:' <<< "${req_body}"; then
+      req_reissue="true"
+    fi
+    filed_num="$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // ([(.waves // [])[]?.issues[]? | select(.unblock_request_id == $id) | .github_issue] | first) // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)"
+    if [ -n "${filed_num}" ]; then
+      # A re-issue filed before its replacement took the wave entry left the
+      # closed original in the wave, which reads as a failed project (#7355).
+      if [ "${req_reissue}" = "true" ] && [[ "${filed_num}" =~ ^[0-9]+$ ]] \
+        && jq -e --argjson item "${req_item}" --arg id "${req_id}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
+        # Resume only a wave-origin failure: a project that a validation,
+        # security-pass or integration failure terminalized stays failed,
+        # because skipping the original does not clear that failure. So does
+        # one parked for a person (ai:blocked waits for /judge_resume;
+        # ai:needs-human is the needs-human digest).
+        repair_resume="true"
+        if has_label "${TRACKING_LABELS}" "ai:blocked" \
+          || has_label "${TRACKING_LABELS}" "ai:needs-human" \
+          || has_label "${TRACKING_LABELS}" "ai:validation-failed" \
+          || has_label "${TRACKING_LABELS}" "ai:validate-failed" \
+          || has_label "${TRACKING_LABELS}" "ai:harness-broken" \
+          || has_label "${TRACKING_LABELS}" "ai:security-pass-failed" \
+          || jq -e '(.integration_sync_status // "") == "failed"' "${STATE_FILE}" >/dev/null 2>&1; then
+          repair_resume="false"
+        fi
+        if jq --argjson item "${req_item}" --arg id "${req_id}" --argjson num "${filed_num}" --argjson resume "${repair_resume}" \
+          '((.waves // [])[]?.issues[]? | select(.github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not)))
+             |= (.status = "skipped" | .unblock_superseded_by = $num)
+           | if $resume and .status == "failed" then .status = "in_progress" else . end' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          post_state_comment || true
+          # Resume like the filing path below: the skipped original was what
+          # made the project read as failed, and a failed project is skipped.
+          if [ "${PROJECT_STATUS}" = "failed" ] && [ "${repair_resume}" = "true" ]; then
+            post_tracking_comment "## Unblock judge re-issue repaired
+
+#${req_item} was re-issued as #${filed_num} (\`${req_id}\`); its wave entry is now \`skipped\`. Status: failed -> in_progress." || true
+            PROJECT_STATUS="in_progress"
+          fi
+          echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${filed_num} outcome=superseded"
+        else
+          rm -f "${STATE_FILE}.tmp"
+          echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=superseded_write_failed"
+        fi
+      fi
       continue
     fi
     if jq -e --arg id "${req_id}" '(.unblock_fixup_rejected_ids // []) | index($id) != null' "${STATE_FILE}" >/dev/null 2>&1; then
@@ -18743,23 +19003,43 @@ handle_unblock_judge_project_hooks() {
       echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} outcome=create_failed"
       continue
     fi
-    jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
-      '.issue_number_map[$id] = $num
-       | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
-       | if .status == "failed" then .status = "in_progress" else . end' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reissue_retarget="false"
+    if [ "${req_reissue}" = "true" ] \
+      && jq -e --argjson item "${req_item}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
+      reissue_retarget="true"
+    fi
+    if [ "${reissue_retarget}" = "true" ]; then
+      # The local id and its dependents stay; only the GitHub issue changes.
+      jq --arg id "${req_id}" --argjson num "${new_num}" --argjson item "${req_item}" \
+        '((.waves // [])[]?.issues[]? | select(.github_issue == $item and ((.status // "") | IN("merged", "skipped") | not)))
+           |= (.github_issue = $num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor)
+             | .stall_recovery_count = 0 | .unblock_request_id = $id | .unblock_reissued_from = $item)
+         | .issue_number_map = ((.issue_number_map // {}) | with_entries(if .value == $item then .value = $num else . end))
+         | .issue_number_map[$id] = $num
+         | if .status == "failed" then .status = "in_progress" else . end' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp"
+    else
+      jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
+        '.issue_number_map[$id] = $num
+         | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
+         | if .status == "failed" then .status = "in_progress" else . end' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp"
+    fi
     post_state_comment || true
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
-      -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
+    if [ "${req_reissue}" != "true" ]; then
+      # A re-issued original is closed and never resumes, so it gets no wait marker.
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
+        -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
 
 <!-- ai:unblock-wait:v1 item=${req_item} fixup=${new_num} -->" >/dev/null 2>&1 || true
+    fi
     if [ "${PROJECT_STATUS}" = "failed" ]; then
       post_tracking_comment "## Unblock judge fix-up filed
 
 Fix-up #${new_num} (\`${req_id}\`) was added to the current wave for #${req_item}. Status: failed -> in_progress." || true
       PROJECT_STATUS="in_progress"
     fi
-    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed"
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed retarget=${reissue_retarget}"
   done
   return 0
 }
@@ -22109,6 +22389,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   _comments_raw="$(mktemp "${TMPDIR:-/tmp}/comments_raw.XXXXXX")"
   COMMENTS_FETCH_OK="false"
   COMMENTS='[]'
+  COMMENTS_FOR_TRACKING_NUM=""
   if gh_retry_to_file "${_comments_raw}" gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100"; then
     _comments_merged="$(mktemp "${TMPDIR:-/tmp}/comments_merged.XXXXXX")"
@@ -22116,6 +22397,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       && jq -e 'type == "array"' "${_comments_merged}" >/dev/null 2>&1; then
       COMMENTS="$(cat "${_comments_merged}")"
       COMMENTS_FETCH_OK="true"
+      COMMENTS_FOR_TRACKING_NUM="${TRACKING_NUM}"
     else
       echo "::warning::Comments JSON for issue #${TRACKING_NUM} failed validation; proceeding with empty list" >&2
       echo "::group::Raw comments response (first 50 lines)" >&2
@@ -27350,7 +27632,8 @@ with open('${STATE_FILE}', 'w') as f:
 
 Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${MAX_JUDGE} allowed (total judge evaluations: ${JUDGE_CYCLE}).
 Clean wave advances do not count against this limit.
-Manual intervention required." >/dev/null
+Manual intervention required." >/dev/null \
+      || echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing."
     set_failed_completion_status_comment \
       "Judge stall cycle limit exceeded (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}). Manual intervention required. See the \"Project Failed — Judge stall cycle limit exceeded\" comment for the diagnostic detail."
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
@@ -27798,7 +28081,8 @@ New fix-up issue candidates: ${NEW_ISSUES_COUNT}
 PRs to revert: ${REVERT_COUNT}"
 
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-    -f body="${JUDGE_COMMENT}" >/dev/null
+    -f body="${JUDGE_COMMENT}" >/dev/null \
+    || echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing."
 
   # ---------------------------------------------------------------
   # Hard guard: judge cannot declare "complete" while waves remain
@@ -27817,7 +28101,8 @@ PRs to revert: ${REVERT_COUNT}"
     echo "::warning::Judge returned 'complete' but project still has pending wave state (wave_complete=${WAVE_COMPLETE}; wave=${CURRENT_WAVE}/${TOTAL_WAVES}; project_complete=${PROJECT_COMPLETE} logged for context). Overriding to 'in_progress'."
     JUDGE_STATUS="in_progress"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because the project still has pending wave state (wave_complete=${WAVE_COMPLETE}, wave=${CURRENT_WAVE}/${TOTAL_WAVES}). Waiting for remaining wave work before allowing project completion." >/dev/null
+      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because the project still has pending wave state (wave_complete=${WAVE_COMPLETE}, wave=${CURRENT_WAVE}/${TOTAL_WAVES}). Waiting for remaining wave work before allowing project completion." >/dev/null \
+      || echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing."
   fi
   fi
 
@@ -27970,7 +28255,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Fix-up issues tracked for this verdict:** ${EXHAUSTED_FIXUP_REFS}
 They are tracked in the current wave; post \`/judge_resume\` (optionally with \`--reset-recovery\`) once they merge, or to let the poller merge and re-judge them.
 
-**Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
+**Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null \
+          || echo "::warning::Could not post a tracking comment on issue #${TRACKING_NUM}; continuing."
 
         set_failed_completion_status_comment \
           "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. Fix-up issues tracked for the final verdict: ${EXHAUSTED_FIXUP_REFS}. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
