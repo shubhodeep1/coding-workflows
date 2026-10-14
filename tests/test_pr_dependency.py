@@ -288,6 +288,9 @@ def _run_unblock_scan(tmp_path: Path, *, with_helper: bool = True) -> tuple[str,
 		f"source '{tmp_path / 'scan.sh'}'\n"
 		'gh_retry() { "$@"; }\n'
 		"_safe_gh_jq() { echo '[]'; }\n"
+		# The needs-human digest upkeep that shares the scan's tick slot is
+		# covered by its own tests; stub it so this scan sees no parked items.
+		"needs_human_digest_prune() { :; }\n"
 		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf \'%s\' "${UNBLOCK_TRUSTED_LOGIN}"; }\n'
 		'run_unblock_scan || echo "UNBLOCK_SCAN rc=$?"\n',
 		encoding="utf-8",
@@ -299,6 +302,7 @@ def _run_unblock_scan(tmp_path: Path, *, with_helper: bool = True) -> tuple[str,
 		GITHUB_REPOSITORY="owner/repo",
 		RUNNER_TEMP=str(tmp_path / "runner"),
 		UNBLOCK_FAILED_PROJECTS_FILE=str(state / "failed.txt"),
+		NEEDS_HUMAN_PARKED_ITEMS_FILE=str(state / "parked.json"),
 		UNBLOCK_JUDGE_ENABLED="true",
 		PYTHONDONTWRITEBYTECODE="1",
 	)

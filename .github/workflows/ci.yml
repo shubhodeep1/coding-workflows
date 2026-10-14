@@ -2,14 +2,16 @@
 name: CI
 
 "on":
-  # Orchestrator integration branches (Q45): a sub-issue PR into
-  # `orchestrator/project-*` is checked before it merges, not only at the
-  # project's final PR into main. Pushes to those branches run too, so
-  # check-failure triage has a base-branch result to compare a failing PR
-  # against (a green base means the failure is the PR's own and is left to
-  # its autofix). Heal intake and budget-watch act on main pushes only.
+  # Pull-request CI runs for every base (issue #7283). A fix PR routed to a
+  # failing PR's head branch (CI-triage routing, #6726 / #7042) then gets its
+  # own `CI / lint` before it merges, like a sub-issue PR into
+  # `orchestrator/project-*` (Q45). Push CI stays on main, stable and the
+  # integration branches, so check-failure triage has a base-branch result
+  # to compare a failing PR against (a green base means the failure is the
+  # PR's own and is left to its autofix). Heal intake and budget-watch act
+  # on main pushes only.
   pull_request:
-    branches: [main, stable, "orchestrator/project-*"]
+    branches: ["**"]
   push:
     branches: [main, stable, "orchestrator/project-*"]
 
@@ -26,7 +28,10 @@ jobs:
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
     # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
-    # cold runner.
+    # cold runner. Since #7250 and #7334 it also runs test steps moved from
+    # tests-heal-plan-and-validation, so that figure no longer covers the
+    # whole job: re-measure it before moving more steps here. budget-watch
+    # warns at 75% of the timeout (11m15s for this job).
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -473,12 +478,55 @@ jobs:
             tests/test_validate_lint_graceful_shutdown_hooks.py \
             tests/test_validate_lint_init_true.py \
             tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_manifest_shell_safety.py \
             tests/test_validate_process_render_recovery.py \
             tests/test_validation_import_audit_stdlib.py \
             tests/test_verify_integration_fingerprints_partial_removal.py \
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
             tests/test_workflow_retro_fanout.py \
             tests/test_workflow_support_ref_follows_pin.py
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m04s of
+      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
+      # timings for that run were not available when these steps were
+      # chosen. Step names and bodies are unchanged.
+      - name: Validation self-test unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
+
+      - name: Validation bootstrap and family direct-run tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -494,8 +542,7 @@ jobs:
 
       - name: Prepare template-only PR live copies for parity tests
         if: >-
-          (github.event_name == 'pull_request' &&
-           (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))) ||
+          (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
           (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -510,7 +557,9 @@ jobs:
           # when --before is a reachable commit: the script skips an empty,
           # all-zero or unreachable one. A push has no PR base, so it passes
           # its own before; a branch-creation or force push falls back to
-          # the merge-base with main.
+          # the merge-base with main. Pull-request CI runs for every base
+          # since #7283, so a fix PR routed to a failing PR's ai/issue-* head
+          # is prepared too; only PRs into stable check the committed tree.
           before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
           if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
             fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
@@ -649,7 +698,7 @@ jobs:
       - name: Activation verification tests (port P4)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
 
       - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
         run: |
@@ -676,6 +725,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
 
       - name: Isolated agent container tests (codex_isolated_exec.sh)
         # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
@@ -801,7 +851,7 @@ jobs:
       - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py tests/test_pr_dependency.py tests/test_check_triage_resolution.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py tests/test_issue_7251_dependency_wait.py tests/test_pr_dependency.py tests/test_check_triage_resolution.py
 
       - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
         run: |
@@ -878,7 +928,7 @@ jobs:
       - name: Workflow failure heal contract and driver tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py
           # Model-provider outage classifier, tracker and resume (issue #6633).
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py
 
@@ -944,44 +994,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_harness_rpc.py
-
-      - name: Validation self-test unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
-
-      - name: Validation bootstrap and family direct-run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
       - name: Validation lint rule unit tests
         run: |

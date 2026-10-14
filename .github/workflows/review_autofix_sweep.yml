@@ -540,6 +540,29 @@ jobs:
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete}"
 
+      # Non-retryable failure backfill (issue #7291): re-send a review/autofix
+      # failure whose trusted current-head marker names a non-retryable reason
+      # (NON_RETRYABLE_FAILURE_REASONS) that the heal intake never diagnosed,
+      # so the intake posts its diagnosis and ai:needs-human. The helper runs
+      # from the trusted default-branch checkout, never from a PR head; the job
+      # has no id-token, so no report identity is attached. Fail-open.
+      - name: Backfill non-retryable autofix failure reports
+        continue-on-error: true
+        # !cancelled(): this pass is independent of the enumerate step, so a
+        # failed dispatch tick does not also skip the backfill.
+        if: ${{ !cancelled() && vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false' && vars.WORKFLOW_HEAL_ENABLED != 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK || '3' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS || '50' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES || '60' }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: bash .ci-rerun-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
+
       - name: Record GH_PAT budget at sweep end
         if: always()
         env:
