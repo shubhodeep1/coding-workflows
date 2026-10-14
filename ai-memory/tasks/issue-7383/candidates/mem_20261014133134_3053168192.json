@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7383,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7383\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7386\",\"pr_number\":7386,\"branch\":\"ai/issue-7383\",\"run_id\":\"38569087877\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38569087877\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/7383-ci-heal-job-rebalance.md\"]}",
+  "fingerprint": "3d4b5b1dd41b528272fd010eeffa959ad095a42bd99c7e1135223fd81ee72d62",
+  "lineage": {
+    "issue_number": 7383,
+    "parent_ids": [],
+    "pr_number": 7386,
+    "run_id": "38569087877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38569087877",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7386"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261014133134_3053168192",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7383,
+    "level": "run",
+    "pr_number": 7386,
+    "run_id": "38569087877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7383: https://github.com/shubhodeep1/coding-workflows/pull/7386",
+  "timestamps": {
+    "created_at": "2026-10-14T13:31:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
