@@ -5,13 +5,23 @@
   "entry_id": "processed_command_7366_6161070688_approved",
   "issue_number": 7366,
   "metadata": {
+    "branch": "ai/issue-7366",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/7366-ci-hooks-job-rebalance.md"
+    ],
+    "issue_number": 7366,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7366",
+    "pr_number": 7368,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7368",
+    "run_attempt": "1",
+    "run_id": "38512850730",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38512850730"
   },
   "run_attempt": 1,
   "run_id": "38512850730",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-14T04:46:20Z",
+  "status": "completed",
+  "timestamp": "2026-10-14T05:06:05Z",
   "workflow": "implement"
 }
