@@ -452,6 +452,8 @@ def test_fixup_hook_marks_an_earlier_appended_reissue_original_skipped(tmp_path:
 	original, successor = after["waves"][0]["issues"]
 	assert original["status"] == "skipped" and original["unblock_superseded_by"] == 901
 	assert successor == {"id": "unblock-5-r1", "github_issue": 901, "status": "done"}
+	# A failed project resumes, or the main loop skips it as terminal.
+	assert after["status"] == "in_progress"
 	assert "outcome=superseded" in result.stdout
 
 

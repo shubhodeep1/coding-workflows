@@ -18672,10 +18672,21 @@ handle_unblock_judge_project_hooks() {
         && jq -e --argjson item "${req_item}" --arg id "${req_id}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
         if jq --argjson item "${req_item}" --arg id "${req_id}" --argjson num "${filed_num}" \
           '((.waves // [])[]?.issues[]? | select(.github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not)))
-             |= (.status = "skipped" | .unblock_superseded_by = $num)' \
+             |= (.status = "skipped" | .unblock_superseded_by = $num)
+           | if .status == "failed" then .status = "in_progress" else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
           post_state_comment || true
+          # Resume like the filing path below: the skipped original was what
+          # made the project read as failed, and a failed project is skipped.
+          if [ "${PROJECT_STATUS}" = "failed" ]; then
+            post_tracking_comment "## Unblock judge re-issue repaired
+
+#${req_item} was re-issued as #${filed_num} (\`${req_id}\`); its wave entry is now \`skipped\`. Status: failed -> in_progress." || true
+            PROJECT_STATUS="in_progress"
+          fi
           echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${filed_num} outcome=superseded"
+        else
+          echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=superseded_write_failed"
         fi
       fi
       continue
