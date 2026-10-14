@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:18673-18678 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The legacy re-issue repair marks the original wave entry `skipped` but leaves the project status as `failed`.\n  WHY: The branch updates the wave entry and posts the state comment without changing `.status` or `PROJECT_STATUS`, so terminal-state handling skips further processing and the repair does not clear the re-issue as the PR description claims. The source labelled it SEVERITY: MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pin the action to its full commit SHA, using `54081f138730dfa15788a46383842cd2f914a1be`.\n  expected_change_site: `.github/workflows/review_autofix.yml`, \"Free disk space\" step\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff does not change `.github/workflows/review_autofix.yml`; the action pin is not part of the delivered changes.\n- requirement: In both push steps, replace the `secrets.GH_PAT` interpolation with `${GH_TOKEN}` and `${GITHUB_REPOSITORY}`.\n  expected_change_site: `.github/workflows/implement.yml` \"Push branch\"; `.github/workflows/review_autofix.yml` \"Push all pending commits\"\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Neither workflow is changed in the PR diff, so neither requested push-step change is delivered.\n- requirement: Add `tests/test_workflow_secret_hardening.py` to assert that neither workflow interpolates the secret and that the action reference uses a 40-hex SHA.\n  expected_change_site: `tests/test_workflow_secret_hardening.py`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no such test file or test hunk.\n- requirement: Add `changelog.d/wfopt-2026-09-18-workflow-secret-hardening.md`.\n  expected_change_site: `changelog.d/wfopt-2026-09-18-workflow-secret-hardening.md`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR adds a changelog fragment for the poller change, but not the requested workflow-secret-hardening fragment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:18673-18678; 22335-22336; 23809-23844 | severity=high | confidence=5\n  PROBLEM: The legacy re-issue repair marks the original wave entry `skipped` but leaves the project status as `failed`.\n  WHY: This branch updates the wave entry and posts the state comment without changing `.status` or `PROJECT_STATUS`, so the poller records the project as failed and terminal-state handling skips further processing.\n- TASK_GAP:\n  Requirement: \"Pin the action to its full commit SHA,\" using `54081f138730dfa15788a46383842cd2f914a1be`.\n  Expected change site: `.github/workflows/review_autofix.yml`, \"Free disk space\" step.\n  Evidence of absence: The PR diff does not change `.github/workflows/review_autofix.yml`; the action pin is not part of the delivered changes.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: In both push steps, replace the `secrets.GH_PAT` interpolation with `${GH_TOKEN}` and `${GITHUB_REPOSITORY}`.\n  Expected change site: `.github/workflows/implement.yml`, \"Push branch\"; `.github/workflows/review_autofix.yml`, \"Push all pending commits\".\n  Evidence of absence: Neither workflow is changed in the PR diff, so neither requested push-step change is delivered.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: Add `tests/test_workflow_secret_hardening.py` to assert that neither workflow interpolates the secret and that the action reference uses a 40-hex SHA.\n  Expected change site: `tests/test_workflow_secret_hardening.py`.\n  Evidence of absence: The PR diff contains no such test file or test hunk.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: Add `changelog.d/wfopt-2026-09-18-workflow-secret-hardening.md`.\n  Expected change site: `changelog.d/wfopt-2026-09-18-workflow-secret-hardening.md`.\n  Evidence of absence: The PR adds a changelog fragment for the poller change, but not the requested workflow-secret-hardening fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "bbbe5a7ba60036c1e9af35fa8b699985fab8f72c8c48fdd813e1a0f324257be1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7372,
+    "run_id": "38540368001",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38540368001",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014094316_eef43153e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7372,
+    "run_id": "38540368001"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-14T09:43:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
