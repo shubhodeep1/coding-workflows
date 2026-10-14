@@ -1003,7 +1003,9 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert steps[0]["with"]["fetch-depth"] == 0
 	prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
 	prepare_if = " ".join(prepare["if"].split())
-	assert "github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))" in prepare_if
+	# Issue #7283: pull-request CI runs for every base, so every PR except one
+	# into stable (which checks the committed tree) is prepared.
+	assert "github.event_name == 'pull_request' && github.base_ref != 'stable'" in prepare_if
 	assert "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')" in prepare_if
 	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
 	assert prepare["env"]["PUSH_BEFORE_SHA"] == "${{ github.event.before }}"
