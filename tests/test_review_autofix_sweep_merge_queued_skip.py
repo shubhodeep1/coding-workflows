@@ -31,9 +31,10 @@ SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 STEP_MARKER = "- name: Enumerate open PRs and dispatch internal-review.yml"
 RUN_HEADER = "        run: |\n"
 RUN_INDENT = " " * 10
-# Lines YAML can place right after a step's block scalar: a comment or list
-# item at step-list indent, or a mapping key at step-key indent or less.
-BLOCK_END_RE = re.compile(r"^(?: {0,6}(?:#|- )| {0,8}[A-Za-z_][\w-]*:(?:\s|$))")
+# Lines YAML can place right after a step's block scalar: a comment indented
+# less than the ten-space body, a list item at step-list indent, or a mapping
+# key at step-key indent or less.
+BLOCK_END_RE = re.compile(r"^(?: {0,9}#| {0,6}- | {0,8}[A-Za-z_][\w-]*:(?:\s|$))")
 
 
 def extract_step_script(text: str | None = None) -> str:
@@ -223,6 +224,16 @@ class SweepMergeQueuedSkipTest(unittest.TestCase):
 		patched = text[:next_step] + inserted + text[next_step:]
 		self.assertEqual(extract_step_script(patched), extract_step_script(text))
 		self.assertNotIn("echo sibling", extract_step_script(patched))
+
+	def test_extractor_accepts_a_step_key_indented_comment_after_the_body(self) -> None:
+		"""A comment at the step-key indent (8 spaces) also ends the block
+		scalar and must not trip the boundary assertion."""
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		start = text.find(STEP_MARKER)
+		next_step = text.find("\n      - name:", start + len(STEP_MARKER))
+		self.assertNotEqual(next_step, -1)
+		patched = text[:next_step] + "\n        # step-key indented comment" + text[next_step:]
+		self.assertEqual(extract_step_script(patched), extract_step_script(text))
 
 	def test_workflow_passes_the_repo_variable(self) -> None:
 		text = SWEEP_WF.read_text(encoding="utf-8")
