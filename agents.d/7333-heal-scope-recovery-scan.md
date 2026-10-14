@@ -1,0 +1,52 @@
+<!-- agents: section="Workflow architecture" -->
+Heal-scope recovery scan (#7333, activation gaps of PR #7325 for #7082):
+`workflow-failure-heal-intake.yml` also runs on `schedule` (`41 * * * *`).
+Its `recovery-candidates` job (no shared lock, `issues: read`) runs
+`scripts/workflow_failure_heal_recovery_scan.sh --list-only`, which lists, in
+one GraphQL query, open `ai:workflow-heal` issues in this repository written by
+the token's own `/user` login whose body has no `ai:workflow-heal-scope`
+marker. Only when that count is above zero does the `recovery-scan` job run,
+holding the job-level `workflow-failure-heal-intake` concurrency group (a
+schedule run's workflow-level group is unique, so a pending scan never
+replaces a pending report). For at most `HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK`
+issues (default 1, clamped 1-2) the scan rebuilds the `autofix_failure`
+report from the issue's never-edited body (`workflow_failure_heal.py
+heal-scope-recovery reconstruct`: pipeline author, `lastEditedAt` null,
+composed `fp` / `source` markers, title, Head SHA, Failed run lines and the
+evidence block; the live PR with the body's head, and the trusted failure
+markers) and runs the unchanged intake with `WORKFLOW_HEAL_REPORT_ORIGIN=recovery_scan`
+plus `WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_FP` / `_ISSUE`. The intake accepts
+that origin only on a `schedule` event with recovery on, both expected values
+well formed and an `autofix_failure` payload, else
+`report_auth=rejected reason=recovery_scan_invalid`. It sets
+`REPORT_AUTH=reconstructed`, which only `_heal_scope_recovery_evaluate`
+accepts; binding, provenance and the `heal-scope verify` creation guard are
+unchanged. The recomputed fingerprint must equal the issue's `fp`
+(`heal_scope_recovery outcome=skip reason=fingerprint_mismatch`) and the
+budget must be a duplicate of that issue (`reason=decision_mismatch`);
+anything but a recovery exits with `reason=not_recovered`. A replay posts
+nothing on the source PR (`source_comment=skipped_reconstructed`), records
+no occurrence (`occurrence=skipped_reconstructed`) and skips the
+non-retryable PR handling (`non_retryable outcome=skip reason=reconstructed`).
+A failed attempt, or a permanent reconstruct skip (`HEAL_SCOPE_RECOVERY_SCAN_PERMANENT_REASONS`),
+leaves `<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason=<r> run=<id> -->`
+(trusted only from the pipeline login, on the comment's last line); after
+`HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS` (default 3) the issue is skipped
+(`outcome=attempts_exhausted`) and one WARNING was sent. Other heal kinds log
+`reason=kind_unsupported` and still need a fresh verified report.
+`HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off with recovery.
+
+Non-retryable reports and recovery (#7333 gap 2): a verified (OIDC)
+`autofix_failure` report routed by `non-retryable-route` with
+`conflict_resolver_sandbox_path_unsupported` or
+`conflict_resolver_sandbox_support_missing`, while recovery is on, is no longer
+stopped at the non-retryable block: it logs
+`non_retryable outcome=deferred reason=heal_scope_recovery` and installs an
+EXIT trap, so the unchanged PR-side handling (`_non_retryable_route_apply`:
+diagnosis comment, `ai:needs-human`, WARNING, pr/head/reason dedup) runs after
+recovery on every exit path and keeps the exit code. When no eligible
+markerless heal issue matches, the intake exits right after
+`_heal_scope_recovery_evaluate` (`heal_scope_recovery outcome=skip
+reason=not_eligible_non_retryable`) with today's PR-side outcome and no
+occurrence or heal issue. The host-only stop and unauthenticated reports are
+never deferred.
