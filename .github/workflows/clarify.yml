@@ -530,7 +530,9 @@ jobs:
               # GitHub API audit (CLAUDE.md §14): no earlier call in this job
               # returns the token's own identity ("Fetch issue metadata" reads
               # only the issue), so this one GET /user runs only for a comment
-              # that is exactly this issue's release marker.
+              # that is exactly this issue's release marker or a poller replay;
+              # a verified replay adds one GET of its source comment. The login
+              # is reused below as pr_dependency.py's --trusted-login.
               _rel_login=""
               _rel_reason="identity_unavailable"
               if _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login)" \
@@ -651,7 +653,13 @@ jobs:
           # ai:clarification (the standalone poller releases them once), and
           # drop ai:blocked so the unblock scan never spends rounds on them.
           # The runner-temp copy is staged from verified support, not the issue branch.
-          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
+          # Reuse the release block's validated GH_PAT login so the helper does
+          # not repeat GET /user (#7328); without it the helper reads it itself.
+          _pr_dependency_login_args=()
+          if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+            _pr_dependency_login_args=(--trusted-login "${_rel_login}")
+          fi
+          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" "${_pr_dependency_login_args[@]}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
           if [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             SKIP_CODEX="true"
             _pr_dependency_reason="$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.reason // "unknown"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
