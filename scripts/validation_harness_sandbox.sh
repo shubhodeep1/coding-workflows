@@ -55,14 +55,18 @@ VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE
 # Empty (the default) keeps <workspace>/validation/logs. validation-refresh
 # sets it so logs stay outside the consumer clone it diffs for drift.
 VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-}"
-# Cgroup setup for the sandbox's rootless dockerd: `auto` (the default) tries a
-# systemd user session first and falls back to cgroupfs; `cgroupfs` skips the
-# systemd attempt. Either way a test container that the daemon refuses to
-# start (or a probe image the daemon refuses to import) fails provision; only
-# a probe the host cannot build, or whose command cannot run inside the
-# container (exit 126/127 without a cgroup error), passes as
-# container_probe_inconclusive.
-VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-auto}"
+# Cgroup setup for the sandbox's rootless dockerd: `cgroupfs` (the default)
+# starts no systemd user manager for the sandbox user, and releases one left
+# by an earlier opt-in `auto` provision. `auto` (opt-in) tries a systemd user
+# session first and falls back to cgroupfs; while that user manager runs, a
+# container could ask it to start processes in the host PID namespace, so
+# `selfcheck` then fails closed with user_manager_reachable_from_container
+# (#7380). Any other value is treated as `cgroupfs`. Either way a test
+# container that the daemon refuses to start (or a probe image the daemon
+# refuses to import) fails provision; only a probe the host cannot build, or
+# whose command cannot run inside the container (exit 126/127 without a
+# cgroup error), passes as container_probe_inconclusive.
+VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-cgroupfs}"
 # Root-owned directory for the namespace launch state (the host pid of
 # `unshare` and the launch marker). It must be absolute and outside the
 # sandbox home, so the sandbox user can neither write nor replace it.
@@ -342,6 +346,7 @@ SANDBOX_CGROUP_ROOT="${SANDBOX_CGROUP_ROOT:-/sys/fs/cgroup}"
 SANDBOX_SESSION_WAIT_SECS="${SANDBOX_SESSION_WAIT_SECS:-15}"
 is_positive_int "${SANDBOX_SESSION_WAIT_SECS}" || SANDBOX_SESSION_WAIT_SECS=15
 SANDBOX_PROBE_IMAGE="ai-validation-probe:local"
+SANDBOX_LINGER_DIR="${SANDBOX_LINGER_DIR:-/var/lib/systemd/linger}"
 
 # Start a systemd user session for the sandbox user (linger keeps
 # user@<uid>.service running without a login). Returns 0 once the user bus
@@ -358,6 +363,62 @@ sandbox_systemd_session()
 		sleep 1
 		waited=$((waited + 1))
 	done
+}
+
+# Undo sandbox_systemd_session (#7380): disable linger and stop the sandbox
+# user's systemd user manager, so no manager is left that a container could
+# ask to start a transient unit in the host PID namespace. Best effort, always
+# returns 0; `selfcheck` (user_manager_route_open) is the enforcer. Callers
+# run it before (re)creating the runtime dir, because stopping the user
+# manager can remove the /run/user/<uid> tmpfs.
+sandbox_release_systemd_session()
+{
+	local user="$1" uid="$2" waited=0
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 0
+	if [ -z "$(sudo -n pgrep -u "${uid}" -x systemd 2>/dev/null || true)" ] \
+		&& ! sudo -n test -e "${SANDBOX_LINGER_DIR}/${user}" >/dev/null 2>&1; then
+		return 0
+	fi
+	if command -v loginctl >/dev/null 2>&1; then
+		sudo -n loginctl disable-linger "${user}" >/dev/null 2>&1 || true
+	fi
+	sudo -n systemctl stop "user@${uid}.service" >/dev/null 2>&1 || true
+	sudo -n systemctl stop "user-runtime-dir@${uid}.service" >/dev/null 2>&1 || true
+	while [ -n "$(sudo -n pgrep -u "${uid}" -x systemd 2>/dev/null || true)" ]; do
+		[ "${waited}" -ge "${SANDBOX_SESSION_WAIT_SECS}" ] && break
+		sleep 1
+		waited=$((waited + 1))
+	done
+	sandbox_log provision ok systemd_user_session_released
+	return 0
+}
+
+# Root-side check (#7380), read from host pids and the host mount namespace,
+# never from files the sandbox writes. Returns 0 when a systemd user manager
+# or a bus daemon runs as the sandbox uid, or its user bus or a socket under
+# <runtime_dir>/systemd exists: a container started through the rootless
+# daemon could bind-mount that socket and start a transient unit in the host
+# PID namespace. Returns 1 when the uid cannot be resolved, 2 when the route
+# is closed. Rootlesskit's and containerd's own sockets are not counted:
+# they cannot start host processes, and every run has them.
+user_manager_route_open()
+{
+	local uid rt name
+	uid="$(sandbox_uid || true)"
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 1
+	rt="/run/user/${uid}"
+	for name in systemd dbus-daemon dbus-broker; do
+		if [ -n "$(sudo -n pgrep -u "${uid}" -x "${name}" 2>/dev/null || true)" ]; then
+			return 0
+		fi
+	done
+	if sudo -n test -S "${rt}/bus" >/dev/null 2>&1; then
+		return 0
+	fi
+	if [ -n "$(sudo -n find "${rt}/systemd" -xdev -type s -print -quit 2>/dev/null || true)" ]; then
+		return 0
+	fi
+	return 2
 }
 
 # Start the sandbox user's rootless dockerd and wait until it answers.
@@ -467,28 +528,36 @@ rootless_docker_container_probe()
 	return 2
 }
 
-# Bring up a daemon that can start containers: systemd user session first
-# (unless VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=cgroupfs), cgroupfs when the
-# session cannot be set up or a container would not start under it. Every
-# outcome is logged; a daemon whose test container fails under both drivers
-# fails provisioning closed (container_start_failed).
+# Bring up a daemon that can start containers. The default (`cgroupfs`)
+# releases any systemd user session left for the sandbox user and uses
+# cgroupfs. Opt-in `auto` tries a systemd user session first and falls back to
+# cgroupfs (releasing the session) when it cannot be set up or a container
+# would not start under it; `selfcheck` then refuses while a user manager runs
+# (#7380). Every outcome is logged; a daemon whose test container fails under
+# both drivers fails provisioning closed (container_start_failed).
 sandbox_start_verified_dockerd()
 {
 	local user="$1" uid="$2" home="$3" runtime_dir="$4" mode="" probe_rc=0
 	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
 		auto|cgroupfs) ;;
-		*) sandbox_log provision ok cgroup_mode_unrecognized_using_auto ;;
+		*) sandbox_log provision ok cgroup_mode_unrecognized_using_cgroupfs ;;
 	esac
 	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
-		cgroupfs) mode=cgroupfs ;;
-		*)
+		auto)
 			if sandbox_systemd_session "${user}" "${uid}"; then
 				mode=systemd
 				sandbox_log provision ok systemd_user_session
 			else
 				mode=cgroupfs
 				sandbox_log provision ok systemd_user_session_unavailable
+				# enable-linger may have succeeded before the session timed out.
+				sandbox_release_systemd_session "${user}" "${uid}"
 			fi
+			;;
+		*)
+			mode=cgroupfs
+			# Clear a linger left by an earlier opt-in `auto` provision.
+			sandbox_release_systemd_session "${user}" "${uid}"
 			;;
 	esac
 	sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
@@ -505,6 +574,8 @@ sandbox_start_verified_dockerd()
 		sandbox_log provision retry "container_start_failed_${mode}"
 		stop_rootless_dockerd "${runtime_dir}"
 		mode=cgroupfs
+		sandbox_release_systemd_session "${user}" "${uid}"
+		sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
 		start_rootless_dockerd cgroupfs "${home}" "${runtime_dir}" || sandbox_fail provision rootless_dockerd_start_timeout
 		probe_rc=0
 		rootless_docker_container_probe || probe_rc=$?
@@ -732,6 +803,13 @@ cmd_selfcheck()
 	# The harness reaches Docker; a daemon in the host PID namespace would let
 	# a `--pid=host` container list runner processes.
 	docker_pidns_isolated "${host_ns}" || sandbox_fail selfcheck docker_pid_namespace_shared
+	# A container started through that daemon is outside the harness's mount
+	# namespace; a systemd user manager for the sandbox uid would let it start
+	# processes in the host PID namespace (#7380). An unknown state (rc 1)
+	# fails closed too.
+	local route_rc=0
+	user_manager_route_open || route_rc=$?
+	[ "${route_rc}" -eq 2 ] || sandbox_fail selfcheck user_manager_reachable_from_container
 	sandbox_log selfcheck ok
 	sandbox_status "ok selfcheck"
 }

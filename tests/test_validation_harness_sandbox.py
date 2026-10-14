@@ -554,12 +554,15 @@ def test_nightly_sandbox_check_fails_when_no_log_copies_back() -> None:
 # without a user session for the sandbox user every container start failed with
 # "open /sys/fs/cgroup/user.slice/user-<uid>.slice/cgroup.controllers"
 # (#6902, #6664). Provision now sets up the session, proves a container starts,
-# and falls back to cgroupfs before failing closed.
+# and falls back to cgroupfs before failing closed. Since #7380 that systemd
+# path is opt-in (`auto`); the default `cgroupfs` releases any leftover user
+# manager, and every path that ends in cgroupfs releases it first.
 
-def _driver(tmp: Path, *, session: bool, probe: dict[str, int], mode: str = "auto", ready: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _driver(tmp: Path, *, session: bool, probe: dict[str, int], mode: str | None = "auto", ready: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
 	"""Run sandbox_start_verified_dockerd with its collaborators stubbed out.
 
 	probe maps the daemon's driver (systemd/cgroupfs/reused) to the probe's exit code.
+	mode None leaves VALIDATION_HARNESS_SANDBOX_CGROUP_MODE unset (the default).
 	"""
 	calls = tmp / "calls"
 	status = tmp / "status"
@@ -571,15 +574,17 @@ build_sandbox_env() {{ :; }}
 declare -A PROBE=({probes})
 DAEMON="{"reused" if ready else ""}"
 sandbox_systemd_session() {{ echo "session $*" >> "{calls}"; {"return 0" if session else "return 1"}; }}
+sandbox_release_systemd_session() {{ echo "release $*" >> "{calls}"; }}
 rootless_docker_ready() {{ [ -n "${{DAEMON}}" ]; }}
 start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
 stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
 rootless_docker_container_probe() {{ echo "probe ${{DAEMON}}" >> "{calls}"; return "${{PROBE[$DAEMON]:-1}}"; }}
 sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
 '''
-	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
-		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp), "VALIDATION_HARNESS_SANDBOX_CGROUP_MODE": mode,
-			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+	env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)}
+	if mode is not None:
+		env["VALIDATION_HARNESS_SANDBOX_CGROUP_MODE"] = mode
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, env=env)
 	return result, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
 
 
@@ -594,7 +599,7 @@ def test_a_working_systemd_session_is_used_once_a_container_starts(tmp_path: Pat
 def test_a_container_that_fails_under_systemd_restarts_the_daemon_with_cgroupfs(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=True, probe={"systemd": 1, "cgroupfs": 0})
 	assert result.returncode == 0, result.stderr
-	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd", "stop", "start cgroupfs", "probe cgroupfs"]
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd", "stop", "release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
 	assert "outcome=retry reason=container_start_failed_systemd" in result.stderr
 	assert "outcome=ok reason=container_probe_cgroupfs" in result.stderr
 
@@ -602,7 +607,7 @@ def test_a_container_that_fails_under_systemd_restarts_the_daemon_with_cgroupfs(
 def test_no_systemd_session_goes_straight_to_cgroupfs(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=False, probe={"cgroupfs": 0})
 	assert result.returncode == 0, result.stderr
-	assert calls == ["session ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+	assert calls == ["session ai-validation 1002", "release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
 	assert "outcome=ok reason=systemd_user_session_unavailable" in result.stderr
 
 
@@ -617,7 +622,21 @@ def test_a_container_that_fails_under_both_drivers_fails_provision_closed(tmp_pa
 def test_cgroupfs_mode_never_touches_the_systemd_session(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode="cgroupfs")
 	assert result.returncode == 0, result.stderr
-	assert calls == ["start cgroupfs", "probe cgroupfs"]
+	assert calls == ["release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+
+
+def test_cgroupfs_is_the_default_cgroup_mode(tmp_path: Path) -> None:
+	result = subprocess.run(["bash", "-c", f'source "{HELPER}"; printf "%s" "${{VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}}"'],
+		capture_output=True, text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "cgroupfs"
+
+
+def test_the_default_mode_never_starts_a_systemd_session(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode=None)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+	assert "reason=cgroup_mode_unrecognized" not in result.stderr
 
 
 def test_an_inconclusive_probe_keeps_the_daemon_and_says_so(tmp_path: Path) -> None:
@@ -630,7 +649,7 @@ def test_an_inconclusive_probe_keeps_the_daemon_and_says_so(tmp_path: Path) -> N
 def test_a_reused_daemon_is_tested_too_and_replaced_when_containers_fail(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=True, probe={"reused": 1, "cgroupfs": 0}, ready=True)
 	assert result.returncode == 0, result.stderr
-	assert calls == ["session ai-validation 1002", "probe reused", "stop", "start cgroupfs", "probe cgroupfs"]
+	assert calls == ["session ai-validation 1002", "probe reused", "stop", "release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
 
 
 CGROUP_ERR = "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory"
@@ -801,6 +820,7 @@ source "{HELPER}"
 sudo() {{ :; }}
 build_sandbox_env() {{ :; }}
 sandbox_systemd_session() {{ return 0; }}
+sandbox_release_systemd_session() {{ :; }}
 DAEMON=""
 start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
 stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
@@ -815,7 +835,8 @@ sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/
 echo "HARNESS_LAUNCHED" >> "{calls}"
 '''
 	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
-		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status),
+			"VALIDATION_HARNESS_SANDBOX_CGROUP_MODE": "auto"})
 	assert result.returncode == 3, result.stderr
 	lines = calls.read_text(encoding="utf-8").splitlines()
 	assert lines == ["start systemd", "run systemd", "stop", "start cgroupfs", "run cgroupfs"]
@@ -831,11 +852,64 @@ def test_a_non_integer_session_wait_falls_back_to_the_default(tmp_path: Path) ->
 	assert result.stdout == "15"
 
 
-def test_an_unrecognized_cgroup_mode_is_logged_and_uses_auto(tmp_path: Path) -> None:
-	result, calls = _driver(tmp_path, session=True, probe={"systemd": 0}, mode="cgoupfs")
+def test_an_unrecognized_cgroup_mode_is_logged_and_uses_cgroupfs(tmp_path: Path) -> None:
+	# A typo must never opt into the systemd user session (#7380).
+	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode="autoo")
 	assert result.returncode == 0, result.stderr
-	assert "outcome=ok reason=cgroup_mode_unrecognized_using_auto" in result.stderr
-	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]
+	assert "outcome=ok reason=cgroup_mode_unrecognized_using_cgroupfs" in result.stderr
+	assert calls == ["release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+
+
+def _release(tmp: Path, *, manager: bool = True, linger: bool = True, loginctl_rc: int = 0) -> tuple[subprocess.CompletedProcess, str]:
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "loginctl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(bin_dir / "loginctl").chmod(0o755)
+	log = tmp / "sudo.log"
+	stopped = tmp / "stopped"
+	script = f'''
+source "{HELPER}"
+sudo() {{
+	shift
+	echo "$*" >> "{log}"
+	case "$1" in
+		loginctl) return {loginctl_rc} ;;
+		systemctl) : > "{stopped}" ;;
+		pgrep) {"[ -e '" + str(stopped) + "' ] || echo 77" if manager else ":"} ;;
+		test) {"return 0" if linger else "return 1"} ;;
+	esac
+	return 0
+}}
+sleep() {{ :; }}
+sandbox_release_systemd_session ai-validation 1002
+echo "rc=$?"
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "HOME": str(tmp), "SANDBOX_SESSION_WAIT_SECS": "2"})
+	return result, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_the_release_disables_linger_and_stops_the_user_manager(tmp_path: Path) -> None:
+	result, sudo_log = _release(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "rc=0" in result.stdout
+	assert "loginctl disable-linger ai-validation" in sudo_log
+	assert "systemctl stop user@1002.service" in sudo_log
+	assert "outcome=ok reason=systemd_user_session_released" in result.stderr
+
+
+def test_the_release_returns_zero_when_loginctl_fails(tmp_path: Path) -> None:
+	result, sudo_log = _release(tmp_path, loginctl_rc=1)
+	assert result.returncode == 0, result.stderr
+	assert "rc=0" in result.stdout
+	assert "systemctl stop user@1002.service" in sudo_log
+
+
+def test_the_release_does_nothing_when_no_manager_or_linger_exists(tmp_path: Path) -> None:
+	result, sudo_log = _release(tmp_path, manager=False, linger=False)
+	assert "rc=0" in result.stdout
+	assert "loginctl" not in sudo_log and "systemctl" not in sudo_log
+	assert "systemd_user_session_released" not in result.stderr
 
 # --- PID namespace for the harness (#7349, finding validation-harness-credential-inheritance) ---
 # The harness and the namespace self-check start in a new PID and mount
@@ -1050,6 +1124,66 @@ echo REACHED
 	assert result.returncode == 3, result.stderr
 	assert "phase=selfcheck outcome=fail reason=docker_pid_namespace_shared" in result.stderr
 	assert "REACHED" not in result.stdout
+
+
+# --- No reachable systemd user manager (#7380) ---------------------------------
+# A container started through the rootless daemon is outside the harness's
+# mount namespace; a user manager for the sandbox uid would let it start a
+# transient unit in the host PID namespace. selfcheck refuses while one exists.
+
+def _route_selfcheck(tmp: Path, *, process: str = "", bus: bool = False, socket: bool = False) -> subprocess.CompletedProcess:
+	return _sourced(tmp, f'''
+as_sandbox() {{ echo ok; }}
+as_sandbox_in_pidns() {{ echo ok; }}
+sudo() {{
+	shift
+	case "$1" in
+		pgrep)
+			case "$*" in
+				*"-x dockerd"*) echo 55 ;;
+				*"-x {process or 'none'}") echo 77 ;;
+			esac ;;
+		readlink) case "$2" in /proc/55/ns/pid) echo "pid:[999]" ;; *) readlink "$2" ;; esac ;;
+		test) case "$*" in "test -S "*/bus) {"return 0" if bus else "return 1"} ;; esac ;;
+		find) {"echo /run/user/4242/systemd/private" if socket else ":"} ;;
+	esac
+	return 0
+}}
+cmd_selfcheck 1
+echo REACHED
+''')
+
+
+@pytest.mark.parametrize("kwargs", ({"process": "systemd"}, {"process": "dbus-daemon"}, {"process": "dbus-broker"}, {"bus": True}, {"socket": True}))
+def test_selfcheck_fails_while_a_user_manager_is_reachable(tmp_path: Path, kwargs: dict) -> None:
+	result = _route_selfcheck(tmp_path, **kwargs)
+	assert result.returncode == 3, result.stderr
+	assert "phase=selfcheck outcome=fail reason=user_manager_reachable_from_container" in result.stderr
+	assert "REACHED" not in result.stdout
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail selfcheck user_manager_reachable_from_container\n"
+
+
+def test_selfcheck_passes_without_a_user_manager(tmp_path: Path) -> None:
+	result = _route_selfcheck(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "phase=selfcheck outcome=ok" in result.stderr
+	assert "REACHED" in result.stdout
+
+
+def test_an_unresolvable_uid_fails_the_route_check_closed(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+sandbox_uid() { return 1; }
+rc=0; user_manager_route_open || rc=$?
+echo "rc=${rc}"
+''')
+	assert "rc=1" in result.stdout
+
+
+def test_the_route_check_runs_after_the_docker_check_and_before_ok() -> None:
+	selfcheck = _function_body("cmd_selfcheck")
+	assert "user_manager_route_open" in selfcheck
+	assert 'sandbox_fail selfcheck user_manager_reachable_from_container' in selfcheck
+	assert selfcheck.index("docker_pidns_isolated") < selfcheck.index("user_manager_route_open") < selfcheck.index("sandbox_log selfcheck ok")
 
 
 def _cleanup(tmp: Path, *, meta: str = "0 regular file", pid: str = "4321", comm: str = "unshare", owner: str = "0") -> tuple[int, list[str]]:
