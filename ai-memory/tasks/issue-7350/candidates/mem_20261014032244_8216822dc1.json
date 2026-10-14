@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7350,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7350\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7354\",\"pr_number\":7354,\"branch\":\"ai/issue-7350\",\"run_id\":\"38504095092\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38504095092\",\"changed_files\":[\"changelog.d/7350-validation-fallback-sandbox-tests.md\",\"tests/test_validation_harness_sandbox.py\"]}",
+  "fingerprint": "8762ef4e5716d3edd8f77eb69895e34706552c6c15d8dca4a40289e57c9860b7",
+  "lineage": {
+    "issue_number": 7350,
+    "parent_ids": [],
+    "pr_number": 7354,
+    "run_id": "38504095092",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38504095092",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7354"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261014032244_8216822dc1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7350,
+    "level": "run",
+    "pr_number": 7354,
+    "run_id": "38504095092"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7350: https://github.com/shubhodeep1/coding-workflows/pull/7354",
+  "timestamps": {
+    "created_at": "2026-10-14T03:22:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
