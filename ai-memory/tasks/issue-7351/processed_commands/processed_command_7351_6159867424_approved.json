@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7351_6159867424_approved",
   "issue_number": 7351,
   "metadata": {
+    "branch": "ai/issue-7351",
+    "changed_files": [
+      "agents.d/7351-validation-refresh-credential-blanking.md",
+      "changelog.d/7351-validation-refresh-credential-blanking.md",
+      "scripts/validation_refresh_runner.py",
+      "tests/test_validation_refresh_runner.py"
+    ],
+    "issue_number": 7351,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7351",
+    "pr_number": 7353,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7353",
+    "run_attempt": "1",
+    "run_id": "38503761907",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38503761907"
   },
   "run_attempt": 1,
   "run_id": "38503761907",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-14T03:00:17Z",
+  "status": "completed",
+  "timestamp": "2026-10-14T03:23:51Z",
   "workflow": "implement"
 }
