@@ -348,6 +348,16 @@ for attempt in $(seq 1 "${max_attempts}"); do
       plan_rc=0
     fi
   fi
+  if [ "${plan_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): every pool account is gated and the
+    # wait is on. Never run codex; skip the rest of planning so the report
+    # step records the wait and the hourly resume pass replays the command.
+    echo "AI_ENGINE_CAPACITY_WAIT role=PLAN outcome=deferred stage=plan"
+    if [ -n "${GITHUB_ENV:-}" ]; then
+      { echo "SKIP_PLAN=true"; echo "CLAUDE_CAPACITY_WAIT=true"; } >> "${GITHUB_ENV}"
+    fi
+    exit 0
+  fi
   if [ "${HEAL_ROUTE:-false}" != true ] && [ "${PLAN_ENGINE}" != "claude" ]; then
     bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi

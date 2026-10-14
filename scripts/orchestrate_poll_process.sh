@@ -499,6 +499,14 @@ poller_judge_isolated()
     return 77
   fi
   POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt "${rb_engine}" "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
+  if [ "${rb_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no OpenCode retry. Callers defer as
+    # for 77, but the reason keeps the wait out of the isolation counters.
+    printf '%s\n' claude_capacity_wait > "${judge_reason_file}"
+    echo "${judge_role}_ISOLATION outcome=deferred reason=claude_capacity_wait" >&2
+    : > "${output_file}"
+    return 77
+  fi
   if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then
     # Claude unavailable inside isolation: retry OpenCode in a NEW root.
     rb_rc=0
@@ -582,6 +590,12 @@ _record_judge_isolation_failure()
   local role="$1" state_file="$2" issue="$3" labels="$4" reason count comment comment_id owned_label=false tracking_ref="-"
   [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
   reason="$(cat "${RUNTIME_DIR}/judge_isolation_reason" 2>/dev/null || true)"
+  if [ "${reason}" = claude_capacity_wait ]; then
+    # A Claude capacity wait is not an isolation failure (issue #7370): it never
+    # counts toward JUDGE_ISOLATION_MAX_FAILURES or adds ai:needs-human.
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=deferred reason=claude_capacity_wait counted=false"
+    return 0
+  fi
   case "${reason}" in support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;; *) reason=unknown ;; esac
   count="$(jq -r --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role].count // 0 else 0 end' "${state_file}" 2>/dev/null || echo 0)"
   [[ "${count}" =~ ^[0-9]{1,9}$ ]] || count=0
@@ -8432,7 +8446,8 @@ run_security_pass_inline() {
       SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"
       SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json")
   fi
-  if ! ( cd "${security_pass_engine_dir}" && \
+  local security_pass_audit_rc=0
+  ( cd "${security_pass_engine_dir}" && \
     SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
@@ -8452,7 +8467,14 @@ run_security_pass_inline() {
     bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}" ); then
+      -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}" ) || security_pass_audit_rc=$?
+  if [ "${security_pass_audit_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): never engine_unavailable. The pass
+    # stays pending and is retried on a later tick.
+    echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} outcome=deferred reason=claude_capacity_wait"
+    return 1
+  fi
+  if [ "${security_pass_audit_rc}" -ne 0 ]; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -14054,6 +14076,16 @@ dispatch_validation_if_needed() {
   local validation_cycle_dispatches
   local validation_cap_run_url
   local validation_cap_redispatch_fields=""
+
+  # Claude capacity wait (issue #7370, plan D7): a validate run that waited
+  # for Claude capacity ends without a verdict and labels the tracking issue
+  # ai:claude-capacity-wait. Hold dispatch, without counting toward
+  # MAX_VALIDATION_DISPATCHES_PER_CYCLE, until the hourly capacity-resume pass
+  # removes the label. Reads the cycle's existing label snapshot (no API call).
+  if printf '%s' "${TRACKING_LABELS:-[]}" | jq -e 'type == "array" and any(.[]; (if type == "object" then .name else . end) == "ai:claude-capacity-wait")' >/dev/null 2>&1; then
+    echo "VALIDATION_DISPATCH_CAP outcome=capacity_wait issue=${TRACKING_NUM:-} cycle=${validation_cycle}"
+    return 0
+  fi
 
   # Defensive preflight: refuse to dispatch validate while the current
   # wave's PRs are not all merged into the integration branch
@@ -25668,11 +25700,16 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         RB_ISOLATION_REASON="$(cat "${RUNTIME_DIR}/rb_judge_isolation_reason" 2>/dev/null || true)"
+        RB_ISOLATION_CAPACITY_WAIT=false
+        [ "${RB_ISOLATION_REASON}" != claude_capacity_wait ] || RB_ISOLATION_CAPACITY_WAIT=true
         case "${RB_ISOLATION_REASON}" in
           support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;;
           *) RB_ISOLATION_REASON=unknown ;;
         esac
-        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
+        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ] && [ "${RB_ISOLATION_CAPACITY_WAIT}" = true ]; then
+          # Claude capacity wait (issue #7370): defer without counting.
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=deferred reason=claude_capacity_wait counted=false"
+        elif [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
           RB_ISOLATION_PREV_COUNT="$(jq -r --arg key "${rb_issue}" --arg head "${RB_ISOLATION_HEAD}" 'if .review_blocked_isolation_state[$key].head_sha == $head then .review_blocked_isolation_state[$key].count // 0 else 0 end' "${STATE_FILE}")"
           [[ "${RB_ISOLATION_PREV_COUNT}" =~ ^[0-9]+$ ]] || RB_ISOLATION_PREV_COUNT=0
           RB_ISOLATION_COUNT=$((RB_ISOLATION_PREV_COUNT + 1))

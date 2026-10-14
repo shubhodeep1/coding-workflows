@@ -81,6 +81,11 @@ run_editor_claude()
 			heal_engine=codex
 			return 75
 			;;
+		80)
+			# Claude capacity wait (issue #7370): never run the codex editor.
+			echo 'HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=capacity_wait action=stop' >&2
+			return 80
+			;;
 		*)
 			# Any other exit (1 = editor failure, 124 = timeout, or anything
 			# unexpected) fails closed without a transfer. claude_run already
@@ -98,6 +103,7 @@ run_editor()
 	if [ "${heal_engine}" = claude ]; then
 		run_editor_claude "${editor_prompt}" && return 0
 		rc=$?
+		[ "${rc}" -eq 80 ] && return 80
 		[ "${rc}" -eq 75 ] || return 1
 		rc=0
 	fi

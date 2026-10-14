@@ -153,6 +153,14 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 # autofix failure streak (issue #6633, the 2026-09-30 credit outage).
 PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
 PROVIDER_UNAVAILABLE_COMMENT_MARKER = "AI review/autofix paused — model provider unavailable"
+# A Claude pool capacity wait (issue #7370) is the same kind of repo-wide
+# pause: every account is at its usage gate and the work waits for the hourly
+# capacity-resume pass. scripts/provider_outage.py keeps a literal copy of
+# PAUSE_FAILURE_REASONS (it is staged alone); a test pins the two equal.
+CLAUDE_CAPACITY_REASON = "claude_capacity"
+CLAUDE_CAPACITY_COMMENT_MARKER = "AI review paused — Claude pool at capacity"
+PAUSE_FAILURE_REASONS = frozenset({PROVIDER_UNAVAILABLE_REASON, CLAUDE_CAPACITY_REASON})
+PAUSE_COMMENT_MARKERS = (PROVIDER_UNAVAILABLE_COMMENT_MARKER, CLAUDE_CAPACITY_COMMENT_MARKER)
 
 # Pipeline phases whose failed runs report themselves (the `heal-report` job of
 # clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
@@ -871,7 +879,7 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]], *, author_l
 		if author and _comment_author(comment) != author:
 			continue
 		body = sanitize_text(comment.get("body"))
-		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_canonical_failure_marker(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+		if any(marker in body for marker in PAUSE_COMMENT_MARKERS) or _marker_fields(_canonical_failure_marker(body)).get("reason") in PAUSE_FAILURE_REASONS:
 			# A provider outage neither adds to nor ends the streak.
 			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
@@ -3032,7 +3040,7 @@ def latest_trusted_autofix_marker_is_host_only(comments: Iterable[Any], author_l
 			fields = _marker_fields(match)
 			# Provider-outage markers are repo-wide events (#6633): like
 			# count_identical_failures, they never decide or end the scan.
-			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			if fields.get("reason") in PAUSE_FAILURE_REASONS:
 				continue
 			if head and fields.get("head", "").lower() != head:
 				return False
@@ -3289,7 +3297,7 @@ def count_identical_failures(
 			recorded = failure_fields.get("support", "").lower()
 			# Outage markers never count (#6633), so they must not spend a
 			# re-arm slot either: the resolver never ran under that support.
-			if failure_fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			if failure_fields.get("reason") in PAUSE_FAILURE_REASONS:
 				continue
 			if failure_fields.get("head", "").lower() == head and is_valid_sha(recorded):
 				recorded_supports.add(recorded)
@@ -3315,7 +3323,7 @@ def count_identical_failures(
 			if support and fields.get("support", "").lower() != support:
 				continue
 			run = fields.get("run", "")
-			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			if fields.get("reason") in PAUSE_FAILURE_REASONS:
 				# Outage markers never count and never end the scan; the
 				# run is remembered so its other comments are skipped too.
 				if run:
@@ -3610,7 +3618,7 @@ def select_non_retryable_backfill_candidate(
 		match = _BACKFILL_FAILURE_MARKER_RE.search(body)
 		if match is not None:
 			fields = _marker_fields(match)
-			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON or fields.get("head", "").lower() != head:
+			if fields.get("reason") in PAUSE_FAILURE_REASONS or fields.get("head", "").lower() != head:
 				continue
 			deciding = (comment, fields)
 			break

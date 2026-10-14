@@ -479,6 +479,14 @@ jobs:
               continue
             fi
 
+            # A PR waiting for Claude capacity (issue #7370) is re-dispatched
+            # by the hourly capacity-resume pass in orchestrate_poll.yml, which
+            # removes the label; a sweep dispatch would only pause it again.
+            if printf '%s' "${row}" | jq -e '(.labels // []) | index("ai:claude-capacity-wait") != null' >/dev/null 2>&1; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=claude_capacity_wait head_ref=${head_ref}"
+              continue
+            fi
+
             # Preflight (mirrors scripts/orchestrate_poll_process.sh:7792-7814).
             # Skip when a review run is already in_progress, queued, or pending
             # for this branch on either workflow, or a dispatched run is named

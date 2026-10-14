@@ -407,6 +407,11 @@ summariser_run_attempt()
 			: > "${attempt_out}"
 			summariser_isolation_refuse claude sandbox_unavailable
 			return $?
+		elif [ "${attempt_rc}" -eq 80 ]; then
+			# Claude capacity wait (issue #7370): no OpenCode fallback.
+			echo "AI_ENGINE_CAPACITY_WAIT role=SUMMARISER outcome=deferred" | tee -a "${log_file}" >&2
+			if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+			return 80
 		elif [ "${attempt_rc}" -eq 75 ] || [ "${attempt_rc}" -eq 2 ]; then
 			grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${attempt_err}" >&2 || true
 			if [ "${attempt_rc}" -eq 2 ]; then

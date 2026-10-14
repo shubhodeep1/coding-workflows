@@ -3692,6 +3692,12 @@ else
   run_validate_engine_attempt "VALIDATE" "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}" "${MODEL_REASONING_EFFORT_DISCOVER:-${MODEL_REASONING_EFFORT:-}}"
   DISCOVER_EXIT=$?
   set -e
+  if [ "${DISCOVER_EXIT}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no codex and no verdict; validate.yml
+    # maps exit 80 to a wait instead of a harness error.
+    echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE outcome=deferred stage=validate"
+    exit 80
+  fi
   emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
   if discover_stall_state="$(read_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
     :
@@ -4591,6 +4597,12 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   run_validate_engine_attempt "VALIDATE" "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}" "${MODEL_REASONING_EFFORT:-}"
   DIAGNOSE_EXIT=$?
   set -e
+  if [ "${DIAGNOSE_EXIT}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no codex and no verdict; validate.yml
+    # maps exit 80 to a wait instead of a harness error.
+    echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE outcome=deferred stage=validate"
+    exit 80
+  fi
   emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
   if diagnose_stall_state="$(read_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
     :

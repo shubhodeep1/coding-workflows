@@ -1488,6 +1488,14 @@ if [ -f "${ISOLATED_HELPER}" ] && [ ! -L "${ISOLATED_HELPER}" ] &&
 			SUPPORT_ROOT_DIR="${TRUSTED_SUPPORT_DIR}" SUPPORT_INSTRUCTIONS_FILE="${TRUSTED_SUPPORT_DIR}/unattended_system_instructions.md" \
 			MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}" MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}" \
 			bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CHECK_TRIAGE) || triage_rc=$?
+		if [ "${triage_rc}" -eq 80 ]; then
+			# Claude capacity wait (issue #7370): file nothing, run no codex.
+			log "skip reason=claude_capacity_wait"
+			if [ -n "${GITHUB_ENV:-}" ]; then
+				echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}" 2>/dev/null || true
+			fi
+			exit 0
+		fi
 		if [ "${triage_rc}" -eq 75 ]; then
 			triage_engine="claude->codex"
 			: > "${DIAG_FILE}"

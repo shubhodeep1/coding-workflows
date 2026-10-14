@@ -12,6 +12,11 @@ name: AI Clarify (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -37,6 +42,12 @@ jobs:
       cancel-in-progress: true
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # Claude capacity wait (issue #7370): the report step labels this issue
+      # and the hourly capacity-resume pass replays the triggering command.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: issue
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ github.event.issue.number }}
+      CLAUDE_CAPACITY_WAIT_STAGE: clarify
+      CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT: ${{ github.event.comment.id || '' }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
@@ -612,6 +623,54 @@ jobs:
             fi
           fi
           # END pr-dependency release classification (#7328)
+
+          # BEGIN capacity-wait replay classification (#7370)
+          # The capacity-resume pass (scripts/provider_outage.py) replays a
+          # clarify run that waited for Claude capacity as
+          # "/reclarify [auto-requeued-by-capacity-wait]" ending in
+          # "<!-- ai:claude-capacity-wait-replay:v1 source=<id|none> run=<id> -->".
+          # Only the GH_PAT login's replay counts (read live, fail closed).
+          # source=none restarts clarify automatically (no human-answer
+          # marker); a replay of a human /reclarify keeps its human semantics.
+          # A human typing the tag gets ordinary /reclarify handling.
+          _cw_body="${COMMENT_BODY//$'\r'/}"
+          _cw_body="${_cw_body%"${_cw_body##*[![:space:]]}"}"
+          _cw_first="${_cw_body%%$'\n'*}"
+          _cw_last="${_cw_body##*$'\n'}"
+          if [ "${EVENT_NAME}" = "issue_comment" ] && [ "${_cw_first}" = "/reclarify [auto-requeued-by-capacity-wait]" ] \
+            && [[ "${_cw_last}" =~ ^\<\!--\ ai:claude-capacity-wait-replay:v1\ source=(none|[1-9][0-9]{0,19})\ run=[0-9]{1,20}\ --\>$ ]]; then
+            _cw_source="${BASH_REMATCH[1]}"
+            _cw_reason="identity_unavailable"
+            if [ -z "${_rel_login:-}" ]; then
+              _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login 2>/dev/null)" || _rel_login=""
+            fi
+            if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+              if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
+                _cw_reason="verified"
+              else
+                _cw_reason="author_mismatch"
+              fi
+            fi
+            if [ "${_cw_reason}" = "verified" ] && [ "${_cw_source}" != "none" ]; then
+              # One GET of the source comment: it must be a /reclarify by an
+              # OWNER/MEMBER/COLLABORATOR on this issue.
+              _cw_reason="source_unverified"
+              if _cw_src_json="$(source scripts/gh_helpers.sh && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_cw_source}")" \
+                && printf '%s' "${_cw_src_json}" | jq -e --arg suffix "/repos/${GITHUB_REPOSITORY:-}/issues/${ISSUE_NUMBER}" \
+                  '((.issue_url // "") | endswith($suffix)) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | ascii_downcase | startswith("/reclarify"))' >/dev/null 2>&1; then
+                _cw_reason="verified_source"
+              fi
+            fi
+            if [ "${_cw_reason}" = "verified" ]; then
+              IS_AUTOMATED_RELEASE="true"
+              IS_FORCED_RECLARIFY="false"
+              COMMENT_ROUTE_TRUSTED="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=capacity_wait_replay reason=verified outcome=restart issue=${ISSUE_NUMBER}"
+            else
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=capacity_wait_replay reason=${_cw_reason} outcome=human_reclarify issue=${ISSUE_NUMBER}"
+            fi
+          fi
+          # END capacity-wait replay classification (#7370)
 
           # State gate: a closed issue should not produce side effects (label
           # changes, /answer auto-post that triggers plan→implement). The
@@ -1343,6 +1402,14 @@ jobs:
             rc=0
             if [ "${CLARIFY_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
+              if [ "${rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): never codex, no retries.
+                # Later output steps skip; the report step records the wait
+                # and the hourly capacity-resume pass replays the command.
+                echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY outcome=deferred stage=clarify"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${rc}" -eq 75 ]; then
                 # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
                 # attempt and the rest run the codex path (plan D1).
@@ -1373,7 +1440,7 @@ jobs:
           done
 
       - name: Semantic cache store
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1401,14 +1468,14 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success')
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Write run summary
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true')
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY || '80000' }}
         run: |
@@ -1445,7 +1512,7 @@ jobs:
 
       - name: Parse Codex output
         id: parse_codex
-        if: steps.clarify_route.outputs.skip_codex != 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true')
         run: |
           set -euo pipefail
           BLOCKED_REASON="$(perl -ne '
@@ -1508,7 +1575,7 @@ jobs:
           fi
 
       - name: Handle blocked clarification output
-        if: steps.parse_codex.outputs.blocked == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.parse_codex.outputs.blocked == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1554,7 +1621,7 @@ jobs:
 
       - name: Post clarification questions
         id: post_questions
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLARIFY_HUMAN_ANSWER_REQUESTED: ${{ steps.clarify_route.outputs.is_forced_reclarify }}
@@ -1607,7 +1674,7 @@ jobs:
         # clarify-respond worker and falls back to these RECOMMENDED picks
         # itself (issue #6262 follow-up).
         id: standalone_auto_decide
-        if: steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1689,7 +1756,7 @@ jobs:
           echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decisions=${AUTO_DECIDE_COUNT} ad_total=$(jq -r '.total' "${AUTO_DECIDE_RENDER_FILE}")"
 
       - name: Record clarification candidate (needs clarification)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1712,7 +1779,7 @@ jobs:
 
       - name: Post clear-to-proceed comment
         id: post_clear
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1731,7 +1798,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1751,7 +1818,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true')
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1794,7 +1861,7 @@ jobs:
           fi
 
       - name: Record clarification run completed
-        if: success() && steps.clarify_route.outputs.comment_route_trusted != 'false'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (success() && steps.clarify_route.outputs.comment_route_trusted != 'false')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1827,7 +1894,7 @@ jobs:
       - name: Record clarification run failed
         # The route output is empty when the job fails before "Decide clarify
         # route" finishes; then fall back to the comment's association (#7328).
-        if: (failure() || cancelled()) && steps.clarify_route.outputs.comment_route_trusted != 'false' && (steps.clarify_route.outputs.comment_route_trusted == 'true' || github.event_name != 'issue_comment' || contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && ((failure() || cancelled()) && steps.clarify_route.outputs.comment_route_trusted != 'false' && (steps.clarify_route.outputs.comment_route_trusted == 'true' || github.event_name != 'issue_comment' || contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1852,7 +1919,7 @@ jobs:
             --metadata-json "{\"outcome\": \"${FINAL_OUTCOME}\"}"
 
       - name: Comment on issue failure
-        if: failure() || cancelled()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() || cancelled())
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1871,7 +1938,7 @@ jobs:
       # A token-created marker does not start a new workflow; the scheduled
       # poller replays this command with the PAT once the budget recovers.
       - name: Queue failed reclarify for poller
-        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' }}
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
@@ -1918,7 +1985,7 @@ jobs:
           exit 1
 
       - name: Telegram failure notification
-        if: failure() || cancelled()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() || cancelled())
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

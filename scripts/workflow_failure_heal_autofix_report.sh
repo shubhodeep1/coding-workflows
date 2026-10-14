@@ -181,6 +181,12 @@ if [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
 	log "skip reason=provider_unavailable pr=${PR}"
 	exit 0
 fi
+# A Claude pool capacity wait (issue #7370) is the same repo-wide pause: the
+# capacity tracker and the hourly resume pass handle it, so no heal issue.
+if [ "${FAILURE_REASON}" = "claude_capacity" ]; then
+	log "skip reason=claude_capacity pr=${PR}"
+	exit 0
+fi
 
 # --- Streak ------------------------------------------------------------------
 

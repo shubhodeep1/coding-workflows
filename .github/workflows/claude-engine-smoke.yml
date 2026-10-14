@@ -26,6 +26,11 @@ concurrency:
   group: claude-engine-smoke
   cancel-in-progress: false
 
+env:
+  # The smoke asserts the codex-fallback exit 75 for an all-gated pool, so it
+  # keeps the Claude capacity wait (issue #7370) off.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
+
 jobs:
   smoke:
     name: Claude engine smoke (${{ matrix.profile }})

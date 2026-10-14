@@ -155,8 +155,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `provider-outage-resume` job of `ai-review.yml` (hourly schedule,
    `GH_PAT` only). A Claude pool run with every account gated
    (`claude-pool-token` reason `all_gated`) opens a separate `kind=capacity`
-   tracker with one WARNING, never pauses reviews, and closes on the next run
-   that gets an account. Log prefix `PROVIDER_OUTAGE`.
+   tracker with one WARNING; with the capacity wait on (default since #7370)
+   the review pauses as `claude_capacity` and the tracker closes only after the
+   hourly capacity-resume pass resumed every waiting item. Log prefix `PROVIDER_OUTAGE`.
    Failure and cap markers carry `support=<sha>`, the gate's verified review
    support SHA (#6625); the gate, the cap job and the sweep ignore markers of
    another or no support version, so a support fix lets the scheduled sweep

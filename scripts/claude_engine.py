@@ -845,6 +845,13 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 			parts.insert(0, f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
 		lines.append(f"{name}: {', '.join(parts) if parts else 'at the gate'}")
 	alert = bool(gated or auth_failed)
+	# Earliest time a gated account is usable again (issue #7370): the
+	# capacity-wait section of the alert names it.
+	usable_times = [
+		value for value in (_usable_at(probe, gate) for probe in ordered if str(probe.get("account") or "?") in gated)
+		if _int_or_none(value) is not None
+	]
+	next_usable_at = _format_reset(min(_int_or_none(value) for value in usable_times)) if usable_times else ""
 	text = ""
 	if alert:
 		total = len(ordered)
@@ -862,6 +869,7 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 		"auth_failed": auth_failed,
 		"probe_failed": failed,
 		"usable": usable,
+		"next_usable_at": next_usable_at,
 		"text": text,
 	}
 

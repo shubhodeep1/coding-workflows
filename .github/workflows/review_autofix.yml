@@ -102,6 +102,11 @@ on:
         type: string
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
   REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
@@ -282,7 +287,7 @@ env:
   # preflight-checked): the staging backfill copies them from the main
   # verified workflow checkout when the staging helper does not install them.
   REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
-    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh provider_outage.py
+    workflow_failure_heal.py workflow_failure_heal_autofix_report.sh provider_outage.py ai_engine_fallback_report.sh
 
 jobs:
   gate:
@@ -2264,8 +2269,9 @@ jobs:
       - name: Record Claude pool capacity
         # Issue #6633 (Q3): every pool account at its usage gate is a capacity
         # event, not a PR failure. One deduplicated ai:provider-outage tracker
-        # (kind=capacity) and alert; it never pauses reviews and closes on the
-        # next run that gets an account.
+        # (kind=capacity) and alert. With the Claude capacity wait on (issue
+        # #7370) the next step pauses the review; the tracker closes only once
+        # the hourly capacity-resume pass resumed every waiting item.
         if: always() && env.PR_CLOSED != 'true' && (steps.claude_pool.outputs.reason == 'all_gated' || steps.claude_pool.outputs.available == 'true')
         continue-on-error: true
         env:
@@ -2280,6 +2286,27 @@ jobs:
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_pool_capacity.sh"
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_claude_pool_capacity.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record Claude pool capacity' (fail open)."
+            exit 0
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
+      - name: Defer review on Claude capacity
+        # Issue #7370 (Claude capacity wait, Phase 3): see
+        # scripts/review_autofix_step_claude_capacity_wait.sh.
+        if: env.PR_CLOSED != 'true' && steps.claude_pool.outputs.reason == 'all_gated' && steps.ai_engine.outputs.any_claude == 'true'
+        id: claude_capacity_wait
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          CLAUDE_CAPACITY_WAIT_STEP_MODE: defer
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_capacity_wait.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_claude_capacity_wait.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Defer review on Claude capacity' (fail open)."
             exit 0
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
@@ -5296,6 +5323,27 @@ jobs:
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
+      - name: Record Claude capacity wait
+        # Issue #7370 (Claude capacity wait, Phase 3): see
+        # scripts/review_autofix_step_claude_capacity_wait.sh.
+        if: always() && env.AUTOFIX_FAILURE_REASON == 'claude_capacity' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          CLAUDE_CAPACITY_WAIT_STEP_MODE: record
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_capacity_wait.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::warning::review_autofix_step_claude_capacity_wait.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record Claude capacity wait' (fail open)."
+            exit 0
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
       - name: Record model-provider outage
         # Issue #6633: one repo-wide ai:provider-outage tracker and one alert
         # instead of a per-PR failure; the scheduled sweep resumes on recovery.
@@ -5317,7 +5365,7 @@ jobs:
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJSON('["provider_unavailable","claude_capacity"]'), env.AUTOFIX_FAILURE_REASON)
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -5336,7 +5384,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJSON('["provider_unavailable","claude_capacity"]'), env.AUTOFIX_FAILURE_REASON)
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5376,7 +5424,7 @@ jobs:
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Telegram failure
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
+        if: failure() && env.PR_CLOSED != 'true' && !contains(fromJSON('["provider_unavailable","claude_capacity"]'), env.AUTOFIX_FAILURE_REASON)
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -5554,7 +5602,7 @@ jobs:
         # reported through the ai:resolver-escalated label path. Fail-open by
         # construction: the script always exits 0 and the step never blocks
         # cleanup.
-        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
+        if: (failure() || env.EDITOR_CHANGES_LOST == 'true' || env.EDITOR_NOOP_SUSPICIOUS == 'true') && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) && !contains(fromJSON('["provider_unavailable","claude_capacity"]'), env.AUTOFIX_FAILURE_REASON)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
