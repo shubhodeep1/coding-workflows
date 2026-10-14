@@ -18778,6 +18778,7 @@ UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_proj
 # smallest existing call that supplies both (§14).
 handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
+  local req_reissue filed_num reissue_retarget repair_resume
   local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
   local close_reason close_marker close_stop
   local -a unblock_fixup_security_label_args=()
@@ -18864,7 +18865,56 @@ handle_unblock_judge_project_hooks() {
       echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup comment=$(jq -r 'if (.comment_id | type) == "number" then .comment_id else "unknown" end' <<< "${request}") outcome=invalid_request"
       continue
     fi
-    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+    # A non-security `reissue` closes the original item (unblock_actions.py),
+    # so its replacement takes the original's wave entry, as stall recovery's
+    # close_and_reissue does. A security original stays open and keeps its
+    # entry; its successor is appended like any fix-up. The title prefix is
+    # written by unblock_actions.py, never by the model.
+    req_reissue="false"
+    if [[ "${req_title}" == "Re-issue of #${req_item}:"* ]] && ! grep -q '^<!-- ai:security-finding:' <<< "${req_body}"; then
+      req_reissue="true"
+    fi
+    filed_num="$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // ([(.waves // [])[]?.issues[]? | select(.unblock_request_id == $id) | .github_issue] | first) // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)"
+    if [ -n "${filed_num}" ]; then
+      # A re-issue filed before its replacement took the wave entry left the
+      # closed original in the wave, which reads as a failed project (#7355).
+      if [ "${req_reissue}" = "true" ] && [[ "${filed_num}" =~ ^[0-9]+$ ]] \
+        && jq -e --argjson item "${req_item}" --arg id "${req_id}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
+        # Resume only a wave-origin failure: a project that a validation,
+        # security-pass or integration failure terminalized stays failed,
+        # because skipping the original does not clear that failure. So does
+        # one parked for a person (ai:blocked waits for /judge_resume;
+        # ai:needs-human is the needs-human digest).
+        repair_resume="true"
+        if has_label "${TRACKING_LABELS}" "ai:blocked" \
+          || has_label "${TRACKING_LABELS}" "ai:needs-human" \
+          || has_label "${TRACKING_LABELS}" "ai:validation-failed" \
+          || has_label "${TRACKING_LABELS}" "ai:validate-failed" \
+          || has_label "${TRACKING_LABELS}" "ai:harness-broken" \
+          || has_label "${TRACKING_LABELS}" "ai:security-pass-failed" \
+          || jq -e '(.integration_sync_status // "") == "failed"' "${STATE_FILE}" >/dev/null 2>&1; then
+          repair_resume="false"
+        fi
+        if jq --argjson item "${req_item}" --arg id "${req_id}" --argjson num "${filed_num}" --argjson resume "${repair_resume}" \
+          '((.waves // [])[]?.issues[]? | select(.github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not)))
+             |= (.status = "skipped" | .unblock_superseded_by = $num)
+           | if $resume and .status == "failed" then .status = "in_progress" else . end' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          post_state_comment || true
+          # Resume like the filing path below: the skipped original was what
+          # made the project read as failed, and a failed project is skipped.
+          if [ "${PROJECT_STATUS}" = "failed" ] && [ "${repair_resume}" = "true" ]; then
+            post_tracking_comment "## Unblock judge re-issue repaired
+
+#${req_item} was re-issued as #${filed_num} (\`${req_id}\`); its wave entry is now \`skipped\`. Status: failed -> in_progress." || true
+            PROJECT_STATUS="in_progress"
+          fi
+          echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${filed_num} outcome=superseded"
+        else
+          rm -f "${STATE_FILE}.tmp"
+          echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=superseded_write_failed"
+        fi
+      fi
       continue
     fi
     if jq -e --arg id "${req_id}" '(.unblock_fixup_rejected_ids // []) | index($id) != null' "${STATE_FILE}" >/dev/null 2>&1; then
@@ -18953,23 +19003,43 @@ handle_unblock_judge_project_hooks() {
       echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} outcome=create_failed"
       continue
     fi
-    jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
-      '.issue_number_map[$id] = $num
-       | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
-       | if .status == "failed" then .status = "in_progress" else . end' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reissue_retarget="false"
+    if [ "${req_reissue}" = "true" ] \
+      && jq -e --argjson item "${req_item}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
+      reissue_retarget="true"
+    fi
+    if [ "${reissue_retarget}" = "true" ]; then
+      # The local id and its dependents stay; only the GitHub issue changes.
+      jq --arg id "${req_id}" --argjson num "${new_num}" --argjson item "${req_item}" \
+        '((.waves // [])[]?.issues[]? | select(.github_issue == $item and ((.status // "") | IN("merged", "skipped") | not)))
+           |= (.github_issue = $num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor)
+             | .stall_recovery_count = 0 | .unblock_request_id = $id | .unblock_reissued_from = $item)
+         | .issue_number_map = ((.issue_number_map // {}) | with_entries(if .value == $item then .value = $num else . end))
+         | .issue_number_map[$id] = $num
+         | if .status == "failed" then .status = "in_progress" else . end' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp"
+    else
+      jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
+        '.issue_number_map[$id] = $num
+         | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
+         | if .status == "failed" then .status = "in_progress" else . end' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp"
+    fi
     post_state_comment || true
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
-      -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
+    if [ "${req_reissue}" != "true" ]; then
+      # A re-issued original is closed and never resumes, so it gets no wait marker.
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
+        -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
 
 <!-- ai:unblock-wait:v1 item=${req_item} fixup=${new_num} -->" >/dev/null 2>&1 || true
+    fi
     if [ "${PROJECT_STATUS}" = "failed" ]; then
       post_tracking_comment "## Unblock judge fix-up filed
 
 Fix-up #${new_num} (\`${req_id}\`) was added to the current wave for #${req_item}. Status: failed -> in_progress." || true
       PROJECT_STATUS="in_progress"
     fi
-    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed"
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed retarget=${reissue_retarget}"
   done
   return 0
 }
