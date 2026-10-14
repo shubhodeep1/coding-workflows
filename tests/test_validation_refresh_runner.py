@@ -461,10 +461,17 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 		expected_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
 		saw_self_test = False
 		for command, _cwd, _check, env_overrides in executor.seen:
-			if any(item in command for item in pipeline_commands):
+			if any(item in command for item in pipeline_commands) or tuple(command[:3]) in (
+				SANDBOX_PROVISION_PREFIX,
+				SANDBOX_SELF_TEST_PREFIX,
+			):
+				# Every pipeline subprocess gets each control-plane
+				# credential blanked (#7351).
 				assert env_overrides is not None
-				assert env_overrides.get("GH_TOKEN") == ""
-				assert env_overrides.get("GITHUB_TOKEN") == ""
+				for name in refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES:
+					assert env_overrides.get(name) == "", (name, command)
+			if any(item in command for item in pipeline_commands) or tuple(command[:3]) == SANDBOX_PROVISION_PREFIX:
+				assert env_overrides is not None
 				assert env_overrides.get("LOG_DIR") == str(expected_log_dir)
 			if tuple(command[:3]) == SANDBOX_SELF_TEST_PREFIX:
 				saw_self_test = True
@@ -481,6 +488,53 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 		assert saw_self_test
 		# The driver is never launched directly on the host.
 		assert all(command[:2] != ["bash", str(REPO_ROOT / "scripts" / "validate_driver.sh")] for command, *_ in executor.seen)
+		executor.assert_consumed()
+
+
+def test_refresh_pipeline_credential_names_cover_control_plane_secrets() -> None:
+	names = set(refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES)
+	for required in (
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+		"GH_PAT",
+		"OPENROUTER_API_KEY",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+		"ACTIONS_ID_TOKEN_REQUEST_URL",
+	):
+		assert required in names, required
+
+
+def test_process_repository_cleanup_after_self_test_failure_blanks_credentials() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-cleanup-env-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX, returncode=1, stderr="boom"),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		_make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+
+		cleanup_calls = [env for cmd, _cwd, _check, env in executor.seen if cmd[:3] == ["bash", SANDBOX_SCRIPT, "cleanup"]]
+		assert len(cleanup_calls) == 1
+		for name in refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES:
+			assert cleanup_calls[0] is not None and cleanup_calls[0].get(name) == "", name
 		executor.assert_consumed()
 
 
@@ -774,6 +828,15 @@ def test_discovery_dispatch_reports_agree_when_types_match() -> None:
 		assert recorded["committed_type"] == "node-runtime"
 		assert recorded["discovered_type"] == "node-runtime"
 		assert recorded["pr_url"] is None
+		# Discovery keeps OPENROUTER_API_KEY for its host broker (#7351).
+		codex_envs = [
+			env
+			for cmd, _cwd, _check, env in executor.seen
+			if tuple(cmd[: len(ISOLATED_CODEX_PREFIX)]) == ISOLATED_CODEX_PREFIX
+		]
+		assert codex_envs
+		for env in codex_envs:
+			assert env is None or env.get("OPENROUTER_API_KEY", "unset") != ""
 		# No codex retry, no push.
 		assert sum(1 for cmd, _cwd, _check, _env in executor.seen if tuple(cmd[:len(ISOLATED_CODEX_PREFIX)]) == ISOLATED_CODEX_PREFIX) == 1
 		assert all(cmd[:3] != ["git", "push", "-u"] for cmd, _cwd, _check, _env in executor.seen)

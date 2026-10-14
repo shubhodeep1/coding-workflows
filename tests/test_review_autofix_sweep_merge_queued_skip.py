@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -28,28 +29,44 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 STEP_MARKER = "- name: Enumerate open PRs and dispatch internal-review.yml"
-NEXT_STEP_MARKER = "- name: Record GH_PAT budget at sweep end"
+RUN_HEADER = "        run: |\n"
 RUN_INDENT = " " * 10
+# Lines YAML can place right after a step's block scalar: a comment indented
+# less than the ten-space body, a list item at step-list indent, or a mapping
+# key at step-key indent or less.
+BLOCK_END_RE = re.compile(r"^(?: {0,9}#| {0,6}- | {0,8}[A-Za-z_][\w-]*:(?:\s|$))")
 
 
-def extract_step_script() -> str:
-	"""Return the `run:` body of the enumerate-and-dispatch step, dedented."""
-	text = SWEEP_WF.read_text(encoding="utf-8")
+def extract_step_script(text: str | None = None) -> str:
+	"""Return the `run:` body of the enumerate-and-dispatch step, dedented.
+
+	The body ends where the YAML block scalar ends: the first non-blank line
+	indented less than the body's ten spaces (for example the next step's
+	comment or `- name:` line), so a step added after this one cannot leak
+	into the extracted script.
+	"""
+	if text is None:
+		text = SWEEP_WF.read_text(encoding="utf-8")
 	start = text.find(STEP_MARKER)
 	assert start != -1, "could not locate the sweep step"
-	end = text.find(NEXT_STEP_MARKER, start)
-	assert end != -1, "could not bound the sweep step"
-	step = text[start:end]
-	run_at = step.find("        run: |\n")
+	run_at = text.find(RUN_HEADER, start)
 	assert run_at != -1, "sweep step has no block-scalar run body"
-	body = step[run_at + len("        run: |\n"):]
-	lines = []
+	assert "- name:" not in text[start + len(STEP_MARKER):run_at], \
+		"run body found belongs to a later step"
+	body = text[run_at + len(RUN_HEADER):]
+	lines: list[str] = []
 	for line in body.splitlines():
 		if line.startswith(RUN_INDENT):
 			lines.append(line[len(RUN_INDENT):])
-		else:
-			assert line.strip() == "", f"unexpected indentation in run body: {line!r}"
+		elif line.strip() == "":
 			lines.append("")
+		else:
+			assert BLOCK_END_RE.match(line), f"run body ended on an unexpected line: {line!r}"
+			break
+	while lines and lines[-1] == "":
+		lines.pop()
+	assert lines, "sweep step run body is empty"
+	assert "gh workflow run" in "\n".join(lines), "sweep step run body lost its dispatch"
 	return "\n".join(lines) + "\n"
 
 
@@ -190,6 +207,33 @@ class SweepMergeQueuedSkipTest(unittest.TestCase):
 		self.assertEqual(snapshot[0]["labels"], ["ai:merge-queued"])
 		for key in ("number", "head_ref", "head_sha", "title", "body"):
 			self.assertIn(key, snapshot[0])
+
+	def test_extractor_ignores_a_sibling_step_added_after_it(self) -> None:
+		"""A new step (with a comment above it) inserted after the enumerate
+		step must not leak into the extracted script (issue #7340)."""
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		start = text.find(STEP_MARKER)
+		next_step = text.find("\n      - name:", start + len(STEP_MARKER))
+		self.assertNotEqual(next_step, -1)
+		inserted = (
+			"\n      # A sibling step comment indented like the step list."
+			"\n      - name: Inserted sibling step"
+			"\n        run: |"
+			"\n          echo sibling"
+		)
+		patched = text[:next_step] + inserted + text[next_step:]
+		self.assertEqual(extract_step_script(patched), extract_step_script(text))
+		self.assertNotIn("echo sibling", extract_step_script(patched))
+
+	def test_extractor_accepts_a_step_key_indented_comment_after_the_body(self) -> None:
+		"""A comment at the step-key indent (8 spaces) also ends the block
+		scalar and must not trip the boundary assertion."""
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		start = text.find(STEP_MARKER)
+		next_step = text.find("\n      - name:", start + len(STEP_MARKER))
+		self.assertNotEqual(next_step, -1)
+		patched = text[:next_step] + "\n        # step-key indented comment" + text[next_step:]
+		self.assertEqual(extract_step_script(patched), extract_step_script(text))
 
 	def test_workflow_passes_the_repo_variable(self) -> None:
 		text = SWEEP_WF.read_text(encoding="utf-8")

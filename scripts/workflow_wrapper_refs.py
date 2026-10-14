@@ -21,7 +21,7 @@ _REUSABLE_WORKFLOW_REF_RE = re.compile(
 # reusable-workflow `uses:` refs (issue #7209). Only the listed paths are
 # pinned; other checkouts keep their ref.
 _SUPPORT_REPOSITORY = "shubhodeep1/coding-workflows"
-_PINNED_SUPPORT_CHECKOUT_PATHS = (".security-hold-support",)
+_PINNED_SUPPORT_CHECKOUT_PATHS = (".security-hold-support", ".non-retryable-backfill-support")
 _KEY_VALUE_RE = re.compile(
 	r"^(?P<indent>[ \t]*)(?:-[ \t]+)?(?P<key>[A-Za-z0-9_-]+):[ \t]*(?P<value>[^\r\n#]*?)[ \t]*(?:#[^\r\n]*)?(?P<eol>\r?\n?)$"
 )

@@ -19,6 +19,14 @@
 #      when it grants them all, resumes the issue without a verdict (once per
 #      rejection run); a blocked fix-up the judge filed itself is listed once
 #      in the `ai:operator-step` issue instead of getting another fix-up;
+#   2a'. for an ai:check-triage issue, runs scripts/check_triage_resolution.py
+#      gate (Q129): a verified fix closes the issue with evidence, no round;
+#   2b. if a `wait` verdict (or an operator step, Q126) holds the item, checks
+#      its condition instead (unblock_hold_condition): met, it posts the
+#      stop's resume command (unblock_actions.py hold-followup); unmet, it
+#      refreshes the hold and stops; after UNBLOCK_JUDGE_WAIT_MAX_DAYS, or
+#      when the condition can no longer be met, the hold expires and the
+#      item is judged again. A hold is not a round;
 #   3. fingerprints the failure, asks the ledger what is still allowed
 #      (never repeat a verdict per fingerprint, 2 rounds per item, 6 per
 #      project, the terminal close), and, unless only the close is left, asks
@@ -42,6 +50,9 @@
 # newest trusted guard comment is an automation-path grant rejection,
 # `descope` / `operator_step` record an operator handoff instead of a fix-up,
 # and a trusted handoff hold marker keeps later runs from judging it again),
+# UNBLOCK_JUDGE_WAIT_ENABLED (default true; `false` takes `wait` off the menu,
+# ends open holds and lets an operator_step fix-up resume at once again; any
+# other value is treated as false), UNBLOCK_JUDGE_WAIT_MAX_DAYS (default 14),
 # MOCK_UNBLOCK_JUDGE_JSON (tests only: used instead of the model),
 # MOCK_UNBLOCK_JUDGE_NOW (tests only).
 # UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
@@ -68,7 +79,10 @@
 # reads the source issues a pipeline-authored item names (files_touched_scope_guard.py
 # --origin-repo: at most 8 issues, two attempts each). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
+# A hold check reads at most two items (the pull request and its compare
+# against the branch, or the issue) or runs a local `git grep` in TARGET_DIR.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
+#      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
@@ -156,6 +170,179 @@ unblock_latest_wait()
 		| sort_by(.at) | last // empty
 		| "\(.id) \(.fixup) \(.done) \(.at) \(.updated)"
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
+}
+
+# Default on: unset, empty or `true`; `false` turns waits off; any other
+# value turns them off and says so.
+unblock_wait_enabled()
+{
+	case "${UNBLOCK_JUDGE_WAIT_ENABLED:-true}" in
+		""|true|TRUE|True) return 0 ;;
+		false|FALSE|False) return 1 ;;
+	esac
+	unblock_log "item=${ITEM:-} op=wait_config outcome=disabled reason=invalid_value"
+	return 1
+}
+
+unblock_wait_max_hours()
+{
+	local days="${UNBLOCK_JUDGE_WAIT_MAX_DAYS:-14}"
+	if ! [[ "${days}" =~ ^[0-9]{1,3}$ ]] || [ "$((10#${days}))" -lt 1 ]; then
+		# stderr: callers read the hours from stdout.
+		unblock_log "item=${ITEM:-} op=wait_config outcome=default reason=invalid_max_days" >&2
+		days=14
+	fi
+	echo "$((10#${days} * 24))"
+}
+
+# The newest trusted hold marker on the item: "<id> <kind> <ref> <open|done|expired> <created> <updated>".
+unblock_latest_hold()
+{
+	jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
+		[.[] | select((.user.login // "") == $login)
+			| . as $c
+			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) as $last
+			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) hold=(?<kind>pr_on_branch|item_closed|placeholder_retired) ref=(?<ref>[A-Za-z0-9_./@-]{1,120})(?: (?<state>done|expired))? -->$")?) as $m
+			| select($m.item == $item)
+			| {id: $c.id, kind: $m.kind, ref: $m.ref, state: ($m.state // "open"), at: ($c.created_at // ""), updated: ($c.updated_at // $c.created_at // "")}]
+		| sort_by(.at) | last // empty
+		| "\(.id) \(.kind) \(.ref) \(.state) \(.at) \(.updated)"
+	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
+}
+
+unblock_hold_description()
+{
+	case "$1" in
+		pr_on_branch) printf 'pull request #%s merged and on `%s`' "${2%%@*}" "${2#*@}" ;;
+		item_closed) printf '#%s closed' "$2" ;;
+		placeholder_retired) printf 'operator step `%s` done' "$2" ;;
+	esac
+}
+
+# Whether a hold's condition holds now: prints met, unmet, impossible (it can
+# never be met, so the hold ends) or unknown (a read failed; try later).
+unblock_hold_condition()
+{
+	local kind="$1" ref="$2" pr branch pr_json state merged sha status dir rc=0
+	case "${kind}" in
+		item_closed)
+			[[ "${ref}" =~ ^[1-9][0-9]*$ ]] || { echo unknown; return 0; }
+			state="$(gh api "repos/${REPOSITORY}/issues/${ref}" --jq '.state // ""' 2>/dev/null)" || { echo unknown; return 0; }
+			case "${state}" in
+				closed) echo met ;;
+				open) echo unmet ;;
+				*) echo unknown ;;
+			esac
+			;;
+		pr_on_branch)
+			pr="${ref%%@*}"
+			branch="${ref#*@}"
+			if ! [[ "${pr}" =~ ^[1-9][0-9]*$ ]] || [ -z "${branch}" ] || [ "${branch}" = "${ref}" ]; then
+				echo unknown
+				return 0
+			fi
+			pr_json="$(gh api "repos/${REPOSITORY}/pulls/${pr}" --jq '{state, merged, merge_commit_sha}' 2>/dev/null)" || { echo unknown; return 0; }
+			state="$(jq -r '.state // ""' <<< "${pr_json}" 2>/dev/null || true)"
+			merged="$(jq -r '.merged // false' <<< "${pr_json}" 2>/dev/null || true)"
+			sha="$(jq -r '.merge_commit_sha // ""' <<< "${pr_json}" 2>/dev/null || true)"
+			if [ "${merged}" != "true" ]; then
+				case "${state}" in
+					closed) echo impossible ;;
+					open) echo unmet ;;
+					*) echo unknown ;;
+				esac
+				return 0
+			fi
+			[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo unknown; return 0; }
+			# `behind` or `identical`: the merge commit is already on the branch.
+			status="$(gh api "repos/${REPOSITORY}/compare/${branch}...${sha}" --jq '.status // ""' 2>/dev/null)" || { echo unknown; return 0; }
+			case "${status}" in
+				identical|behind) echo met ;;
+				ahead|diverged) echo unmet ;;
+				*) echo unknown ;;
+			esac
+			;;
+		placeholder_retired)
+			[[ "${ref}" =~ ^[A-Z][A-Z0-9_]{2,63}$ ]] && [[ "${ref}" == *_UNSET_OPERATOR_STEP ]] || { echo unknown; return 0; }
+			dir="${TARGET_DIR:-${SUPPORT_DIR}}"
+			if ! git -C "${dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+				echo unknown
+				return 0
+			fi
+			# The changelog keeps the history of a retired step, so it does not count.
+			git -C "${dir}" grep -q -F -e "${ref}" -- . ':(exclude)CHANGELOG.md' ':(exclude)changelog.d' >/dev/null 2>&1 || rc=$?
+			case "${rc}" in
+				1) echo met; return 0 ;;
+				0) ;;
+				*) echo unknown; return 0 ;;
+			esac
+			# Still named in code: an env-var step is done once a person set it as a
+			# repository Actions variable or secret (Q130). A read error, a missing
+			# permission included, keeps the hold waiting.
+			if [ "$(gh api "repos/${REPOSITORY}/actions/variables/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ] \
+				|| [ "$(gh api "repos/${REPOSITORY}/actions/secrets/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ]; then
+				echo met
+			else
+				echo unmet
+			fi
+			;;
+		*) echo unknown ;;
+	esac
+}
+
+# The placeholder of the trusted operator_step verdict that filed the fix-up
+# whose wait marker was posted at $1, when it waits on a person
+# (`_UNSET_OPERATOR_STEP`); empty otherwise. The verdict comment, not the
+# fix-up, is the record: "Stays off behind `NAME` until the operator step is done."
+# Only when the newest verdict before that fix-up wait (the one that filed the
+# fix-up) is the operator_step; a later descope fix-up resumes as usual.
+unblock_operator_step_placeholder()
+{
+	jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" --arg at "$1" '
+		[.[] | select((.user.login // "") == $login and (.created_at // "") <= $at)
+			| ((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r"))) as $lines
+			| select(($lines | last // "") | test("^<!-- ai:unblock:v1 item=" + $item + " stop=[a-z-]+ fingerprint=[0-9a-f]{12} verdict=[a-z_]+ round=[1-9][0-9]*( override=[a-z_]+)? -->$"))
+			| {at: (.created_at // ""), operator_step: (($lines | last) | test(" verdict=operator_step ")), name: ([$lines[] | (capture("^Stays off behind `(?<n>[A-Z][A-Z0-9_]{2,63})` until the operator step is done\\.$")? | .n)] | first // "")}]
+		| sort_by(.at) | last // empty | select(.operator_step) | .name
+		| select(test("^[A-Z][A-Z0-9_]{2,63}$") and endswith("_UNSET_OPERATOR_STEP"))
+	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
+}
+
+# Q129: run the check-triage resolution gate (#7095) that clarify runs. It
+# closes an ai:check-triage issue with evidence once its pull request merged
+# and the failure is verified fixed on the default branch. Returns 0 when this
+# run must stop (closed, or verified but a write failed: retried next run);
+# 1 to judge the item as usual.
+unblock_check_triage_resolved()
+{
+	local default_branch verdict status rc=0
+	# The gate's own off switch; checked here too so it costs no reads.
+	if [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		unblock_log "item=${ITEM} op=triage_resolution outcome=judge status=disabled"
+		return 1
+	fi
+	default_branch="$(git -C "${TARGET_DIR:-${SUPPORT_DIR}}" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+	if [ -z "${default_branch}" ]; then
+		default_branch="$(gh api "repos/${REPOSITORY}" --jq '.default_branch // ""' 2>/dev/null || true)"
+	fi
+	if ! [[ "${default_branch}" =~ ^[A-Za-z0-9._/-]{1,100}$ ]]; then
+		unblock_log "item=${ITEM} op=triage_resolution outcome=skip reason=default_branch_unknown"
+		return 1
+	fi
+	verdict="$(unblock_py "${SUPPORT_DIR}/scripts/check_triage_resolution.py" gate --issue-json "${RUNTIME_DIR}/item.json" \
+		--repo "${REPOSITORY}" --issue-number "${ITEM}" --default-branch "${default_branch}" 2>/dev/null)" || rc=$?
+	status="$(jq -r '.status // ""' <<< "${verdict}" 2>/dev/null || true)"
+	status="$(printf '%s' "${status}" | tr -cd 'a-z_' | cut -c1-40)"
+	if [ "${rc}" -eq 3 ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_resolution outcome=skip reason=write_failed"
+		return 0
+	fi
+	if [ "${rc}" -eq 0 ] && { [ "${status}" = "resolved" ] || [ "${status}" = "already_resolved" ]; }; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_resolution outcome=closed status=${status}"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_resolution outcome=judge status=${status:-error} rc=${rc}"
+	return 1
 }
 
 unblock_patch_comment()
@@ -983,6 +1170,38 @@ unblock_main()
 						return 0
 					fi
 				fi
+				# Q126 (#6831): a fix-up whose operator step waits on a person does
+				# not resume the item; it holds it until that step is done.
+				local step_placeholder=""
+				if unblock_wait_enabled; then
+					step_placeholder="$(unblock_operator_step_placeholder "${wait_at}")"
+				fi
+				# A hold already posted for this fix-up (its wait marker update failed
+				# afterwards) is not posted again: holds count toward MAX_HOLDS_PER_ITEM.
+				local prior_hold prior_hold_kind prior_hold_ref prior_hold_at
+				prior_hold=""
+				[ -n "${step_placeholder}" ] && prior_hold="$(unblock_latest_hold)"
+				if [ -n "${prior_hold}" ]; then
+					read -r _ prior_hold_kind prior_hold_ref _ prior_hold_at _ <<< "${prior_hold}"
+					if [ "${prior_hold_kind}" != "placeholder_retired" ] || [ "${prior_hold_ref}" != "${step_placeholder}" ] \
+						|| [[ "${prior_hold_at}" < "${wait_at}" ]]; then
+						prior_hold=""
+					fi
+				fi
+				if [ -n "${step_placeholder}" ]; then
+					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} merged. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=placeholder_retired ref=${step_placeholder} -->" >/dev/null 2>&1; then
+						# The fix-up wait stays open, so the next run tries again.
+						unblock_log "item=${ITEM} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=skip reason=hold_record_failed"
+						return 0
+					fi
+					unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge holds this item until operator step \`${step_placeholder}\` is done.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=held"
+					return 0
+				fi
 				ops_file="${RUNTIME_DIR}/followup_ops.json"
 				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" > "${ops_file}" \
 					|| ! unblock_run_ops "${ops_file}"; then
@@ -1007,6 +1226,86 @@ unblock_main()
 			unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} did not merge in time; the unblock judge decides again.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+			last_activity="${now}"
+		fi
+	fi
+
+	# Q129: a resolved check-triage issue is closed with evidence, no round used.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -f "${SUPPORT_DIR}/scripts/check_triage_resolution.py" ] \
+		&& jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
+		&& unblock_check_triage_resolved; then
+		return 0
+	fi
+
+	# A hold from a `wait` verdict or an operator step (Q116, Q126): no round
+	# and no resume until its condition holds; then the stop's resume command.
+	local hold hold_id hold_kind hold_ref hold_state hold_at hold_updated hold_status hold_desc hold_reason
+	hold=""
+	[ "${untrusted_project_pr}" = "true" ] || hold="$(unblock_latest_hold)"
+	if [ -n "${hold}" ]; then
+		read -r hold_id hold_kind hold_ref hold_state hold_at hold_updated <<< "${hold}"
+		if [ "${hold_state}" != "open" ]; then
+			# Like a fix-up's follow-up, the end of a hold restarts the 24-hour clock.
+			if [ -z "${last_activity}" ] || [[ "${hold_updated}" > "${last_activity}" ]]; then
+				last_activity="${hold_updated}"
+			fi
+		else
+			hold_desc="$(unblock_hold_description "${hold_kind}" "${hold_ref}")"
+			if unblock_wait_enabled; then
+				hold_status="$(unblock_hold_condition "${hold_kind}" "${hold_ref}")"
+			else
+				hold_status="disabled"
+			fi
+			case "${hold_status}" in
+				met)
+					ops_file="${RUNTIME_DIR}/hold_followup_ops.json"
+					if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" hold-followup --context-file "${RUNTIME_DIR}/context.json" \
+						--kind "${hold_kind}" --ref "${hold_ref}" > "${ops_file}" \
+						|| ! unblock_run_ops "${ops_file}"; then
+						# The hold stays open, so the next run retries the resume.
+						unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=followup_failed"
+						return 0
+					fi
+					unblock_patch_comment "${hold_id}" "Waited for ${hold_desc}; the unblock judge posted this item's resume command.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} done -->" \
+						|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=met"
+					return 0
+					;;
+				unknown)
+					# A condition that stays unreadable still ends at the hold's lifetime.
+					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
+						# Refresh the open hold so the scan (keyed on the marker's
+						# updatedAt) waits UNBLOCK_JUDGE_RETRY_HOURS before re-dispatching.
+						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the condition could not be read this time, so the unblock judge checks again later. This hold uses no round. Last checked ${now}.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
+							|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
+						unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_check_unavailable"
+						return 0
+					fi
+					hold_reason="max_days"
+					;;
+				unmet)
+					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
+						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the unblock judge resumes this item afterwards. This hold uses no round. Last checked ${now}.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
+							|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
+						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=holding"
+						return 0
+					fi
+					hold_reason="max_days"
+					;;
+				impossible) hold_reason="cannot_be_met" ;;
+				*) hold_reason="waits_disabled" ;;
+			esac
+			unblock_patch_comment "${hold_id}" "Stopped waiting for ${hold_desc} (${hold_reason}); the unblock judge decides again.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} expired -->" \
+				|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=expired reason=${hold_reason}"
 			last_activity="${now}"
 		fi
 	fi
@@ -1081,6 +1380,7 @@ Still waiting for an operator; last checked ${now}.
 	local -a decide_args=(decide --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --comments-file "${RUNTIME_DIR}/item_comments.json"
 		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
+	unblock_wait_enabled || decide_args+=(--wait-disabled)
 	# An ai:security issue never gets accept_with_followup on its menu (#6541);
 	# unblock_actions.py refuses it again if this flag is ever missing.
 	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
@@ -1166,6 +1466,30 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	verdict_name="$(jq -r '.verdict' "${RUNTIME_DIR}/verdict.json")"
 	if [ "${untrusted_project_pr}" = "true" ] && [[ ! "${verdict_name}" =~ ^(reissue|descope|operator_step|accept_with_followup|close)$ ]]; then
 		unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=untrusted_pr_verdict"
+		return 0
+	fi
+	if [ "${verdict_name}" = "wait" ]; then
+		# A hold, not a round: no ai:unblock:v1 marker and no project copy, so
+		# it never counts toward the caps. The item keeps its block.
+		local hold_line
+		hold_kind="$(jq -r '.hold_kind // ""' "${RUNTIME_DIR}/verdict.json")"
+		hold_ref="$(jq -r '.hold_ref // ""' "${RUNTIME_DIR}/verdict.json")"
+		hold_line="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" hold-marker --item "${ITEM}" --kind "${hold_kind}" --ref "${hold_ref}" | jq -r '.marker // empty')"
+		if [ -z "${hold_line}" ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=wait outcome=skip reason=marker_failed"
+			return 0
+		fi
+		hold_desc="$(unblock_hold_description "${hold_kind}" "${hold_ref}")"
+		comment_body="$(jq -r --arg desc "${hold_desc}" --arg days "$(( $(unblock_wait_max_hours) / 24 ))" --arg marker "${hold_line}" '
+			"## Unblock judge: `wait`\n\nReason: " + .reason + "\n\n"
+			+ "Waiting for " + $desc + ". This item keeps its block and the hold uses no round: the unblock judge checks again on its next runs, posts the resume command once the condition holds, and decides again after " + $days + " days.\n\n"
+			+ $marker
+		' "${RUNTIME_DIR}/verdict.json")"
+		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=wait outcome=skip reason=record_failed"
+			return 0
+		fi
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=wait op=hold hold=${hold_kind} ref=${hold_ref} outcome=held"
 		return 0
 	fi
 	round="$(jq -r '.round' "${RUNTIME_DIR}/verdict.json")"

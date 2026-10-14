@@ -112,6 +112,9 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 				"EVENT_NAME": event_name,
 				"EVENT_ACTION": event_action,
 				"COMMENT_BODY": "/reclarify" if event_name == "issue_comment" else "",
+				# The job predicate admits ordinary /reclarify comments only from
+				# these associations; the route fails closed without one (#7328).
+				"COMMENT_AUTHOR_ASSOCIATION": "OWNER" if event_name == "issue_comment" else "",
 				"RUN_ID": "1",
 				"ISSUE_NUMBER": "123",
 				# The step env sets it from vars.AI_ISSUE_IMPLEMENTER (empty when unset).

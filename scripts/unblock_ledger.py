@@ -43,7 +43,16 @@ Rules enforced here:
   - `close` is offered and accepted only once a round cap, the 24-hour rule
     or an exhausted menu applies (TERMINAL_REASONS), never on the model's
     choice alone: comment text the judge reads is evidence, not a reason to
-    abandon the work (issue #6557).
+    abandon the work (issue #6557);
+  - `wait` holds the item until a named condition the pipeline can check
+    itself holds (HOLD_KINDS). It records a hold marker, not a round, so it
+    uses no round and never counts toward the caps:
+
+      <!-- ai:unblock-wait:v1 item=<n> hold=<kind> ref=<ref>[ done| expired] -->
+
+    It is offered at most MAX_HOLDS_PER_ITEM times per item, never for a
+    condition this item already saw met, and not at all when the caller
+    passes `decide --wait-disabled` (UNBLOCK_JUDGE_WAIT_ENABLED=false).
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -58,9 +67,10 @@ verdict, 2 unreadable input):
   decide --item <n> --stop <id> --fingerprint <fp> --comments-file <path>
          [--project-comments-file <path>] --trusted-login <login>
          --now <iso8601> [--kind issue|pr|project] [--last-activity <iso8601>]
-         [--security-issue]
+         [--security-issue] [--wait-disabled]
       Rounds used, the verdicts still allowed, and whether the item is
-      terminal (and why).
+      terminal (and why); `holds_used` and `holds_met` count the item's
+      trusted hold markers.
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
       Check a judge verdict against the `decide` output and the hard limits,
       and print the normalised verdict.
@@ -80,7 +90,9 @@ verdict, 2 unreadable input):
       otherwise `{status: none, reason}`.
   marker --item <n> --stop <id> --fingerprint <fp> --verdict <v> --round <k>
          [--override bulk_delete]
-      The marker line to end the verdict comment with.
+      The marker line to end the verdict comment with (never for `wait`).
+  hold-marker --item <n> --kind <kind> --ref <ref> [--state done|expired]
+      The hold marker line for a `wait` verdict or an operator-step hold.
 
 No GitHub API calls and no network (CLAUDE.md §15): callers pass the
 comments they already fetched.
@@ -136,9 +148,18 @@ VERDICTS = (
 	"reissue",
 	"accept_with_followup",
 	"operator_step",
+	"wait",
 	"close",
 )
 TERMINAL_VERDICT = "close"
+# What a `wait` verdict may hold an item for: conditions the judge checks
+# itself on its next runs (scripts/unblock_judge.sh unblock_hold_condition).
+# pr_on_branch: pull request <pr> merged and its merge commit is on <branch>;
+# item_closed: issue or pull request <n> is closed; placeholder_retired: the
+# `_UNSET_OPERATOR_STEP` placeholder no longer appears on the default branch.
+HOLD_KINDS = ("pr_on_branch", "item_closed", "placeholder_retired")
+HOLD_STATES = ("done", "expired")
+MAX_HOLDS_PER_ITEM = 3
 # The deterministic conditions under which `decide` makes an item terminal;
 # `validate` accepts the terminal close only with one of these.
 TERMINAL_REASONS = ("item_cap", "project_cap", "still_blocked_24h", "menu_exhausted")
@@ -197,6 +218,13 @@ AUTOMATION_PATH_REJECTION_RE = re.compile(
 	r"run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) truncated=(?P<truncated>true|false) "
 	r"paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
 )
+HOLD_MARKER_RE = re.compile(
+	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) hold=(?P<kind>[a-z_]+) "
+	r"ref=(?P<ref>[A-Za-z0-9_./@-]{1,120})(?: (?P<state>done|expired))? -->$"
+)
+# A branch name a hold may name: no option-like start, no `..`, `//`, `@{`,
+# trailing `/` or `.`, or `.lock` suffix, as `git check-ref-format` refuses.
+HOLD_BRANCH_RE = re.compile(r"^(?![-./])(?!.*\.\.)(?!.*//)(?!.*\.lock$)[A-Za-z0-9._/-]{1,100}(?<![./])$")
 OPERATOR_HANDOFF_RE = re.compile(
 	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) reason=operator_handoff run=(?P<run>[0-9]+) -->$"
 )
@@ -332,7 +360,8 @@ def parse_markers(comments: object, trusted_login: str) -> list[dict]:
 		if not lines:
 			continue
 		match = MARKER_RE.match(lines[-1])
-		if not match or match.group("stop") not in STOP_IDS or match.group("verdict") not in VERDICTS:
+		if not match or match.group("stop") not in STOP_IDS or match.group("verdict") not in VERDICTS \
+			or match.group("verdict") == "wait":
 			continue
 		created = comment.get("created_at") or ""
 		try:
@@ -351,6 +380,85 @@ def parse_markers(comments: object, trusted_login: str) -> list[dict]:
 			}
 		)
 	return entries
+
+
+def hold_ref(wait_for: object, item: int | None = None) -> tuple[str, str]:
+	"""(kind, ref) for a `wait` condition; refuses anything the judge cannot check."""
+	if not isinstance(wait_for, dict):
+		raise UsageError("wait needs 'wait_for': an object naming the condition")
+	kind = wait_for.get("kind")
+	if kind not in HOLD_KINDS:
+		raise UsageError(f"wait_for kind must be one of {list(HOLD_KINDS)}")
+	if kind == "pr_on_branch":
+		pr, branch = wait_for.get("pr"), wait_for.get("branch")
+		if type(pr) is not int or pr < 1:
+			raise UsageError("wait_for pr_on_branch needs 'pr': a positive pull request number")
+		if not isinstance(branch, str) or not HOLD_BRANCH_RE.match(branch):
+			raise UsageError("wait_for pr_on_branch needs 'branch': a plain branch name")
+		return kind, f"{pr}@{branch}"
+	if kind == "item_closed":
+		number = wait_for.get("item")
+		if type(number) is not int or number < 1:
+			raise UsageError("wait_for item_closed needs 'item': a positive issue or pull request number")
+		if item is not None and number == item:
+			raise UsageError("wait_for item_closed cannot wait for the blocked item itself")
+		return kind, str(number)
+	name = wait_for.get("placeholder")
+	if not isinstance(name, str) or not ENV_NAME_RE.match(name) or not name.endswith(OPERATOR_PLACEHOLDER_SUFFIX):
+		raise UsageError(f"wait_for placeholder_retired needs 'placeholder': a name ending in {OPERATOR_PLACEHOLDER_SUFFIX}")
+	return kind, name
+
+
+def wait_for_from_ref(kind: str, ref: str) -> dict:
+	"""The `wait_for` object a hold marker's kind and ref stand for (inverse of hold_ref)."""
+	if kind == "pr_on_branch":
+		pr, sep, branch = ref.partition("@")
+		if not sep or not pr.isdigit():
+			raise UsageError(f"hold ref {ref!r} is not <pr>@<branch>")
+		return {"kind": kind, "pr": int(pr), "branch": branch}
+	if kind == "item_closed":
+		if not ref.isdigit():
+			raise UsageError(f"hold ref {ref!r} is not an issue number")
+		return {"kind": kind, "item": int(ref)}
+	return {"kind": kind, "placeholder": ref}
+
+
+def hold_marker(item: int, kind: str, ref: str, state: str = "") -> str:
+	if kind not in HOLD_KINDS:
+		raise UsageError(f"unknown hold kind {kind!r}")
+	if hold_ref(wait_for_from_ref(kind, ref), item) != (kind, ref):
+		raise UsageError(f"hold ref {ref!r} is not a canonical {kind} reference")
+	if state and state not in HOLD_STATES:
+		raise UsageError(f"hold state must be one of {list(HOLD_STATES)}")
+	line = f"<!-- ai:unblock-wait:v1 item={item} hold={kind} ref={ref}{' ' + state if state else ''} -->"
+	match = HOLD_MARKER_RE.match(line)
+	if not match or match.group("kind") != kind:
+		raise UsageError(f"hold ref {ref!r} is not a valid {kind} reference")
+	return line
+
+
+def parse_holds(comments: object, trusted_login: str, item: int) -> list[dict]:
+	"""This item's hold markers from comments by the trusted login (last non-empty line)."""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	holds = []
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		match = HOLD_MARKER_RE.match(lines[-1]) if lines else None
+		if not match or int(match.group("item")) != item or match.group("kind") not in HOLD_KINDS:
+			continue
+		holds.append({
+			"kind": match.group("kind"),
+			"ref": match.group("ref"),
+			"state": match.group("state") or "open",
+			"created_at": comment.get("created_at") or "",
+		})
+	return holds
 
 
 def latest_rejection(comments: object, trusted_login: str, item: int, stop: str) -> dict:
@@ -566,6 +674,8 @@ def decide(
 	rejection: dict | None = None,
 	*,
 	security_issue: bool = False,
+	holds: list[dict] | None = None,
+	wait_enabled: bool = True,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -607,6 +717,11 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
 	if kind == "project":
 		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
+	# A hold is not a round, so it is bounded by its own count instead.
+	holds = [hold for hold in (holds or []) if isinstance(hold, dict)]
+	holds_met = sorted({f"{hold.get('kind')}:{hold.get('ref')}" for hold in holds if hold.get("state") == "done"})
+	if not wait_enabled or len(holds) >= MAX_HOLDS_PER_ITEM:
+		allowed = [verdict for verdict in allowed if verdict != "wait"]
 	# The terminal close is never on the model's menu (issue #6557): the judge
 	# reads public comments, so a comment steering it to `close` must not be
 	# able to abandon a blocked item. `close` is offered only below, once a
@@ -649,6 +764,8 @@ def decide(
 		"allowed": [TERMINAL_VERDICT] if terminal_reason else options,
 		"terminal": bool(terminal_reason),
 		"terminal_reason": terminal_reason,
+		"holds_used": len(holds),
+		"holds_met": holds_met,
 	}
 
 
@@ -822,6 +939,14 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			normalised["rejected_run"] = rejected["run_id"]
 		normalised["rejection_run"] = rejection["run"]
 		normalised["paths"] = cleaned
+	if name == "wait":
+		hold_kind, ref = hold_ref(verdict.get("wait_for"), decision.get("item") if type(decision.get("item")) is int else None)
+		if f"{hold_kind}:{ref}" in (decision.get("holds_met") or []):
+			raise UsageError(f"wait condition {hold_kind}:{ref} was already met on this item; pick another verdict")
+		if type(decision.get("item")) is int:
+			hold_marker(decision["item"], hold_kind, ref)
+		normalised["hold_kind"] = hold_kind
+		normalised["hold_ref"] = ref
 	if name == "operator_step":
 		flag = verdict.get("placeholder")
 		if not isinstance(flag, str) or not ENV_NAME_RE.match(flag):
@@ -844,6 +969,8 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 def marker(item: int, stop: str, fp: str, verdict: str, round_number: int, override: str = "") -> str:
 	if verdict not in VERDICTS:
 		raise UsageError(f"unknown verdict {verdict!r}")
+	if verdict == "wait":
+		raise UsageError("a wait records a hold marker (hold-marker), not a round")
 	if round_number < 1:
 		raise UsageError("round must be at least 1")
 	suffix = ""
@@ -876,6 +1003,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--last-activity", default="")
 	decide_cmd.add_argument("--rejection-file")
 	decide_cmd.add_argument("--security-issue", action="store_true")
+	decide_cmd.add_argument("--wait-disabled", action="store_true")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -909,6 +1037,11 @@ def build_parser() -> argparse.ArgumentParser:
 	marker_cmd.add_argument("--verdict", required=True)
 	marker_cmd.add_argument("--round", required=True, type=int)
 	marker_cmd.add_argument("--override", default="")
+	hold_cmd = sub.add_parser("hold-marker")
+	hold_cmd.add_argument("--item", required=True)
+	hold_cmd.add_argument("--kind", required=True)
+	hold_cmd.add_argument("--ref", required=True)
+	hold_cmd.add_argument("--state", default="")
 	return parser
 
 
@@ -946,7 +1079,8 @@ def run(argv: list[str] | None = None) -> dict:
 		item = _check_item(args.item)
 		stop = _check_stop(args.stop)
 		fp = _check_fingerprint(args.fingerprint)
-		item_entries = parse_markers(_read_json(args.comments_file, "--comments-file"), args.trusted_login)
+		item_comments = _read_json(args.comments_file, "--comments-file")
+		item_entries = parse_markers(item_comments, args.trusted_login)
 		project_entries = None
 		if args.project_comments_file:
 			project_entries = parse_markers(_read_json(args.project_comments_file, "--project-comments-file"), args.trusted_login)
@@ -955,6 +1089,8 @@ def run(argv: list[str] | None = None) -> dict:
 		return decide(
 			item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection,
 			security_issue=args.security_issue,
+			holds=parse_holds(item_comments, args.trusted_login, item),
+			wait_enabled=not args.wait_disabled,
 		)
 	if args.command == "validate":
 		return validate(
@@ -974,6 +1110,8 @@ def run(argv: list[str] | None = None) -> dict:
 			args.zip_file, _check_item(args.item), args.repo, approved,
 		)
 	item = _check_item(args.item)
+	if args.command == "hold-marker":
+		return {"marker": hold_marker(item, args.kind, args.ref, args.state)}
 	return {
 		"marker": marker(
 			item, _check_stop(args.stop), _check_fingerprint(args.fingerprint), args.verdict, args.round, args.override

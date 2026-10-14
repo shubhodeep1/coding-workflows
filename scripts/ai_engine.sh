@@ -24,13 +24,23 @@
 #       AI_ENGINE_FALLBACK_RECORDS_FILE and sets AI_ENGINE_FALLBACK_EXIT
 #       (plan D1, item 3e). Capacity reasons (`all_gated`, `all_usage_limit`)
 #       or AI_ENGINE_FALLBACK_POLICY=always give 75: the caller runs codex and
-#       at most one Telegram note is sent per job. Every other reason under
-#       the default policy `capacity` gives 76 and logs
-#       `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`: the caller must
-#       fail (never run codex). The optional class can only demote a reason
-#       to `non_capacity`. Always returns 0; callers use AI_ENGINE_FALLBACK_EXIT.
-#       AI_ENGINE_LAST_FALLBACK_REASON holds the sanitized reason afterwards,
-#       so a caller whose stderr is redirected can log it.
+#       at most one Telegram note is sent per job. With
+#       CLAUDE_POOL_CAPACITY_WAIT_ENABLED=true (opt-in; off by default until
+#       the capacity-wait plan's Phase 4 resume pass lands, issue #7251) a
+#       capacity reason under the policy `capacity` instead gives 80 (wait):
+#       the record's action is `wait`, `AI_ENGINE_CAPACITY_WAIT role= reason=`
+#       is logged, no Telegram note is sent and the caller must not run codex.
+#       Every other reason under the default policy `capacity` gives 76 and
+#       logs `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`: the caller
+#       must fail (never run codex). The optional class can only demote a
+#       reason to `non_capacity`. Always returns 0; callers use
+#       AI_ENGINE_FALLBACK_EXIT. AI_ENGINE_LAST_FALLBACK_REASON holds the
+#       sanitized reason afterwards, so a caller whose stderr is redirected
+#       can log it.
+#   ai_engine_capacity_wait_enabled
+#       Returns 0 when CLAUDE_POOL_CAPACITY_WAIT_ENABLED is `true` (any letter
+#       case). Unset, empty or `false` is off; any other value is off with a
+#       warning.
 #   ai_engine_fallback_policy
 #       `capacity` (default) or `always`; an unknown value is `capacity`.
 #   ai_engine_fallback_class <reason>
@@ -57,7 +67,9 @@
 #       Returns 0 on success; 75 when Claude is out of capacity (every
 #       account gated or at its usage limit, or any unavailability under
 #       AI_ENGINE_FALLBACK_POLICY=always), after logging AI_ENGINE_FALLBACK,
-#       so the caller runs the codex path (D1); 76 when Claude is unavailable
+#       so the caller runs the codex path (D1); 80 instead of 75 when the
+#       capacity wait is on (ai_engine_capacity_wait_enabled): the caller
+#       must not run codex; 76 when Claude is unavailable
 #       for any other reason (no isolation support, Docker or image, no
 #       credential, no policy, a rejected token or dead relay) under the
 #       default policy `capacity`: the caller fails closed and never runs
@@ -75,7 +87,8 @@
 #       with SUPPORT_ROOT_DIR / SUPPORT_INSTRUCTIONS_FILE pointing at the
 #       directory this file was sourced from, wrapped in codex_heartbeat.sh
 #       when present; exit 75 (Claude out of capacity) runs the codex command,
-#       any other status (including 76, a refused fallback) is returned as is. Sets AI_ENGINE_LAST_SELECTED to
+#       any other status (including 76, a refused fallback, and 80, a capacity
+#       wait) is returned as is. Sets AI_ENGINE_LAST_SELECTED to
 #       `codex`, `claude` or `claude->codex`.
 #   ai_engine_stage_support <source_root> <dest_root>
 #       Copies the fixed list of engine support files (this file, the
@@ -100,6 +113,8 @@
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
 #   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
 #   AI_ENGINE_FALLBACK_POLICY  `capacity` (default) | `always` (D1 rollback)
+#   CLAUDE_POOL_CAPACITY_WAIT_ENABLED  `true` turns a capacity fallback into a
+#                           wait (exit 80); default off (issue #7251, Phase 1)
 #   AI_ENGINE_FALLBACK_RECORDS_FILE  fallback records the job's report step
 #                           reads (default
 #                           ${RUNNER_TEMP}/ai-engine-fallback-records.tsv)
@@ -125,7 +140,11 @@ _AI_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _AI_ENGINE_EXIT_FALLBACK=75
 # Public exit code of a refused (non-capacity) fallback (plan item 3e, D1).
 _AI_ENGINE_EXIT_REFUSED=76
-# Set by ai_engine_fallback: 75 (run codex) or 76 (refused, fail closed).
+# Public exit code of a capacity wait (issue #7251): Claude is out of
+# capacity and CLAUDE_POOL_CAPACITY_WAIT_ENABLED=true; codex must not run.
+_AI_ENGINE_EXIT_WAIT=80
+# Set by ai_engine_fallback: 75 (run codex), 76 (refused, fail closed) or 80
+# (capacity wait, fail without codex).
 AI_ENGINE_FALLBACK_EXIT="${_AI_ENGINE_EXIT_FALLBACK}"
 readonly -a _AI_ENGINE_SANDBOX_ONLY_ROLES=(REVIEW_EDITOR REVIEW_CONSOLIDATOR RB_JUDGE CONFLICT_RESOLVER)
 
@@ -202,6 +221,26 @@ ai_engine_fallback_class()
 	esac
 }
 
+ai_engine_capacity_wait_enabled()
+{
+	# Phase 1 of the capacity-wait plan (issue #7251): off by default, because
+	# the resume pass that re-dispatches waiting work lands in Phase 4, which
+	# flips this default to on. Do not enable it before then.
+	local raw="${CLAUDE_POOL_CAPACITY_WAIT_ENABLED:-}"
+	# Trim surrounding whitespace like provider_outage.py's .strip(), so both
+	# read the same value as on or off.
+	raw="${raw#"${raw%%[![:space:]]*}"}"
+	raw="${raw%"${raw##*[![:space:]]}"}"
+	case "${raw,,}" in
+		true) return 0 ;;
+		""|false) return 1 ;;
+		*)
+			echo "::warning::AI engine: invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED; capacity wait off." >&2
+			return 1
+			;;
+	esac
+}
+
 ai_engine_no_account_reason()
 {
 	local reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}" token=""
@@ -230,7 +269,10 @@ ai_engine_fallback()
 	# The caller's class can only demote a capacity reason (D3), never promote.
 	[ "${demote}" = "non_capacity" ] && class="non_capacity"
 	policy="$(ai_engine_fallback_policy)"
-	if [ "${policy}" = "always" ] || [ "${class}" = "capacity" ]; then
+	if [ "${policy}" != "always" ] && [ "${class}" = "capacity" ] && ai_engine_capacity_wait_enabled; then
+		action="wait"
+		AI_ENGINE_FALLBACK_EXIT="${_AI_ENGINE_EXIT_WAIT}"
+	elif [ "${policy}" = "always" ] || [ "${class}" = "capacity" ]; then
 		action="codex"
 		AI_ENGINE_FALLBACK_EXIT="${_AI_ENGINE_EXIT_FALLBACK}"
 	else
@@ -247,6 +289,12 @@ ai_engine_fallback()
 	fi
 	if [ "${action}" = "refused" ]; then
 		echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${role} reason=${reason}" >&2
+		return 0
+	fi
+	if [ "${action}" = "wait" ]; then
+		# No codex runs, so no codex-fallback note: the job's report step
+		# (ai_engine_fallback_report.sh) records the wait and alerts once.
+		echo "AI_ENGINE_CAPACITY_WAIT role=${role} reason=${reason}" >&2
 		return 0
 	fi
 	# The Claude review-panel slot has no codex path: it retries its pool
@@ -699,6 +747,7 @@ claude_run_selected()
 			AI_ENGINE_READ_ONLY=true SUPPORT_ROOT_DIR="${engine_root}" SUPPORT_INSTRUCTIONS_FILE="${instructions}" \
 				claude_run "${role}" "${prompt_file}" "${out_file}" "${workdir}" || rc=$?
 		fi
+		# Only 75 runs codex; 76 (refused) and 80 (capacity wait) are returned.
 		if [ "${rc}" -ne "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
 			return "${rc}"
 		fi
