@@ -28,7 +28,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 STEP_MARKER = "- name: Enumerate open PRs and dispatch internal-review.yml"
-NEXT_STEP_MARKER = "- name: Record GH_PAT budget at sweep end"
+# The step after the enumerate step is the non-retryable backfill (issue
+# #7291); bound the slice at its leading comment so its YAML is not read as
+# part of the run body.
+NEXT_STEP_MARKER = "# Non-retryable failure backfill (issue #7291)"
 RUN_INDENT = " " * 10
 
 

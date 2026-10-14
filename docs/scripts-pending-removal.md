@@ -90,6 +90,18 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
+### `scripts/workflow_failure_heal_non_retryable_backfill.sh` + the "Backfill non-retryable autofix failure reports" step of `.github/workflows/review_autofix_sweep.yml` + the `non-retryable-backfill` job of `workflow-templates/ai-review.yml`
+
+- **Introduced in:** the PR for #7291 (2026-10-14)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually (or together with the review/autofix reporter and heal intake in the entry above)
+- **Removal preflight checks:**
+  - The last 10 runs of `review_autofix_sweep.yml` log `WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL outcome=complete ... dispatched=0` and no `pr=<n> outcome=skip reason=tick_cap` line (`gh run view <id> --log | grep WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL`), so no undiagnosed non-retryable failure is still waiting on the backfill.
+  - The same runs log no `outcome=warn reason=listing_truncated` line, or every rotated window has been covered with `dispatched=0`.
+  - `rg -n 'workflow_failure_heal_non_retryable_backfill\.sh' .github/workflows workflow-templates` shows the sweep step and the consumer job removed first, and consumers have synced an `ai-review.yml` without the job.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py` passes after the backfill selector and `tests/test_workflow_failure_heal_non_retryable_backfill.py` are removed.
+- **Owner:** @shubhodeep1
+
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
 - **Introduced in:** #4134 (2026-09-19)
