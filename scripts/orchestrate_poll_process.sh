@@ -18768,13 +18768,13 @@ handle_unblock_judge_project_hooks() {
     fi
     reissue_retarget="false"
     if [ "${req_reissue}" = "true" ] \
-      && jq -e --argjson item "${req_item}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and (.status // "") != "merged")' "${STATE_FILE}" >/dev/null 2>&1; then
+      && jq -e --argjson item "${req_item}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
       reissue_retarget="true"
     fi
     if [ "${reissue_retarget}" = "true" ]; then
       # The local id and its dependents stay; only the GitHub issue changes.
       jq --arg id "${req_id}" --argjson num "${new_num}" --argjson item "${req_item}" \
-        '((.waves // [])[]?.issues[]? | select(.github_issue == $item and (.status // "") != "merged"))
+        '((.waves // [])[]?.issues[]? | select(.github_issue == $item and ((.status // "") | IN("merged", "skipped") | not)))
            |= (.github_issue = $num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor)
              | .stall_recovery_count = 0 | .unblock_request_id = $id | .unblock_reissued_from = $item)
          | .issue_number_map = ((.issue_number_map // {}) | with_entries(if .value == $item then .value = $num else . end))

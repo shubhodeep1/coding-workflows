@@ -466,6 +466,18 @@ def test_fixup_hook_leaves_a_finished_original_alone(tmp_path: Path, entries: li
 	assert creates == [] and after == state
 
 
+def test_fixup_hook_reissue_never_revives_a_skipped_original(tmp_path: Path) -> None:
+	# A later re-issue request must not set a superseded (skipped) entry back to pending.
+	skipped = {"id": "issue-5", "github_issue": 5, "status": "skipped", "unblock_superseded_by": 900}
+	state = _reissue_state([skipped])
+	body = REISSUE_BODY.replace("unblock-5-r1", "unblock-5-r2")
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=body)
+	assert result.returncode == 0, result.stderr
+	assert creates == ["create"]
+	assert after["waves"][0]["issues"] == [skipped, {"id": "unblock-5-r2", "github_issue": 901, "status": "pending"}]
+	assert "retarget=false" in result.stdout
+
+
 @pytest.mark.parametrize("body", [
 	# A security original stays open, so its successor is appended.
 	"<!-- ai:unblock-fixup-request:v1 item=5 id=unblock-5-r1 -->\n### Re-issue of #5: Pin the action\n\n<!-- ai:security-finding:abc-1 -->\nRe-issued.",
