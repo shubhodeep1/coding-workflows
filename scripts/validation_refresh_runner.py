@@ -62,6 +62,27 @@ DISCOVERY_CODEX_CALL_TIMEOUT_SECS = 300
 CLONE_ATTEMPTS = 3
 CLONE_RETRY_DELAYS_SECS = (5, 15)
 
+# Control-plane credentials the refresh process may hold (the workflow step
+# sets GH_TOKEN from GH_PAT and OPENROUTER_API_KEY). Every pipeline
+# subprocess that works on the untrusted consumer clone (render, lint,
+# sandbox provision, checked-run, cleanup) gets these blanked, so they stay
+# in this process. Discovery's isolated Codex launch is not a pipeline
+# subprocess and keeps OPENROUTER_API_KEY for its host-side broker (#7351).
+REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES = (
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"GH_PAT",
+	"OPENROUTER_API_KEY",
+	"TG_BOT_SECRET",
+	"CHECK_TRIAGE_ISSUES_TOKEN",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"ANTHROPIC_API_KEY",
+	# validation-refresh.yml grants id-token: write; keep the OIDC request
+	# credentials out of the pipeline subprocesses too.
+	"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+	"ACTIONS_ID_TOKEN_REQUEST_URL",
+)
+
 
 def _env_bool(name: str, default: bool) -> bool:
 	value = os.environ.get(name)
@@ -430,11 +451,10 @@ class ValidationRefreshRunner:
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
 		diagnostics: list[str] = []
 		pipeline_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
-		pipeline_env_overrides = {
-			"GH_TOKEN": "",
-			"GITHUB_TOKEN": "",
-			"LOG_DIR": str(pipeline_log_dir),
-		}
+		# Blank every control-plane credential for the pipeline subprocesses;
+		# none of them needs one, and they run against the untrusted clone.
+		pipeline_env_overrides = {name: "" for name in REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES}
+		pipeline_env_overrides["LOG_DIR"] = str(pipeline_log_dir)
 
 		render_command = [
 			"python3",
@@ -458,7 +478,10 @@ class ValidationRefreshRunner:
 		# from /proc. The self-test therefore runs only through
 		# scripts/validation_harness_sandbox.sh (separate user, rootless
 		# Docker, allowlisted env, selfcheck against this pid). Any sandbox
-		# failure is a self_test failure; there is no host fallback.
+		# failure is a self_test failure; there is no host fallback. The
+		# runner-UID helper calls (provision, checked-run, cleanup) also get
+		# the blanked pipeline_env_overrides, so no refresh credential leaves
+		# this process (#7351).
 		sandbox_script = str(self.source_root / "scripts" / "validation_harness_sandbox.sh")
 		self_test_command = [
 			"bash",

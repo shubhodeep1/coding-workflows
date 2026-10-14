@@ -127,7 +127,7 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -166,7 +166,7 @@ jobs:
           # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
           # are unchanged.
           resolver_ci_triage_routing_on=false
-          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" in
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
@@ -222,7 +222,7 @@ jobs:
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
-            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
           if [ -s "${resolver_err_file}" ]; then
@@ -252,6 +252,9 @@ jobs:
             fi
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
+          elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
             exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."

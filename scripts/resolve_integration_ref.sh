@@ -119,7 +119,9 @@ branch_exists() {
 }
 
 # --- CI-triage PR-branch routing (CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED) ------
-# Opt-in (default off). When on, an `ai:check-triage` issue filed by
+# On by default: unset, empty, `true`, `1`, `yes` or `on` route; `false`,
+# `0`, `no` or `off` turn it off; any other value turns it off with a
+# ::warning::. When on, an `ai:check-triage` issue filed by
 # scripts/check_failure_triage.sh resolves to the head branch of the PR whose
 # check failed, after verifying the label, the canonical marker header, a
 # trusted author, the body's PR line, the live PR (open, same repository,
@@ -129,10 +131,14 @@ branch_exists() {
 CI_TRIAGE_REFUSED_RC=3
 
 ci_triage_routing_enabled() {
-	local raw="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}"
+	local raw="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}"
 	case "${raw,,}" in
 		true|1|yes|on) return 0 ;;
-		*) return 1 ;;
+		false|0|no|off) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED has an unrecognised value; CI-triage PR-branch routing is off. Use true or false." >&2
+			return 1
+			;;
 	esac
 }
 
@@ -191,6 +197,12 @@ for label in labels if isinstance(labels, list) else []:
 has_label = "ai:check-triage" in names
 has_marker = re.search(r"<!--\s*check-failure-triage:", body) is not None
 if not has_label and not has_marker:
+	print("skip")
+	sys.exit(0)
+# The unblock judge CI-failure reissue (scripts/unblock_actions.py, #7032)
+# carries only a `check-failure-triage:pr=<n>` lineage marker and no label.
+# It is not a triage issue to route; it keeps the default-branch behaviour.
+if not has_label and re.search(r"<!--\s*check-failure-triage:(?!pr=)", body) is None:
 	print("skip")
 	sys.exit(0)
 pr_markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
@@ -353,12 +365,23 @@ resolve_ci_triage_branch() {
 resolve_ref() {
 	local child_body child_branch tracking_issue tracking_body tracking_branch
 	local child_json="" triage_branch triage_rc
+	# Evaluate the flag once so an unrecognised value warns only once.
+	local routing_on=0
 	if ci_triage_routing_enabled; then
+		routing_on=1
+	fi
+	if [ "${routing_on}" -eq 1 ]; then
 		# One full issue read supplies body, labels, author and PR flag. With
 		# routing on, an unreadable issue might be a CI-triage issue, so a
 		# failed read or parse refuses (exit 3) instead of returning a code
-		# that callers map to the default-branch fallback.
-		if ! child_json="$(get_issue_json "${ISSUE}")"; then
+		# that callers map to the default-branch fallback. A rate-limited
+		# read keeps the resolver's retry-later exit 75, as without routing.
+		local read_rc=0
+		child_json="$(get_issue_json "${ISSUE}")" || read_rc=$?
+		if [ "${read_rc}" -eq 75 ]; then
+			_resolver_rate_limited "issue-${ISSUE}"
+		fi
+		if [ "${read_rc}" -ne 0 ]; then
 			ci_triage_refuse "issue_read_failed" "none"
 			return "${CI_TRIAGE_REFUSED_RC}"
 		fi
@@ -384,7 +407,7 @@ print(body if isinstance(body, str) else "")
 		return 0
 	fi
 
-	if ci_triage_routing_enabled; then
+	if [ "${routing_on}" -eq 1 ]; then
 		triage_rc=0
 		triage_branch="$(resolve_ci_triage_branch "${child_json}")" || triage_rc=$?
 		if [ "${triage_rc}" -ne 0 ]; then
@@ -427,12 +450,14 @@ run_case() {
 	out_file="$(mktemp)"
 	err_file="$(mktemp)"
 	# Always set the routing flag explicitly so an outer value cannot leak
-	# into a fixture; fixtures opt in through `env`.
+	# into a fixture; fixtures opt in through `env`. A JSON null unsets it, so
+	# a fixture can exercise the resolver's own default.
 	routing_flag="$(python3 -c '
 import json, pathlib, sys
 fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
-print(str(env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")))
+value = env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")
+print("__unset__" if value is None else str(value))
 ' "${fixture_file}")"
 	(
 		export PATH="${bin_dir}:${PATH}"
@@ -441,7 +466,11 @@ print(str(env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")))
 		export REPO="owner/repo"
 		export ISSUE="101"
 		export GH_TOKEN="test-token"
-		export CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${routing_flag}"
+		if [ "${routing_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED
+		else
+			export CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${routing_flag}"
+		fi
 		if resolve_ref >"${out_file}" 2>"${err_file}"; then
 			echo 0 >"${out_file}.rc"
 		else
@@ -481,6 +510,12 @@ if expected_reason:
 elif routing_errors:
 	print(f"self-test unexpected CI_TRIAGE_PR_BRANCH_ROUTING refusal for {fixture['name']}: {routing_errors!r}", file=sys.stderr)
 	sys.exit(1)
+expected_warning = fixture.get("expected_warning")
+if expected_warning:
+	warnings = [line for line in err_text.splitlines() if line.startswith("::warning::") and expected_warning in line]
+	if len(warnings) != 1:
+		print(f"self-test expected exactly one ::warning:: containing {expected_warning!r} for {fixture['name']}, got {warnings!r}", file=sys.stderr)
+		sys.exit(1)
 PY
 
 	rm -f "${out_file}" "${err_file}" "${out_file}.rc"

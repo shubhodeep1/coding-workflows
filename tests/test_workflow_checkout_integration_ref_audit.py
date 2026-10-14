@@ -185,8 +185,8 @@ def _refctx_step(wf: str) -> str:
 
 def test_required_workflows_fail_closed_on_ci_triage_routing_refusal() -> None:
 	"""Resolver exit 3 (CI-triage routing refused) must never fall back to main."""
-	env_line = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}"
-	forward = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \\'
+	env_line = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}"
+	forward = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \\'
 	capture = '})" || resolver_rc=$?'
 	refused_branch = 'elif [ "${resolver_rc}" -eq 3 ]; then'
 	fallback = 'echo "::warning::Canonical integration resolver failed; falling back to default branch."'
@@ -230,7 +230,12 @@ case "$sub" in
     dest="${args[${#args[@]}-1]}"
     mkdir -p "$dest/scripts"
     if [ "$FAKE_GIT_MODE" != no_script ]; then
-      printf '#!/usr/bin/env bash\\necho STUB_RESOLVER_RAN >&2\\nexit 0\\n' > "$dest/scripts/resolve_integration_ref.sh"
+      cat > "$dest/scripts/resolve_integration_ref.sh" <<'STUB'
+#!/usr/bin/env bash
+echo STUB_RESOLVER_RAN >&2
+if [ -n "${FAKE_RESOLVER_STDERR:-}" ]; then echo "${FAKE_RESOLVER_STDERR}" >&2; fi
+exit "${FAKE_RESOLVER_RC:-0}"
+STUB
     fi
     exit 0 ;;
   fetch) [ "$FAKE_GIT_MODE" = fetch_fail ] && exit 1; exit 0 ;;
@@ -251,7 +256,7 @@ def _refctx_run_body(workflow_name: str) -> str:
 	return re.sub(r"\$\{\{[^}]*\}\}", _sub, body)
 
 
-def _run_refctx(workflow_name: str, mode: str, routing: str | None) -> tuple[int, str, str]:
+def _run_refctx(workflow_name: str, mode: str, routing: str | None, extra_env: dict[str, str] | None = None) -> tuple[int, str, str]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		bin_dir = tmp_path / "bin"
@@ -276,6 +281,8 @@ def _run_refctx(workflow_name: str, mode: str, routing: str | None) -> tuple[int
 		}
 		if routing is not None:
 			env["CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED"] = routing
+		if extra_env:
+			env.update(extra_env)
 		res = subprocess.run(
 			["bash", "-c", _refctx_run_body(workflow_name)],
 			env=env, capture_output=True, text=True, timeout=60,
@@ -295,14 +302,15 @@ def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
 	}
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
 		for mode, reason in failures.items():
-			for routing in ("true", "TRUE", "1", "yes", "on"):
+			# Unset routes by default, like scripts/resolve_integration_ref.sh.
+			for routing in ("true", "TRUE", "1", "yes", "on", None):
 				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
 				label = f"{workflow_name} mode={mode} routing={routing}"
 				assert rc != 0, f"{label}: expected failure\n{out}"
 				assert "ref=" not in gh_output, f"{label}: wrote a ref: {gh_output!r}"
 				assert f"INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason={reason}" in out, f"{label}\n{out}"
 				assert "STUB_RESOLVER_RAN" not in out, f"{label}: ran an unpinned resolver"
-			for routing in ("false", None):
+			for routing in ("false", "OFF", "0", "maybe"):
 				rc, out, gh_output = _run_refctx(workflow_name, mode, routing)
 				label = f"{workflow_name} mode={mode} routing={routing}"
 				assert rc == 0, f"{label}: expected the fallback\n{out}"
@@ -314,12 +322,46 @@ def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
 		assert rc == 0 and "STUB_RESOLVER_RAN" in out, f"{workflow_name} ok path\n{out}"
 
 
+def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() -> None:
+	"""A merged/closed triage PR (reason=pr_not_open) keeps the default
+	branch in clarify only, so the #7095 resolution gate can run; every other
+	phase still refuses. With routing on, a rate-limited resolver (exit 75)
+	never falls back to the default branch."""
+	pr_not_open = {
+		"FAKE_RESOLVER_RC": "3",
+		"FAKE_RESOLVER_STDERR": "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=pr_not_open",
+	}
+	other_refusal = {
+		"FAKE_RESOLVER_RC": "3",
+		"FAKE_RESOLVER_STDERR": "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=branch_missing",
+	}
+	rate_limited = {"FAKE_RESOLVER_RC": "75"}
+	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
+		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true", pr_not_open)
+		if workflow_name == "clarify.yml":
+			assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} pr_not_open\n{out}"
+			assert "::notice::CI_TRIAGE_PR_BRANCH_ROUTING" in out, out
+			assert "::error::CI_TRIAGE_PR_BRANCH_ROUTING" not in out, out
+		else:
+			assert rc != 0 and "ref=" not in gh_output, f"{workflow_name} pr_not_open\n{out}"
+		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true", other_refusal)
+		assert rc != 0 and "ref=" not in gh_output, f"{workflow_name} other refusal\n{out}"
+		for routing in ("true", None):
+			rc, out, gh_output = _run_refctx(workflow_name, "ok", routing, rate_limited)
+			assert rc != 0 and "ref=" not in gh_output, f"{workflow_name} rate_limited routing={routing}\n{out}"
+			assert "INTEGRATION_REF_RESOLVE outcome=rate_limited" in out, out
+		if workflow_name in ("clarify.yml", "plan.yml", "orchestrate_clarify_respond.yml"):
+			rc, out, gh_output = _run_refctx(workflow_name, "ok", "false", rate_limited)
+			assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} rate_limited routing off\n{out}"
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
 	test_required_workflows_enforce_integration_ref_contract()
 	test_required_workflows_fail_closed_on_ci_triage_routing_refusal()
 	test_required_workflows_fail_closed_when_resolver_staging_fails()
+	test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit()
 	return 0
 
 
