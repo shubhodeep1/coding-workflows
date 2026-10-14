@@ -255,6 +255,34 @@ def test_resolver_that_duplicated_other_side_text_still_fails():
 		assert "FINGERPRINT_RESOLVER_UNION_MERGE_V1" not in out, out
 
 
+def test_resolver_text_taken_from_an_unrelated_other_side_line_still_fails():
+	# Captured abc, resolver aXbc, and the other side's file holds an unrelated,
+	# unchanged line aXc that is kept whole in aXbc. Main edited a different line,
+	# so the inserted X is the resolver's own text, not the other side's edit.
+	def body(x_line: str, extra: str) -> str:
+		return "\n".join(["#!/usr/bin/env bash", x_line, "\tx='aXc'", extra, ""])
+	regex = re.escape("x='abc'")
+	with _sandbox_repo() as repo:
+		_write(repo, body("\tx='ab'", "y=1"))
+		_run_git(repo, "commit", "--quiet", "-m", "base", date=_D0_BASE)
+		_run_git(repo, "checkout", "--quiet", "-b", "orchestrator/project-1")
+		_write(repo, body("\tx='abc'", "y=1"))
+		_run_git(repo, "commit", "--quiet", "-m", "AI implementation for issue #7358 (#7365)", date=_D1_IMPL)
+		_run_git(repo, "checkout", "--quiet", "main")
+		_write(repo, body("\tx='ab'", "y=2"))
+		_run_git(repo, "commit", "--quiet", "-m", "main edit (#7376)", date=_D2_MAIN)
+		_run_git(repo, "checkout", "--quiet", "orchestrator/project-1")
+		_run_git(repo, "merge", "--no-ff", "--no-commit", "main", date=_D3_RESOLVE, check=False)
+		_write(repo, body("\tx='aXbc'", "y=2"))
+		_run_git(repo, "commit", "--quiet", "-m", "[ai-merge-resolve] resolve merge conflicts", date=_D3_RESOLVE)
+		head = _run_git(repo, "rev-parse", "HEAD").strip()
+		state = _fingerprint_state()
+		state["7358"]["must_contain"] = [{"file": _TARGET_PATH, "regex": regex}]
+		rc, out = _verify(repo, head, state)
+		assert rc == 1, out
+		assert "FINGERPRINT_RESOLVER_UNION_MERGE_V1" not in out, out
+
+
 def test_resolver_that_dropped_part_of_the_sub_issue_line_still_fails():
 	partial = _UNION_LINE.replace("|Bad credentials", "")
 	with _sandbox_repo() as repo:

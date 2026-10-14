@@ -719,7 +719,17 @@ def _is_must_contain_resolver_union_merge_false_positive(
 	from L3, is itself contained whole in L3 the same way, every run L3
 	inserts into L1 is a substring of that L2, and every character of L3
 	is matched to a character of L1 or of L2 (so the resolver added
-	nothing of its own, not even a second copy of other-side text).
+	nothing of its own, not even a second copy of other-side text);
+	* L2 is absent from the file at the merge base of the two parents (the
+	other side changed it), and one merge-base line is kept whole, with text
+	only inserted, in both L1 and L2 (so L2 is the other side's edit of
+	the line the sub-issue edited, not an unrelated line).
+
+	Everything else returns None: working-tree mode, no or unparseable
+	``captured_at``, a non-``re.escape`` regex, a non-resolver,
+	single-parent or pre-capture line-changing commit, dropped or changed
+	captured text, text found on neither side, or an L2 that is identical to
+	L3, unchanged since the merge base, or derived from a different base line.
 
 	Returns the resolver merge commit SHA when confirmed (caller skips the
 	violation); None otherwise. Fails CLOSED on every guard and on any git
@@ -780,12 +790,35 @@ def _is_must_contain_resolver_union_merge_false_positive(
 					[line.strip() for line in other.stdout.decode("utf-8", errors="replace").splitlines()]
 					if other.returncode == 0 else []
 				)
+				# Tie the other side's line to an edit of the same line: it must be absent
+				# at the merge base (the other side changed it), and it and the captured
+				# line must both keep one merge-base line whole. A merge base or file that
+				# cannot be read leaves base_lines empty, so the defense fails closed.
+				base = subprocess.run(
+					["git", "merge-base", parents[0], parents[1]],
+					capture_output=True,
+					check=False,
+					timeout=GIT_COMMAND_TIMEOUT_SECS,
+				)
+				base_sha = base.stdout.decode("utf-8", errors="replace").strip() if base.returncode == 0 else ""
+				base_show = subprocess.run(
+					["git", "show", f"{base_sha}:{normalized_path}"],
+					capture_output=True,
+					check=False,
+					timeout=GIT_COMMAND_TIMEOUT_SECS,
+				) if base_sha else None
+				base_lines = {
+					line.strip() for line in base_show.stdout.decode("utf-8", errors="replace").splitlines()
+				} if base_show is not None and base_show.returncode == 0 else set()
+				base_lines.discard("")
+				literal_bases = [line for line in base_lines if _only_inserts(line, literal) is not None]
 				for merged_line in (line.strip() for line in content.splitlines()):
 					if len(merged_line) <= len(literal):
 						continue
 					inserted = _only_inserts(literal, merged_line)
 					if not inserted:
 						continue
+					literal_matched = _matched_positions(literal, merged_line)
 					for other_line in other_lines:
 						# other_line == merged_line would make both checks vacuous: a resolver
 						# that took the other side verbatim (undoing a sub-issue deletion) must fail.
@@ -794,9 +827,11 @@ def _is_must_contain_resolver_union_merge_false_positive(
 						if (
 							other_line
 							and other_line != merged_line
+							and other_line not in base_lines
 							and all(run in other_line for run in inserted)
+							and any(_only_inserts(line, other_line) is not None for line in literal_bases)
 							and _only_inserts(other_line, merged_line) is not None
-							and len(_matched_positions(literal, merged_line) | _matched_positions(other_line, merged_line)) == len(merged_line)
+							and len(literal_matched | _matched_positions(other_line, merged_line)) == len(merged_line)
 						):
 							result = sha
 							break
