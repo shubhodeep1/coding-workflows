@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: In `scripts/validation_harness_sandbox.sh`, `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=cgroupfs` (line 483) skips `sandbox_systemd_session` completely. That function is the only place that runs `loginctl enable-linger` (line 354). So with `cgroupfs` as the default, no `systemd --user` manager starts and there is no socket for a container to reach. Option B needs proof that a narrowed bus cannot start transient units, but runc's systemd driver starts transient scopes through that same bus, so that proof is unlikely to exist. Option C would add that unproven hardening on top of A.\nQ2: Failing closed in opt-in `auto` mode is the only answer that meets the acceptance criterion \"selfcheck fails closed \u2026 when that route is reachable in the active mode\". With `cgroupfs` as the default, it does not turn ordinary validations on GitHub-hosted runners into `harness_error`, and the daily `harness-sandbox-check` keeps exercising the default. Option C would remove an operator escape hatch that #7063 added, and the issue does not ask for that.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options. Implementation notes for the planner, binding as the scope of this decision:\n- `scripts/validation_harness_sandbox.sh`:\n  - Change the default on line 65 to `${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-cgroupfs}` and keep `auto` as an accepted value (lines 478-489).\n  - Update the header comments (around lines 59 and 471) to describe the new default.\n  - `selfcheck` must fail closed (exit 3, `harness_error`) with the named reason `user_manager_reachable_from_container` when either check matches:\n    - a `systemd --user` process runs as the sandbox uid, read as root with `pgrep -u <uid> -x systemd`, never from files the sandbox can write;\n    - a socket other than `docker.sock` exists under `/run/user/<uid>` in the host mount namespace, outside the harness's private namespace.\n  - The check covers both modes. In `cgroupfs` mode it catches linger left behind by an earlier opt-in `auto` provision on a reused runner. In `auto` mode with a live user session it makes opt-in `auto` work only where no user manager starts.\n  - In `cgroupfs` mode, `provision` may first run `loginctl disable-linger <user>` (best effort) so a leftover linger from an earlier job clears itself before `selfcheck` runs.\n  - The auto-to-cgroupfs fallback (lines 489 and 504-508) can leave linger enabled after systemd mode failed. It should disable linger on fallback too, or `selfcheck` will fail on it.\n- `tests/test_validation_harness_sandbox.py`:\n  - Update the #7063 cases so the default resolves to `cgroupfs`, `auto` remains opt-in, and an invalid value maps to the new default.\n  - Add cases for the new `selfcheck` reason: a user manager running, a socket reachable, and the clean default.\n- Documentation:\n  - README.md: change the variables-table default for `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` to `cgroupfs` and describe `auto` as opt-in.\n  - `agents.d/<issue>-<slug>.md`: add a fragment that corrects the #7063 cgroup-driver bullet and the #7349 PID-namespace \"Residual\" sentence, or edit agents.md directly only to correct that existing text (\u00a725).\n  - `changelog.d/<issue>-<slug>.md`: add a fragment.\n  - Remove the documented residual from the existing #7349 `agents.d/` and `changelog.d/` fragments.\n- No new workflow wiring is needed. `nightly-validation-selftest.yml` `harness-sandbox-check` already runs the default.\n\nSETUP REQUIRED:\nNone. The decisions add no placeholders.",
+  "fingerprint": "94b67e39aef2ad7f2ee9b7d1a3d02de9b98bc51e2731ed5c062a64dda12a9eed",
+  "lineage": {
+    "issue_number": 7380,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38562613196",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38562613196",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7380"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261014122815_b3a1653515",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7380,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38562613196"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7380",
+  "timestamps": {
+    "created_at": "2026-10-14T12:28:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
