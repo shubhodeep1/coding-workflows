@@ -14,6 +14,13 @@ Rules:
 - Each issue must be self-contained: its body must have enough context for
   the AI pipeline (clarify → plan → implement → review) to handle it
   without knowledge of sibling issues.
+- External facts: when an issue depends on a fact from outside the
+  repository (a release tag's commit SHA, a package version, an API
+  endpoint or signature), write the value into the issue body and say how
+  it was verified (for example the `git ls-remote` output for a tag).
+  Claude-engine planners have no web search or web fetch and cannot look it
+  up. When you cannot verify a value, say so in the body instead of
+  writing a guessed one.
 - One concern per issue. A single issue should be implementable within a
   single PR touching at most ~10 files.
 - Do not propose issues that duplicate existing functionality.

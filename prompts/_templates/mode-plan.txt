@@ -134,18 +134,26 @@ Rules:
   commit ID never matches the planning ref; some sandboxes have no git at
   all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
   error there is evidence of a mismatch.
-- Prefer repo-local context first. Web search IS available (the
-  `web_search` tool is enabled by the codex config —
-  `scripts/write_codex_config.sh` defaults `--web-search live`). Use it
-  for public 3rd-party API docs, library reference, RFCs, and similar
-  publicly-readable resources. Do NOT use it for private/auth-walled
-  resources or anything requiring a credential.
-- If external APIs/services are involved, fetch their official public
-  docs via the web tool, verify the source is the official vendor/library
-  or relevant standards publisher, and include concrete endpoint,
-  signature scheme, and payload details in the plan. Only ask (rather
-  than fetch) when the docs are private/auth-walled or genuinely
+- Prefer repo-local context first. Web search is available only when this
+  run has a web tool: Codex runs do (the `web_search` tool is enabled by
+  the codex config — `scripts/write_codex_config.sh` defaults
+  `--web-search live`). Claude-engine runs have no web search or web
+  fetch; their system instructions say so. When a web tool is available,
+  use it for public 3rd-party API docs, library reference, RFCs, and
+  similar publicly-readable resources. Do NOT use it for
+  private/auth-walled resources or anything requiring a credential.
+- If external APIs/services are involved and a web tool is available,
+  fetch their official public docs, verify the source is the official
+  vendor/library or relevant standards publisher, and include concrete
+  endpoint, signature scheme, and payload details in the plan. Only ask
+  (rather than fetch) when the docs are private/auth-walled or genuinely
   unavailable.
+- Without a web tool, take external facts (a release tag's commit SHA, a
+  package version, an API endpoint or signature) only from the issue
+  body, its answers, the comment thread or the repository, and never
+  try to look them up. When the issue states such a fact as verified,
+  use it as given. When a fact the plan depends on is in none of those
+  places, ask for it instead of guessing.
 
 Mandatory Question Format (only when emitting clarification questions):
 

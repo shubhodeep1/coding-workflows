@@ -18,10 +18,10 @@ PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"4034f8b29daae023bdcfd20ed4f3ee361f59810941df783583176df8d64f5b9e"
+	"fddbd4846771391b77cd57960194bad740a9879e717d575aa694b605ae2ddb9a"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 14_066
-PRE_EXTRACTION_PROMPT_LINES = 220
+PRE_EXTRACTION_PROMPT_BYTES = 14_582
+PRE_EXTRACTION_PROMPT_LINES = 227
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:

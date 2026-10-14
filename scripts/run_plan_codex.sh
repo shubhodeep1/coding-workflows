@@ -196,18 +196,25 @@ Rules:
   do NOT guess: return clarification questions in the Q<ID>/Choices format defined in
   prompts/mode-plan.txt ("Mandatory Question Format" section) and state that
   clarification is required before planning.
-- Prefer repo-local context first, but web search IS available (the
-  `web_search` tool is enabled by the codex config — see
-  `scripts/write_codex_config.sh`'s `--web-search live` default). Use it for
-  public 3rd-party API docs, library reference, RFCs, and similar publicly-
-  readable resources. Do NOT use it for private/auth-walled resources or
-  anything that requires a credential.
-- If implementation requires calling external APIs/services, fetch their
-  official public docs via the web tool, verify the source is the official
-  vendor/library or relevant standards publisher, and include concrete
-  endpoint/method/parameter details in the plan so the implementation editor
-  has the contract inlined. If the docs are genuinely unavailable after web
-  search, ask for clarification instead of inventing details.
+- Prefer repo-local context first. Web search is available only when this
+  run has a web tool: Codex runs do (the `web_search` tool is enabled by the
+  codex config — see `scripts/write_codex_config.sh`'s `--web-search live`
+  default). Claude-engine runs have no web search or web fetch; their system
+  instructions say so. When a web tool is available, use it for public
+  3rd-party API docs, library reference, RFCs, and similar publicly-readable
+  resources. Do NOT use it for private/auth-walled resources or anything
+  that requires a credential.
+- If implementation requires calling external APIs/services and a web tool
+  is available, fetch their official public docs, verify the source is the
+  official vendor/library or relevant standards publisher, and include
+  concrete endpoint/method/parameter details in the plan so the
+  implementation editor has the contract inlined. If the docs are genuinely
+  unavailable, ask for clarification instead of inventing details.
+- Without a web tool, take external facts (a release tag's commit SHA, a
+  package version, an API endpoint or signature) only from the issue body,
+  its answers, the comment thread or the repository, and never try to look
+  them up. A fact the issue states as verified is used as given; ask for a
+  fact the plan depends on that is in none of those places.
 - Pinned-toolchain authority: a repo validator (`npm run typecheck`/`tsc`,
   `eslint`, `vitest`/`jest`, `npm run build`, or any language equivalent) is
   authoritative only on the repo's pinned toolchain — i.e. after the repo's

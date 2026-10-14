@@ -388,21 +388,38 @@ _ai_engine_pool_isolated()
 	return 0
 }
 
+AI_ENGINE_CLAUDE_NO_WEB_NOTE='## Engine capabilities
+
+This run uses the Claude engine. Web search and web fetch are not available here; do not try them, even where a task prompt says web search is available (that text is written for Codex runs). Take facts from outside the repository, such as a release tag'"'"'s commit SHA, a package version or an API endpoint, only from the task text and the repository. Use a fact the task states as verified as given; ask for one the task depends on that is not there instead of guessing it.'
+
 _ai_engine_json_field()
 {
 	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
 }
 
+# The system instructions a Claude run gets: the trusted
+# unattended_system_instructions.md plus a note that the run has no web tools.
+# The relay refuses provider web_search/web_fetch (claude_anthropic_relay.py,
+# #6494), while the shared prompts were written for Codex, which has
+# `--web-search live`; a planner told it can search blocked on a tag SHA it
+# could not look up (#7357). Prints the path of a copy under RUNNER_TEMP; a
+# failed copy prints the original, so the run still starts.
 _ai_engine_instructions_file()
 {
-	local candidate
+	local candidate combined
 	for candidate in \
 		"${SUPPORT_INSTRUCTIONS_FILE:-}" \
 		"${SUPPORT_ROOT_DIR:+${SUPPORT_ROOT_DIR}/unattended_system_instructions.md}" \
 		"${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/.codex-workflow-src/unattended_system_instructions.md}" \
 		"${_AI_ENGINE_DIR}/../unattended_system_instructions.md"; do
 		if [ -n "${candidate}" ] && [ -f "${candidate}" ]; then
-			printf '%s\n' "${candidate}"
+			if combined="$(mktemp "${RUNNER_TEMP:-/tmp}/claude-instructions-XXXXXXXX.md" 2>/dev/null)" \
+				&& { cat -- "${candidate}"; printf '\n\n%s\n' "${AI_ENGINE_CLAUDE_NO_WEB_NOTE}"; } > "${combined}" 2>/dev/null; then
+				printf '%s\n' "${combined}"
+			else
+				[ -z "${combined:-}" ] || rm -f -- "${combined}"
+				printf '%s\n' "${candidate}"
+			fi
 			return 0
 		fi
 	done
