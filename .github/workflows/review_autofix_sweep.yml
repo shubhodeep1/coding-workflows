@@ -557,6 +557,7 @@ jobs:
           WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK || '3' }}
           WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS || '50' }}
           WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES || '60' }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: bash .ci-rerun-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
 

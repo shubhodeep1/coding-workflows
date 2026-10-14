@@ -165,7 +165,13 @@ if args[:2] == ["api", "graphql"]:
 	if state.get("graphql_fail"):
 		fail()
 	save()
-	print(json.dumps({"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": state["nodes"]}}}}))
+	query = next((a[len("query="):] for a in args if a.startswith("query=")), "")
+	if "totalCount" in query:
+		print(json.dumps({"data": {"repository": {"pullRequests": {"totalCount": state.get("total_count", 0)}}}}))
+	elif "comments(" not in query:
+		print(json.dumps({"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": True, "endCursor": "skipcursor"}}}}}))
+	else:
+		print(json.dumps({"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": state["nodes"]}}}}))
 	sys.exit(0)
 if "dispatches" in " ".join(args):
 	if state.get("dispatch_fail"):
@@ -178,6 +184,9 @@ for arg in args:
 	if arg.startswith("repos/") and "/pulls/" in arg:
 		number = int(arg.rsplit("/", 1)[1])
 		save()
+		if state.get("pr_payload_bad"):
+			print("not json")
+			sys.exit(0)
 		print(json.dumps({"number": number, "title": "Fix things", "body": "", "html_url": "https://github.com/x/y/pull/%d" % number, "labels": [], "head": {"ref": "ai/issue-1", "sha": state["head"], "repo": {"full_name": state["repo"]}}, "base": {"ref": "main"}}))
 		sys.exit(0)
 	if arg.startswith("repos/") and arg.endswith("/comments"):
@@ -337,10 +346,80 @@ def test_driver_lists_least_recently_updated_with_string_repo_vars() -> None:
 		tmp = Path(name)
 		env, state_file = _stage(tmp, _old_nodes(1))
 		_run_driver(tmp, env)
-		call = next(c for c in json.loads(state_file.read_text())["calls"] if c[:2] == ["api", "graphql"])
+		call = next(c for c in json.loads(state_file.read_text())["calls"] if c[:2] == ["api", "graphql"] and "comments(" in " ".join(c))
 		assert call[call.index("owner=acme") - 1] == "-f"
 		assert call[call.index("name=widgets") - 1] == "-f"
 		assert "direction: ASC" in " ".join(call)
+
+
+def _graphql_calls(state_file: Path) -> list[list[str]]:
+	return [c for c in json.loads(state_file.read_text())["calls"] if c[:2] == ["api", "graphql"]]
+
+
+def test_driver_rotates_window_when_more_prs_than_max() -> None:
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, _old_nodes(1), total_count=120)
+		env["WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS"] = "50"
+		env["GITHUB_RUN_NUMBER"] = "7"  # 3 windows; 7 % 3 = 1, so 50 PRs are skipped
+		env["DRY_RUN"] = "true"
+		result = _run_driver(tmp, env)
+		assert result.returncode == 0
+		assert "reason=window_rotated window=1 windows=3 total_open=120" in result.stdout
+		calls = _graphql_calls(state_file)
+		skip_calls = [c for c in calls if "totalCount" not in " ".join(c) and "comments(" not in " ".join(c)]
+		assert len(skip_calls) == 1 and "first=50" in skip_calls[0]
+		listing = next(c for c in calls if "comments(" in " ".join(c))
+		assert "cursor=skipcursor" in listing
+
+
+def test_driver_no_rotation_within_max() -> None:
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, _old_nodes(1), total_count=20)
+		env["DRY_RUN"] = "true"
+		result = _run_driver(tmp, env)
+		assert result.returncode == 0 and "window_rotated" not in result.stdout
+		listing = next(c for c in _graphql_calls(state_file) if "comments(" in " ".join(c))
+		assert not any(a.startswith("cursor=") for a in listing)
+
+
+def test_driver_head_ref_filter_limits_prs() -> None:
+	nodes = _old_nodes(2)
+	nodes[0]["headRefName"] = "claude/x"
+	nodes[1]["headRefName"] = "ai/issue-9"
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, nodes)
+		env["HEAD_REF_FILTER"] = "claude/"
+		env["DRY_RUN"] = "true"
+		result = _run_driver(tmp, env)
+		assert result.returncode == 0
+		assert "pr=20 head=" in result.stdout and "pr=21 " not in result.stdout
+		assert "scanned=1 " in result.stdout
+
+
+def test_driver_unreadable_pr_payload_is_not_head_moved() -> None:
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, _old_nodes(1), pr_payload_bad=True)
+		result = _run_driver(tmp, env)
+		assert result.returncode == 0
+		assert "reason=head_unreadable" in result.stdout and "head_moved" not in result.stdout
+		assert json.loads(state_file.read_text())["dispatches"] == []
+
+
+def test_driver_leading_zero_setting_is_decimal() -> None:
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, _old_nodes(1))
+		env["WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS"] = "08"
+		env["DRY_RUN"] = "true"
+		result = _run_driver(tmp, env)
+		assert result.returncode == 0
+		assert "outcome=complete scanned=1 " in result.stdout
+		listing = next(c for c in _graphql_calls(state_file) if "comments(" in " ".join(c))
+		assert "first=8" in listing
 
 
 def test_driver_dry_run_sends_nothing() -> None:

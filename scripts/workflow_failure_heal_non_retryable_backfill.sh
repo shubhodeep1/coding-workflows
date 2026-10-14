@@ -40,7 +40,9 @@
 # snapshot to reuse, so this pass makes one GraphQL query per page of 10 open
 # PRs (least recently updated first, so a PR the pass or the intake just
 # commented on moves to the back of the window), at most ceil(MAX_PRS / 10)
-# calls (5 by default). A listing cut off at MAX_PRS logs reason=listing_truncated.
+# calls (5 by default). A listing cut off at MAX_PRS logs reason=listing_truncated;
+# with more than MAX_PRS open PRs each tick starts at a rotated window (see
+# "Window rotation" below: one totalCount call, plus one call per 100 skipped PRs).
 # Input: the repository. Output: a JSON array of PR nodes (number,
 # isCrossRepository, headRefOid, comments.nodes{databaseId, body, createdAt,
 # author.login}). Any failure skips the tick (fail open). A marker older than
@@ -60,6 +62,8 @@
 #   WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS        default 50 (1-200)
 #   WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES default 60 (0-10080)
 #   DRY_RUN                                             true: log candidates only
+#   HEAD_REF_FILTER                                     non-empty: only PRs whose head branch contains it
+#   GITHUB_RUN_NUMBER                                   set by Actions; selects the rotated PR window
 #   WORKFLOW_HEAL_UPSTREAM_REPO                         passed to the reporter
 #   WORKFLOW_HEAL_PY, WORKFLOW_HEAL_AUTOFIX_REPORT_SH   helper paths (default: this directory)
 
@@ -84,6 +88,8 @@ bounded_int()
 		echo "::warning::WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL invalid ${name}; using ${default}" >&2
 		value="${default}"
 	fi
+	# Read as base 10, so a leading zero ("08") is not parsed as octal later.
+	value=$((10#${value}))
 	[ "${value}" -gt "${max}" ] && value="${max}"
 	printf '%s' "${value}"
 }
@@ -152,10 +158,72 @@ fi
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
 # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
-QUERY='query($owner: String!, $name: String!, $first: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: $first, after: $cursor, orderBy: {field: UPDATED_AT, direction: ASC}) { pageInfo { hasNextPage endCursor } nodes { number isCrossRepository headRefOid comments(last: 100) { nodes { databaseId body createdAt author { login } } } } } } }'
+QUERY='query($owner: String!, $name: String!, $first: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: $first, after: $cursor, orderBy: {field: UPDATED_AT, direction: ASC}) { pageInfo { hasNextPage endCursor } nodes { number isCrossRepository headRefOid headRefName comments(last: 100) { nodes { databaseId body createdAt author { login } } } } } } }'
 NODES_FILE="${WORK_ROOT}/pr_nodes.jsonl"
 : > "${NODES_FILE}"
 cursor=""
+# Window rotation: with more than MAX_PRS open PRs, each tick starts at a
+# different window of MAX_PRS PRs (GITHUB_RUN_NUMBER modulo the window count;
+# epoch / 1800 without a run number), so idle, ineligible PRs at the front of
+# the oldest-updated order cannot hide an eligible PR behind them on every
+# tick. Cost: one totalCount call per tick, plus one pageInfo-only call per
+# 100 skipped PRs. Any failure starts from the first PR, as before.
+# shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
+COUNT_QUERY='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN) { totalCount } } }'
+# shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
+SKIP_QUERY='query($owner: String!, $name: String!, $first: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: $first, after: $cursor, orderBy: {field: UPDATED_AT, direction: ASC}) { pageInfo { hasNextPage endCursor } } } }'
+count_file="${WORK_ROOT}/count.json"
+total_open=0
+if gh_retry gh api graphql -f "query=${COUNT_QUERY}" -f "owner=${OWNER}" -f "name=${NAME}" > "${count_file}" 2>/dev/null; then
+	total_open="$(python3 -I -B -c '
+import json, sys
+page = json.load(open(sys.argv[1]))
+count = 0
+if isinstance(page, dict) and not page.get("errors"):
+	count = ((((page.get("data") or {}).get("repository") or {}).get("pullRequests")) or {}).get("totalCount")
+print(count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else 0)
+' "${count_file}" 2>/dev/null || echo 0)"
+fi
+[[ "${total_open}" =~ ^[0-9]{1,7}$ ]] || total_open=0
+if [ "${total_open}" -gt "${MAX_PRS}" ]; then
+	windows=$(( (total_open + MAX_PRS - 1) / MAX_PRS ))
+	tick="${GITHUB_RUN_NUMBER:-}"
+	[[ "${tick}" =~ ^[0-9]{1,12}$ ]] || tick=$(( $(date +%s) / 1800 ))
+	window=$(( 10#${tick} % windows ))
+	skip=$(( window * MAX_PRS ))
+	skipped=0
+	while [ "${skipped}" -lt "${skip}" ]; do
+		chunk=$(( skip - skipped ))
+		[ "${chunk}" -gt 100 ] && chunk=100
+		skip_file="${WORK_ROOT}/skip.json"
+		skip_args=(api graphql -f "query=${SKIP_QUERY}" -f "owner=${OWNER}" -f "name=${NAME}" -F "first=${chunk}")
+		[ -n "${cursor}" ] && skip_args+=(-f "cursor=${cursor}")
+		skip_info=""
+		if gh_retry gh "${skip_args[@]}" > "${skip_file}" 2>/dev/null; then
+			skip_info="$(python3 -I -B -c '
+import json, re, sys
+page = json.load(open(sys.argv[1]))
+if not isinstance(page, dict) or page.get("errors"):
+	sys.exit(1)
+info = ((((page.get("data") or {}).get("repository") or {}).get("pullRequests")) or {}).get("pageInfo") or {}
+cursor = info.get("endCursor") if isinstance(info.get("endCursor"), str) else ""
+if not re.fullmatch(r"[A-Za-z0-9+/=_-]{1,200}", cursor):
+	sys.exit(1)
+print("true" if info.get("hasNextPage") is True else "false", cursor)
+' "${skip_file}" 2>/dev/null || true)"
+		fi
+		read -r skip_has_next skip_cursor <<< "${skip_info}"
+		if [ -z "${skip_cursor:-}" ] || [ "${skip_has_next:-false}" != "true" ]; then
+			# Failed read, or fewer PRs than counted: start from the first PR.
+			cursor=""
+			window=0
+			break
+		fi
+		cursor="${skip_cursor}"
+		skipped=$(( skipped + chunk ))
+	done
+	log "outcome=info reason=window_rotated window=${window} windows=${windows} total_open=${total_open}"
+fi
 fetched=0
 listing_ok=true
 while [ "${fetched}" -lt "${MAX_PRS}" ]; do
@@ -201,11 +269,17 @@ if [ "${has_next:-false}" = "true" ] && [ "${fetched}" -ge "${MAX_PRS}" ]; then
 	log "outcome=warn reason=listing_truncated fetched=${fetched} max=${MAX_PRS}"
 fi
 PRS_FILE="${WORK_ROOT}/prs.json"
+# HEAD_REF_FILTER (the sweep's head_ref_filter dispatch input): keep only PRs
+# whose head branch contains it, the same substring match the enumerate step
+# uses. Empty keeps every PR.
 if ! python3 -I -B -c '
 import json, sys
 nodes = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+head_filter = sys.argv[3]
+if head_filter:
+	nodes = [node for node in nodes if isinstance(node, dict) and isinstance(node.get("headRefName"), str) and head_filter in node["headRefName"]]
 json.dump(nodes, open(sys.argv[2], "w", encoding="utf-8"))
-' "${NODES_FILE}" "${PRS_FILE}" 2>/dev/null; then
+' "${NODES_FILE}" "${PRS_FILE}" "${HEAD_REF_FILTER:-}" 2>/dev/null; then
 	log "outcome=skip reason=pr_listing_unavailable"
 	exit 0
 fi
@@ -305,6 +379,10 @@ pr = json.load(open(sys.argv[1], encoding="utf-8"))
 head = (pr.get("head") or {}).get("sha") if isinstance(pr, dict) else ""
 print(head.lower() if isinstance(head, str) else "")
 ' "${pr_json}" 2>/dev/null || true)"
+	if ! [[ "${live_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		log "${fields} outcome=skip reason=head_unreadable"
+		continue
+	fi
 	if [ "${live_head}" != "${head}" ]; then
 		log "${fields} outcome=skip reason=head_moved"
 		continue
