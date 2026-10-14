@@ -860,13 +860,6 @@ jobs:
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
 
-      - name: Workflow failure heal contract and driver tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py
-          # Model-provider outage classifier, tracker and resume (issue #6633).
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py
-
       - name: CI failure workflow_run trigger tests
         run: |
           set -euo pipefail
@@ -1321,6 +1314,23 @@ jobs:
             tests/test_validate_process_fixup_labels.py \
             tests/test_verify_integration_fingerprints_baseline.py \
             tests/test_workflow_untrusted_input_contract.py
+
+      # Moved from `tests-heal-plan-and-validation`, which took 15m12s of
+      # its 20 minutes on main (run 38584572151, budget-watch issue #7387).
+      # Step timings were not readable when this was planned, so this was
+      # picked as the heal job's heaviest step by test count and subprocess
+      # count. `tests-promote-stall-and-review` was chosen because none of the
+      # earlier rebalances moved anything into it (#7250 and #7334 went to
+      # static-checks, #7366 to heal, #7382 and #7383 to release) and
+      # budget-watch has never flagged it. The step needs no git history,
+      # Node or prepared `.claude/` live copies, and both jobs use the same
+      # checkout and the same pip install line.
+      - name: Workflow failure heal contract and driver tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py
+          # Model-provider outage classifier, tracker and resume (issue #6633).
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py
 
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
