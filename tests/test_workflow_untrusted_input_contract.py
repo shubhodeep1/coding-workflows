@@ -493,6 +493,25 @@ def test_workflows_do_not_interpolate_secrets_into_remote_urls() -> None:
 	assert review_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
 
 
+FREE_DISK_SPACE_PINNED_REF = re.compile(r"^jlumbroso/free-disk-space@[0-9a-f]{40}$")
+FREE_DISK_SPACE_PINNED_SHA = "54081f138730dfa15788a46383842cd2f914a1be"
+
+
+def test_review_autofix_free_disk_space_is_sha_pinned() -> None:
+	"""The action runs in a job that later holds GH_PAT; a movable tag must not be used (SEC-001, #7357)."""
+	step = _step("review_autofix.yml", "codex-agent", "Free disk space")
+	uses = step.get("uses")
+	assert isinstance(uses, str)
+	assert FREE_DISK_SPACE_PINNED_REF.match(uses), uses
+	assert uses == f"jlumbroso/free-disk-space@{FREE_DISK_SPACE_PINNED_SHA}"
+	text = (WORKFLOW_DIR / "review_autofix.yml").read_text(encoding="utf-8")
+	references = [line for line in text.splitlines() if "jlumbroso/free-disk-space@" in line]
+	assert references
+	for line in references:
+		assert re.search(r"jlumbroso/free-disk-space@[0-9a-f]{40}\b", line), line
+		assert line.rstrip().endswith("# v1.3.1"), line
+
+
 def run_all_contract_tests() -> None:
 	for name, test_func in sorted(globals().items()):
 		if name.startswith("test_") and callable(test_func):
