@@ -122,16 +122,22 @@
 #                                         then only after the composed body's
 #                                         ai:workflow-heal-scope:v1 marker verifies; a missing
 #                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
-#                                         sends a CRITICAL alert and exits nonzero.
-#   HEAL_SCOPE_RECOVERY_ENABLED           default "false" (#7191). Only "true" (any letter case)
-#                                         lets a verified-identity report replace an open,
-#                                         pipeline-authored heal issue that has no scope marker
-#                                         (heal-scope status `missing`) instead of recording a
-#                                         duplicate. Also needs HEAL_INTAKE_SCOPE_GUARD_ENABLED=true:
-#                                         the replacement is created only through the unchanged
-#                                         scope guard. The original gets one recovery-marker
-#                                         comment and is closed as "not planned"; its body is
-#                                         never copied or edited.
+#                                         sends a CRITICAL alert and exits nonzero. Exception:
+#                                         a heal-scope recovery replacement (see
+#                                         HEAL_SCOPE_RECOVERY_ENABLED) is still verified and
+#                                         created while this gate is off.
+#   HEAL_SCOPE_RECOVERY_ENABLED           default on (#7191, #7323). Unset, empty or "true"
+#                                         (any letter case) lets a verified-identity report
+#                                         replace an open, pipeline-authored heal issue that has
+#                                         no scope marker (heal-scope status `missing`) instead
+#                                         of recording a duplicate; "false" turns off recovery
+#                                         only, and any other value also turns it off with a
+#                                         warning. Recovery does not need
+#                                         HEAL_INTAKE_SCOPE_GUARD_ENABLED: the replacement is
+#                                         created only after its scope marker passes the same
+#                                         `heal-scope verify` check. The original gets one
+#                                         recovery-marker comment and is closed as "not
+#                                         planned"; its body is never copied or edited.
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -176,8 +182,19 @@ SCOPE_MARKER_GUARD_ENABLED="${WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED:-true}"
 # Heal issue creation gate (#6871): off by default, fail closed. See
 # _heal_intake_scope_guard_permits_create.
 SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"
-# Heal-scope recovery (#7191): off by default. See _heal_scope_recovery_evaluate.
-SCOPE_RECOVERY_ENABLED="${HEAL_SCOPE_RECOVERY_ENABLED:-false}"
+# Heal-scope recovery (#7191, #7323): on by default; "false" turns it off and
+# any other value also turns it off with a warning (the value is not echoed).
+# See _heal_scope_recovery_evaluate.
+SCOPE_RECOVERY_SWITCH="${HEAL_SCOPE_RECOVERY_ENABLED-}"
+case "${SCOPE_RECOVERY_SWITCH,,}" in
+	''|true) SCOPE_RECOVERY_ENABLED="true" ;;
+	false) SCOPE_RECOVERY_ENABLED="false" ;;
+	*)
+		SCOPE_RECOVERY_ENABLED="false"
+		echo "::warning::WORKFLOW_HEAL heal_scope_recovery outcome=skip reason=invalid_switch" >&2
+		;;
+esac
+unset SCOPE_RECOVERY_SWITCH
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -950,10 +967,12 @@ ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true
 # --- Heal-scope recovery (#7191) --------------------------------------------
 # A pipeline-authored heal issue filed without an ai:workflow-heal-scope:v1
 # marker (#7082) is refused by the implement preflight, and retrying cannot
-# make its body verifiable. With HEAL_SCOPE_RECOVERY_ENABLED=true and the scope
-# guard on, a report whose OIDC identity verified may replace it: a duplicate
-# decision is turned into an open, so the new issue goes through the normal
-# scope freeze, diagnosis, scope render and the unchanged scope guard. The
+# make its body verifiable. With HEAL_SCOPE_RECOVERY_ENABLED on (the default),
+# a report whose OIDC identity verified may replace it: a duplicate decision is
+# turned into an open, so the new issue goes through the normal scope freeze,
+# diagnosis, scope render and the scope guard, which runs its unchanged
+# `heal-scope verify` check for this path even while
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED is off (#7323). The
 # original body is never an input; its markers are left out of the lineage by
 # re-running the budget without it. Once the replacement exists, the original
 # gets one recovery-marker comment and is closed as "not planned".
@@ -981,10 +1000,6 @@ _heal_scope_recovery_evaluate()
 	recovery_repo="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
 	[ -n "${recovery_repo}" ] || recovery_repo="${SELF_REPO}"
 	recovery_url="$(jq -r '.existing_url // ""' "${DECISION_FILE}")"
-	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
-		log "heal_scope_recovery outcome=skip reason=scope_guard_disabled issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
-		return 0
-	fi
 	if [ "${REPORT_AUTH}" != "verified" ]; then
 		log "heal_scope_recovery outcome=skip reason=report_unauthenticated report_auth=${REPORT_AUTH:-none} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
 		return 0
@@ -1676,11 +1691,18 @@ _git_fetch_consumer_scope_ref()
 # implement preflight uses (author / label / edit checks are satisfied
 # synthetically: the issue does not exist yet, so only the marker shape is
 # checked) and refuses creation, fail closed, on anything but `verified`.
+# Heal-scope recovery (#7323): while a recovery replacement is being created
+# (HEAL_SCOPE_RECOVERY_ACTIVE=true, set only by _heal_scope_recovery_evaluate)
+# the guard-off branch does not exit; it runs the same verify check, so the
+# replacement is filed only with a verified scope marker. Every other intake
+# path with the guard off still ends with exit 0.
 _heal_intake_scope_guard_permits_create()
 {
 	local scope_guard_repo="$1" scope_guard_body_file="$2" scope_guard_labels="$3" scope_guard_target_branch="${4:-}"
 	local scope_guard_input="${RUNTIME_DIR}/scope_guard_input.json" scope_guard_status=""
-	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
+	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ] && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
+		log "scope_guard outcome=recovery_only repo=${scope_guard_repo} issue=${HEAL_SCOPE_RECOVERY_ISSUE} fp=${FP} source=${SOURCE_LABEL}"
+	elif [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
 		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
 		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true

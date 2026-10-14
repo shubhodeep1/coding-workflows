@@ -262,7 +262,7 @@ jobs:
           echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -273,7 +273,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             case "${f}" in
-              load_workflow_overlay.py|security_dependency.py|check_triage_resolution.py|workflow_failure_heal.py)
+              pr_dependency.py|load_workflow_overlay.py|security_dependency.py|check_triage_resolution.py|workflow_failure_heal.py)
                 install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}" ;;
             esac
             _fetched_scripts+=("${f}")
@@ -460,6 +460,7 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
+          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -520,6 +521,27 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
           fi
 
+          # Issue #7251 waits for PR #6667 to merge into the default branch
+          # (unblock fix-up #7257). Applies to #7251 in this workflow's source
+          # repository only; the helper makes no API call for any other issue.
+          # No labels are written; the scheduled poller releases the issue.
+          # ISSUE_7251_DEPENDENCY_WAIT_ENABLED=false turns the hold off.
+          ISSUE_7251_HELD="false"
+          if [ "${IS_CLOSED}" != "true" ]; then
+            source scripts/gh_helpers.sh 2>/dev/null || true
+            if type issue_7251_dependency_wait_applies >/dev/null 2>&1 \
+              && issue_7251_dependency_wait_applies "${GITHUB_REPOSITORY}" "${ISSUE_NUMBER}"; then
+              ISSUE_7251_STATE="$(issue_7251_dependency_gate_state "${GITHUB_REPOSITORY}")"
+              case "${ISSUE_7251_STATE}" in
+                open|unverified|merged_pending|closed_pending)
+                  ISSUE_7251_HELD="true"
+                  SKIP_CODEX="true"
+                  echo "AI_PHASE_GATE_V1 phase=clarify gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip issue=${ISSUE_NUMBER} detail=${ISSUE_7251_STATE}"
+                  ;;
+              esac
+            fi
+          fi
+
           # Hold a generated security follow-up before any label or automatic
           # /answer write until the issue it depends on has merged (issue
           # #4934). The target is already fetched; only a dependent issue
@@ -535,6 +557,32 @@ jobs:
             if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
               echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
               exit 1
+            fi
+          fi
+          # Hold a trusted standalone issue that declares `- Depends on PR: #N`
+          # and `- Requires on main: <path> contains <string>` until that PR is
+          # merged into the default branch and the string is on it (issue
+          # #7228). Held issues get no questions or /answer, keep only
+          # ai:clarification (the standalone poller releases them once), and
+          # drop ai:blocked so the unblock scan never spends rounds on them.
+          # The runner-temp copy is staged from verified support, not the issue branch.
+          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
+          if [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            SKIP_CODEX="true"
+            _pr_dependency_reason="$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.reason // "unknown"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency reason=${_pr_dependency_reason:-unknown} outcome=skip issue=${ISSUE_NUMBER}"
+            # No label writes on a closed issue or an untrusted new issue.
+            if [ "${IS_CLOSED}" != "true" ] && { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
+              source scripts/gh_helpers.sh
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+                echo "::error::Could not mark PR-dependent issue #${ISSUE_NUMBER} as waiting"
+                exit 1
+              fi
+              if jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+                if ! gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null; then
+                  echo "::warning::Could not remove ai:blocked from PR-dependent issue #${ISSUE_NUMBER}; the unblock scan may still see it."
+                fi
+              fi
             fi
           fi
           # An ai:check-triage issue whose linked PR merged and whose failure
@@ -562,7 +610,8 @@ jobs:
           echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"
 
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${ISSUE_7251_HELD}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+            [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else
