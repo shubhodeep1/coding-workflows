@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- Read `scripts/validation_harness_sandbox.sh`: the header, `as_sandbox`, the self-check probe, `cmd_run`, `cmd_checked_run`, and how cleanup uses `pgid`. Nothing edited.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The finding asks for a separate user and a separate PID namespace, failing closed when isolation is unavailable. Today the separate user, the `env -i` allowlist (`as_sandbox`, line 190) and the `/proc/<pid>/environ` self-check (lines 519-521) exist, but the harness still shares the host PID namespace: the sandbox user can list every runner process and read its world-readable `/proc/<pid>/cmdline`. Option A closes that gap and fails closed. Option B would leave part of the recommendation undone on a critical finding, and option C contradicts the finding's own fail-closed requirement.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/validation_harness_sandbox.sh (`as_sandbox` line 187, `SELFCHECK_PROBE` lines 516-542, `cmd_selfcheck` line 544, `cmd_cleanup` lines 716-731, `cmd_run` lines 735-814, `cmd_checked_run` line 819)\n    - scripts/validate_process.sh Phase 3 (the provision \u2192 selfcheck \u2192 run sequence and `fail_closed_validation_sandbox`; no change to that sequence is needed)\n    - scripts/validation_refresh_runner.py (uses `checked-run`, so it gets the namespace with no change)\n    - tests/test_validation_harness_sandbox.py\n  steps:\n    - Start the harness in `cmd_run` (lines 796-797) inside a new PID and mount namespace created as root, before dropping to the sandbox user. For example: `sudo -n unshare --pid --fork --mount-proc --kill-child -- sudo -n -u \"$VALIDATION_HARNESS_SANDBOX_USER\" -- env -i \"${SANDBOX_ENV_ARGS[@]}\" setsid --wait bash -c ...`. Keep the `env -i` allowlist exactly as it is. The rootless Docker socket under the sandbox home stays reachable because the new mount namespace copies the existing mounts.\n    - Fix cleanup for the namespace. Inside the namespace `$$` is a namespace-local pid (1 or 2), so the current `.pgid` file and `kill -KILL -- -<pgid>` in `cmd_cleanup` would target the wrong host process group. Record the host pid of the root-owned `unshare` process in a root-owned file next to `${work}`. Have `cmd_cleanup` stop it with `sudo -n kill -KILL <pid>`; `--kill-child` then takes down every process in the namespace. Keep the existing `docker compose` / container cleanup. Never act on a pid value of 1 or less.\n    - Add a feasibility probe (`sudo -n unshare --pid --fork --mount-proc --kill-child -- true`) to `cmd_provision` and again at the start of `cmd_run`. If it fails, call `sandbox_fail <phase> pid_namespace_unavailable` (exit 3). Phase 3 already turns exit 3 into `harness_error` with no host fallback. A failed `unshare` launch inside `cmd_run` must also fail closed (for example `reason=pid_namespace_launch_failed`) and never retry without the namespace.\n    - Extend the self-check so the probe also runs inside a namespace created the same way. Inside it, the probe fails (new token such as `caller_pid_visible`) if `/proc/<caller_pid>` exists and its `environ` or `cmdline` is readable. It also fails if any process other than the namespace's own is visible (for example, more pids under `/proc` than the probe's own process tree). Keep the existing host-namespace checks.\n    - Add contract tests in tests/test_validation_harness_sandbox.py covering: the `unshare --pid --fork --mount-proc` launch line; the absence of any non-namespaced launch path; the `pid_namespace_unavailable` fail-closed path (fake `unshare` that exits non-zero \u2192 exit 3, status file `fail ... pid_namespace_unavailable`, harness never runs); cleanup killing the recorded host pid rather than a namespace-local pgid; and the new self-check token.\n    - Document the change as one `agents.d/<issue>-validation-harness-pid-namespace.md` fragment under the \"Validation harness isolation\" section, plus one `changelog.d/` fragment. Do not edit agents.md or CHANGELOG.md directly.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The separate user still blocks reading `/proc/<pid>/environ`. The new PID namespace also hides the controller and every other runner process (cmdline, process list) from the harness. Isolation failure stays fail-closed through the existing exit-3 \u2192 `harness_error` path, which is exactly what the finding recommends.\n  reversibility: Removing the `unshare` wrapper and restoring the `.pgid` cleanup brings back today's separate-user-only isolation. No state or schema changes are involved. The daily `harness-sandbox-check` job (nightly-validation-selftest.yml) surfaces a runner-image regression the day it lands, so it does not first show up as broken project validations.",
+  "fingerprint": "2532a1afd6fcdd9f90750e0eec52306165869aa1795a64fbca9762239aa436ce",
+  "lineage": {
+    "issue_number": 7349,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38502713134",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38502713134",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7349"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261014025550_d3af7af55c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7349,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38502713134"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7349",
+  "timestamps": {
+    "created_at": "2026-10-14T02:55:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
