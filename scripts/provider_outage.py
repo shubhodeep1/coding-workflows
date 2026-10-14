@@ -126,6 +126,11 @@ ITEM_WAIT_MARKER_RE = re.compile(
 	r"<!-- ai:claude-capacity-wait:v1 stage=(?P<stage>[a-z_-]{1,30}) source=(?P<source>[0-9]{1,20}|none) "
 	r"run=(?P<run>[0-9]{1,20}|none) role=[A-Z0-9_,]{1,400} -->"
 )
+# Last capacity-resume pass (issue #7370). orchestrate_poll.yml's pool_window
+# step reads it from the tracker listing find_tracking already fetched, so the
+# hourly pass runs once an hour has passed even when no tick lands in the
+# first minutes of the hour.
+WAIT_PROBE_RE = re.compile(r"<!-- ai:claude-capacity-wait-probe:v1 at=[0-9TZ:-]{1,40} -->")
 REPLAY_MARKER_RE = re.compile(r"<!-- ai:claude-capacity-wait-replay:v1 source=(?P<source>none|[0-9]{1,20}) run=(?P<run>[0-9]{1,20}|none) -->")
 STAGE_COMMAND_RE = re.compile(r"^\s*/(?:reclarify|answer|approved)\b", re.IGNORECASE)
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -927,6 +932,13 @@ def render_wait_done(body: str, done: set[str]) -> str:
 	return (body or "").rstrip("\n") + "\n" + line + "\n"
 
 
+def render_wait_probe(body: str, now: dt.datetime) -> str:
+	line = f"<!-- ai:claude-capacity-wait-probe:v1 at={now.strftime('%Y-%m-%dT%H:%M:%SZ')} -->"
+	if WAIT_PROBE_RE.search(body or ""):
+		return WAIT_PROBE_RE.sub(line, body, count=1)
+	return (body or "").rstrip("\n") + "\n" + line + "\n"
+
+
 def pending_wait_items(comments: list[dict[str, Any]], *, login: str, done: set[str]) -> list[dict[str, str]]:
 	"""Trusted tracker item markers (oldest first) not yet resumed."""
 	items: list[dict[str, str]] = []
@@ -982,6 +994,13 @@ def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str)
 		return "superseded"
 	if str(pr.get("state") or "") != "open":
 		return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+	labels = {str(label.get("name") or "") for label in pr.get("labels") or [] if isinstance(label, dict)}
+	if CAPACITY_WAIT_LABEL not in labels:
+		# The label goes before the dispatch, so an unlabelled PR was already
+		# dispatched by an earlier pass whose done-marker write failed, or its
+		# label was removed by hand; the review sweep dispatches unlabelled
+		# PRs, so dispatching again here would only queue a duplicate review.
+		return "superseded"
 	head = str((pr.get("head") or {}).get("sha") or "").lower()
 	base_repo = (pr.get("base") or {}).get("repo") or {}
 	default_branch = str(base_repo.get("default_branch") or "")
@@ -1002,8 +1021,13 @@ def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str)
 
 def _resume_wait_issue(gh: Any, item: dict[str, str], *, login: str, labelled: set[int]) -> str:
 	number = int(item["item"])
+	# An issue missing from the label listing is still checked: the reporter
+	# records the tracker marker before it adds the label, so a failed label
+	# add must not mark the wait done without a replay. A replay marker for
+	# this run or a newer trusted command below supersedes it, and removing an
+	# absent label counts as success (HTTP 404), so this never replays twice.
 	if number not in labelled:
-		return "done"
+		_log(f"op=capacity_resume kind=issue item={number} run={item['run']} detail=unlabelled")
 	comments = gh.comments(number)
 	if comments is None:
 		return "failed"
@@ -1080,13 +1104,18 @@ def capacity_resume(gh: Any, *, pool_available: bool, items_out: str | None, ale
 		return values
 	done = parse_wait_done(tracker["body"])
 	pending = pending_wait_items(comments, login=login, done=done)
+	# Record this pass's time; a failed write only means the next tick
+	# probes again (fail open toward more probes).
+	body = render_wait_probe(tracker["body"], _utc_now())
+	if not gh.patch_body(tracker["number"], body):
+		body = tracker["body"]
+		_log(f"op=capacity_resume tracker={tracker['number']} outcome=probe_marker_write_failed")
 	values["pending"] = str(len(pending))
 	_write_items(items_out, {"count": len(pending), "opened_at": tracker.get("opened") or "", "items": [{key: item[key] for key in ("kind", "item", "workflow", "run")} for item in pending]})
 	if not pool_available:
 		_log(f"op=capacity_resume tracker={tracker['number']} outcome=waiting pending={len(pending)}")
 		_write_output(output_path, values)
 		return values
-	body = tracker["body"]
 	labelled_issues: set[int] | None = None
 	counts = {"pr": 0, "issue": 0, "run": 0}
 	not_rerun: list[str] = []

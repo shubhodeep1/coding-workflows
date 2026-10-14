@@ -331,7 +331,7 @@ def test_a_waiting_pr_is_redispatched(tmp_path: Path) -> None:
 	head = "a" * 40
 	gh = FakeGitHub()
 	gh.tracker_comments = [_c(_item("pr", "8", "31"))]
-	gh.prs[8] = {"state": "open", "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
+	gh.prs[8] = {"state": "open", "labels": [{"name": po.CAPACITY_WAIT_LABEL}], "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
 	gh.issue_comments[8] = [_c(f"paused\n<!-- review-autofix-failure:v1 head={head} reason=claude_capacity fp={'b' * 64} run=31 -->")]
 	_resume(gh, tmp_path)
 	assert gh.dispatched == [8] and gh.removed == [8] and gh.closed == [1]
@@ -400,7 +400,7 @@ def test_a_failed_label_removal_keeps_the_pr_pending(tmp_path: Path) -> None:
 	head = "c" * 40
 	gh = FakeGitHub()
 	gh.tracker_comments = [_c(_item("pr", "8", "42"))]
-	gh.prs[8] = {"state": "open", "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
+	gh.prs[8] = {"state": "open", "labels": [{"name": po.CAPACITY_WAIT_LABEL}], "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
 	gh.issue_comments[8] = [_c(f"p\n<!-- review-autofix-failure:v1 head={head} reason=claude_capacity fp={'b' * 64} run=42 -->")]
 	gh.remove_label = lambda number, label: False  # type: ignore[method-assign]
 	_resume(gh, tmp_path)
@@ -492,3 +492,62 @@ def test_panel_slot_does_not_set_the_job_failure_reason() -> None:
 	text = _text(SCRIPTS / "review_run_reviewers.sh")
 	block = text[text.index("      80)\n        # Claude capacity wait (issue #7370)"):text.index("      75|76)")]
 	assert 'GITHUB_ENV' not in block
+
+
+# --- Review fixes (issue #7370 review round 3) --------------------------------
+
+
+def test_an_unlabelled_pr_is_not_dispatched_again(tmp_path: Path) -> None:
+	# The label goes before the dispatch, so an unlabelled PR was already
+	# dispatched (or the sweep owns it); the pass must not queue a duplicate.
+	head = "d" * 40
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("pr", "8", "61"))]
+	gh.prs[8] = {"state": "open", "labels": [], "head": {"sha": head}, "base": {"repo": {"default_branch": "main"}}}
+	gh.issue_comments[8] = [_c(f"p\n<!-- review-autofix-failure:v1 head={head} reason=claude_capacity fp={'b' * 64} run=61 -->")]
+	_resume(gh, tmp_path)
+	assert gh.dispatched == [] and gh.closed == [1]
+	assert "pr:8:61" in gh.tracker_body
+
+
+def test_an_unlabelled_issue_is_still_replayed(tmp_path: Path) -> None:
+	# A failed label add after the tracker marker must not strand the wait.
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("issue", "5", "62"))]
+	gh.labelled = []
+	gh.issue_comments[5] = [_c("w\n<!-- ai:claude-capacity-wait:v1 stage=clarify source=none run=62 role=CLARIFY -->")]
+	_resume(gh, tmp_path)
+	[(number, body)] = [entry for entry in gh.posted if entry[0] == 5]
+	assert body.endswith("<!-- ai:claude-capacity-wait-replay:v1 source=none run=62 -->")
+	assert gh.closed == [1]
+
+
+def test_an_already_replayed_unlabelled_issue_is_not_replayed_twice(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("issue", "5", "63"))]
+	gh.labelled = []
+	gh.issue_comments[5] = [
+		_c("w\n<!-- ai:claude-capacity-wait:v1 stage=clarify source=none run=63 role=CLARIFY -->"),
+		_c("/reclarify [auto-requeued-by-capacity-wait]\n<!-- ai:claude-capacity-wait-replay:v1 source=none run=63 -->"),
+	]
+	_resume(gh, tmp_path)
+	assert [entry for entry in gh.posted if entry[0] == 5] == []
+	assert gh.closed == [1]
+
+
+def test_each_pass_records_its_probe_time(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("run", "none", "64"))]
+	_resume(gh, tmp_path, available=False)
+	assert re.search(r"<!-- ai:claude-capacity-wait-probe:v1 at=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z -->", gh.tracker_body)
+	_resume(gh, tmp_path)
+	assert gh.tracker_body.count("ai:claude-capacity-wait-probe:v1") == 1
+	assert "done=run:none:64" in gh.tracker_body
+
+
+def test_pool_window_also_opens_an_hour_after_the_last_pass() -> None:
+	text = _text(WORKFLOWS / "orchestrate_poll.yml")
+	step = text[text.index("        id: pool_window\n"):text.index("      - name: Install Claude Code CLI\n")]
+	assert "provider_outage_trackers.json" in step
+	assert "ai:claude-capacity-wait-probe:v1" in step
+	assert "-ge 3300 ]" in step

@@ -1026,6 +1026,22 @@ jobs:
           minute=$((10#$(date -u +%M)))
           in_window=false
           [ "${minute}" -ge "${window}" ] || in_window=true
+          # Scheduled ticks can arrive 25-60 minutes apart and rarely land in
+          # the first minutes of the hour, so the window also opens once an
+          # hour has passed since the last capacity-resume pass (the
+          # ai:claude-capacity-wait-probe:v1 marker on the trusted capacity
+          # tracker find_tracking already listed; no extra API call). A
+          # missing or unreadable marker opens it, which fails open toward a
+          # probe.
+          trackers_file="${RUNTIME_DIR:-}/provider_outage_trackers.json"
+          if [ "${in_window}" != true ] && [ -f "${trackers_file}" ]; then
+            last_probe="$(jq -r 'first(.[]? | select((.pull_request | not) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))) | (((.body // "") | capture("<!-- ai:claude-capacity-wait-probe:v1 at=(?<at>[0-9TZ:-]{1,40}) -->") | .at) // "")) // empty' "${trackers_file}" 2>/dev/null || true)"
+            last_epoch="$(date -u -d "${last_probe:-invalid}" +%s 2>/dev/null || echo 0)"
+            [[ "${last_epoch}" =~ ^[0-9]+$ ]] || last_epoch=0
+            if [ $(( $(date -u +%s) - last_epoch )) -ge 3300 ]; then
+              in_window=true
+            fi
+          fi
           echo "in_window=${in_window}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI

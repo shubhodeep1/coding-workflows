@@ -493,7 +493,7 @@ def test_find_tracking_with_tracking_issues_skips_standalone_probe(tmp_path: Pat
 def test_find_tracking_standalone_probe_disabled(tmp_path: Path, enabled: str) -> None:
 	result, outputs, calls = _run_find_tracking(tmp_path, enabled=enabled)
 	assert result.returncode == 0, result.stderr
-	assert outputs == {"has_tracking": "false", "standalone_recovery": "false", "has_work": "false"}
+	assert outputs == {"capacity_wait": "false", "has_tracking": "false", "standalone_recovery": "false", "has_work": "false"}
 	assert "STANDALONE_STALL_PROBE outcome=skip reason=disabled" in result.stdout
 	assert not _graphql_calls(calls)
 
@@ -510,7 +510,7 @@ def test_find_tracking_standalone_probe_disabled(tmp_path: Path, enabled: str) -
 def test_find_tracking_standalone_probe_counts(tmp_path: Path, counts: dict, has_work: str, outcome: str) -> None:
 	result, outputs, calls = _run_find_tracking(tmp_path, graphql=_probe_response(**counts), enabled="On")
 	assert result.returncode == 0, result.stderr
-	assert outputs == {"has_tracking": "false", "standalone_recovery": "true", "has_work": has_work}
+	assert outputs == {"capacity_wait": "false", "has_tracking": "false", "standalone_recovery": "true", "has_work": has_work}
 	assert f"STANDALONE_STALL_PROBE {outcome}" in result.stdout
 	graphql = _graphql_calls(calls)
 	assert len(graphql) == 1
@@ -539,7 +539,7 @@ def test_find_tracking_standalone_probe_counts(tmp_path: Path, counts: dict, has
 def test_find_tracking_standalone_probe_fails_open(tmp_path: Path, kwargs: dict, reason: str) -> None:
 	result, outputs, _calls = _run_find_tracking(tmp_path, **kwargs)
 	assert result.returncode == 0, result.stderr
-	assert outputs == {"has_tracking": "false", "standalone_recovery": "true", "has_work": "true"}
+	assert outputs == {"capacity_wait": "false", "has_tracking": "false", "standalone_recovery": "true", "has_work": "true"}
 	assert f"STANDALONE_STALL_PROBE outcome=probe_failed reason={reason}" in result.stdout
 	assert "::warning::Standalone stall recovery probe" in result.stdout
 

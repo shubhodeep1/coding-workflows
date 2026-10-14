@@ -506,7 +506,8 @@ def test_poller_rb_prepare_preserves_engine_selection_log(tmp_path: Path) -> Non
 @pytest.mark.parametrize("comment_reply, expected_comment_id", [('{"id":123}', 123), ('{}', None)])
 def test_isolation_deferral_escalates_once_per_head(tmp_path: Path, comment_reply: str, expected_comment_id: int | None) -> None:
 	text = POLLER.read_text(encoding="utf-8")
-	block = text.split('        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
+	# Issue #7370: the counting branch follows the capacity-wait branch as an elif.
+	block = text.split('        elif [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
 		'        echo "::warning::Review-blocked judge failed', 1,
 	)[0]
 	state = tmp_path / "state.json"
