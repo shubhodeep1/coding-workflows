@@ -3044,6 +3044,13 @@ print(m.group(1) if m else "")
           # BUG-001: the baseline is the head the judge evaluated, not a
           # live re-read that may have moved during the judge call.
           RB_HEAD_SHA="$(printf '%s' "${RB_JUDGED_HEAD_SHA:-}" | tr '[:upper:]' '[:lower:]')"
+          # A live head that differs here passed the stale-head guard only as
+          # this run's checked-out head behind an unpushed local commit, which
+          # the closed PR never carried; implement.yml ignores a baseline that
+          # differs from the closed PR's headRefOid, so use the live head.
+          if [ -n "${RB_LIVE_HEAD_SHA:-}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_HEAD_SHA}" ]; then
+            RB_HEAD_SHA="${RB_LIVE_HEAD_SHA}"
+          fi
           if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             RB_EFFECTIVE_REISSUE_MODE="redo"
             RB_SPOT_FIX_REASON="head_ref_unavailable"

@@ -445,7 +445,8 @@ def _run_close_and_reissue(
 	``gh`` (for example a ``git`` shim that makes one lookup fail).
 	``judged_head_sha`` sets ``RB_JUDGED_HEAD_SHA`` (the head the judge
 	evaluated, which the spot-fix baseline uses); ``None`` uses the
-	resolved head and ``"__REPO_HEAD__"`` the bootstrapped repo head."""
+	resolved head and ``"__REPO_HEAD__"`` the bootstrapped repo head
+	(an ``extra_env`` value of ``"__REPO_HEAD__"`` resolves the same way)."""
 	branch = _extract_close_and_reissue_branch()
 
 	with tempfile.TemporaryDirectory(prefix="test_review_rb_judge_") as td:
@@ -530,7 +531,7 @@ def _run_close_and_reissue(
 			"RB_JUDGED_HEAD_SHA": resolved_judged_head,
 		}
 		if extra_env:
-			env.update({str(k): str(v) for k, v in extra_env.items()})
+			env.update({str(k): (repo_head_before if v == "__REPO_HEAD__" else str(v)) for k, v in extra_env.items()})
 		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(

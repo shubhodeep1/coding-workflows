@@ -361,3 +361,36 @@ def test_spot_fix_baseline_uses_judged_head_even_when_live_head_differs() -> Non
 	assert "REISSUE_BASELINE_PRESERVED" in state["_stdout"]
 	assert f"ai/reissue-baseline/pr-42-{judged[:12]}-" in state["_stdout"]
 	assert not state.get("pr_view_args"), state.get("pr_view_args")
+
+
+@needs_jq
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+def test_spot_fix_baseline_uses_live_head_when_judged_head_is_unpushed_local_commit() -> None:
+	# The stale-head guard lets a run proceed when the live head is its own
+	# checked-out head behind an unpushed local commit (RB_JUDGED_HEAD_SHA).
+	# The closed PR never carries that local commit, and implement.yml ignores
+	# a baseline that differs from the closed PR's headRefOid, so the baseline
+	# is the live PR head (RB_LIVE_HEAD_SHA) instead.
+	module = _load_label_propagation_module()
+	state = module._run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 1, "line_end": 1, "symptom": "Guard missing"},
+			],
+			"new_issue": {"title": "Reissue: follow-up", "body": "Patch the grounded gap."},
+		},
+		reissue_preserve_baseline_enabled="1",
+		repo_files={"src/app.py": "print('hello')\n"},
+		judged_head_sha=OTHER,
+		extra_env={"RB_LIVE_HEAD_SHA": "__REPO_HEAD__"},
+	)
+	live = state["_repo_head_before"]
+	assert live and live != OTHER
+	assert f"head_sha={live}" in state["_stdout"], state["_stdout"]
+	assert f"ai/reissue-baseline/pr-42-{live[:12]}-" in state["_stdout"]
+	assert OTHER[:12] not in state["_stdout"]
+	assert not state.get("pr_view_args"), state.get("pr_view_args")
