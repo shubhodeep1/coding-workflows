@@ -67,6 +67,8 @@ jobs:
       group: ai-orchestrate-poll-${{ github.repository }}
       cancel-in-progress: false
 
+    env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
     steps:
       - name: Create runtime workspace
         run: |
@@ -237,16 +239,89 @@ jobs:
           if [ "${COUNT}" -eq 0 ]; then
             echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
-            echo "has_work=false" >> "$GITHUB_OUTPUT"
-            # Standalone stall recovery still runs on ticks with no active
-            # project (issue #7183); the full poller runs it after its loop
-            # otherwise. Same truthy test as is_truthy in the poller.
+            # Standalone stall recovery (issue #7284, activation gap from PR
+            # #7044) runs only inside the full poller, so a repository with
+            # no open tracking issue never recovered a stalled standalone
+            # issue. The full poller runs when this probe finds candidates.
+            # Same truthy rule as is_truthy in orchestrate_poll_process.sh.
+            # standalone_recovery (issue #7183) still gates the no-project
+            # toolchain steps and "Run standalone stall recovery without
+            # active projects", which runs when the probe below leaves
+            # has_work=false.
             case "$(printf '%s' "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" | tr '[:upper:]' '[:lower:]')" in
               1|true|yes|on) standalone_recovery=true ;;
               *) standalone_recovery=false ;;
             esac
             echo "Standalone stall recovery without active projects: standalone_recovery=${standalone_recovery}"
             echo "standalone_recovery=${standalone_recovery}" >> "$GITHUB_OUTPUT"
+            if [ "${standalone_recovery}" != "true" ]; then
+              echo "STANDALONE_STALL_PROBE outcome=skip reason=disabled"
+              echo "has_work=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # §14 audit: this step's only other call is the tracking-label
+            # issue listing above, which cannot see standalone issues. The
+            # poller's batched helpers (_fetch_standalone_marker_issues_graphql,
+            # _fetch_candidate_issue_details_graphql / _candidate_details_json)
+            # run only inside the full poller, after this decision is made.
+            # This is one aliased GraphQL call, made only on ticks with no
+            # open tracking issue; it reads integer counts only. The labels
+            # are the poller's pipeline_labels, one per alias so no
+            # multi-label filter semantics are assumed; the searches use the
+            # same query strings as _fetch_standalone_marker_issues_graphql.
+            # Fail open: a failed or malformed probe runs the full poller.
+            probe_owner="${GITHUB_REPOSITORY%%/*}"
+            probe_name="${GITHUB_REPOSITORY#*/}"
+            probe_q_state="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments"
+            probe_q_clarify="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments"
+            # shellcheck disable=SC2016
+            probe_query='query($owner: String!, $name: String!, $q_state: String!, $q_clarify: String!) {
+            repository(owner: $owner, name: $name) {
+              l0: issues(states: OPEN, labels: ["ai:clarification"], first: 1) { totalCount }
+              l1: issues(states: OPEN, labels: ["ai:planning"], first: 1) { totalCount }
+              l2: issues(states: OPEN, labels: ["ai:awaiting-approval"], first: 1) { totalCount }
+              l3: issues(states: OPEN, labels: ["ai:implementing"], first: 1) { totalCount }
+              l4: issues(states: OPEN, labels: ["ai:done"], first: 1) { totalCount }
+              l5: issues(states: OPEN, labels: ["ai:ready-to-merge"], first: 1) { totalCount }
+              l6: issues(states: OPEN, labels: ["ai:review-blocked"], first: 1) { totalCount }
+            }
+            state: search(query: $q_state, type: ISSUE, first: 1) { issueCount }
+            clarify: search(query: $q_clarify, type: ISSUE, first: 1) { issueCount }
+          }'
+            probe_resp=""
+            if ! probe_resp="$(gh_retry gh api graphql \
+                -f owner="${probe_owner}" \
+                -f name="${probe_name}" \
+                -f q_state="${probe_q_state}" \
+                -f q_clarify="${probe_q_clarify}" \
+                -f query="${probe_query}" 2>/dev/null)"; then
+              echo "::warning::Standalone stall recovery probe failed; running the full poller so recovery is not skipped."
+              echo "STANDALONE_STALL_PROBE outcome=probe_failed reason=graphql_failed"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            probe_counts=""
+            if ! probe_counts="$(printf '%s' "${probe_resp}" | jq -er '
+                def n: if type == "number" and . >= 0 and . == floor then . else error("bad") end;
+                .data as $d
+                | [$d.repository.l0.totalCount, $d.repository.l1.totalCount, $d.repository.l2.totalCount,
+                   $d.repository.l3.totalCount, $d.repository.l4.totalCount, $d.repository.l5.totalCount,
+                   $d.repository.l6.totalCount] as $labels
+                | [($labels | map(n) | add), ($d.state.issueCount | n), ($d.clarify.issueCount | n)]
+                | @tsv' 2>/dev/null)"; then
+              echo "::warning::Standalone stall recovery probe returned an unexpected response; running the full poller so recovery is not skipped."
+              echo "STANDALONE_STALL_PROBE outcome=probe_failed reason=malformed"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            read -r probe_labeled probe_state probe_clarify <<< "${probe_counts}"
+            if [ $((probe_labeled + probe_state + probe_clarify)) -gt 0 ]; then
+              echo "STANDALONE_STALL_PROBE outcome=candidates labeled=${probe_labeled} state_marker=${probe_state} clarify_marker=${probe_clarify}"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "STANDALONE_STALL_PROBE outcome=none labeled=${probe_labeled} state_marker=${probe_state} clarify_marker=${probe_clarify}"
+              echo "has_work=false" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
 
@@ -823,6 +898,7 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -837,7 +913,7 @@ jobs:
           if [ -f scripts/ai_engine.sh ] && jq -e 'any(.[]; all(.labels[]?; .name != "ai:codex"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
             # shellcheck source=/dev/null
             if source scripts/ai_engine.sh; then
-              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do
+              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do
                 if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
                   any_claude=true
                 fi
@@ -957,7 +1033,12 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP || 'project' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW || '40' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          # Audit a clean worktree of the audited head (scripts/orchestrate_poll_process.sh
+          # security_pass_prepare_audit_worktree); false audits the poller checkout in place.
+          SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}
           # Claude engine (plan Phase 5c): the judges' engine, per tracking
           # issue (scripts/ai_engine.sh; CLAUDE_FIXER_ENABLED=false keeps
           # RB_JUDGE on codex).
@@ -968,11 +1049,13 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1111,6 +1194,8 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
+          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash scripts/orchestrate_poll_process.sh
@@ -1146,7 +1231,10 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP || 'project' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW || '40' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
           AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
@@ -1154,11 +1242,13 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1229,6 +1319,8 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
+          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
           STANDALONE_RECOVERY_SWEEP_ONLY: "true"
         run: |
           set -euo pipefail
@@ -1260,6 +1352,7 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1267,6 +1360,8 @@ jobs:
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           PYTHONDONTWRITEBYTECODE: "1"
+          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
+          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
 
       # Standalone PR conflict and noop-suspicious recovery sweeps (issue
@@ -1607,4 +1702,26 @@ jobs:
             gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
           else
             echo 'GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
           fi

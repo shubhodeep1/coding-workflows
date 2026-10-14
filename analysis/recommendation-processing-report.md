@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (117)
+## Processed source docs (118)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -122,6 +122,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-08-25.md`
 - `analysis/workflow-optimization-2026-08-27.md`
 - `analysis/workflow-optimization-2026-08-29.md`
+- `analysis/workflow-optimization-2026-09-16.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1108,3 +1109,34 @@ The two source docs repeat recommendations across their narrative sections and a
 - `analysis/workflow-optimization-2026-08-19.md`, `analysis/workflow-optimization-2026-08-23.md`, `analysis/workflow-optimization-2026-08-24.md`, and `analysis/workflow-optimization-2026-08-25.md` are fully represented in the source-qualified ledger above, added to `Processed source docs (115)`, and deleted from `analysis/` on this ref.
 - `analysis/workflow-optimization-2026-08-27.md` and `analysis/workflow-optimization-2026-08-29.md` repeat findings across narrative, summary, cross-reference, and handoff sections; this closeout counts the 26 and 25 named findings once under source-qualified keys, groups only the remaining narrative asks, records 84 internally reconciled outcomes, adds both files to `Processed source docs (117)`, and deletes the source files while preserving their provenance here.
 - The 2026-08-27 Codex trusted-directory consolidator failure is stale on this ref because `scripts/review_consolidate.sh` now uses the isolated OpenCode path. Conversely, partially landed hardening did not override either source's explicit `RISKY_SKIP` tags: pagination, poller freshness, retry-policy consolidation, and cancellation behavior remain deferred.
+
+### `analysis/workflow-optimization-2026-09-16.md`
+Processed: 2026-10-12
+- Speed 1 / Cost 1 / Reliability 2 (`model_provider_broker_start` support-symbol preflight) — rejected (obsolete): the function no longer exists (only historical comments mention it); review support is staged from the verified workflow commit and the `REVIEW_EDITOR_PREFLIGHT` step exists.
+- Speed 2 / Reliability 1 (`resolver-agent-home` writability) — rejected (obsolete): the resolver runs in the review sandbox and `resolver-agent-home` no longer exists in the repo.
+- Speed 3 (reuse the AI-memory worktree across poll start/end) — rejected: the saving is unmeasured on the current poller and the change risks the independent fail-open memory paths.
+- Speed 4 / Cost 5 (lazy Semble in the poller) — already-implemented: `SEMBLE_BOOTSTRAP_MODE` defaults to `lazy` in `orchestrate_poll.yml`.
+- Speed 5 (no-action poll gate) — rejected: the sweeps and the merge-train release run every tick, and skipping them risks reconciliation.
+- Cost 2 (same-head deterministic failure suppression) — already-implemented: the `review-autofix-failure:v1` fingerprint cap.
+- Cost 3 (reviewer circuit breaker) — already-implemented: `REVIEWER_CIRCUIT_BREAKER_ENABLED`, `scripts/reviewer_failback_chains.json` and the reviewer loop guards.
+- Cost 4 (prompt-growth reduction) — rejected: too broad to implement safely as specified; `CONTEXT_BUDGET_WARN` telemetry already exists.
+- Reliability 3 (primary failure in run summaries) — already-implemented for the cited case: resolver failures are summarized as `conflict_resolver_failed`, and `AUTOFIX_FAILURE_REASON` and the failure headline exist.
+- Reliability 4 (memory fail-open aggregation / `event_id`) — rejected: under-specified; memory records already use stable IDs (`make_record_id`).
+- Reliability 5 (`ledger_emit_substate` warning storm) — already-implemented: `LEDGER_TOKENS_LOG_MAX_BYTES` tail read and `LEDGER_EMIT_TIMEOUT_SECONDS`.
+- AI memory timing fields; `GH_API_CALL` / `GH_API_SUMMARY` telemetry — rejected: broad cross-cutting telemetry; `GH_API_RETRY` logging exists.
+- Review gate double `/files` fetch — already-implemented: the gate makes one paginated `/files` lookup.
+- Prompt cache 1 (aggregate `cache_hit_rate`) — already-implemented: `compute_cache_hit_rate` on aggregates in `scripts/cost_audit.py`.
+- Prompt cache 2–4 (prefix fingerprints, component token counts, prompt ordering, memory compaction) — rejected: under-specified.
+- BUG-001 (cancelled required checks accepted) — applied: checks-gate-cancelled (`changelog.d/7127-checks-gate-cancelled.md`); `scripts/pr_checks_lib.sh` now blocks on cancelled and similar conclusions.
+- CONSIST-001 (no-op recovery check gate) — applied: checks-gate-cancelled; Gate D calls `_pr_checks_completed` with the PR base ref.
+- API-001, API-002 direct paths, DEAD-002 — applied: poller-api-dedup (`changelog.d/7268-poller-api-dedup.md`).
+- API-002 sweep-wide GraphQL batching — rejected: tagged RISKY_SKIP in the source.
+- API-003 (release `gh_api_safe`) — rejected: tagged RISKY_SKIP in the source; it sits in the release retry loop.
+- API-004 (guard-block handler retries) — applied: guard-block-gh-retry (`changelog.d/7172-guard-block-gh-retry.md`).
+- BATCH-001, MERGE-002, REUSE-001 — rejected: tagged RISKY_SKIP in the source.
+- MERGE-001 (clarify comment snapshot reuse) — already-implemented: clarify comments are read once, paginated.
+- MERGE-003 / MERGE-004 (batch lint-script issue lookups) — rejected: batching would change the fail-open/fail-closed semantics of security-relevant lint scripts for a small saving.
+- DUP-001 through DUP-005 — rejected: style-only refactors that would add new staged support modules (staging blast-radius risk).
+- EXPR-001 / EXPR-002 — applied in reduced form: implement-expr-limit (`changelog.d/7165-implement-run-expression-limit.md`); interpolations moved to `env:` and an 18,000-character CI guard added, with no script extraction.
+- DEAD-001 (label-repair evidence engine) — rejected: deliberately reserved, as documented in agents.md.
+- SHELL-001 (unused shell assignments) — rejected: low value; removing assigned identifiers conflicts with naming immutability.

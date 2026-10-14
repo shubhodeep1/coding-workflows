@@ -53,6 +53,17 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `run_issue_7251_dependency_wait` in `scripts/orchestrate_poll_process.sh` + `issue_7251_*` helpers in `scripts/gh_helpers.sh` + the `issue_7251_dependency_wait` gates in `.github/workflows/clarify.yml` and `.github/workflows/plan.yml`
+
+- **Introduced in:** unblock fix-up #7257 for #7251 (2026-10-12)
+- **Type:** single-use
+- **Removal trigger:** #7251 carries a trusted `ai:issue-7251-dependency-released:6667`, `ai:issue-7251-preflight-failed:6667` or `ai:issue-7251-dependency-closed:6667` marker comment, or #7251 is closed. Until removal the poller spends one GraphQL call per tick on it.
+- **Removal preflight checks:**
+  - `gh api repos/shubhodeep1/coding-workflows/issues/7251/comments --paginate --jq '.[].body' | grep -c 'ai:issue-7251-dependency-\(released\|closed\):6667\|ai:issue-7251-preflight-failed:6667'` returns at least 1, or `gh issue view 7251 --repo shubhodeep1/coding-workflows --json state --jq .state` prints `CLOSED`.
+  - The last 24 hours of `orchestrate_poll` run logs contain no `STALL_SKIP issue=7251 reason=dependency_wait detail=open` line.
+  - `rg -n 'issue_7251|ISSUE_7251' .github scripts tests` lists only the files this entry names (the handler, the helpers, the two gates, the `orchestrate_poll.yml` env lines, `tests/test_issue_7251_dependency_wait.py` and its `ci.yml` wiring), so they are all removed together.
+- **Owner:** @shubhodeep1
+
 ### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
 
 - **Introduced in:** #6118 (2026-10-05)
@@ -271,6 +282,17 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
+
+### `scripts/ai_engine_fallback_report.sh`
+
+- **Introduced in:** #6705 (2026-10-07), plan item 3e of `docs/plans/unattended-claude-pipeline-completion-plan.md` (Refs #6664)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `git grep -n ai_engine_fallback_report.sh .github/workflows` returns no callers.
+  - `git grep -n AI_ENGINE_FALLBACK_POLICY scripts/ai_engine.sh` returns no matches (the fallback policy was removed).
+  - `gh issue list --repo shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search engine_fallback_refused` returns no issues.
 - **Owner:** @shubhodeep1
 
 ### `workflow-templates/.claude/hooks/prepush_affected_tests.py`

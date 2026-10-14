@@ -2881,9 +2881,11 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'REVIEWER_FAILBACK:' in reviewers
 	assert 'reviewer_record_health_outcome' in reviewers
 
-	assert 'opencode_run_cmd "$@"' in summariser
+	assert 'opencode_run_cmd' not in summariser
+	assert 'bash "${summariser_sandbox_sh}" run' in summariser
+	assert '"${sandbox_engine}" SUMMARISER read' in summariser
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in summariser
-	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in summariser
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"' in summariser
 	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
 	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
 	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
@@ -2901,7 +2903,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s' in consolidate
 	sandbox = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert '"RB_JUDGE", "REVIEW_CONSOLIDATOR"' in sandbox
-	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR)' in sandbox
+	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)' in sandbox
 	assert 'opencode_source_mount+=\',readonly\'' in sandbox
 	assert 'opencode_agent=reviewer' in sandbox
 	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in _agents_text_with_fragments()
@@ -6920,9 +6922,13 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 		bin_dir.mkdir()
 		fake_gh = bin_dir / "gh"
 		# Every call is recorded; the required-checks wait reads one green check-run.
+		# The merge-base freshness gate defers when it cannot resolve the base
+		# (#6988), so the PR read names one and the compare reports it up to date.
 		fake_gh.write_text(
 			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
-			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;; esac\n',
+			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;;\n'
+			f'  *compare/*) printf \'{{"ahead_by":0,"files":[]}}\' ;;\n'
+			f'  *pulls/42*) printf \'{{"head":{{"sha":"{head_sha}"}},"base":{{"ref":"main"}}}}\' ;;\nesac\n',
 			encoding="utf-8",
 		)
 		fake_gh.chmod(0o755)

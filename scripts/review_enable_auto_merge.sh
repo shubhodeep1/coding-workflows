@@ -42,7 +42,7 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 # Q35: A): a reviewed head whose base moved under files this PR touches is
 # updated from the base instead of auto-merged, so CI and review run on the
 # combined tree first. The library is a required bootstrap script; a missing
-# copy logs once and keeps the pre-gate behaviour.
+# copy fails closed: freshness cannot be verified, so auto-merge defers.
 # shellcheck source=/dev/null
 if [ -f "${SCRIPT_DIR}/pr_checks_lib.sh" ]; then
 	source "${SCRIPT_DIR}/pr_checks_lib.sh" 2>/dev/null || true
@@ -50,8 +50,10 @@ fi
 if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
 	_pr_base_fresh_for_merge()
 	{
-		echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
-		return 0
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+		echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+		return 1
 	}
 fi
 if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
@@ -64,6 +66,18 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
 		return 1
 	}
 fi
+
+# Deferral reason for the freshness gate: `base_moved_overlap` when the base
+# moved under this PR's files (a branch update was requested), otherwise
+# `base_freshness_unknown` (freshness could not be verified; no update).
+base_freshness_defer_reason()
+{
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+		echo "base_moved_overlap"
+	else
+		echo "base_freshness_unknown"
+	fi
+}
 
 record_auto_merge_ready_labels_allowed()
 {
@@ -250,8 +264,12 @@ review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" succes
 _orch_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
 if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
 	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
-	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=base_moved_overlap"
-	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	else
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
+	fi
 	exit 0
 fi
 
@@ -273,8 +291,12 @@ fi
 if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	&& ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
 	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
-	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=base_moved_overlap"
-	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	else
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
+	fi
 	exit 0
 fi
 
