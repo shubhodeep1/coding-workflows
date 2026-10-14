@@ -1185,7 +1185,13 @@ esac
 				"    if os.environ.get('SECURITY_AUDIT_FIX_CYCLE_DIFFS') else None\n"
 				"  ),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
+				"  'line_ownership': os.environ.get('SECURITY_AUDIT_LINE_OWNERSHIP'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
+				"  'cwd': os.path.realpath(os.getcwd()),\n"
+				"  'support_dir': os.environ.get('SECURITY_AUDIT_SUPPORT_DIR'),\n"
+				"  'fp_exclusions': os.environ.get('SECURITY_AUDIT_FP_EXCLUSIONS'),\n"
+				"  'cwd_head': __import__('subprocess').run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip(),\n"
+				"  'cwd_has_integration_sentinel': Path('.orchestrator_judge_context_sentinel.txt').is_file(),\n"
 				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
 				"}), encoding='utf-8')\n"
 				"PY\n"
@@ -2096,7 +2102,7 @@ if args[0] == 'api':
 					'mergedAt': pr.get('merged_at', None),
 					'headRefName': pr.get('headRefName', ''),
 					'baseRefName': pr.get('baseRefName', ''),
-					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+					'headRefOid': pr.get('headRefOid', pr.get('headSha', format(int(linked_pr_num), '040x') if str(linked_pr_num).isdigit() else f'mocksha{linked_pr_num}')),
 								'mergeable': pr.get('mergeable', None),
 								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 								'mergeCommit': {
@@ -2517,8 +2523,11 @@ if args[0] == 'api':
 				print('false')
 			else:
 				print('null')
+		# Default PR heads are 40-hex so the head-bound merges (#6991,
+		# _orch_squash_merge_bound / --match-head-commit) accept them; pass
+		# headSha to model an unresolvable head.
 		elif jq == '.head.sha':
-			print(pr.get('headSha', f'mocksha{pr_num}'))
+			print(pr.get('headSha', format(int(pr_num), '040x') if str(pr_num).isdigit() else f'mocksha{pr_num}'))
 		elif jq == '.head.ref':
 			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
@@ -2543,7 +2552,7 @@ if args[0] == 'api':
 					},
 				},
 				'head': {
-					'sha': pr.get('headSha', f'mocksha{pr_num}'),
+					'sha': pr.get('headSha', format(int(pr_num), '040x') if str(pr_num).isdigit() else f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
 					'repo': (
 						None if pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo')) is None
@@ -3031,6 +3040,9 @@ if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '
 # Combined-mode branch prep now creates a judge worktree instead of
 # switching the poller's own checkout; the checkout-failure knob covers it.
 if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
+	sys.exit(1)
+if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_WORKTREE_ADD_FAIL_SUBSTR', '') \
+		and any(os.environ['MOCK_GIT_WORKTREE_ADD_FAIL_SUBSTR'] in arg for arg in args[2:]):
 	sys.exit(1)
 if args[:2] == ['worktree', 'add']:
 	store.setdefault('git_worktree_add_calls', []).append(args[2:])
@@ -3879,6 +3891,109 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert "SECURITY_PASS_CLEAN" in combined_log
 	assert result["telegram_cleanup_calls"] == ["192"]
 	assert not any(prior_alert_marker in comment["body"] for comment in result["issues"]["192"]["comments"])
+
+
+def _security_pass_audit_tree_state() -> dict:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	return state
+
+
+def test_security_pass_audits_clean_worktree_of_integration_head() -> None:
+	"""The audit reads a clean detached worktree of the audited head, while the
+	engine itself still runs from the trusted support root (the poller root)."""
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert capture is not None
+	assert capture["cwd"].endswith("/security-pass-audit-wt-192")
+	assert capture["cwd_head"] == capture["diff_head"]
+	assert capture["cwd_has_integration_sentinel"] is True
+	assert capture["support_dir"]
+	assert capture["support_dir"] != capture["cwd"]
+	assert not capture["support_dir"].startswith(capture["cwd"])
+	assert capture["fp_exclusions"] == capture["support_dir"] + "/scripts/security_audit_fp_exclusions.json"
+	assert (
+		f"SECURITY_PASS_AUDIT_TREE tracking_issue=192 head_sha={capture['diff_head']} outcome=prepared"
+		in combined_log
+	)
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	# The worktree is removed once the security pass returns.
+	assert not Path(capture["cwd"]).exists()
+
+
+def test_security_pass_audit_worktree_switch_off_audits_in_place() -> None:
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED": "false"},
+	)
+
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert capture is not None
+	assert "security-pass-audit-wt-" not in capture["cwd"]
+	assert capture["support_dir"] is None
+	assert capture["fp_exclusions"] is None
+	assert "outcome=skipped reason=disabled" in combined_log
+	assert result["latest_state"]["security_pass_status"] == "passed"
+
+
+def test_security_pass_audit_worktree_failure_fails_closed() -> None:
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_GIT_WORKTREE_ADD_FAIL_SUBSTR": "security-pass-audit-wt-"},
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert result["security_audit_capture"] is None
+	assert "SECURITY_PASS_AUDIT_TREE tracking_issue=192" in combined_log
+	assert "outcome=failed reason=worktree_add_failed" in combined_log
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in combined_log
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["status"] != "complete"
+
+
+def test_security_pass_audit_worktree_wiring_contract() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	security_runner = poller.split("run_security_pass_inline() {", 1)[1].split("\n}", 1)[0]
+	assert 'security_pass_prepare_audit_worktree "${current_head_sha}"' in security_runner
+	assert 'SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"' in security_runner
+	assert 'SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json"' in security_runner
+	assert 'bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}"' in security_runner
+	# Branch-written scripts are never executed: no relative script path runs
+	# from the audit worktree.
+	assert "bash scripts/security_audit.sh" not in security_runner
+	assert "gh api" not in security_runner
+	gate = poller.split("ensure_security_pass_before_completion() {", 1)[1].split("\n}", 1)[0]
+	assert gate.index("run_security_pass_inline") < gate.index("security_pass_remove_audit_worktree")
+	judge = poller.split("security_pass_exhaustion_judge() {", 1)[1].split("\nsecurity_pass_", 1)[0]
+	assert 'security_judge_dir="${SECURITY_PASS_AUDIT_WORKTREE}"' in judge
+	assert judge.index('pushd "${security_judge_dir}"') < judge.index("poller_claude_judge SECURITY_JUDGE")
+	# One call site: an unenterable worktree defers, never judges the poller checkout.
+	assert judge.count("poller_claude_judge SECURITY_JUDGE") == 1
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}" in workflow
 
 
 def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> None:
@@ -12584,7 +12699,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12656,7 +12771,7 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12666,7 +12781,7 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-11",
 			"headRefFromApi": "ai/issue-11",
-			"headSha": "sha911",
+			"headSha": "0000000000000000000000000000000000000911",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12717,7 +12832,7 @@ def test_integration_backpressure_size_aware_floor_does_not_self_deadlock_large_
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12772,7 +12887,7 @@ def test_integration_backpressure_uses_wave_issue_count_when_total_issues_missin
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12818,7 +12933,7 @@ def test_integration_backpressure_falls_back_to_floor_on_non_numeric_total_issue
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -12892,7 +13007,7 @@ def test_backward_scan_backpressure_log_reports_floor_and_effective_threshold():
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-35",
 			"headRefFromApi": "ai/issue-35",
-			"headSha": "sha935",
+			"headSha": "0000000000000000000000000000000000000935",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -13339,7 +13454,7 @@ def test_standalone_conflict_sweep_no_longer_special_cases_draft_claude_prs():
 			"headRefName": "claude/implement-plan-some-project",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha415",
+			"headSha": "0000000000000000000000000000000000000415",
 		},
 	]
 	result = _run_poller(
@@ -13362,7 +13477,7 @@ def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 			"headRefName": "claude/issue-10",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha411",
+			"headSha": "0000000000000000000000000000000000000411",
 		},
 	]
 	result = _run_poller(
@@ -13384,7 +13499,7 @@ def test_standalone_conflict_sweep_sees_named_pending_dispatch():
 	result = _run_poller(
 		state=state, enable_validation="false", max_validate_cycles="3",
 		prs=[{"number": 411, "state": "open", "baseRefName": "main",
-		      "headRefName": "claude/issue-10", "headSha": "sha411",
+		      "headRefName": "claude/issue-10", "headSha": "0000000000000000000000000000000000000411",
 		      "mergeable": False, "mergeable_state": "dirty"}],
 		update_branch_fail_for_prs=[411],
 		active_autofix_runs=[{
@@ -13407,7 +13522,7 @@ def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
 			"headRefName": "ai/issue-10",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha412",
+			"headSha": "0000000000000000000000000000000000000412",
 		},
 	]
 	result = _run_poller(
@@ -13436,7 +13551,7 @@ def test_standalone_conflict_sweep_skips_merge_train_queued_prs():
 				"baseRefName": "main",
 				"headRefName": "ai/issue-10",
 				"headRefFromApi": "ai/issue-10",
-				"headSha": "sha417",
+				"headSha": "0000000000000000000000000000000000000417",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"labels": ["ai:merge-queued"],
@@ -13460,7 +13575,7 @@ def test_standalone_conflict_sweep_skips_closed_pr_on_detail_fetch():
 			"headRefName": "claude/issue-13",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha413",
+			"headSha": "0000000000000000000000000000000000000413",
 		},
 	]
 	result = _run_poller(
@@ -13483,7 +13598,7 @@ def test_standalone_conflict_sweep_active_run_guard_skips_dispatch():
 			"headRefName": "claude/issue-14",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha414",
+			"headSha": "0000000000000000000000000000000000000414",
 		},
 	]
 	result = _run_poller(
@@ -13511,7 +13626,7 @@ def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues()
 			"headRefFromApi": "",
 			"mergeable": False,
 			"mergeable_state": "dirty",
-			"headSha": "sha415",
+			"headSha": "0000000000000000000000000000000000000415",
 		},
 	]
 	result = _run_poller(
@@ -13595,7 +13710,7 @@ def test_standalone_stall_recovery_skips_merge_train_queued_pr_without_judge():
 				"baseRefName": "main",
 				"headRefName": "ai/issue-501",
 				"headRefFromApi": "ai/issue-501",
-				"headSha": "sha418",
+				"headSha": "0000000000000000000000000000000000000418",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"labels": ["ai:merge-queued"],
@@ -13765,7 +13880,7 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 				"baseRefName": "main",
 				"headRefName": head_ref,
 				"headRefFromApi": head_ref,
-				"headSha": "sha416",
+				"headSha": "0000000000000000000000000000000000000416",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -13827,7 +13942,7 @@ def test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt():
 				"baseRefName": "main",
 				"headRefName": "claude/unrelated-fix",
 				"headRefFromApi": "claude/unrelated-fix",
-				"headSha": "sha416",
+				"headSha": "0000000000000000000000000000000000000416",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -13934,7 +14049,7 @@ def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejec
 				"baseRefName": "main",
 				"headRefName": "claude/unrelated-fix",
 				"headRefFromApi": "claude/unrelated-fix",
-				"headSha": "sha417",
+				"headSha": "0000000000000000000000000000000000000417",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -14287,7 +14402,7 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 				"baseRefName": "main",
 				"headRefName": head_ref,
 				"headRefFromApi": head_ref,
-				"headSha": "sha417",
+				"headSha": "0000000000000000000000000000000000000417",
 				"mergeable": True,
 				"mergeable_state": "clean",
 			},
@@ -15690,7 +15805,7 @@ def _backpressure_3928_shape_prs() -> list[dict]:
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "0000000000000000000000000000000000000910",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -24234,7 +24349,7 @@ def test_final_merge_success_sends_critical_telegram_alert():
 	# PR url, tracking-issue url, human-readable gate description, and the
 	# CRITICAL level).
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
-	merge_marker = '--squash --delete-branch 2>&1 >/dev/null)"; then'
+	merge_marker = '--squash --delete-branch --match-head-commit "${pr_head_sha}" 2>&1 >/dev/null)"; then'
 	merge_idx = poller_body.find(merge_marker)
 	assert merge_idx != -1, (
 		"finalize merge-success arm (`gh pr merge --squash --delete-branch`) "
@@ -25544,6 +25659,365 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 		assert result["review_dispatches"] == []
 
 
+
+# --- needs-human digest (plan item 4a, D6) -------------------------------------
+
+NEEDS_HUMAN_TERMINAL_CALLS = {
+	"security_pass_failed": 3,
+	"validation_failed": 3,
+	"final_merge_exhausted": 1,
+	"integration_conflict_capped": 1,
+	"judge_cycles_exhausted": 1,
+	"judge_repeat_fingerprint": 1,
+	"recovery_exhausted": 1,
+	"judge_output_exhausted": 1,
+}
+
+
+def test_needs_human_digest_terminal_paths_call_the_helper():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	for reason, count in NEEDS_HUMAN_TERMINAL_CALLS.items():
+		assert script.count(f'needs_human_park_project "{reason}"') == count, reason
+	lines = script.splitlines()
+	for idx, line in enumerate(lines):
+		if line.strip() in ('set_tracking_phase_label "ai:security-pass-failed"', 'set_tracking_phase_label "ai:validation-failed"'):
+			assert lines[idx + 1].strip().startswith("needs_human_park_project "), idx
+	assert 'NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"' in script
+	# Nothing closes the tracking issue on an exhausted budget.
+	park = _extract_bash_function(script, "needs_human_park_project() {")
+	assert "state=closed" not in park and "gh issue close" not in park and "set_tracking_phase_label" not in park
+
+
+def test_needs_human_digest_prune_runs_once_per_tick_with_the_unblock_scan():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	scan = _extract_bash_function(script, "run_unblock_scan() {")
+	prune_at = scan.index("needs_human_digest_prune || true")
+	# Before the scan's own kill switch, so a disabled judge still prunes.
+	assert prune_at < scan.index('if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]')
+	assert script.count("needs_human_digest_prune || true") == 1
+	assert len(re.findall(r"(?m)^\s*run_unblock_scan \|\|", script)) == 2
+
+
+def _run_needs_human_park(tmp: Path, **env_extra: str) -> tuple[subprocess.CompletedProcess, Path, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	park = _extract_bash_function(script, "needs_human_park_project() {")
+	calls = tmp / "calls.txt"
+	alerts = tmp / "alerts.txt"
+	(tmp / "scripts").mkdir(exist_ok=True)
+	(tmp / "scripts" / "operator_step_issue.py").write_text(
+		"import json, os, sys\n"
+		"open(os.environ['FAKE_PARK_CALLS'], 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+		"print(json.dumps({'issue': 900, 'newly_parked': True}))\n",
+		encoding="utf-8",
+	)
+	harness = tmp / "harness.sh"
+	harness.write_text(
+		"set -uo pipefail\n"
+		'UNBLOCK_TRUSTED_LOGIN=""\n'
+		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf "%s" "$UNBLOCK_TRUSTED_LOGIN"; }\n'
+		'tg_notify() { printf "%s %s\\n" "$2" "$1" >> "$FAKE_ALERTS"; }\n'
+		+ park + '\nneeds_human_park_project "recovery_exhausted"\n',
+		encoding="utf-8",
+	)
+	env = dict(os.environ, TRACKING_NUM="40", GITHUB_REPOSITORY="o/r", FAKE_PARK_CALLS=str(calls), FAKE_ALERTS=str(alerts))
+	for name in ("UNBLOCK_JUDGE_ENABLED", "NEEDS_HUMAN_DIGEST_ENABLED"):
+		env.pop(name, None)
+	env.update(env_extra)
+	result = subprocess.run(["bash", str(harness)], cwd=tmp, capture_output=True, text=True, env=env, check=False)
+	return result, calls, alerts
+
+
+def test_needs_human_digest_defers_to_the_unblock_judge_by_default():
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, _ = _run_needs_human_park(Path(tmp))
+		assert result.returncode == 0, result.stderr
+		assert "NEEDS_HUMAN item=40 kind=project reason=recovery_exhausted outcome=skip detail=unblock_judge_pending" in result.stdout
+		assert not calls.exists()
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, _ = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", NEEDS_HUMAN_DIGEST_ENABLED="false")
+		assert "outcome=skip detail=disabled" in result.stdout and not calls.exists()
+
+
+def test_needs_human_digest_parks_the_project_when_the_judge_is_off():
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false")
+		assert result.returncode == 0, result.stderr
+		args = calls.read_text(encoding="utf-8").split()
+		assert args[:2] == ["needs-human", "park"]
+		for flag, value in (("--repo", "o/r"), ("--item", "40"), ("--kind", "project"), ("--stop", "project-failed"),
+				("--reason", "recovery_exhausted"), ("--trusted-login", "pipeline-bot"),
+				("--link", "https://github.com/o/r/issues/40")):
+			assert args[args.index(flag) + 1] == value, flag
+		if shutil.which("jq"):
+			assert alerts.read_text(encoding="utf-8").startswith("CRITICAL Project #40 parked in needs-human digest #900")
+
+
+def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release():
+	"""Parking must never write the marker release_staged_support_needs_human_latches keys on."""
+	import importlib.util
+
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	sweep = _extract_bash_function(script, "release_staged_support_needs_human_latches() {")
+	assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in sweep
+	helper_source = (REPO_ROOT / "scripts" / "operator_step_issue.py").read_text(encoding="utf-8")
+	assert "needs-human-latch" not in helper_source and "needs-human-auto-release" not in helper_source
+	spec = importlib.util.spec_from_file_location("operator_step_issue_latch", REPO_ROOT / "scripts" / "operator_step_issue.py")
+	writer = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(writer)
+	line = writer.render_digest_entry(7, "issue", "needs-human",
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->", "", "2026-10-08T00:00:00Z")
+	body = writer.render_digest({7: {"kind": "issue", "parked": "2026-10-08T00:00:00Z", "line": line}}, [])
+	assert "<!-- ai:needs-human-latch" not in body
+	park = _extract_bash_function(script, "needs_human_park_project() {")
+	assert "/approved" not in park and "ai:awaiting-approval" not in park
+
+
+# --- Line ownership (plan item 4b, decision D4) ------------------------------
+
+
+def _line_ownership_advisory_finding() -> dict:
+	return _security_pass_second_test_finding() | {"advisory": True}
+
+
+def _line_ownership_blocking_finding() -> dict:
+	return _security_pass_test_finding() | {"advisory": False}
+
+
+def test_security_pass_line_ownership_advisory_only_result_passes_and_files_followup() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_line_ownership_advisory_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	assert capture["line_ownership"] == "project"
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == capture["diff_head"]
+	assert latest_state.get("security_pass_cycle", 0) == 0
+	assert latest_state["security_pass_reported_findings"] == []
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-2"]
+	assert waived[0]["source"] == "line_ownership"
+	assert waived[0]["waived_by"] == "security-pass-line-ownership"
+	created = result.get("created_issues", [])
+	# Only the advisory follow-up: no consolidated fix issue.
+	assert [issue["labels"] for issue in created] == [["ai:security"]]
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "<!-- ai:security-finding:SEC-TEST-2 -->" in advisory_body
+	assert "<!-- security-pass-advisory:192:SEC-TEST-2 -->" in advisory_body
+	assert "Its cited line predates the project" in advisory_body
+	assert "after the consolidated fix-cycle budget was spent" not in advisory_body
+	assert waived[0]["issue"] == created[0]["number"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_CLEAN tracking_issue=192 head_sha={capture['diff_head']} advisory=1" in combined_log
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=line_ownership ids=SEC-TEST-2" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-TEST-2 source=line_ownership" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-TEST-2 issue={created[0]['number']} source=line_ownership" in combined_log
+	advisory_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔐 Security-pass advisory findings (pre-existing code)")
+	]
+	assert len(advisory_comments) == 1
+	assert "`SEC-TEST-2`" in advisory_comments[0]
+
+
+def test_security_pass_line_ownership_mixed_result_blocks_only_on_project_findings() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_line_ownership_blocking_finding(), _line_ownership_advisory_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+	assert [row["finding_id"] for row in latest_state["security_pass_waived_findings"]] == ["SEC-TEST-2"]
+	fix_issues = [issue for issue in result.get("created_issues", []) if "ai:orchestrator-managed" in issue["labels"]]
+	assert len(fix_issues) == 1
+	fix_body = result["issues"][str(fix_issues[0]["number"])]["body"]
+	assert "| SEC-TEST-1 |" in fix_body
+	assert "SEC-TEST-2" not in fix_body
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_BLOCKED tracking_issue=192 head_sha={capture['diff_head']} findings=1 cycle=0 advisory=1" in combined_log
+
+
+def test_security_pass_line_ownership_advisories_do_not_spend_cycle_budget() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_line_ownership_advisory_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_cycle"] == 3
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_" not in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "advisory=1" in combined_log
+
+
+def test_security_pass_line_ownership_rereported_advisory_is_not_refiled() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	finding = _security_pass_second_test_finding()
+	state["security_pass_waived_findings"] = [
+		{
+			"finding_id": "SEC-TEST-2",
+			"file": finding["file"],
+			"line": finding["line"],
+			"owasp_or_stride_category": finding["owasp_or_stride_category"],
+			"severity": finding["severity"],
+			"exploit_scenario": finding["exploit_scenario"],
+			"justification": "Cited line predates the project.",
+			"source": "line_ownership",
+			"waived_by": "security-pass-line-ownership",
+			"waived_at_cycle": 1,
+			"issue": 850,
+		}
+	]
+	state["security_pass_followup_issues"] = [{"finding_id": "SEC-TEST-2", "issue": 850}]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_line_ownership_advisory_finding()]),
+		issue_labels={10: ["ai:merged"], 850: ["ai:security", "ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert result.get("created_issues", []) == []
+	assert not any(
+		comment["body"].startswith("## 🔐 Security-pass advisory findings (pre-existing code)")
+		for comment in result["issues"]["192"]["comments"]
+	)
+	assert "advisory=0" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_line_ownership_non_boolean_advisory_fails_closed() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding() | {"advisory": "yes"}]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["security_pass_status"] != "passed"
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_line_ownership_off_is_forwarded_and_keeps_findings_blocking() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_AUDIT_LINE_OWNERSHIP": "off"},
+	)
+
+	assert result["security_audit_capture"]["line_ownership"] == "off"
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "blocked"
+	assert "security_pass_waived_findings" not in latest_state or latest_state["security_pass_waived_findings"] == []
+	assert "findings=1 cycle=0 advisory=0" in result["stdout"] + result["stderr"]
+
+
+
+def test_security_pass_waiver_cap_keeps_every_followup_pending_row() -> None:
+	"""The 100-row waiver cap drops only the oldest settled rows: a row still
+	awaiting its advisory follow-up (``followup_pending``) is never dropped,
+	in either ``security_pass_record_waivers`` or
+	``ensure_security_pass_state_fields``, and row order is preserved.  A
+	plain ``.[-100:]`` slice would drop pending line-ownership advisories that
+	the deferred filer then never sees."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	recorder = _extract_bash_function(script, "security_pass_record_waivers() {")
+	normalizer = _extract_bash_function(script, "ensure_security_pass_state_fields() {")
+	existing: list[dict] = []
+	for index in range(110):
+		existing.append({"finding_id": f"SETTLED-{index:03d}", "issue": 1000 + index})
+		if index in (0, 1, 50, 108):
+			existing.append({"finding_id": f"OLD-PENDING-{index:03d}", "issue": None, "followup_pending": True, "finding": {"finding_id": f"OLD-PENDING-{index:03d}"}})
+	new_waivers = [
+		{"finding_id": f"NEW-PENDING-{index}", "issue": None, "followup_pending": True, "finding": {"finding_id": f"NEW-PENDING-{index}"}}
+		for index in range(3)
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		state_file = Path(tmp) / "state.json"
+		state_file.write_text(json.dumps({"security_pass_waived_findings": existing}), encoding="utf-8")
+		waivers_file = Path(tmp) / "waivers.json"
+		waivers_file.write_text(json.dumps(new_waivers), encoding="utf-8")
+		snapshot_file = Path(tmp) / "after_record.json"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			+ recorder + "\n" + normalizer + "\n"
+			+ f'security_pass_record_waivers "$(cat {str(waivers_file)!r})"\n'
+			+ f'cp "$STATE_FILE" {str(snapshot_file)!r}\n'
+			+ "ensure_security_pass_state_fields\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		after_record = json.loads(snapshot_file.read_text(encoding="utf-8"))["security_pass_waived_findings"]
+		after_normalize = json.loads(state_file.read_text(encoding="utf-8"))["security_pass_waived_findings"]
+
+	pending_ids = [row["finding_id"] for row in existing if row.get("followup_pending")] + [
+		row["finding_id"] for row in new_waivers
+	]
+	settled_kept = [f"SETTLED-{index:03d}" for index in range(10, 110)]
+	expected_ids = [
+		row["finding_id"]
+		for row in existing + new_waivers
+		if row.get("followup_pending") or row["finding_id"] in settled_kept
+	]
+	ids = [row["finding_id"] for row in after_record]
+	assert ids == expected_ids
+	assert [rid for rid in ids if rid in pending_ids] == pending_ids
+	assert sum(1 for row in after_record if not row.get("followup_pending")) == 100
+	# Normalization on the next tick keeps the same rows: no pending row lost.
+	assert after_normalize == after_record
 def test_stall_retired_conflict_reissue_is_wired_and_registered():
 	# Issue #6680: both stall-recovery paths consult the retired host-only
 	# conflict check before dispatching the conflict resolver; the helper's

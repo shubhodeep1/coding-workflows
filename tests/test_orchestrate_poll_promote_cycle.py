@@ -21,6 +21,7 @@ BASELINE_SHA = "c" * 40
 PROVING_MERGE_SHA = "d" * 40
 HUMAN_SHA = "e" * 40
 BOT_SHA = "f" * 40
+FINAL_PR_HEAD_SHA = "9" * 40
 
 LABEL = "ai:comprehensive-test-pending"
 
@@ -55,6 +56,10 @@ def _open_final_pr(number: int = 360) -> dict:
 		"state": "open",
 		"baseRefName": "main",
 		"headRefName": "orchestrator/project-192",
+		# The final merge is bound to a resolved 40-hex head (#6991,
+		# poller-merge-unbound-to-checked-head); the harness default
+		# `mocksha<N>` is refused before the promotion gate runs.
+		"headSha": FINAL_PR_HEAD_SHA,
 		"mergeable": True,
 		"mergeable_state": "clean",
 	}

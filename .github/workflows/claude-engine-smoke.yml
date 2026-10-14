@@ -6,7 +6,9 @@ name: Claude engine smoke
 # nothing to GitHub. One leg per tool profile (write, read):
 #   - offline: settings rendering (P5) and transcript classification;
 #   - without a credential (the broker refused or is unconfigured, every
-#     account is gated): claude_run returns 75 with AI_ENGINE_FALLBACK (D1);
+#     account is gated): claude_run returns 76 with AI_ENGINE_FALLBACK_REFUSED
+#     under the default policy, and 75 under AI_ENGINE_FALLBACK_POLICY=always
+#     (D1, plan item 3e);
 #   - with a credential: the context gate (start-up tokens < 25,000 and a
 #     CLAUDE.md marker the model cannot see), the P5 denials (write leg), and
 #     the relay gate through the sandboxed clarify (read leg) and review
@@ -86,11 +88,19 @@ jobs:
           printf 'Reply with exactly OK.\n' > "${RUNNER_TEMP}/prompt.txt"
           # shellcheck disable=SC1091
           source scripts/ai_engine.sh
+          # Default policy `capacity` (plan item 3e): no_credential is not a
+          # capacity reason, so the fallback is refused with exit 76.
           rc=0
-          claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback.log" || rc=$?
+          AI_ENGINE_FALLBACK_POLICY=capacity claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback.log" || rc=$?
           cat "${RUNNER_TEMP}/fallback.log"
-          test "${rc}" -eq 75
+          test "${rc}" -eq 76
           grep -q "AI_ENGINE_FALLBACK role=${SMOKE_ROLE} reason=no_credential" "${RUNNER_TEMP}/fallback.log"
+          grep -q "AI_ENGINE_FALLBACK_REFUSED role=${SMOKE_ROLE} reason=no_credential" "${RUNNER_TEMP}/fallback.log"
+          # The rollback policy `always` keeps the codex fallback (exit 75).
+          rc=0
+          AI_ENGINE_FALLBACK_POLICY=always claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback-always.log" || rc=$?
+          cat "${RUNNER_TEMP}/fallback-always.log"
+          test "${rc}" -eq 75
           echo "SMOKE fallback ok (available=false)"
 
       - name: Context gate
