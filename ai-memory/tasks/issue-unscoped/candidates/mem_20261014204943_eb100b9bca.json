@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/verify_integration_fingerprints.py:807-838 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The merge-base tie requires the captured line to be an insert-only superset of a merge-base line, so `literal_bases` is empty and a correct resolver union is still blocked when the sub-issue edit replaced or deleted characters on the shared line.\n  WHY: The gate fails closed with \"sub-issue intent silently reverted\", which narrows the defense's coverage but is not a regression. All four reviewers rated it NIT. z-ai_glm-5_3-flash also notes the README and agents.d fragment do not document this case.\n- scripts/verify_integration_fingerprints.py:807-838 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: A very short merge-base line such as `}` or `{` passes `_only_inserts` in `literal_bases`, which weakens the merge-base tie.\n  WHY: The tie then no longer proves the other side's line is an edit of the line the sub-issue edited. The reviewer found no realistic trigger and rated it NIT. The same concern appears as a hardening suggestion from minimax_minimax-m3 and z-ai_glm-5_3-flash.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/verify_integration_fingerprints.py:(literal_bases / any(_only_inserts(line, other_line)...) in _is_must_contain_resolver_union_merge_false_positive) | severity=NIT | confidence=2\n  PROBLEM: Any merge-base line that can be turned into the captured line or the other side's line by pure insertion, including very short lines such as `}`, satisfies the merge-base tie.\n  WHY: The tie no longer proves the other side's line is an edit of the line the sub-issue edited. No realistic trigger was found, and the other conditions still apply.\n- scripts/verify_integration_fingerprints.py:~807-838 | severity=NIT | confidence=4\n  PROBLEM: If the sub-issue replaced or deleted characters on the shared line, `literal_bases` is empty and the defense never applies.\n  WHY: The project still stops with \"sub-issue intent silently reverted\". This fails closed and narrows coverage; it is not a regression.\n- HARDENING_SUGGESTIONS: add `and len(line) >= 8` to the `literal_bases` comprehension (about 1 line changed). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/verify_integration_fingerprints.py:~812,~832 | severity=NIT | confidence=4\n  PROBLEM: `literal_bases` is populated only when the captured line is an insert-only superset of a merge-base line, so a pure replace on the shared line leaves it empty and the `any(...)` gate is False.\n  WHY: A correct resolver merge of that shape still hard-fails with the violation the PR is trying to retire. This is a fail-closed narrowing against the README and agents fragment prose, not a regression.\n- HARDENING_SUGGESTIONS: drop merge-base lines shorter than 8 characters before computing `literal_bases` (about 1 line changed), because short lines like `}` make the tie vacuous. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/verify_integration_fingerprints.py:810-814,827-833 | severity=NIT | confidence=4\n  PROBLEM: The merge-base check only accepts a captured line derivable from a merge-base line through insertions alone, so it rejects valid unions where the sub-issue replaced or deleted characters.\n  WHY: For example, base `x='foo bar'`, captured `x='foobar'`, other parent `x='foo bar' # main` and resolved `x='foobar' # main` leave `literal_bases` empty. The gate then reports a missing fingerprint and blocks wave dispatch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/verify_integration_fingerprints.py:814,832 | severity=NIT | confidence=4\n  PROBLEM: The merge-base tie requires the captured line to be an insert-only superset of a merge-base line, so a genuine union merge where the sub-issue replaced or deleted characters leaves `literal_bases` empty and the defense returns None.\n  WHY: The gate blocks the wave with \"sub-issue intent silently reverted\" even though the captured line survives whole. This fails closed and is not a regression, but the README (~2985) and agents.d fragment do not list this narrowing among the still-failing cases.\n- HARDENING_SUGGESTIONS: skip base lines shorter than 8 characters in the `literal_bases` filter (about 2 lines changed), because short lines like `}` or `x` make the tie vacuous. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "799ad1d0ee889ed5022f3be494b544e0f48edb22c1f59f00df544a412e638b65",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7389,
+    "run_id": "38630799532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38630799532",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014204943_eb100b9bca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7389,
+    "run_id": "38630799532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T20:49:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
