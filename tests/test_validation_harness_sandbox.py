@@ -915,3 +915,89 @@ def test_sandbox_run_never_executes_an_outside_workspace_entry_on_the_host(sudo_
 		assert any(reason in result.stderr for reason in reasons), result.stderr
 		assert status.read_text().startswith("fail ")
 		assert not marker.exists(), "the fallback runner must never run on the host"
+
+
+# Runtime companions to the source-text checks above: a stub `sudo` runs the
+# sandbox user's commands locally (and answers `docker info`), so cmd_run gets
+# past its preflight and the staging, traversal and launch paths execute.
+_RUNTIME_SUDO_STUB = """#!/bin/bash
+[ "$1" = -n ] && shift
+[ "$1" = -u ] && shift 2
+[ "$1" = -- ] && shift
+for word in "$@"; do
+	case "${word}" in
+		env|-i|*=*) continue ;;
+		docker) exit 0 ;;
+		*) break ;;
+	esac
+done
+exec "$@"
+"""
+
+
+def _runtime_sandbox(root: Path) -> tuple[Path, Path, dict[str, str]]:
+	if subprocess.run(["id", "-u", "nobody"], capture_output=True).returncode != 0:
+		pytest.skip("needs a `nobody` account to stand in for the sandbox user")
+	if subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip() == "nobody":
+		pytest.skip("the test user must differ from the sandbox user")
+	bin_dir = root / "bin"
+	bin_dir.mkdir()
+	home = root / "home"
+	home.mkdir()
+	(bin_dir / "sudo").write_text(_RUNTIME_SUDO_STUB, encoding="utf-8")
+	(bin_dir / "getent").write_text(f"#!/bin/sh\nprintf '%s:x:65534:65534::{home}:/bin/sh\\n' \"$2\"\n", encoding="utf-8")
+	for stub in ("sudo", "getent"):
+		(bin_dir / stub).chmod(0o755)
+	workspace = root / "workspace"
+	workspace.mkdir()
+	(workspace / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+	subprocess.run(["git", "init", "-q", str(workspace)], check=True, env=git_env)
+	subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True, env=git_env)
+	env = {
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"VALIDATION_HARNESS_SANDBOX_USER": "nobody",
+		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(root / "status"),
+		"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST": str(root / "copyback"),
+		"GITHUB_RUN_ID": "7350",
+		"GITHUB_RUN_ATTEMPT": "1",
+	}
+	return home / "work" / "7350-1", workspace, env
+
+
+def test_sandbox_run_executes_an_outside_entry_only_from_its_staged_overlay(tmp_path: Path) -> None:
+	work, workspace, env = _runtime_sandbox(tmp_path)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	outside_entry = runtime / "runner.sh"
+	outside_entry.write_text(
+		'#!/bin/bash\nmkdir -p validation/logs\nprintf "%s\\n%s\\n" "$(pwd -P)" "$0" > validation/logs/entry.txt\n',
+		encoding="utf-8",
+	)
+	outside_entry.chmod(0o755)
+	result = _run(["run", str(outside_entry)], env=env, cwd=workspace)
+	assert result.returncode == 0, result.stderr
+	assert b"phase=run outcome=ok reason=staged" in result.stderr
+	staged = work / ".validation-harness" / "runner.sh"
+	assert staged.read_bytes() == outside_entry.read_bytes(), "outside entry must be staged as an overlay"
+	assert (work / "tracked.txt").read_text() == "tracked\n"
+	ran_from, script = (tmp_path / "copyback" / "entry.txt").read_text().splitlines()
+	assert ran_from == str(work.resolve())
+	assert script == ".validation-harness/runner.sh", "the entry must run from its staged copy, not the host path"
+	assert not (workspace / "validation").exists(), "nothing may be written into the host workspace"
+
+
+@pytest.mark.parametrize("relative", (True, False))
+def test_sandbox_run_rejects_a_dotdot_entry_before_staging(tmp_path: Path, relative: bool) -> None:
+	work, workspace, env = _runtime_sandbox(tmp_path)
+	marker = tmp_path / "ran"
+	(tmp_path / "escape.sh").write_text(f"#!/bin/bash\ntouch {marker}\n", encoding="utf-8")
+	entry = "validation/../../escape.sh"
+	if not relative:
+		entry = f"{workspace.resolve()}/{entry}"
+	result = _run(["run", entry], env=env, cwd=workspace)
+	assert result.returncode == 3, result.stderr
+	assert b"phase=run outcome=fail reason=entry_unsafe" in result.stderr
+	assert (tmp_path / "status").read_text().startswith("fail run entry_unsafe")
+	assert not marker.exists()
+	assert not work.exists(), "a rejected entry must not be staged"
