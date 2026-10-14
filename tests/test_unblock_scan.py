@@ -425,7 +425,8 @@ def test_fixup_hook_reissue_takes_the_original_wave_entry(tmp_path: Path) -> Non
 	assert len(issues) == 1
 	assert issues[0]["id"] == "issue-5" and issues[0]["github_issue"] == 901 and issues[0]["status"] == "pending"
 	assert issues[0]["unblock_request_id"] == "unblock-5-r1" and issues[0]["unblock_reissued_from"] == 5
-	assert state["issue_number_map"] == {"issue-5": 901}
+	# The request id is recorded too, so a later re-issue of the entry cannot hide it.
+	assert state["issue_number_map"] == {"issue-5": 901, "unblock-5-r1": 901}
 	assert state["status"] == "in_progress"
 	assert "retarget=true" in result.stdout
 	# The closed original gets no "waiting for fix-up" marker.

@@ -18778,6 +18778,7 @@ handle_unblock_judge_project_hooks() {
            |= (.github_issue = $num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor)
              | .stall_recovery_count = 0 | .unblock_request_id = $id | .unblock_reissued_from = $item)
          | .issue_number_map = ((.issue_number_map // {}) | with_entries(if .value == $item then .value = $num else . end))
+         | .issue_number_map[$id] = $num
          | if .status == "failed" then .status = "in_progress" else . end' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     else
