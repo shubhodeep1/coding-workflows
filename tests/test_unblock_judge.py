@@ -1154,6 +1154,9 @@ if method == "DELETE":
 	state["labels_removed"].append(endpoint)
 	done("{}")
 if method == "PATCH":
+	if os.environ.get("FAKE_GH_FAIL_HOLD_REFRESH") and "Last checked" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_CLOSE") and f.get("state") == "closed":
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -3534,3 +3537,15 @@ def test_disabled_triage_gate_is_not_run(tmp_path: Path) -> None:
 		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file), CHECK_TRIAGE_RESOLVED_GATE_ENABLED="false")
 	assert "op=triage_resolution outcome=judge status=disabled" in result.stdout and not args_file.exists()
 	assert "outcome=acted" in result.stdout
+
+
+@pytest.mark.parametrize("issue_state,outcome", [
+	({"state": "open"}, "outcome=holding"),
+	({}, "reason=hold_check_unavailable"),
+])
+def test_a_failed_hold_refresh_is_logged(tmp_path: Path, issue_state: dict, outcome: str) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_hold_comment("item_closed", "50")], issues={"50": issue_state},
+		FAKE_GH_FAIL_HOLD_REFRESH="1")
+	assert "op=hold hold=item_closed ref=50 outcome=skip reason=hold_refresh_failed" in result.stdout, result.stdout
+	assert outcome in result.stdout, result.stdout
+	assert state["comments"] == [] and state["patched"] == []

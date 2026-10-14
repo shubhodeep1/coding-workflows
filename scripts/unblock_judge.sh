@@ -1290,7 +1290,8 @@ unblock_main()
 					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
 						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the unblock judge resumes this item afterwards. This hold uses no round. Last checked ${now}.
 
-<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" || true
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
+							|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=holding"
 						return 0
 					fi
