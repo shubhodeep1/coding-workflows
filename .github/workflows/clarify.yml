@@ -1266,10 +1266,11 @@ jobs:
              Only when the task depends on the content of an auth-walled or
              private URL absent from the issue and repository, emit exactly
              `BLOCKED: <short reason>` instead of Q/Choices.
-             Public 3rd-party documentation is NOT a BLOCKED trigger: fetch it with the
-             web tool and proceed with `STATUS: CLEAR` (or Q-IDs if other genuine
-             ambiguities remain) only when the relevant public docs are found; if they
-             are genuinely unavailable, ask a clarification question instead of
+             Public 3rd-party documentation is NOT a BLOCKED trigger: when a web tool
+             is available (point 4), fetch it and proceed with `STATUS: CLEAR` (or
+             Q-IDs if other genuine ambiguities remain) only when the relevant public
+             docs are found; without a web tool, or if the docs are genuinely
+             unavailable, follow point 5 and ask a clarification question instead of
              inventing details.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
