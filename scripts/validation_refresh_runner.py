@@ -77,6 +77,10 @@ REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES = (
 	"CHECK_TRIAGE_ISSUES_TOKEN",
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	"ANTHROPIC_API_KEY",
+	# validation-refresh.yml grants id-token: write; keep the OIDC request
+	# credentials out of the pipeline subprocesses too.
+	"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+	"ACTIONS_ID_TOKEN_REQUEST_URL",
 )
 
 
