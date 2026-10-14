@@ -677,6 +677,14 @@ def _only_inserts(base: str, merged: str) -> list[str] | None:
 	return inserted
 
 
+def _matched_positions(base: str, merged: str) -> set[int]:
+	"""Positions of ``merged`` that ``difflib`` matches to a character of ``base``."""
+	positions: set[int] = set()
+	for _i, j, size in difflib.SequenceMatcher(None, base, merged, autojunk=False).get_matching_blocks():
+		positions.update(range(j, j + size))
+	return positions
+
+
 def _is_must_contain_resolver_union_merge_false_positive(
 	ref: str | None,
 	captured_at: Any,
@@ -707,9 +715,11 @@ def _is_must_contain_resolver_union_merge_false_positive(
 	* the file at the verified ref has a line L3 that contains the whole
 	captured line L1 with text only inserted (no character of L1 changed
 	or dropped), and
-	* one line L2 of the file at the resolver's second parent is itself
-	contained whole in L3 the same way, and every run L3 inserts into L1
-	is a substring of that L2 (so the resolver added nothing of its own).
+	* one line L2 of the file at the resolver's second parent, different
+	from L3, is itself contained whole in L3 the same way, every run L3
+	inserts into L1 is a substring of that L2, and every character of L3
+	is matched to a character of L1 or of L2 (so the resolver added
+	nothing of its own, not even a second copy of other-side text).
 
 	Returns the resolver merge commit SHA when confirmed (caller skips the
 	violation); None otherwise. Fails CLOSED on every guard and on any git
@@ -779,7 +789,15 @@ def _is_must_contain_resolver_union_merge_false_positive(
 					for other_line in other_lines:
 						# other_line == merged_line would make both checks vacuous: a resolver
 						# that took the other side verbatim (undoing a sub-issue deletion) must fail.
-						if other_line and other_line != merged_line and _only_inserts(other_line, merged_line) is not None and all(run in other_line for run in inserted):
+						# Every merged character must also be matched against the captured line or
+						# this other line, so a duplicated or moved run of other-side text fails.
+						if (
+							other_line
+							and other_line != merged_line
+							and all(run in other_line for run in inserted)
+							and _only_inserts(other_line, merged_line) is not None
+							and len(_matched_positions(literal, merged_line) | _matched_positions(other_line, merged_line)) == len(merged_line)
+						):
 							result = sha
 							break
 					if result:
