@@ -53,6 +53,18 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/workflow_failure_heal_recovery_scan.sh` + the `recovery-candidates` / `recovery-scan` jobs and `schedule` trigger of `.github/workflows/workflow-failure-heal-intake.yml`
+
+- **Introduced in:** PR for #7333 (2026-10-13)
+- **Type:** single-use
+- **Removal trigger:** no open, pipeline-authored `ai:workflow-heal` issue without a scope marker for 30 consecutive days. The intake's creation guards (#7059, #6871) already refuse markerless bodies, so no new ones are filed.
+- **Removal preflight checks:**
+  - The `recovery-candidates` job of `workflow-failure-heal-intake.yml` logs `heal_scope_recovery outcome=scan reason=listed count=0` on every run of the last 30 days (`gh run list --workflow workflow-failure-heal-intake.yml --event schedule -R shubhodeep1/coding-workflows`).
+  - `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --json number,body --jq '[.[] | select(.body | contains("ai:workflow-heal-scope") | not)] | length'` prints `0`.
+  - The `recovery-scan` job logs of the last 30 days contain no `heal_scope_recovery outcome=replaced` or `outcome=attempt_failed` line.
+  - The removal PR also drops the `recovery_scan` origin and `REPORT_AUTH=reconstructed` from `scripts/workflow_failure_heal_intake.sh`, `heal-scope-recovery reconstruct` / `scan-marker` from `scripts/workflow_failure_heal.py`, `tests/test_workflow_failure_heal_recovery_scan.py` (and its `ci.yml` entry) and the `docs/INVENTORY.md` line.
+- **Owner:** @shubhodeep1
+
 ### `run_issue_7251_dependency_wait` in `scripts/orchestrate_poll_process.sh` + `issue_7251_*` helpers in `scripts/gh_helpers.sh` + the `issue_7251_dependency_wait` gates in `.github/workflows/clarify.yml` and `.github/workflows/plan.yml`
 
 - **Introduced in:** unblock fix-up #7257 for #7251 (2026-10-12)

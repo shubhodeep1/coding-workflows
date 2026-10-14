@@ -258,8 +258,10 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	assert set(heal.RELEASE_WORKFLOW_NAMES) == actual_names
 	job = intake["jobs"]["intake"]
 	assert "failure" in job["if"] and "timed_out" in job["if"]
-	assert intake["concurrency"]["group"] == "workflow-failure-heal-intake"
+	# Every event but the hourly recovery scan keeps the shared group (#7333).
+	assert intake["concurrency"]["group"] == "${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || 'workflow-failure-heal-intake' }}"
 	assert intake["concurrency"]["cancel-in-progress"] is False
+	assert job["if"].split()[:3] == ["github.event_name", "!=", "'schedule'"]
 	run_step = [s for s in job["steps"] if s.get("name") == "Run workflow failure heal intake"][0]
 	assert "scripts/workflow_failure_heal_intake.sh" in run_step["run"]
 	payload_step = [s for s in job["steps"] if s.get("id") == "payload"][0]
@@ -7442,3 +7444,256 @@ def test_heal_scope_recovery_wiring_is_default_on() -> None:
 	empty_check = open_issue.index('if [ -z "${issue_url}" ]; then')
 	finalize = open_issue.index('_heal_scope_recovery_finalize "${repo}" "${issue_url}"')
 	assert guard < create < empty_check < finalize
+
+
+# ---------------------------------------------------------------------------
+# Heal-scope recovery scan and non-retryable deferral (#7333)
+# ---------------------------------------------------------------------------
+
+SANDBOX_UNSUPPORTED = "conflict_resolver_sandbox_path_unsupported"
+RECOVERY_EVIDENCE = (
+	"failure_reason=conflict_resolver_sandbox_path_unsupported\n"
+	"::error::Conflict resolver: conflicted path(s) cannot enter the sandbox: unsafe=1 host_only=0 categories=symlink depths=1\n"
+	"::error::Process completed with exit code 1."
+)
+
+
+def _recovery_autofix_payload(**overrides) -> dict:
+	# No wrapper pin and no reporter run: what reconstruct produces.
+	payload = _autofix_payload(failure_reason=SANDBOX_UNSUPPORTED, failure_evidence=RECOVERY_EVIDENCE, wrapper_sha=None, reporter_run_url=None)
+	payload.update(overrides)
+	return payload
+
+
+def _intake_autofix_fp(payload: dict) -> str:
+	evidence = payload["failure_evidence"] + "\n"
+	return heal.fingerprint(payload["workflow_name"], f"autofix:{payload['failure_reason']}", heal.error_signature(heal.strip_autofix_evidence_header(evidence)))
+
+
+def _composed_autofix_heal_issue(payload: dict, *, number: int = 7082, fp: str | None = None) -> dict:
+	fp = fp or _intake_autofix_fp(payload)
+	summaries = [{"url": ref["url"], "workflow_name": payload["workflow_name"], "failing_step": "Resolve conflicts"} for ref in payload["run_refs"]]
+	body = heal.compose_issue_body(payload=payload, diagnosis=DIAG_WORKFLOW_DEFECT, fp=fp, gen=1, root=fp, classification="workflow-defect",
+		target_branch="stable", max_depth=3, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/1", run_summaries=summaries)
+	return {"number": number, "title": heal.compose_issue_title(payload, workflow_name=payload["workflow_name"]), "body": body,
+		"author": NR_LOGIN, "last_edited_at": None, "state": "open", "html_url": f"https://github.com/{SELF_REPO}/issues/{number}"}
+
+
+def _scan_marker_comment(reason: str = "fingerprint_mismatch", author: str = NR_LOGIN, run: str = "9") -> dict:
+	return {"id": 70, "body": "scan attempt\n\n" + heal.render_heal_scope_recovery_scan_marker(reason, run), "user": {"login": author}}
+
+
+def test_reconstruct_recovery_payload_round_trips_the_fingerprint() -> None:
+	original = _recovery_autofix_payload()
+	issue = _composed_autofix_heal_issue(original)
+	pull_comments = [_nr_failure_comment(reason=SANDBOX_UNSUPPORTED)]
+	result = heal.reconstruct_recovery_payload(issue=issue, heal_comments=[], pull=_pr(), pull_comments=pull_comments, pipeline_login=NR_LOGIN, self_repo=SELF_REPO)
+	assert result["status"] == "ok", result
+	assert result["expected_issue"] == 7082 and result["expected_repo"] == SELF_REPO
+	assert result["expected_fp"] == _intake_autofix_fp(original)
+	rebuilt = heal.validate_payload(result["payload"])
+	assert rebuilt["source_kind"] == "autofix_failure" and rebuilt["source_repo"] == CONSUMER_REPO and rebuilt["issue_number"] == 4174
+	assert rebuilt["head_sha"] == SHA_B and rebuilt["failure_reason"] == SANDBOX_UNSUPPORTED and rebuilt["workflow_name"] == "AI Review"
+	assert rebuilt["reporter_run_url"] is None
+	# The intake recomputes the same fingerprint from the rebuilt evidence.
+	assert _intake_autofix_fp(rebuilt) == result["expected_fp"]
+	# The trusted marker run comes first, then the run named in the body.
+	assert [ref["run_id"] for ref in rebuilt["run_refs"]] == ["501", "500"]
+	# A moved PR head is replaced by the body's head (binding checks ancestry).
+	moved = _pr()
+	moved["head"]["sha"] = SHA_A
+	again = heal.reconstruct_recovery_payload(issue=issue, heal_comments=[], pull=moved, pull_comments=pull_comments, pipeline_login=NR_LOGIN, self_repo=SELF_REPO)
+	assert again["payload"]["head_sha"] == SHA_B
+
+
+def test_reconstruct_recovery_payload_skips() -> None:
+	payload = _recovery_autofix_payload()
+	issue = _composed_autofix_heal_issue(payload)
+
+	def run(issue=issue, comments=(), pull=None, login=NR_LOGIN):
+		return heal.reconstruct_recovery_payload(issue=issue, heal_comments=list(comments), pull=_pr() if pull is None else pull, pull_comments=[], pipeline_login=login, self_repo=SELF_REPO)
+
+	assert run(issue={**issue, "last_edited_at": "2026-10-01T00:00:00Z"}) == {"status": "skip", "reason": "issue_edited"}
+	assert run(issue={**issue, "author": "mallory"})["reason"] == "untrusted_issue_author"
+	assert run(issue={**issue, "body": issue["body"] + "\n" + _SCOPE_MARKER_OK})["reason"] == "scope_verified"
+	assert run(comments=[_recovery_marker_comment(901)])["reason"] == "already_replaced"
+	host_only = _composed_autofix_heal_issue(_recovery_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	assert run(issue=host_only)["reason"] == "host_only_manual_merge"
+	phase_like = {**issue, "body": issue["body"].replace("- **Consecutive failed review runs on this PR:** ", "- **Consecutive failed plan runs:** ")}
+	assert run(issue=phase_like)["reason"] == "kind_unsupported"
+	assert run(issue={**issue, "title": "Workflow heal: AI Implement failed for o/r#1 (ai:needs-human)"})["reason"] == "kind_unsupported"
+	head_line = f"- **Head SHA:** `{SHA_B}`"
+	assert run(issue={**issue, "body": issue["body"].replace(head_line, "")})["reason"] == "head_sha_missing"
+	no_runs = "\n".join(line for line in issue["body"].split("\n") if not line.startswith("- **Failed run:** "))
+	assert run(issue={**issue, "body": no_runs})["reason"] == "runs_missing"
+	no_evidence = issue["body"].replace("<details><summary>Failure evidence from the reporting run", "<details><summary>Notes")
+	assert run(issue={**issue, "body": no_evidence})["reason"] == "evidence_missing"
+	assert run(pull={"number": 99, "head": {"sha": SHA_B}})["reason"] == "pull_unavailable"
+	assert run(issue={**issue, "body": issue["body"].replace("workflow-failure-heal:fp=", "workflow-failure-heal:xx=")})["reason"] == "markers_missing"
+	for reason in ("issue_edited", "kind_unsupported", "host_only_manual_merge", "runs_missing"):
+		assert reason in heal.HEAL_SCOPE_RECOVERY_SCAN_PERMANENT_REASONS
+	assert "pull_unavailable" not in heal.HEAL_SCOPE_RECOVERY_SCAN_PERMANENT_REASONS
+
+
+def test_reconstruct_identical_failure_cap_uses_the_trusted_marker_fp() -> None:
+	payload = _recovery_autofix_payload(failure_reason="identical_failure_cap")
+	issue = _composed_autofix_heal_issue(payload, fp=FP_HEX)
+	marker = _nr_failure_comment(reason=SANDBOX_UNSUPPORTED)
+	result = heal.reconstruct_recovery_payload(issue=issue, heal_comments=[], pull=_pr(), pull_comments=[marker], pipeline_login=NR_LOGIN, self_repo=SELF_REPO)
+	assert result["status"] == "ok", result
+	fields = heal.parse_failure_markers([marker], head_sha=SHA_B, author_login=NR_LOGIN)
+	assert result["payload"]["failure_fingerprint"] == fields[-1]["fp"]
+	assert result["payload"]["repeated_failure_reason"] == SANDBOX_UNSUPPORTED
+	# A marker by anyone else is not trusted.
+	foreign = heal.reconstruct_recovery_payload(issue=issue, heal_comments=[], pull=_pr(), pull_comments=[_nr_failure_comment(author="mallory")], pipeline_login=NR_LOGIN, self_repo=SELF_REPO)
+	assert "failure_fingerprint" not in foreign["payload"]
+
+
+def test_heal_scope_recovery_scan_marker_counting_and_cli() -> None:
+	assert heal.count_heal_scope_recovery_scan_attempts([_scan_marker_comment(), _scan_marker_comment("intake_failed")], NR_LOGIN) == 2
+	assert heal.count_heal_scope_recovery_scan_attempts([_scan_marker_comment(author="mallory")], NR_LOGIN) == 0
+	quoted = {"body": heal.render_heal_scope_recovery_scan_marker("x_y", "1") + "\nquoted after", "user": {"login": NR_LOGIN}}
+	assert heal.count_heal_scope_recovery_scan_attempts([quoted], NR_LOGIN) == 0
+	assert heal.count_heal_scope_recovery_scan_attempts([_scan_marker_comment()], "") == 0
+	for bad in (("Bad", "1"), ("ok", "x"), ("", "1")):
+		with pytest.raises(ValueError):
+			heal.render_heal_scope_recovery_scan_marker(*bad)
+	with tempfile.TemporaryDirectory(prefix="heal-recovery-scan-cli-") as tmp_name:
+		tmp = Path(tmp_name)
+		payload = _recovery_autofix_payload()
+		(tmp / "issue.json").write_text(json.dumps(_composed_autofix_heal_issue(payload)), encoding="utf-8")
+		(tmp / "comments.json").write_text(json.dumps([_scan_marker_comment()]), encoding="utf-8")
+		(tmp / "pull.json").write_text(json.dumps(_pr()), encoding="utf-8")
+		(tmp / "pull_comments.json").write_text(json.dumps([_nr_failure_comment(reason=SANDBOX_UNSUPPORTED)]), encoding="utf-8")
+		base = ["python3", str(LIB_PATH), "heal-scope-recovery"]
+		check = subprocess.run(base + ["check", "--issue-json", str(tmp / "issue.json"), "--comments-json", str(tmp / "comments.json"), "--pipeline-login", NR_LOGIN], capture_output=True, text=True, check=True)
+		assert json.loads(check.stdout)["scan_attempts"] == 1 and json.loads(check.stdout)["eligible"] is True
+		rebuilt = subprocess.run(base + ["reconstruct", "--issue-json", str(tmp / "issue.json"), "--comments-json", str(tmp / "comments.json"),
+			"--pull-json", str(tmp / "pull.json"), "--pull-comments-json", str(tmp / "pull_comments.json"), "--pipeline-login", NR_LOGIN, "--self-repo", SELF_REPO],
+			capture_output=True, text=True, check=True)
+		assert json.loads(rebuilt.stdout)["status"] == "ok"
+		marker = subprocess.run(base + ["scan-marker", "--reason", "fingerprint_mismatch", "--run-id", "12"], capture_output=True, text=True, check=True)
+		assert marker.stdout == "<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason=fingerprint_mismatch run=12 -->\n"
+
+
+def _recovery_scan_env(payload: dict, issue_number: int = 31, fp: str | None = None) -> dict[str, str]:
+	return {"WORKFLOW_HEAL_REPORT_ORIGIN": "recovery_scan", "GITHUB_EVENT_NAME": "schedule",
+		"WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_FP": fp or _intake_autofix_fp(payload),
+		"WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE": str(issue_number)}
+
+
+def _run_reconstructed(payload: dict, heal_issues: list[dict], *, extra_env: dict | None = None, diagnosis: str = DIAG_WORKFLOW_DEFECT, **state_overrides):
+	state = _nr_state([_nr_failure_comment(reason=SANDBOX_UNSUPPORTED)], heal_issues=heal_issues, **state_overrides)
+	env = {**_recovery_scan_env(payload), **(extra_env or {})}
+	return _run_intake(payload, state, diagnosis=diagnosis, extra_env=env, setup_git=_prepare_recovery_scope_support)
+
+
+def test_intake_recovery_scan_replaces_a_markerless_autofix_heal_issue() -> None:
+	payload = _recovery_autofix_payload()
+	result, state, _ = _run_reconstructed(payload, [_markerless_heal_issue(31, fp=_intake_autofix_fp(payload))])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL report_auth=reconstructed reason=bound source={CONSUMER_REPO}" in result.stdout
+	assert "WORKFLOW_HEAL non_retryable outcome=skip reason=reconstructed" in result.stdout
+	assert "WORKFLOW_HEAL heal_scope_recovery outcome=eligible issue=31" in result.stdout
+	assert "WORKFLOW_HEAL scope_guard outcome=recovery_only" in result.stdout
+	assert len(state["issues_created"]) == 1
+	assert state["issues_closed"] == [["31", "--repo", SELF_REPO, "--reason", "not planned"]]
+	# Nothing on the source PR: no diagnosis comment, no ai:needs-human.
+	assert not [c for c in state.get("comments_posted", []) if c["path"] == NR_PR_COMMENTS]
+	assert not _nr_label_edits(state)
+
+
+def test_intake_recovery_scan_fails_closed() -> None:
+	payload = _recovery_autofix_payload()
+	issue = _markerless_heal_issue(31, fp=_intake_autofix_fp(payload))
+	cases = [
+		({"GITHUB_EVENT_NAME": "workflow_dispatch"}, "report_auth=rejected reason=recovery_scan_invalid"),
+		({"WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_FP": ""}, "report_auth=rejected reason=recovery_scan_invalid"),
+		({"HEAL_SCOPE_RECOVERY_ENABLED": "false"}, "report_auth=rejected reason=recovery_scan_invalid"),
+		({"WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_FP": "e" * 64}, "heal_scope_recovery outcome=skip reason=fingerprint_mismatch"),
+		({"WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE": "32"}, "heal_scope_recovery outcome=skip reason=decision_mismatch"),
+	]
+	for extra_env, expected in cases:
+		result, state, _ = _run_reconstructed(payload, [issue], extra_env=extra_env)
+		assert result.returncode == 0, (extra_env, result.stderr + result.stdout)
+		assert expected in result.stdout, (extra_env, result.stdout)
+		assert _api_writes(state) == [] and "issues_closed" not in state, extra_env
+	# A classification that opens no replacement posts nothing at all.
+	result, state, _ = _run_reconstructed(payload, [issue], diagnosis="## Classification\ntransient\n\n## Summary\nA registry timeout.\n")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "occurrence=skipped_reconstructed" in result.stdout and "source_comment=skipped_reconstructed" in result.stdout
+	assert _api_writes(state) == [] and "issues_closed" not in state
+
+
+def _verified_autofix_identity(tmp: Path) -> dict[str, str]:
+	token_file, jwks_file, _ = _fresh_identity(tmp, run_id="500", job_workflow_ref=f"{SELF_REPO}/.github/workflows/review_autofix.yml@refs/heads/stable")
+	return _identity_env(token_file, jwks_file)
+
+
+def test_intake_verified_sandbox_report_recovers_then_diagnoses_the_pr() -> None:
+	payload = _recovery_autofix_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500")
+	state = _nr_state([_nr_failure_comment(reason=SANDBOX_UNSUPPORTED)], heal_issues=[_markerless_heal_issue(31, fp=_intake_autofix_fp(payload))])
+	with tempfile.TemporaryDirectory(prefix="heal-gap2-") as tmp_name:
+		env = _verified_autofix_identity(Path(tmp_name))
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=env, setup_git=_prepare_recovery_scope_support)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_auth=verified" in result.stdout
+	assert f"WORKFLOW_HEAL non_retryable outcome=deferred reason=heal_scope_recovery route_reason={SANDBOX_UNSUPPORTED}" in result.stdout
+	assert "WORKFLOW_HEAL heal_scope_recovery outcome=replaced issue=31" in result.stdout
+	assert len(state_after["issues_created"]) == 1
+	posted = [c["path"] for c in state_after["comments_posted"]]
+	# Recovery first, then the unchanged PR-side handling.
+	assert posted.index(f"repos/{SELF_REPO}/issues/31/comments") < posted.index(NR_PR_COMMENTS)
+	assert f"outcome=diagnosed source={CONSUMER_REPO}#4174" in result.stdout
+	assert _nr_label_edits(state_after) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]]
+
+
+def test_intake_verified_sandbox_report_without_eligible_issue_keeps_todays_outcome() -> None:
+	payload = _recovery_autofix_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500")
+	with tempfile.TemporaryDirectory(prefix="heal-gap2-none-") as tmp_name:
+		env = _verified_autofix_identity(Path(tmp_name))
+		result, state, _ = _run_intake(payload, _nr_state([_nr_failure_comment(reason=SANDBOX_UNSUPPORTED)]), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "heal_scope_recovery outcome=skip reason=not_eligible_non_retryable" in result.stdout
+		assert "outcome=diagnosed" in result.stdout
+		assert "composed_issue" not in state and "issues_created" not in state
+		assert [c["path"] for c in state["comments_posted"]] == [NR_PR_COMMENTS]
+		assert _nr_label_edits(state) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]]
+	# A host-only report is never deferred. The intake deletes the identity
+	# file it read, so this run needs a fresh one.
+	with tempfile.TemporaryDirectory(prefix="heal-gap2-host-only-") as tmp_name:
+		env = _verified_autofix_identity(Path(tmp_name))
+		host_payload = _recovery_autofix_payload(failure_reason=HOST_ONLY_REASON, reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500")
+		result, state, _ = _run_intake(host_payload, _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "non_retryable outcome=deferred" not in result.stdout and "skip reason=non_retryable_host_only outcome=diagnosed" in result.stdout
+	# An unauthenticated report is not deferred either.
+	result, state, _ = _run_intake(payload, _nr_state([_nr_failure_comment(reason=SANDBOX_UNSUPPORTED)]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable outcome=deferred" not in result.stdout and "outcome=diagnosed" in result.stdout
+
+
+def test_heal_scope_recovery_scan_workflow_wiring() -> None:
+	intake = _yaml(INTAKE_WORKFLOW)
+	on = _on(intake)
+	assert on["schedule"] == [{"cron": "41 * * * *"}]
+	assert intake["jobs"]["intake"]["if"].split()[:3] == ["github.event_name", "!=", "'schedule'"]
+	candidates = intake["jobs"]["recovery-candidates"]
+	assert "github.event_name == 'schedule'" in candidates["if"] and "vars.HEAL_SCOPE_RECOVERY_ENABLED != 'false'" in candidates["if"]
+	assert candidates["permissions"] == {"contents": "read", "issues": "read"}
+	assert "concurrency" not in candidates
+	assert any("workflow_failure_heal_recovery_scan.sh --list-only" in step.get("run", "") for step in candidates["steps"])
+	scan = intake["jobs"]["recovery-scan"]
+	assert scan["needs"] == "recovery-candidates"
+	assert "needs.recovery-candidates.outputs.count != '0'" in scan["if"]
+	assert scan["concurrency"] == {"group": "workflow-failure-heal-intake", "cancel-in-progress": False}
+	assert scan["env"]["HEAL_SCOPE_RECOVERY_ENABLED"] == "${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}"
+	assert scan["env"]["HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK"] == "${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}"
+	assert scan["env"]["HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS"] == "${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}"
+	for key, value in intake["jobs"]["intake"]["env"].items():
+		assert scan["env"].get(key) == value, key
+	assert any(step.get("run", "").strip().endswith("bash scripts/workflow_failure_heal_recovery_scan.sh") for step in scan["steps"])
+	intake_script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	# reconstructed is accepted only by recovery and needs a schedule event.
+	assert intake_script.count('"${REPORT_AUTH}" != "reconstructed"') == 1
+	assert '[ "${GITHUB_EVENT_NAME:-}" != "schedule" ]' in intake_script
