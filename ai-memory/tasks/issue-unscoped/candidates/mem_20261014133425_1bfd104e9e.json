@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:414-417 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The idempotency guard `((.body // \"\") | rtrimstr(\"\\n\") | endswith($marker))` strips only one trailing newline, so a body ending in multiple newlines fails the check.\n  WHY: The guard can then post a duplicate comment when a close is retried. Source severity was MAJOR, mapped to medium. Other reviewers raised the same point as an advisory hardening suggestion with risk score 1: minimax_minimax-m3 (line 414), openai_gpt-6-luna and qwen_qwen3_7-plus (line 417). anthropic_claude-sonnet-5_5 judged it not applicable, since the posted body has no trailing newline and GitHub stores it verbatim.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:417 | severity=MAJOR | confidence=4\n  PROBLEM: The idempotency guard `((.body // \"\") | rtrimstr(\"\\n\") | endswith($marker))` strips only a single trailing newline.\n  WHY: A body with multiple trailing newlines makes `endswith` false, so a retried close posts a duplicate comment.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:414 | HARDENING_RISK_SCORE=1\n  PROBLEM: `rtrimstr(\"\\n\")` strips only one trailing newline, so a body ending in `\\n\\n` after the marker fails `endswith` and one duplicate comment is posted after a failed close.\n  WHY: The suggested fix is `gsub(\"\\\\s+$\"; \"\")` before `endswith($marker)`. The reviewer says it does not reproduce today, because the posted comment has no trailing newline and GitHub stores the body verbatim.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:417 | HARDENING_RISK_SCORE=1\n  PROBLEM: The marker check removes only one trailing newline before testing whether the comment ends with the marker.\n  WHY: The suggested fix is to trim all trailing whitespace before `endswith($marker)`, so retries also recognize a trusted marker followed by multiple newlines. Estimated change: 1 line.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:417 | HARDENING_RISK_SCORE=1\n  PROBLEM: `rtrimstr(\"\\n\")` strips only one trailing newline, so a stored body ending in two newlines before the marker fails `endswith` and causes one duplicate comment after a failed close.\n  WHY: The suggested fix is `| gsub(\"\\\\s+$\"; \"\")` before `endswith($marker)`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "97f978570b832aca4331b37ac6adfcb7174d6d4bc861210686b1c289b0fcf895",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7381,
+    "run_id": "38568826382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38568826382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014133425_1bfd104e9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7381,
+    "run_id": "38568826382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-14T13:34:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
