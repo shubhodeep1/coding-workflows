@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, step \"Workflow failure heal contract and driver tests\" in tests-heal-plan-and-validation\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The step remains in tests-heal-plan-and-validation (lines 863-935) and is sharded in place with collection, sharding, parallel execution and result aggregation logic instead of being moved unchanged. Severity disagreement: MAJOR (openai_gpt-6-luna) vs NIT (anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus); highest used. Two reviewers judged the deviation justified, because the literal move timed out the destination job in CI run 38602731355.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged.\"\nExpected change site: `.github/workflows/ci.yml`\nEvidence of absence: the step stays in `tests-heal-plan-and-validation` and is sharded in place. The deviation is justified by CI run 38602731355, where the literal move timed out the destination job. This is a deliberate deviation, not a defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, step \"Workflow failure heal contract and driver tests\" in `tests-heal-plan-and-validation`.\nEvidence of absence: The step remains in `tests-heal-plan-and-validation` at lines 863\u2013935. Instead of moving it unchanged to another job, the diff adds collection, sharding, and parallel execution logic within the step. The changelog documents that a prior move was cancelled at the destination job's timeout, but the requested relocation is not present in the final diff.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml, step \"Workflow failure heal contract and driver tests\" moved from tests-heal-plan-and-validation to the job with the most headroom\nEvidence of absence: The step remains in tests-heal-plan-and-validation at lines 863-935. Instead of moving the step unchanged, the implementation shards tests/test_workflow_failure_heal.py into 4 parallel pytest processes within the same step. The step is not \"unchanged\"; it now includes collection, sharding, parallel execution, and result aggregation logic.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fbaecf28ebdc80275ca5b9b951c2eb6ebbca4e2dcba9da1d952e47c0987889e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7388,
+    "run_id": "38618340834",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38618340834",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014203224_d2a70374ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7388,
+    "run_id": "38618340834"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T20:32:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
