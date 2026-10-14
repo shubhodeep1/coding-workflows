@@ -160,11 +160,13 @@ def test_heal_intake_takes_ci_only_for_pushes_to_the_default_branch() -> None:
 
 
 def test_ci_runs_on_orchestrator_integration_prs_and_pushes() -> None:
-	"""Q45: sub-issue PRs into `orchestrator/project-*` get CI before they
-	merge, and pushes to those branches give triage's base gate a result."""
+	"""Q45 / issue #7283: pull-request CI runs for every base, so sub-issue
+	PRs into `orchestrator/project-*` and fix PRs routed to a failing PR's
+	head branch get CI before they merge. Pushes to main, stable and the
+	integration branches give triage's base gate a result."""
 	on = _on(_load(CI))
-	for event in ("pull_request", "push"):
-		assert on[event]["branches"] == ["main", "stable", "orchestrator/project-*"], event
+	assert on["pull_request"]["branches"] == ["**"], on["pull_request"]
+	assert on["push"]["branches"] == ["main", "stable", "orchestrator/project-*"], on["push"]
 	# The base gate reads the newest completed CI push run on the PR's base.
 	script = TRIAGE_SCRIPT.read_text(encoding="utf-8")
 	assert "runs?branch=${BASE_REF}&event=push&per_page=1" in script

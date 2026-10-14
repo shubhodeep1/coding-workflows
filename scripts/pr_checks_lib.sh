@@ -501,24 +501,21 @@ _pr_checks_completed()
 # variable cannot hold an empty string and the workflow passes `|| ''`. A
 # value with a comma or control character, or longer than 100 characters,
 # warns and falls back to the repository default.
-# Optional $1: the PR's base ref. ci.yml's pull_request trigger covers only
-# main, stable and orchestrator/project-*, so the `lint` default applies only
-# to those bases (or an unknown base, failing closed); a PR stacked on any
-# other branch (for example a heal PR on an ai/issue-* head) never gets a CI
-# `lint` check-run and would otherwise time out on every review round. An
-# explicitly configured name applies to every base.
+# Optional $1: the PR's base ref, kept for the callers' signature. ci.yml's
+# pull_request trigger covers every base since issue #7283, so the `lint`
+# default applies to every base: a PR stacked on another branch (a fix PR
+# routed to a failing PR's ai/issue-* head, a heal PR) waits for its own CI
+# `lint` before it merges. An explicitly configured name also applies to
+# every base.
 _pr_auto_merge_required_ci_check_name()
 {
 	local raw="${AUTO_MERGE_REQUIRED_CI_CHECK-}"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	# shellcheck disable=SC2034  # base ref accepted for the callers' signature (#7283)
 	local ci_check_base_ref="${1:-}"
 	local default_name="none"
 	case "$(printf '%s' "${repo}" | tr '[:upper:]' '[:lower:]')" in
-		shubhodeep1/coding-workflows)
-			case "${ci_check_base_ref}" in
-				""|main|stable|orchestrator/project-*) default_name="lint" ;;
-			esac
-			;;
+		shubhodeep1/coding-workflows) default_name="lint" ;;
 	esac
 	raw="${raw#"${raw%%[![:space:]]*}"}"
 	raw="${raw%"${raw##*[![:space:]]}"}"

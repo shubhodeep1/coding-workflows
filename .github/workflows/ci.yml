@@ -2,14 +2,16 @@
 name: CI
 
 "on":
-  # Orchestrator integration branches (Q45): a sub-issue PR into
-  # `orchestrator/project-*` is checked before it merges, not only at the
-  # project's final PR into main. Pushes to those branches run too, so
-  # check-failure triage has a base-branch result to compare a failing PR
-  # against (a green base means the failure is the PR's own and is left to
-  # its autofix). Heal intake and budget-watch act on main pushes only.
+  # Pull-request CI runs for every base (issue #7283). A fix PR routed to a
+  # failing PR's head branch (CI-triage routing, #6726 / #7042) then gets its
+  # own `CI / lint` before it merges, like a sub-issue PR into
+  # `orchestrator/project-*` (Q45). Push CI stays on main, stable and the
+  # integration branches, so check-failure triage has a base-branch result
+  # to compare a failing PR against (a green base means the failure is the
+  # PR's own and is left to its autofix). Heal intake and budget-watch act
+  # on main pushes only.
   pull_request:
-    branches: [main, stable, "orchestrator/project-*"]
+    branches: ["**"]
   push:
     branches: [main, stable, "orchestrator/project-*"]
 
@@ -494,8 +496,7 @@ jobs:
 
       - name: Prepare template-only PR live copies for parity tests
         if: >-
-          (github.event_name == 'pull_request' &&
-           (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))) ||
+          (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
           (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -510,7 +511,9 @@ jobs:
           # when --before is a reachable commit: the script skips an empty,
           # all-zero or unreachable one. A push has no PR base, so it passes
           # its own before; a branch-creation or force push falls back to
-          # the merge-base with main.
+          # the merge-base with main. Pull-request CI runs for every base
+          # since #7283, so a fix PR routed to a failing PR's ai/issue-* head
+          # is prepared too; only PRs into stable check the committed tree.
           before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
           if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
             fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
@@ -801,7 +804,7 @@ jobs:
       - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py tests/test_check_triage_resolution.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py tests/test_issue_7251_dependency_wait.py tests/test_pr_dependency.py tests/test_check_triage_resolution.py
 
       - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
         run: |
