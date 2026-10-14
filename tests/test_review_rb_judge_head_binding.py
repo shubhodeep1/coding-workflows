@@ -61,10 +61,12 @@ def _run_guard(
 	fetch_fails: bool = False,
 	severity_decision: str | None = None,
 	cwd: Path | None = None,
+	initial_head: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]]]:
 	"""Run the extracted guard. ``severity_decision`` also runs the security
 	severity block with ``rb_security_severity_block`` stubbed to print it;
-	``cwd`` runs the harness inside a git repository (ancestry checks)."""
+	``cwd`` runs the harness inside a git repository (ancestry checks);
+	``initial_head`` sets ``INITIAL_HEAD_SHA`` (the head the run checked out)."""
 	block = _extract_guard_block(SEVERITY_END_ANCHOR if severity_decision is not None else END_ANCHOR)
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_head_binding_") as td:
 		tmp = Path(td)
@@ -110,6 +112,7 @@ def _run_guard(
 			"REPOSITORY": "owner/repo",
 			"RB_ACTION": action,
 			"RB_JUDGED_HEAD_SHA": judged_head,
+			"INITIAL_HEAD_SHA": initial_head,
 			"IS_FINAL": "false",
 			"SEVERITY_STUB": severity_decision or "allow",
 			"RB_SECURITY_BLOCKING_ISSUES": "#1",
@@ -271,8 +274,9 @@ def _git(args: list[str], cwd: Path) -> str:
 @pytest.mark.parametrize("action", ["fix", "close_and_reissue", "merge"])
 def test_live_head_ancestor_of_judged_head_proceeds_and_descendant_is_stale(action: str) -> None:
 	# The judged head is the local checkout HEAD; an unpushed local commit
-	# (editor or [ai-merge-resolve]) puts it ahead of the live head. That is
-	# not a concurrent push, so the judge proceeds. A live head outside the
+	# (editor or [ai-merge-resolve]) puts it ahead of the live head. When the
+	# live head is still the head the run checked out (INITIAL_HEAD_SHA) that
+	# is not a concurrent push, so the judge proceeds. A live head outside the
 	# judged history (here: the judged head's descendant) is stale.
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_head_ancestry_") as td:
 		repo = Path(td)
@@ -281,14 +285,40 @@ def test_live_head_ancestor_of_judged_head_proceeds_and_descendant_is_stale(acti
 		live = _git(["rev-parse", "HEAD"], repo)
 		_git(["commit", "-q", "--allow-empty", "-m", "local"], repo)
 		judged = _git(["rev-parse", "HEAD"], repo)
-		proc, output, calls = _run_guard(action, _open_pr(live), judged_head=judged, cwd=repo)
+		proc, output, calls = _run_guard(action, _open_pr(live), judged_head=judged, cwd=repo, initial_head=live)
 		assert "PROCEEDED" in proc.stdout, proc.stdout + proc.stderr
 		assert "judge_skip_reason" not in output
 		assert calls == []
-		proc, output, calls = _run_guard(action, _open_pr(judged), judged_head=live, cwd=repo)
+		proc, output, calls = _run_guard(action, _open_pr(judged), judged_head=live, cwd=repo, initial_head=live)
 		assert "PROCEEDED" not in proc.stdout
 		assert "judge_skip_reason=stale_head" in output.splitlines()
 		assert calls == []
+
+
+@needs_jq
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+@pytest.mark.parametrize("action", ["fix", "close_and_reissue", "merge"])
+def test_force_push_back_to_older_ancestor_is_stale(action: str) -> None:
+	# A force-push back to an older commit during the judge call also leaves
+	# the live head an ancestor of the judged head. It is not the head the run
+	# checked out, so the judge must skip; an unset INITIAL_HEAD_SHA fails
+	# closed the same way.
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_head_force_back_") as td:
+		repo = Path(td)
+		_git(["init", "-q"], repo)
+		_git(["commit", "-q", "--allow-empty", "-m", "older"], repo)
+		older = _git(["rev-parse", "HEAD"], repo)
+		_git(["commit", "-q", "--allow-empty", "-m", "initial"], repo)
+		initial = _git(["rev-parse", "HEAD"], repo)
+		_git(["commit", "-q", "--allow-empty", "-m", "local"], repo)
+		judged = _git(["rev-parse", "HEAD"], repo)
+		for initial_head in (initial, ""):
+			proc, output, calls = _run_guard(action, _open_pr(older), judged_head=judged, cwd=repo, initial_head=initial_head)
+			assert "PROCEEDED" not in proc.stdout, proc.stdout + proc.stderr
+			assert "judge_skip_reason=stale_head" in output.splitlines()
+			assert calls == []
+		proc, output, _calls = _run_guard(action, _open_pr(initial), judged_head=judged, cwd=repo, initial_head=initial.upper())
+		assert "PROCEEDED" in proc.stdout, proc.stdout + proc.stderr
 
 
 def _load_label_propagation_module():

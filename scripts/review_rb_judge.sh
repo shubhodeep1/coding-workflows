@@ -1923,13 +1923,19 @@ fi
 # RB_JUDGED_HEAD_SHA is the local checkout HEAD, which can sit ahead of the
 # live head when this run committed locally (editor or [ai-merge-resolve])
 # and the push is deferred to "Push all pending commits" after the judge.
-# A live head that is an ancestor of the judged head is that case, not a
-# concurrent push, so only a live head outside the judged history is stale.
+# That case is exempt only when the live head is still the head this run
+# checked out (INITIAL_HEAD_SHA, exported via GITHUB_ENV by "Checkout PR
+# head branch") and an ancestor of the judged head. Ancestry alone cannot
+# tell it from a force-push back to an older commit during the judge call,
+# so any other differing live head (or an unset INITIAL_HEAD_SHA) is stale.
 if [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
   RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA:-}"
   RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA_LC,,}"
+  RB_INITIAL_HEAD_SHA_LC="${INITIAL_HEAD_SHA:-}"
+  RB_INITIAL_HEAD_SHA_LC="${RB_INITIAL_HEAD_SHA_LC,,}"
   if [ -n "${RB_LIVE_HEAD_SHA}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA_LC}" ] \
     && ! { [[ "${RB_JUDGED_HEAD_SHA_LC}" =~ ^[0-9a-f]{40}$ ]] \
+      && [ "${RB_LIVE_HEAD_SHA}" = "${RB_INITIAL_HEAD_SHA_LC}" ] \
       && git merge-base --is-ancestor "${RB_LIVE_HEAD_SHA}" "${RB_JUDGED_HEAD_SHA_LC}" >/dev/null 2>&1; }; then
     echo "RB_JUDGE_STALE_HEAD pr=${PR_NUMBER} judged_head=${RB_JUDGED_HEAD_SHA:-unknown} live_head=${RB_LIVE_HEAD_SHA} action=${RB_ACTION}"
     echo "judge_action=skip" >> "$GITHUB_OUTPUT"
