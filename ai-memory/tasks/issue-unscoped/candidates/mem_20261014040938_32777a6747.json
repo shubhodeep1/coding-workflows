@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Tests should confirm that entries outside the workspace are copied into the sandbox and that `..` paths are rejected.\"\n  expected_change_site: `tests/test_validation_harness_sandbox.py::test_sandbox_run_stages_outside_entry_as_overlay_and_rejects_dotdot` (lines 871-885)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: All three reviewers say the test at lines 871-885 only checks that certain source-text fragments appear in the `cmd_run` body. The fragments are `'entry_rel=\".validation-harness/$(basename -- \"${entry}\")\"'`, `'overlays+=(\"${entry_rel}=${entry}\")'` and `\"*/../*) sandbox_fail run entry_unsafe ;;\"`. The test never runs a successful staging or a `..` rejection. The runtime test at lines 896-917 fails during the sudo/rootless-Docker preflight, before it reaches the staging call `python3 -I -c \"${STAGE_PY}\" ... \"${overlays[@]}\"`. So removing `\"${overlays[@]}\"` at `scripts/validation_harness_sandbox.sh:782`, or rewriting the `..` case so it no longer calls `sandbox_fail`, would still pass both tests. All three reviewers rated this SEVERITY: NIT. qwen_qwen3_7-plus disagrees that it is a gap: it calls it a NIT-level test-quality concern, not an unmet requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Tests should confirm that entries outside the workspace are copied into the sandbox and that `..` paths are rejected.\"\n  Expected change site: `tests/test_validation_harness_sandbox.py::test_sandbox_run_stages_outside_entry_as_overlay_and_rejects_dotdot`\n  Evidence of absence: The test checks the contents of `cmd_run` and that the `*/../*` rejection pattern appears in the script text. It never actually runs a `..` rejection or a successful staging of an outside entry. The runtime test at lines 896-917 fails during the preflight (sudo/Docker availability check), so it never reaches the staging logic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Tests confirm that entries outside the workspace are copied into the sandbox and that `..` paths are rejected.\"\n  Expected change site: `tests/test_validation_harness_sandbox.py::test_sandbox_run_stages_outside_entry_as_overlay_and_rejects_dotdot` (lines 871-885).\n  Evidence of absence: Lines 875-877 only check that the `entry_rel=...`, `overlays+=(...)` and `*/../*) sandbox_fail run entry_unsafe ;;` strings appear in `cmd_run`. The parametrized runtime test at lines 896-917 stubs `sudo` so that `require_sudo run` or `id -u`/`rootless_docker_ready` fails before `python3 -I -c \"${STAGE_PY}\" ... \"${overlays[@]}\"` runs. Removing `\"${overlays[@]}\"` at `scripts/validation_harness_sandbox.sh:782`, or rewriting the `..` case so it no longer calls `sandbox_fail`, would still pass both tests. The reviewer says items (1), sandbox-only launch, and (3), nothing runs on the host, are covered at runtime; only item (2) is checked by source text alone.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The approved task summary says tests should confirm that entries outside the workspace are copied into the sandbox and that `..` paths are rejected.\n  Expected change site: `tests/test_validation_harness_sandbox.py::test_sandbox_run_stages_outside_entry_as_overlay_and_rejects_dotdot`\n  Evidence of absence: Lines 871-885 check source text for staging and traversal checks but do not run either behavior. The runtime test at lines 896-917 stops at the sudo or rootless-Docker preflight, before staging. A change that drops the overlay from the staging call, or that accepts a traversal entry, would still pass these tests.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c5fe3773b9c360e874600d6b6b0c865535eccbdfde86c74fe13345070a3abcfa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7354,
+    "run_id": "38507861842",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38507861842",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014040938_32777a6747",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7354,
+    "run_id": "38507861842"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T04:09:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
