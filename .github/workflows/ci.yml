@@ -1389,14 +1389,16 @@ jobs:
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
         # the per-run file-list cache (one GET /pulls/{n}/files per distinct
         # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence and gh_retry's per-attempt stdout buffering (#5495)
-        # in scripts/gh_helpers.sh.
+        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
+        # the non-retryable HTTP 400/401 classification in
+        # scripts/gh_helpers.sh.
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_review_merge_train.py \
             tests/test_gh_helpers_parse_reset_header.py \
             tests/test_gh_retry_stdout_isolation.py \
+            tests/test_gh_retry_permanent_auth_failures.py \
             tests/test_gh_api_retry.py \
             tests/test_gh_api_retry_py.py
 
