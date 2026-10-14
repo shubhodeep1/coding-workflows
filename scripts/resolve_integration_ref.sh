@@ -199,6 +199,12 @@ has_marker = re.search(r"<!--\s*check-failure-triage:", body) is not None
 if not has_label and not has_marker:
 	print("skip")
 	sys.exit(0)
+# The unblock judge CI-failure reissue (scripts/unblock_actions.py, #7032)
+# carries only a `check-failure-triage:pr=<n>` lineage marker and no label.
+# It is not a triage issue to route; it keeps the default-branch behaviour.
+if not has_label and re.search(r"<!--\s*check-failure-triage:(?!pr=)", body) is None:
+	print("skip")
+	sys.exit(0)
 pr_markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
 pr = pr_markers[0] if len(pr_markers) == 1 and re.fullmatch(r"[1-9][0-9]{0,9}", pr_markers[0]) else "none"
 
@@ -359,7 +365,12 @@ resolve_ci_triage_branch() {
 resolve_ref() {
 	local child_body child_branch tracking_issue tracking_body tracking_branch
 	local child_json="" triage_branch triage_rc
+	# Evaluate the flag once so an unrecognised value warns only once.
+	local routing_on=0
 	if ci_triage_routing_enabled; then
+		routing_on=1
+	fi
+	if [ "${routing_on}" -eq 1 ]; then
 		# One full issue read supplies body, labels, author and PR flag. With
 		# routing on, an unreadable issue might be a CI-triage issue, so a
 		# failed read or parse refuses (exit 3) instead of returning a code
@@ -396,7 +407,7 @@ print(body if isinstance(body, str) else "")
 		return 0
 	fi
 
-	if ci_triage_routing_enabled; then
+	if [ "${routing_on}" -eq 1 ]; then
 		triage_rc=0
 		triage_branch="$(resolve_ci_triage_branch "${child_json}")" || triage_rc=$?
 		if [ "${triage_rc}" -ne 0 ]; then
@@ -499,6 +510,12 @@ if expected_reason:
 elif routing_errors:
 	print(f"self-test unexpected CI_TRIAGE_PR_BRANCH_ROUTING refusal for {fixture['name']}: {routing_errors!r}", file=sys.stderr)
 	sys.exit(1)
+expected_warning = fixture.get("expected_warning")
+if expected_warning:
+	warnings = [line for line in err_text.splitlines() if line.startswith("::warning::") and expected_warning in line]
+	if len(warnings) != 1:
+		print(f"self-test expected exactly one ::warning:: containing {expected_warning!r} for {fixture['name']}, got {warnings!r}", file=sys.stderr)
+		sys.exit(1)
 PY
 
 	rm -f "${out_file}" "${err_file}" "${out_file}.rc"

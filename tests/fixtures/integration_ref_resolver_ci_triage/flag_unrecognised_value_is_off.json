@@ -40,5 +40,6 @@
     "ai/issue-6564": true
   },
   "expected_stdout": "",
-  "expected_exit_code": 0
+  "expected_exit_code": 0,
+  "expected_warning": "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED has an unrecognised value"
 }
