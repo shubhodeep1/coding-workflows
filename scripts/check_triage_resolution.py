@@ -24,7 +24,9 @@ issue body):
 - the linked PR merged (same-repository head, 40-hex merge commit);
 - check-run triage: every latest run of the exact check name on the default
   branch tip completed with ``success``;
-  workflow-run triage: the triage's run belongs to this repository and PR, and
+  workflow-run triage: the triage's run belongs to this repository and PR (it
+  lists the PR, runs on the PR's current head, or runs on the trusted header's
+  Head SHA on the PR's head branch), and
   the newest completed default-branch push run of the same workflow concluded
   ``success`` with every failed PR job name (matrix suffix included) present
   exactly once and ``success``;
@@ -337,11 +339,23 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			return _fail("run_unreadable")
 		run_repo = (run.get("repository") or {}).get("full_name") if isinstance(run.get("repository"), dict) else None
 		run_prs = [item.get("number") for item in run.get("pull_requests") or [] if isinstance(item, dict)]
+		# GitHub empties a run's pull_requests once the PR merges, and the PR head
+		# moves on when commits follow the failure, so a run on the trusted
+		# header's failed head and on the PR's head branch also binds it (#7332).
+		triage_head = triage.get("head_sha")
+		on_triage_head = (
+			isinstance(triage_head, str) and bool(SHA_RE.match(triage_head)) and run.get("head_sha") == triage_head
+			and isinstance(head.get("ref"), str) and bool(head.get("ref")) and run.get("head_branch") == head.get("ref")
+		)
 		if (
 			run.get("id") != run_id or run.get("name") != triage["check_name"]
 			or not isinstance(run_repo, str) or run_repo.lower() != repo.lower()
 			or run.get("event") != "pull_request"
-			or not (triage["pr"] in run_prs or (isinstance(head.get("sha"), str) and run.get("head_sha") == head.get("sha")))
+			or not (
+				triage["pr"] in run_prs
+				or (isinstance(head.get("sha"), str) and run.get("head_sha") == head.get("sha"))
+				or on_triage_head
+			)
 			or not isinstance(run.get("workflow_id"), int)
 		):
 			return _fail("run_identity_mismatch")

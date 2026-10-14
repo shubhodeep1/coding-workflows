@@ -18,7 +18,8 @@ jobs:
   clarify:
     if: >-
       ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:'))))
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:')))) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"')))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -27,7 +28,12 @@ jobs:
       # immediately with no comment, label update, or Telegram alert. This is
       # intentional — the new run supersedes the old one. The "Comment on issue
       # failure" step does NOT fire for cancelled runs (only for failures).
-      group: ai-clarify-${{ github.event.issue.number }}
+      # A comment from an author without an OWNER/MEMBER/COLLABORATOR
+      # association can only reach this job as the poller's PR-dependency
+      # release marker (issue #7328); it gets its own group per comment so
+      # anyone posting that text cannot cancel or replace a running clarify.
+      # The route step verifies that such a comment came from the GH_PAT login.
+      group: ai-clarify-${{ github.event.issue.number }}${{ (github.event_name == 'issue_comment' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) && format('-release-{0}', github.event.comment.id) || '' }}
       cancel-in-progress: true
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
@@ -73,7 +79,7 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -111,7 +117,7 @@ jobs:
           # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
           # are unchanged.
           resolver_ci_triage_routing_on=false
-          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" in
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
@@ -157,17 +163,39 @@ jobs:
           # Exit 3 means CI-triage PR-branch routing was required but could
           # not be verified; never fall back to the default branch then.
           resolver_rc=0
+          resolver_err_file="${resolver_stage_root}/resolver.err"
           integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
-            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
-            bash "${resolver_script}"
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
+          # A triage issue whose PR is merged or closed (reason=pr_not_open)
+          # keeps the default branch in clarify only, so the check-triage
+          # resolution gate (#7095) below can close it with evidence. Plan,
+          # implement, clarify-respond and validate still refuse it.
+          resolver_pr_not_open=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
+            resolver_pr_not_open=true
+          fi
+          if [ -s "${resolver_err_file}" ]; then
+            if [ "${resolver_pr_not_open}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            else
+              cat "${resolver_err_file}" >&2
+            fi
+          fi
           if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_pr_not_open}" = "true" ]; then
+            echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; clarifying on the default branch so the resolution gate can run."
+            echo "ref=" >> "$GITHUB_OUTPUT"
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
+          elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
             exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
@@ -481,6 +509,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          COMMENT_USER_LOGIN: ${{ github.event.comment.user.login || '' }}
+          COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association || '' }}
           RUN_ID: ${{ github.run_id }}
           ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
@@ -508,6 +538,80 @@ jobs:
           if [ "${EVENT_NAME}" = "issue_comment" ] && [ "${_rc_is_command}" = "true" ]; then
             IS_FORCED_RECLARIFY="true"
           fi
+
+          # BEGIN pr-dependency release classification (#7328)
+          # The standalone poller posts exactly "/reclarify" + newline +
+          # "<!-- ai:pr-dependency-released:<n> -->" with GH_PAT once a held
+          # issue's pull-request dependency is met. That comment restarts
+          # clarify automatically: it is not a human request for answers, so
+          # it must not add the human-answer marker that makes clarify-respond
+          # skip the issue. It counts as a release only when its author is the
+          # GH_PAT login, read live (fail closed); any other author keeps the
+          # ordinary /reclarify rules, and a comment from an author without an
+          # OWNER/MEMBER/COLLABORATOR association is not trusted at all.
+          IS_AUTOMATED_RELEASE="false"
+          COMMENT_ROUTE_TRUSTED="true"
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            case "${COMMENT_AUTHOR_ASSOCIATION:-}" in
+              OWNER|MEMBER|COLLABORATOR) COMMENT_ROUTE_TRUSTED="true" ;;
+              *) COMMENT_ROUTE_TRUSTED="false" ;;
+            esac
+            _rel_body="${COMMENT_BODY//$'\r'/}"
+            _rel_body="${_rel_body%"${_rel_body##*[![:space:]]}"}"
+            _rel_expected="/reclarify"$'\n'"<!-- ai:pr-dependency-released:${ISSUE_NUMBER} -->"
+            # A failed release run is requeued by the poller's
+            # replay_failed_reclarify_commands as "/reclarify
+            # [auto-requeued-by-poller]" + "<!-- ai:reclarify-replay:v1
+            # source=<id> -->"; it is a release only when comment <id> is this
+            # issue's exact release marker from the same GH_PAT login.
+            _rel_replay_prefix="/reclarify [auto-requeued-by-poller]"$'\n'"<!-- ai:reclarify-replay:v1 source="
+            _rel_replay_source=""
+            if [[ "${_rel_body}" == "${_rel_replay_prefix}"*" -->" ]]; then
+              _rel_replay_source="${_rel_body#"${_rel_replay_prefix}"}"
+              _rel_replay_source="${_rel_replay_source%" -->"}"
+              [[ "${_rel_replay_source}" =~ ^[1-9][0-9]{0,19}$ ]] || _rel_replay_source=""
+            fi
+            if [[ "${_rel_body}" == "${_rel_expected}" ]] || [ -n "${_rel_replay_source}" ]; then
+              # GitHub API audit (CLAUDE.md §14): no earlier call in this job
+              # returns the token's own identity ("Fetch issue metadata" reads
+              # only the issue), so this one GET /user runs only for a comment
+              # that is exactly this issue's release marker or a poller replay;
+              # a verified replay adds one GET of its source comment. The login
+              # is reused below as pr_dependency.py's --trusted-login.
+              _rel_login=""
+              _rel_reason="identity_unavailable"
+              if _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login)" \
+                && [[ "${_rel_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+                if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
+                  _rel_reason="verified"
+                else
+                  _rel_reason="author_mismatch"
+                fi
+              fi
+              if [ "${_rel_reason}" = "verified" ] && [ -n "${_rel_replay_source}" ]; then
+                # One GET of the replay's source comment, only for a replay
+                # comment already verified to come from the GH_PAT login.
+                _rel_reason="replay_source_unverified"
+                if _rel_src_json="$(source scripts/gh_helpers.sh && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_rel_replay_source}")" \
+                  && printf '%s' "${_rel_src_json}" | jq -e --arg login "${_rel_login,,}" --arg expected "${_rel_expected}" \
+                    --arg suffix "/repos/${GITHUB_REPOSITORY:-}/issues/${ISSUE_NUMBER}" \
+                    '((.user.login // "") | ascii_downcase) == $login and ((.issue_url // "") | endswith($suffix)) and (((.body // "") | gsub("\r"; "") | sub("\\s+$"; "")) == $expected)' >/dev/null 2>&1; then
+                  _rel_reason="verified_replay"
+                fi
+              fi
+              if [ "${_rel_reason}" = "verified" ] || [ "${_rel_reason}" = "verified_replay" ]; then
+                IS_AUTOMATED_RELEASE="true"
+                IS_FORCED_RECLARIFY="false"
+                COMMENT_ROUTE_TRUSTED="true"
+                echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency_release reason=${_rel_reason} outcome=restart issue=${ISSUE_NUMBER}"
+              elif [ "${COMMENT_ROUTE_TRUSTED}" = "true" ]; then
+                echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency_release reason=${_rel_reason} outcome=human_reclarify issue=${ISSUE_NUMBER}"
+              else
+                echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency_release reason=${_rel_reason} outcome=skip issue=${ISSUE_NUMBER}"
+              fi
+            fi
+          fi
+          # END pr-dependency release classification (#7328)
 
           # State gate: a closed issue should not produce side effects (label
           # changes, /answer auto-post that triggers plan→implement). The
@@ -538,6 +642,9 @@ jobs:
           elif [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ] && [ "${ISSUE_AUTHOR_TRUSTED}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}"
+          elif [ "${COMMENT_ROUTE_TRUSTED}" != "true" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_comment_author outcome=skip issue=${ISSUE_NUMBER}"
           elif [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
@@ -575,10 +682,13 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=clarify gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
             # Retain the issue in the scheduled standalone poller's existing
             # candidate set; it releases this label once the fix merges.
-            source scripts/gh_helpers.sh
-            if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
-              echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
-              exit 1
+            # An untrusted comment author (#7328) causes no label write.
+            if [ "${COMMENT_ROUTE_TRUSTED}" = "true" ]; then
+              source scripts/gh_helpers.sh
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+                echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
+                exit 1
+              fi
             fi
           fi
           # Hold a trusted standalone issue that declares `- Depends on PR: #N`
@@ -588,13 +698,20 @@ jobs:
           # ai:clarification (the standalone poller releases them once), and
           # drop ai:blocked so the unblock scan never spends rounds on them.
           # The runner-temp copy is staged from verified support, not the issue branch.
-          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
+          # Reuse the release block's validated GH_PAT login so the helper does
+          # not repeat GET /user (#7328); without it the helper reads it itself.
+          _pr_dependency_login_args=()
+          if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+            _pr_dependency_login_args=(--trusted-login "${_rel_login}")
+          fi
+          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" "${_pr_dependency_login_args[@]}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
           if [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             SKIP_CODEX="true"
             _pr_dependency_reason="$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.reason // "unknown"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency reason=${_pr_dependency_reason:-unknown} outcome=skip issue=${ISSUE_NUMBER}"
-            # No label writes on a closed issue or an untrusted new issue.
-            if [ "${IS_CLOSED}" != "true" ] && { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
+            # No label writes on a closed issue, an untrusted new issue or an
+            # untrusted comment author (#7328).
+            if [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
               source scripts/gh_helpers.sh
               if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
                 echo "::error::Could not mark PR-dependent issue #${ISSUE_NUMBER} as waiting"
@@ -632,7 +749,7 @@ jobs:
           echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"
 
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${ISSUE_7251_HELD}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && [ "${ISSUE_7251_HELD}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
@@ -642,10 +759,12 @@ jobs:
 
           echo "is_orchestrator_managed=${IS_ORCHESTRATOR_MANAGED}" >> "$GITHUB_OUTPUT"
           echo "is_forced_reclarify=${IS_FORCED_RECLARIFY}" >> "$GITHUB_OUTPUT"
+          echo "is_automated_release=${IS_AUTOMATED_RELEASE}" >> "$GITHUB_OUTPUT"
+          echo "comment_route_trusted=${COMMENT_ROUTE_TRUSTED}" >> "$GITHUB_OUTPUT"
           echo "is_closed=${IS_CLOSED}" >> "$GITHUB_OUTPUT"
           echo "skip_codex=${SKIP_CODEX}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} automated_release=${IS_AUTOMATED_RELEASE} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
 
       - name: Detect smoke test and tune LLM settings
         run: |
@@ -743,6 +862,8 @@ jobs:
             -f body=$'/answer [auto-answered-by-orchestrator]\n\nAuto answer was posted because this issue is labeled ai:orchestrator-managed and this run was not a forced human /reclarify.'
 
       - name: Record clarification run start
+        # A comment the route step did not trust (#7328) writes no AI-memory events.
+        if: steps.clarify_route.outputs.comment_route_trusted != 'false'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1673,7 +1794,7 @@ jobs:
           fi
 
       - name: Record clarification run completed
-        if: success()
+        if: success() && steps.clarify_route.outputs.comment_route_trusted != 'false'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1704,7 +1825,9 @@ jobs:
             --metadata-json "{\"outcome\": \"${OUTCOME}\"}"
 
       - name: Record clarification run failed
-        if: failure() || cancelled()
+        # The route output is empty when the job fails before "Decide clarify
+        # route" finishes; then fall back to the comment's association (#7328).
+        if: (failure() || cancelled()) && steps.clarify_route.outputs.comment_route_trusted != 'false' && (steps.clarify_route.outputs.comment_route_trusted == 'true' || github.event_name != 'issue_comment' || contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1770,7 +1893,9 @@ jobs:
             _rc_is_command="true"
           fi
           [ "${_rc_is_command}" = "true" ] || exit 1
-          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
+          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *)
+            echo "::notice::Failed /reclarify not requeued: poller replay requires an OWNER, MEMBER or COLLABORATOR author (association=${SOURCE_ASSOCIATION:-none})."
+            exit 1 ;; esac
           gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
           # The marker alone is undiscoverable by the poller. Retry transient
