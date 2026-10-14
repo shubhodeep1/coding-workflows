@@ -46,10 +46,13 @@ The scan records the intake's specific skip reason, not its final
 `reason=not_recovered` line. `budget_budget_exhausted`, `budget_failed`,
 `comments_unavailable`, `identity_unavailable`, `issue_record_missing` and the
 intake's `error heal_issue_list_failed` read failure clear on their own: they log
-`outcome=deferred`, post no attempt marker and do not count as intake failures. An open
+`outcome=deferred`, post no attempt marker and do not count as intake failures; up to
+two deferrals per run give their per-tick slot back, so one deferring issue
+cannot starve later candidates. An open
 issue that already carries a trusted recovery marker (a failed close after
 `outcome=replaced`) is closed by the scan (`reason=already_replaced close=done|failed`;
-a failed close sends a WARNING).
+a failed close leaves an attempt marker with `reason=close_failed`, so the
+attempt cap bounds the retries and only the last attempt sends a WARNING).
 `HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off with recovery.
 
 Non-retryable reports and recovery (#7333 gap 2): a verified (OIDC)

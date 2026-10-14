@@ -367,12 +367,34 @@ def test_scan_defers_an_intake_heal_issue_list_failure() -> None:
 def test_scan_warns_when_an_already_replaced_issue_cannot_be_closed() -> None:
 	comments_path = f"repos/{SELF_REPO}/issues/31/comments"
 	marker = {"id": 2, "body": "replaced\n\n" + heal.render_heal_scope_recovery_marker(901, SELF_REPO), "user": {"login": LOGIN}}
+	# A failed close records an attempt marker and sends no WARNING yet.
 	with tempfile.TemporaryDirectory(prefix="heal-scan-close-fail-") as tmp_name:
 		state = _state([_heal_issue(31)], {comments_path: [marker]})
 		state["close_fail"] = True
-		result, _, _, intake_env, tg_log = _run(Path(tmp_name), state)
+		result, state, _, intake_env, tg_log = _run(Path(tmp_name), state)
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "reason=already_replaced issue=31 close=failed" in result.stdout
-		warnings = [line for line in tg_log.read_text(encoding="utf-8").splitlines() if line.startswith("WARNING\t")]
-		assert len(warnings) == 1 and "could not close already-replaced" in warnings[0]
+		assert "attempt_failed reason=close_failed issue=31 attempts=1 max=3 marker=posted" in result.stdout
+		assert len(state["posted"]) == 1 and state["posted"][0]["path"] == comments_path
+		assert not tg_log.exists()
 		assert not intake_env.exists()
+	# The last attempt sends one WARNING; the attempt cap bounds the retries.
+	with tempfile.TemporaryDirectory(prefix="heal-scan-close-fail-cap-") as tmp_name:
+		state = _state([_heal_issue(31)], {comments_path: [marker, _scan_comment(), _scan_comment()]})
+		state["close_fail"] = True
+		result, _, _, _, tg_log = _run(Path(tmp_name), state)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "attempt_failed reason=close_failed issue=31 attempts=3 max=3 marker=posted" in result.stdout
+		warnings = [line for line in tg_log.read_text(encoding="utf-8").splitlines() if line.startswith("WARNING\t")]
+		assert len(warnings) == 1 and "stopped trying" in warnings[0]
+
+
+def test_scan_deferral_gives_the_slot_back_to_a_later_candidate() -> None:
+	output = "WORKFLOW_HEAL heal_scope_recovery outcome=skip reason=issue_record_missing issue=31 repo=x fp=x"
+	with tempfile.TemporaryDirectory(prefix="heal-scan-defer-slot-") as tmp_name:
+		result, _, _, intake_env, _ = _run(Path(tmp_name), _state([_heal_issue(31), _heal_issue(32)]), intake_output=output)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "outcome=deferred reason=issue_record_missing issue=31" in result.stdout
+		# The deferral released the one per-tick slot, so #32 ran too.
+		assert "WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE=32" in intake_env.read_text(encoding="utf-8")
+		assert "deferred=2 " in result.stdout

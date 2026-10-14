@@ -100,6 +100,10 @@ MAX_ATTEMPTS="$(_bounded_int "${HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS:-}" 3 1 20
 # Candidates examined per run (each costs one comment read), so exhausted
 # issues cannot make one tick read every heal issue.
 MAX_EXAMINED=20
+# Deferred intake runs per scan that give their per-tick slot back, so one
+# candidate that keeps deferring cannot starve later candidates; the bound
+# keeps a global cap (every candidate defers) from running many intakes.
+MAX_DEFERRED=2
 # shellcheck disable=SC2016  # GraphQL variables, not shell expansions.
 ISSUE_QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){state body lastEditedAt}}}'
 
@@ -247,6 +251,7 @@ _post_attempt_marker()
 
 PROCESSED=0
 EXAMINED=0
+DEFERRED=0
 INTAKE_FAILURES=0
 # The loop reads fd 3 so nothing it runs can consume the candidate list.
 while IFS= read -r -u 3 candidate; do
@@ -285,8 +290,10 @@ while IFS= read -r -u 3 candidate; do
 				CLOSE_STATE="done"
 			fi
 			log "heal_scope_recovery outcome=skip reason=already_replaced issue=${NUMBER} close=${CLOSE_STATE}"
-			if [ "${CLOSE_STATE}" = "failed" ]; then
-				tg_send_msg "Workflow failure heal: the recovery scan could not close already-replaced https://github.com/${SELF_REPO}/issues/${NUMBER}; it retries every hour."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			if [ "${CLOSE_STATE}" = "failed" ] && [ "${ATTEMPTS}" -lt "${MAX_ATTEMPTS}" ]; then
+				# An attempt marker bounds the retries; the last one sends a
+				# single WARNING and drops the issue from the candidate list.
+				_post_attempt_marker "${NUMBER}" "close_failed" "${ATTEMPTS}"
 			fi
 			continue
 		fi
@@ -389,8 +396,13 @@ while IFS= read -r -u 3 candidate; do
 		budget_budget_exhausted|budget_failed|comments_unavailable|identity_unavailable|issue_record_missing|heal_issue_list_failed)
 			# A cap or read failure that clears on its own: no attempt is
 			# recorded, so it cannot retire the issue, and it does not count as
-			# an intake failure (the intake alerts on its own); the next run retries.
+			# an intake failure. Only heal_issue_list_failed alerts from the
+			# intake; the others are logged only. The next run retries.
 			log "heal_scope_recovery outcome=deferred reason=${REASON} issue=${NUMBER} attempts=${ATTEMPTS} max=${MAX_ATTEMPTS} intake_rc=${INTAKE_RC}"
+			if [ "${DEFERRED}" -lt "${MAX_DEFERRED}" ]; then
+				DEFERRED=$((DEFERRED + 1))
+				PROCESSED=$((PROCESSED - 1))
+			fi
 			continue
 			;;
 	esac
@@ -400,7 +412,7 @@ while IFS= read -r -u 3 candidate; do
 	_post_attempt_marker "${NUMBER}" "${REASON}" "${ATTEMPTS}"
 done 3< <(jq -c '.[]' "${CANDIDATES_FILE}")
 
-log "heal_scope_recovery outcome=scan reason=done processed=${PROCESSED} examined=${EXAMINED} intake_failures=${INTAKE_FAILURES}"
+log "heal_scope_recovery outcome=scan reason=done processed=${PROCESSED} examined=${EXAMINED} deferred=${DEFERRED} intake_failures=${INTAKE_FAILURES}"
 if [ "${PROCESSED}" -gt 0 ] && [ "${INTAKE_FAILURES}" -ge "${PROCESSED}" ]; then
 	exit 1
 fi
