@@ -403,20 +403,27 @@ sandbox_release_systemd_session()
 # they cannot start host processes, and every run has them.
 user_manager_route_open()
 {
-	local uid rt name
+	local uid rt name out rc
 	uid="$(sandbox_uid || true)"
 	[[ "${uid}" =~ ^[0-9]+$ ]] || return 1
 	rt="/run/user/${uid}"
 	for name in systemd dbus-daemon dbus-broker; do
-		if [ -n "$(sudo -n pgrep -u "${uid}" -x "${name}" 2>/dev/null || true)" ]; then
-			return 0
-		fi
+		rc=0
+		out="$(sudo -n pgrep -u "${uid}" -x "${name}" 2>/dev/null)" || rc=$?
+		[ -n "${out}" ] && return 0
+		# pgrep exits 1 for no match; 2 or more is an error, so the state is
+		# unknown and selfcheck fails closed.
+		[ "${rc}" -le 1 ] || return 1
 	done
 	if sudo -n test -S "${rt}/bus" >/dev/null 2>&1; then
 		return 0
 	fi
-	if [ -n "$(sudo -n find "${rt}/systemd" -xdev -type s -print -quit 2>/dev/null || true)" ]; then
-		return 0
+	if sudo -n test -e "${rt}/systemd" >/dev/null 2>&1; then
+		rc=0
+		out="$(sudo -n find "${rt}/systemd" -xdev -type s -print -quit 2>/dev/null)" || rc=$?
+		[ -n "${out}" ] && return 0
+		# A failed search of an existing directory may hide a socket.
+		[ "${rc}" -eq 0 ] || return 1
 	fi
 	return 2
 }

@@ -1179,6 +1179,26 @@ echo "rc=${rc}"
 	assert "rc=1" in result.stdout
 
 
+@pytest.mark.parametrize("failing", ("pgrep", "find"))
+def test_a_failed_inspection_fails_the_route_check_closed(tmp_path: Path, failing: str) -> None:
+	# An inspection error must not read as "no user manager" (#7380 review).
+	result = _sourced(tmp_path, f'''
+sandbox_uid() {{ echo 4242; }}
+sudo() {{
+	shift
+	case "$1" in
+		pgrep) {"return 3" if failing == "pgrep" else "return 1"} ;;
+		test) case "$*" in "test -S "*) return 1 ;; esac; return 0 ;;
+		find) {"return 1" if failing == "find" else "return 0"} ;;
+	esac
+	return 0
+}}
+rc=0; user_manager_route_open || rc=$?
+echo "rc=${{rc}}"
+''')
+	assert "rc=1" in result.stdout
+
+
 def test_the_route_check_runs_after_the_docker_check_and_before_ok() -> None:
 	selfcheck = _function_body("cmd_selfcheck")
 	assert "user_manager_route_open" in selfcheck
