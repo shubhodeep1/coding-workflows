@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The log contract says `skip_reason=none` means \"the rebuild proceeds\", but it only means the threshold check passed. `_attempt_branch_rebuild_after_escalation` (scripts/orchestrate_poll_process.sh lines 11659-11700) can still skip the rebuild at lines 11675-11679 (replay commits), 11684-11689 (default-branch head SHA) and 11696-11700 (branch-protection metadata).\n  WHY: Operators reading `skip_reason=none` as \"rebuild proceeds\" would be misled when a later preflight skip happens. All reviewers rated this NIT, so the severity is mapped to low, and they did not disagree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7355-dead-values-cleanup.md:2 (related code: scripts/orchestrate_poll_process.sh:11659-11680) | severity=NIT | confidence=4\n  PROBLEM: `skip_reason=none` only means `_check_branch_rebuild_threshold` returned 0. The function can still return without rebuilding: replay-commit derivation failure (lines 11675-11679, audit `skipped_missing_replay`), unresolved default-branch head SHA (lines 11684-11689), or branch-protection metadata load failure (lines 11696-11699).\n  WHY: No code fails, but the contractual log description is wrong and misleads operators. The suggested fix is a wording change, for example \"the threshold and cooldown checks passed; later preflight checks can still skip the rebuild\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=NIT | confidence=4\n  PROBLEM: The log contract for `skip_reason=none` is ambiguous and potentially misleading.\n  WHY: The contract says \"the rebuild proceeds\", but `skip_reason=none` only reflects the threshold check result, and later checks or failures can occur before the rebuild starts. The contract text is technically imprecise and may confuse operators.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/7355-dead-values-cleanup.md:2 (related code: scripts/orchestrate_poll_process.sh:11675-11679) | severity=NIT | confidence=4\n  PROBLEM: The log contract says `skip_reason=none` means \"the rebuild proceeds\", but that only means the threshold check passed. The caller can still return without rebuilding when replay metadata is incomplete.\n  WHY: A threshold-passing run logs `skip_reason=none`, then `_derive_branch_rebuild_replay_commits` can fail and the caller returns with the rebuild skipped, so the documented meaning misleads operators.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7355-dead-values-cleanup.md:2 (related code: scripts/orchestrate_poll_process.sh:11659, 11675-11679, 11684-11688, 11696-11700) | severity=NIT | confidence=4\n  PROBLEM: The fragment documents `skip_reason=none` as \"the rebuild proceeds\", but it only means the threshold check passed. After the log line at 11659, the caller has three early-return paths that skip the rebuild without logging another decision line: `_derive_branch_rebuild_replay_commits` failure (11675-11679), unresolvable default-branch head SHA (11684-11688), and branch-protection metadata load failure (11696-11700).\n  WHY: The log line is emitted before the later preflight checks, so `skip_reason=none` is a threshold-decision outcome, not a rebuild outcome. Operators grepping for it to count actual rebuilds will over-count.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a06c376cba47e3587d30364f6cda5528d062a3d2b8a890f3ff8bf18948aa879f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7378,
+    "run_id": "38558469591",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38558469591",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014120451_1f3872b7b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7378,
+    "run_id": "38558469591"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T12:04:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
