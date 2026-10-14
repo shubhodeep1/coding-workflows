@@ -114,6 +114,9 @@ jobs:
       # replacement must still pass `heal-scope verify`. 'false' turns off
       # recovery only.
       HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
+      # Re-issue lineage (Q147): a report whose heal issue the unblock judge
+      # re-issued is recorded on the open re-issue. 'false' turns it off.
+      HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
@@ -362,6 +365,7 @@ jobs:
       HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
       HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}
       HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}
+      HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
       WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
       WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
