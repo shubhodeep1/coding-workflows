@@ -351,7 +351,8 @@ def test_project_close_retry_allows_its_own_abandoned_state_write(tmp_path: Path
 
 def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,
 	trusted_members: list[int] | None = None, include_trusted_state_comment: bool = True,
-	trusted_integration_branch: str | None = None, request_body: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
+	trusted_integration_branch: str | None = None, request_body: str | None = None,
+	tracking_labels: list[str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
 	text = POLLER.read_text(encoding="utf-8")
 	start = text.index("handle_unblock_judge_project_hooks() {")
 	hook = text[start:text.index("\n}\n", start) + 3]
@@ -374,7 +375,7 @@ def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | No
 		comments.insert(1, {"user": {"login": "mallory"},
 			"body": f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={forged_manifest} -->\n{base64.b64encode(forged_payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"})
 	harness = '''
-has_label() { return 1; }
+has_label() { printf '%s' "$1" | jq -e --arg l "$2" 'type == "array" and index($l) != null' >/dev/null 2>&1; }
 unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN=pipeline-bot; }
 _fetch_pr_json() { echo "$1" >> "$PR_CALLS_FILE"; printf '%s\\n' "$MOCK_PR_JSON"; }
 ensure_label_exists() { :; }
@@ -392,7 +393,7 @@ post_state_comment() { :; }
 post_tracking_comment() { :; }
 ''' + hook + '\nhandle_unblock_judge_project_hooks\n'
 	env = dict(os.environ, STATE_FILE=str(state_file), PR_CALLS_FILE=str(pr_calls), CREATES_FILE=str(creates),
-		MOCK_PR_JSON=json.dumps(pr) if pr is not None else "{}", TRACKING_NUM="40", TRACKING_LABELS="[]",
+		MOCK_PR_JSON=json.dumps(pr) if pr is not None else "{}", TRACKING_NUM="40", TRACKING_LABELS=json.dumps(tracking_labels or []),
 		GITHUB_REPOSITORY="o/r", PROJECT_STATUS="failed", COMMENTS=json.dumps(comments), UNBLOCK_JUDGE_ENABLED="true")
 	result = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, check=False)
 	return result, json.loads(state_file.read_text(encoding="utf-8")), pr_calls.read_text().splitlines() if pr_calls.exists() else [], creates.read_text().splitlines() if creates.exists() else []
@@ -454,6 +455,28 @@ def test_fixup_hook_marks_an_earlier_appended_reissue_original_skipped(tmp_path:
 	assert successor == {"id": "unblock-5-r1", "github_issue": 901, "status": "done"}
 	# A failed project resumes, or the main loop skips it as terminal.
 	assert after["status"] == "in_progress"
+	assert "outcome=superseded" in result.stdout
+
+
+@pytest.mark.parametrize("labels,integration_failed", [
+	(["ai:validation-failed"], False),
+	(["ai:security-pass-failed"], False),
+	([], True),
+])
+def test_fixup_hook_repair_keeps_an_unrelated_failure(tmp_path: Path, labels: list[str], integration_failed: bool) -> None:
+	# The repair skips the original but must not clear a failure it did not cause.
+	state = _reissue_state([
+		{"id": "issue-5", "github_issue": 5, "status": "closed"},
+		{"id": "unblock-5-r1", "github_issue": 901, "status": "done"},
+	], {"unblock-5-r1": 901})
+	if integration_failed:
+		state["integration_sync_status"] = "failed"
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=REISSUE_BODY,
+		tracking_labels=labels)
+	assert result.returncode == 0, result.stderr
+	assert creates == []
+	assert after["waves"][0]["issues"][0]["status"] == "skipped"
+	assert after["status"] == "failed"
 	assert "outcome=superseded" in result.stdout
 
 

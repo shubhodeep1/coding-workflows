@@ -18568,7 +18568,7 @@ UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_proj
 # smallest existing call that supplies both (§14).
 handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
-  local req_reissue filed_num reissue_retarget
+  local req_reissue filed_num reissue_retarget repair_resume
   local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
   local close_reason close_marker close_stop
   local -a unblock_fixup_security_label_args=()
@@ -18670,15 +18670,26 @@ handle_unblock_judge_project_hooks() {
       # closed original in the wave, which reads as a failed project (#7355).
       if [ "${req_reissue}" = "true" ] && [[ "${filed_num}" =~ ^[0-9]+$ ]] \
         && jq -e --argjson item "${req_item}" --arg id "${req_id}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
-        if jq --argjson item "${req_item}" --arg id "${req_id}" --argjson num "${filed_num}" \
+        # Resume only a wave-origin failure: a project that a validation,
+        # security-pass or integration failure terminalized stays failed,
+        # because skipping the original does not clear that failure.
+        repair_resume="true"
+        if has_label "${TRACKING_LABELS}" "ai:validation-failed" \
+          || has_label "${TRACKING_LABELS}" "ai:validate-failed" \
+          || has_label "${TRACKING_LABELS}" "ai:harness-broken" \
+          || has_label "${TRACKING_LABELS}" "ai:security-pass-failed" \
+          || jq -e '(.integration_sync_status // "") == "failed"' "${STATE_FILE}" >/dev/null 2>&1; then
+          repair_resume="false"
+        fi
+        if jq --argjson item "${req_item}" --arg id "${req_id}" --argjson num "${filed_num}" --argjson resume "${repair_resume}" \
           '((.waves // [])[]?.issues[]? | select(.github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not)))
              |= (.status = "skipped" | .unblock_superseded_by = $num)
-           | if .status == "failed" then .status = "in_progress" else . end' \
+           | if $resume and .status == "failed" then .status = "in_progress" else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
           post_state_comment || true
           # Resume like the filing path below: the skipped original was what
           # made the project read as failed, and a failed project is skipped.
-          if [ "${PROJECT_STATUS}" = "failed" ]; then
+          if [ "${PROJECT_STATUS}" = "failed" ] && [ "${repair_resume}" = "true" ]; then
             post_tracking_comment "## Unblock judge re-issue repaired
 
 #${req_item} was re-issued as #${filed_num} (\`${req_id}\`); its wave entry is now \`skipped\`. Status: failed -> in_progress." || true
@@ -18686,6 +18697,7 @@ handle_unblock_judge_project_hooks() {
           fi
           echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${filed_num} outcome=superseded"
         else
+          rm -f "${STATE_FILE}.tmp"
           echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=superseded_write_failed"
         fi
       fi
