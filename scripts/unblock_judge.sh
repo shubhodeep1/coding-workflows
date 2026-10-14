@@ -414,7 +414,7 @@ unblock_heal_already_fixed()
 		pr_sha="$(jq -r '.merge_commit_sha // ""' <<< "${pr_json}" | tr -cd '0-9a-f' | cut -c1-40)"
 		# A trusted marker from an earlier run whose close failed: post it once only.
 		if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "<!-- ai:unblock-heal-already-fixed:v1 item=${ITEM} sibling=${candidate} pr=${pr_number} -->" \
-			'any(.[]; (.user.login // "") == $login and ((.body // "") | rtrimstr("\n") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+			'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 			:
 		elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: the same failure was already fixed through #${candidate}, whose pull request #${pr_number} merged into \`${pr_base}\`${pr_sha:+ (\`${pr_sha}\`)}. The unblock judge used no round on this item.
 
