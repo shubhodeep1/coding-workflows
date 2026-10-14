@@ -1848,6 +1848,12 @@ unblock_ask_model()
 				CLARIFY_ISOLATION_SUPPORT_DIR="${SUPPORT_DIR}/scripts" \
 				CLARIFY_ISOLATION_TIMEOUT_SECS="${UNBLOCK_JUDGE_TIMEOUT_SECS:-1500}" \
 				bash "${SUPPORT_DIR}/scripts/clarify_isolated_run.sh" "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/claude.err" claude UNBLOCK_JUDGE) || rc=$?
+			if [ "${rc}" -eq 80 ]; then
+				# Claude capacity wait (issue #7370): no verdict, no
+				# invalid_verdict marker; the unblock scan retries later.
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=claude_capacity_wait"
+				return 1
+			fi
 			if [ "${rc}" -ne 0 ] && [ "${rc}" -ne 75 ]; then
 				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=isolation_failed rc=${rc}"
 				: > "${output_file}"

@@ -25,8 +25,8 @@
 #       (plan D1, item 3e). Capacity reasons (`all_gated`, `all_usage_limit`)
 #       or AI_ENGINE_FALLBACK_POLICY=always give 75: the caller runs codex and
 #       at most one Telegram note is sent per job. With
-#       CLAUDE_POOL_CAPACITY_WAIT_ENABLED=true (opt-in; off by default until
-#       the capacity-wait plan's Phase 4 resume pass lands, issue #7251) a
+#       CLAUDE_POOL_CAPACITY_WAIT_ENABLED on (the default since the Phase 4
+#       resume pass landed, issue #7370; `false` turns it off) a
 #       capacity reason under the policy `capacity` instead gives 80 (wait):
 #       the record's action is `wait`, `AI_ENGINE_CAPACITY_WAIT role= reason=`
 #       is logged, no Telegram note is sent and the caller must not run codex.
@@ -38,9 +38,9 @@
 #       sanitized reason afterwards, so a caller whose stderr is redirected
 #       can log it.
 #   ai_engine_capacity_wait_enabled
-#       Returns 0 when CLAUDE_POOL_CAPACITY_WAIT_ENABLED is `true` (any letter
-#       case). Unset, empty or `false` is off; any other value is off with a
-#       warning.
+#       Returns 0 when CLAUDE_POOL_CAPACITY_WAIT_ENABLED is unset, empty or
+#       `true` (any letter case). `false` is off; any other value is off with
+#       a warning.
 #   ai_engine_fallback_policy
 #       `capacity` (default) or `always`; an unknown value is `capacity`.
 #   ai_engine_fallback_class <reason>
@@ -113,8 +113,9 @@
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
 #   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
 #   AI_ENGINE_FALLBACK_POLICY  `capacity` (default) | `always` (D1 rollback)
-#   CLAUDE_POOL_CAPACITY_WAIT_ENABLED  `true` turns a capacity fallback into a
-#                           wait (exit 80); default off (issue #7251, Phase 1)
+#   CLAUDE_POOL_CAPACITY_WAIT_ENABLED  on (default) turns a capacity fallback
+#                           into a wait (exit 80); `false` restores codex
+#                           (issues #7251, #7370)
 #   AI_ENGINE_FALLBACK_RECORDS_FILE  fallback records the job's report step
 #                           reads (default
 #                           ${RUNNER_TEMP}/ai-engine-fallback-records.tsv)
@@ -223,17 +224,18 @@ ai_engine_fallback_class()
 
 ai_engine_capacity_wait_enabled()
 {
-	# Phase 1 of the capacity-wait plan (issue #7251): off by default, because
-	# the resume pass that re-dispatches waiting work lands in Phase 4, which
-	# flips this default to on. Do not enable it before then.
+	# On by default since Phase 4 of the capacity-wait plan (issue #7370): the
+	# hourly capacity-resume pass in orchestrate_poll.yml re-dispatches
+	# waiting work. Workflows pass the repo variable explicitly (off for the
+	# `core` install profile, which has no poll wrapper); `false` rolls back.
 	local raw="${CLAUDE_POOL_CAPACITY_WAIT_ENABLED:-}"
 	# Trim surrounding whitespace like provider_outage.py's .strip(), so both
 	# read the same value as on or off.
 	raw="${raw#"${raw%%[![:space:]]*}"}"
 	raw="${raw%"${raw##*[![:space:]]}"}"
 	case "${raw,,}" in
-		true) return 0 ;;
-		""|false) return 1 ;;
+		""|true) return 0 ;;
+		false) return 1 ;;
 		*)
 			echo "::warning::AI engine: invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED; capacity wait off." >&2
 			return 1

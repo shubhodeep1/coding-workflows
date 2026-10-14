@@ -22,6 +22,15 @@ Subcommands (all fail open: an unexpected error prints a log line and exits 0):
   close      Close an open tracker of one kind (Claude pool capacity cleared).
   mark-label Post the `ai:provider-outage-label:v1` marker on an item whose
              `ai:review-blocked` label an outage caused.
+  capacity-resume
+             Hourly Claude capacity-wait pass (issue #7370, orchestrate_poll.yml):
+             list the items waiting on the open kind=capacity tracker
+             (`ai:claude-capacity-wait-item:v1` markers by the GH_PAT login)
+             and, once an account is usable, re-dispatch waiting PRs, replay
+             the waiting issue's command, re-run waiting runs, record each in
+             `<!-- ai:claude-capacity-wait-resume:v1 done=... -->`, then close
+             the tracker with one alert. `close --kind capacity` answers
+             `pending_waits` while items are still waiting.
   sweep      Scheduled pass: pause while an outage tracker is open and the
              probe is not up; on recovery re-dispatch the PRs whose newest
              current-head failure marker is `provider_unavailable`, remove
@@ -81,6 +90,13 @@ SOURCE_REPO = "shubhodeep1/coding-workflows"
 TRACKER_LABEL = "ai:provider-outage"
 REVIEW_BLOCKED_LABEL = "ai:review-blocked"
 PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
+# Claude capacity wait (issue #7370). Literal copy of
+# workflow_failure_heal.PAUSE_FAILURE_REASONS (this helper is staged alone in
+# several jobs, so it never imports that module); a test pins them equal.
+CLAUDE_CAPACITY_REASON = "claude_capacity"
+PAUSE_FAILURE_REASONS = frozenset({PROVIDER_UNAVAILABLE_REASON, CLAUDE_CAPACITY_REASON})
+CAPACITY_WAIT_LABEL = "ai:claude-capacity-wait"
+CAPACITY_REPLAY_TAG = "[auto-requeued-by-capacity-wait]"
 KIND_TITLES = {"outage": "AI Provider Outage", "capacity": "AI Claude Pool Capacity"}
 PROBE_TIMEOUT_SECS = 15
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
@@ -101,6 +117,23 @@ RELEASE_RUN_MARKER_RE = re.compile(r"<!-- ai:provider-outage-release-run:v1 run=
 LABEL_MARKER_RE = re.compile(
 	r"<!-- ai:provider-outage-label:v1 item=(?P<item>[0-9]{1,10}) pr=(?P<pr>[0-9]{1,10}) head=(?P<head>[0-9a-f]{40}|none) run=(?P<run>[0-9]{1,20}|none) -->"
 )
+WAIT_ITEM_MARKER_RE = re.compile(
+	r"<!-- ai:claude-capacity-wait-item:v1 kind=(?P<kind>issue|pr|run) item=(?P<item>[0-9]{1,10}|none) "
+	r"workflow=(?P<workflow>[A-Za-z0-9_.-]{1,80}) run=(?P<run>[0-9]{1,20}|none) role=(?P<role>[A-Z0-9_,]{1,400}) -->"
+)
+WAIT_RESUME_RE = re.compile(r"<!-- ai:claude-capacity-wait-resume:v1 done=(?P<done>[a-z0-9:,]*) -->")
+ITEM_WAIT_MARKER_RE = re.compile(
+	r"<!-- ai:claude-capacity-wait:v1 stage=(?P<stage>[a-z_-]{1,30}) source=(?P<source>[0-9]{1,20}|none) "
+	r"run=(?P<run>[0-9]{1,20}|none) role=[A-Z0-9_,]{1,400} -->"
+)
+# Last capacity-resume pass (issue #7370). orchestrate_poll.yml's pool_window
+# step reads it from the tracker listing find_tracking already fetched, so the
+# hourly pass runs once an hour has passed even when no tick lands in the
+# first minutes of the hour.
+WAIT_PROBE_RE = re.compile(r"<!-- ai:claude-capacity-wait-probe:v1 at=[0-9TZ:-]{1,40} -->")
+REPLAY_MARKER_RE = re.compile(r"<!-- ai:claude-capacity-wait-replay:v1 source=(?P<source>none|[0-9]{1,20}) run=(?P<run>[0-9]{1,20}|none) -->")
+STAGE_COMMAND_RE = re.compile(r"^\s*/(?:reclarify|answer|approved)\b", re.IGNORECASE)
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 FAILURE_MARKER_RE = re.compile(r"<!--\s*review-autofix-failure:v1\s+(?P<fields>[^>]*?)\s*-->")
 FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*review-autofix-failure-cap:v1\b")
 MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>[A-Za-z0-9_.:-]+)")
@@ -132,14 +165,14 @@ def _bool_env(name: str, default: bool) -> bool:
 def _capacity_wait_enabled() -> bool:
 	"""CLAUDE_POOL_CAPACITY_WAIT_ENABLED, parsed like scripts/ai_engine.sh.
 
-	Phase 1 of the capacity-wait plan (issue #7251): unset, empty or `false`
-	is off (the default until the Phase 4 resume pass flips it), `true` in any
-	letter case is on, and any other value is off with a warning.
+	On by default since the Phase 4 resume pass landed (issue #7370): unset,
+	empty or `true` (any letter case) is on, `false` is off, and any other
+	value is off with a warning.
 	"""
 	raw = os.environ.get("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", "").strip().lower()
-	if raw == "true":
+	if raw in {"", "true"}:
 		return True
-	if raw not in {"", "false"}:
+	if raw != "false":
 		print("::warning::provider_outage: invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED; capacity wait off.", file=sys.stderr)
 	return False
 
@@ -320,8 +353,12 @@ class GitHub:
 		return self._login
 
 	def list_issues(self, label: str) -> list[dict[str, Any]] | None:
-		data = self._json(["api", f"repos/{self.repository}/issues?labels={label}&state=open&per_page=100"])
-		return data if isinstance(data, list) else None
+		# Paginated (issue #7370): the capacity-resume pass treats an issue
+		# absent from this listing as no longer waiting.
+		pages = self._json(["api", "--paginate", "--slurp", f"repos/{self.repository}/issues?labels={label}&state=open&per_page=100"])
+		if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+			return None
+		return [issue for page in pages for issue in page if isinstance(issue, dict)]
 
 	def create_issue(self, title: str, body: str) -> int | None:
 		data = self._json(["api", "-X", "POST", f"repos/{self.repository}/issues", "-f", f"title={title}", "-f", f"body={body}", "-f", f"labels[]={TRACKER_LABEL}"])
@@ -363,8 +400,39 @@ class GitHub:
 		allow_edits = "true" if _bool_env("ALLOW_WORKFLOW_EDITS", False) else "false"
 		return self._run(["workflow", "run", workflow, "--repo", self.repository, "--ref", ref, "-f", f"pr_number={pr_number}", "-f", f"allow_workflow_edits={allow_edits}"]).returncode == 0
 
+	def add_label(self, number: int, label: str) -> bool:
+		return self._run(["api", "-X", "POST", f"repos/{self.repository}/issues/{number}/labels", "-f", f"labels[]={label}"]).returncode == 0
+
 	def remove_label(self, number: int, label: str) -> bool:
-		return self._run(["api", "-X", "DELETE", f"repos/{self.repository}/issues/{number}/labels/{label}"]).returncode == 0
+		# HTTP 404 means the label is already gone (issue #7370): the goal is
+		# met, so a missing label never leaves a resume item pending.
+		result = self._run(["api", "-X", "DELETE", f"repos/{self.repository}/issues/{number}/labels/{label}"])
+		return result.returncode == 0 or "HTTP 404" in (result.stderr or "") + (result.stdout or "")
+
+	def _get_or_gone(self, path: str) -> dict[str, Any] | None:
+		"""GET one object; `{"_gone": True}` on HTTP 404, None on other failures."""
+		result = self._run(["api", path])
+		if result.returncode != 0:
+			return {"_gone": True} if "HTTP 404" in (result.stderr or "") + (result.stdout or "") else None
+		try:
+			data = json.loads(result.stdout)
+		except json.JSONDecodeError:
+			return None
+		return data if isinstance(data, dict) else None
+
+	def get_pr(self, number: int) -> dict[str, Any] | None:
+		return self._get_or_gone(f"repos/{self.repository}/pulls/{number}")
+
+	def get_comment(self, comment_id: int) -> dict[str, Any] | None:
+		return self._get_or_gone(f"repos/{self.repository}/issues/comments/{comment_id}")
+
+	def rerun_run(self, run_id: int) -> tuple[bool, int | None]:
+		"""Re-run a whole workflow run; returns (ok, HTTP status on failure)."""
+		result = self._run(["api", "-X", "POST", f"repos/{self.repository}/actions/runs/{run_id}/rerun"])
+		if result.returncode == 0:
+			return True, None
+		match = re.search(r"HTTP (\d{3})", (result.stderr or "") + (result.stdout or ""))
+		return False, int(match.group(1)) if match else None
 
 	def rerun_failed_jobs(self, run_id: int) -> bool:
 		return self._run(["api", "-X", "POST", f"repos/{self.repository}/actions/runs/{run_id}/rerun-failed-jobs"]).returncode == 0
@@ -538,7 +606,7 @@ def _failure_fields(body: str) -> dict[str, str] | None:
 	return fields
 
 
-def resume_decision(comments: list[dict[str, Any]], *, head: str, login: str) -> str:
+def resume_decision(comments: list[dict[str, Any]], *, head: str, login: str, reasons: Iterable[str] = (PROVIDER_UNAVAILABLE_REASON,)) -> str:
 	"""`resume`, `other` or `undecided` from the newest decisive trusted comment.
 
 	Decisive: a trusted failure marker for the current head, or a trusted
@@ -552,7 +620,7 @@ def resume_decision(comments: list[dict[str, Any]], *, head: str, login: str) ->
 		if fields is not None:
 			if fields.get("head", "").lower() != head:
 				continue
-			return "resume" if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON else "other"
+			return "resume" if fields.get("reason") in set(reasons) else "other"
 		if any(marker in body for marker in SUCCESS_MARKERS):
 			return "other"
 	return "undecided"
@@ -574,7 +642,7 @@ def label_marker_still_valid(comments: list[dict[str, Any]], *, login: str, not_
 		if FAILURE_CAP_MARKER_RE.search(body):
 			return None
 		fields = _failure_fields(body)
-		if fields is not None and fields.get("reason") != PROVIDER_UNAVAILABLE_REASON:
+		if fields is not None and fields.get("reason") not in PAUSE_FAILURE_REASONS:
 			return None
 	return None
 
@@ -592,7 +660,7 @@ def superseded_after(comments: list[dict[str, Any]], *, login: str, since: dt.da
 		if FAILURE_CAP_MARKER_RE.search(body):
 			return True
 		fields = _failure_fields(body)
-		if fields is not None and fields.get("reason") != PROVIDER_UNAVAILABLE_REASON:
+		if fields is not None and fields.get("reason") not in PAUSE_FAILURE_REASONS:
 			return True
 	return False
 
@@ -831,6 +899,15 @@ def close_tracker(gh: Any, *, kind: str, alert_out: str | None) -> str:
 	if not trackers:
 		_log(f"op=close kind={kind} outcome=none_open")
 		return "none_open"
+	if kind == "capacity":
+		# A tracker that still lists waiting work stays open until the
+		# capacity-resume pass has resumed it (issue #7370).
+		login = str(gh.login() or "").strip().lower()
+		for tracker in trackers:
+			comments = gh.comments(tracker["number"])
+			if comments is None or pending_wait_items(comments, login=login, done=parse_wait_done(tracker["body"])):
+				_log(f"op=close kind={kind} tracker={tracker['number']} outcome=pending_waits")
+				return "pending_waits"
 	for tracker in trackers:
 		gh.comment(tracker["number"], "Recovered: a run obtained capacity again." if kind == "capacity" else "Recovered.")
 		if not gh.close_issue(tracker["number"]):
@@ -839,6 +916,295 @@ def close_tracker(gh: Any, *, kind: str, alert_out: str | None) -> str:
 	_write_alert(alert_out, f"{KIND_TITLES.get(kind, kind)} recovered in {gh.repository}: tracker #{trackers[0]['number']} closed.")
 	_log(f"op=close kind={kind} tracker={trackers[0]['number']} outcome=closed")
 	return "closed"
+
+
+# ---------------------------------------------------------------------------
+# Claude capacity wait resume (issue #7370)
+# ---------------------------------------------------------------------------
+
+
+def parse_wait_done(body: str) -> set[str]:
+	match = WAIT_RESUME_RE.search(body or "")
+	return {part for part in match.group("done").split(",") if part} if match else set()
+
+
+def render_wait_done(body: str, done: set[str]) -> str:
+	line = f"<!-- ai:claude-capacity-wait-resume:v1 done={','.join(sorted(done))} -->"
+	if WAIT_RESUME_RE.search(body or ""):
+		return WAIT_RESUME_RE.sub(line, body, count=1)
+	return (body or "").rstrip("\n") + "\n" + line + "\n"
+
+
+def render_wait_probe(body: str, now: dt.datetime) -> str:
+	line = f"<!-- ai:claude-capacity-wait-probe:v1 at={now.strftime('%Y-%m-%dT%H:%M:%SZ')} -->"
+	if WAIT_PROBE_RE.search(body or ""):
+		return WAIT_PROBE_RE.sub(line, body, count=1)
+	return (body or "").rstrip("\n") + "\n" + line + "\n"
+
+
+def pending_wait_items(comments: list[dict[str, Any]], *, login: str, done: set[str]) -> list[dict[str, str]]:
+	"""Trusted tracker item markers (oldest first) not yet resumed."""
+	items: list[dict[str, str]] = []
+	seen: set[str] = set()
+	for comment in comments:
+		if not isinstance(comment, dict) or _author(comment) != login:
+			continue
+		for match in WAIT_ITEM_MARKER_RE.finditer(str(comment.get("body") or "")):
+			fields = match.groupdict()
+			key = f"{fields['kind']}:{fields['item']}:{fields['run']}"
+			if key in done or key in seen:
+				continue
+			seen.add(key)
+			items.append({"key": key, "kind": fields["kind"], "item": fields["item"], "workflow": fields["workflow"], "run": fields["run"]})
+	return items
+
+
+def _trusted_command_author(comment: dict[str, Any], login: str) -> bool:
+	association = str(comment.get("author_association") or comment.get("authorAssociation") or "").upper()
+	return _author(comment) == login or association in TRUSTED_ASSOCIATIONS
+
+
+def replay_body(stage: str, source_body: str | None, source: str, run: str) -> str | None:
+	"""The replay comment for one waiting issue stage, or None (no replay)."""
+	marker = f"<!-- ai:claude-capacity-wait-replay:v1 source={source} run={run} -->"
+	if stage == "clarify" and source == "none":
+		return f"/reclarify {CAPACITY_REPLAY_TAG}\n{marker}"
+	if source_body is None:
+		return None
+	body = source_body.replace("\r", "").rstrip()
+	if stage == "clarify_respond":
+		return f"{body}\n\n{marker}"
+	if stage in {"clarify", "plan", "implement"}:
+		first, sep, rest = body.partition("\n")
+		if not STAGE_COMMAND_RE.match(first):
+			return None
+		if len(first.split()) == 1:
+			# Bare command: the tag follows it, as the auto-answer tags do.
+			return f"{first} {CAPACITY_REPLAY_TAG}{sep}{rest}\n\n{marker}"
+		# The first line carries answers; keep it intact and tag a line of
+		# its own so answer parsing sees the original text.
+		return f"{body}\n\n{CAPACITY_REPLAY_TAG}\n{marker}"
+	return None
+
+
+def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str) -> str:
+	number = int(item["item"])
+	pr = gh.get_pr(number)
+	if pr is None:
+		return "failed"
+	if pr.get("_gone"):
+		# Deleted or transferred PR (HTTP 404): nothing left to resume.
+		return "superseded"
+	if str(pr.get("state") or "") != "open":
+		return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+	labels = {str(label.get("name") or "") for label in pr.get("labels") or [] if isinstance(label, dict)}
+	if CAPACITY_WAIT_LABEL not in labels:
+		# The label goes before the dispatch, so an unlabelled PR was already
+		# dispatched by an earlier pass whose done-marker write failed, or its
+		# label was removed by hand; the review sweep dispatches unlabelled
+		# PRs, so dispatching again here would only queue a duplicate review.
+		return "superseded"
+	head = str((pr.get("head") or {}).get("sha") or "").lower()
+	base_repo = (pr.get("base") or {}).get("repo") or {}
+	default_branch = str(base_repo.get("default_branch") or "")
+	comments = gh.comments(number)
+	if comments is None or not default_branch:
+		return "failed"
+	decision = resume_decision(comments, head=head, login=login, reasons=(CLAUDE_CAPACITY_REASON,))
+	if decision == "resume":
+		# Remove the label before dispatching: a failed removal dispatches
+		# nothing, so a retry never queues a duplicate review, and a failed
+		# dispatch leaves an unlabelled PR the regular review sweep picks up.
+		if not gh.remove_label(number, CAPACITY_WAIT_LABEL):
+			return "failed"
+		if gh.dispatch(workflow, default_branch, number):
+			return "dispatched"
+		# Put the label back so the next pass retries the dispatch: an
+		# unlabelled PR counts as already dispatched (see above).
+		if not gh.add_label(number, CAPACITY_WAIT_LABEL):
+			_log(f"op=capacity_resume kind=pr item={number} run={item['run']} outcome=label_restore_failed")
+		return "failed"
+	# The head moved on or a later run decided it: nothing to replay.
+	return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+
+
+def _resume_wait_issue(gh: Any, item: dict[str, str], *, login: str, labelled: set[int]) -> str:
+	number = int(item["item"])
+	# An issue missing from the label listing is still checked: the reporter
+	# records the tracker marker before it adds the label, so a failed label
+	# add must not mark the wait done without a replay. A replay marker for
+	# this run or a newer trusted command below supersedes it, and removing an
+	# absent label counts as success (HTTP 404), so this never replays twice.
+	if number not in labelled:
+		_log(f"op=capacity_resume kind=issue item={number} run={item['run']} detail=unlabelled")
+	comments = gh.comments(number)
+	if comments is None:
+		return "failed"
+	marker_index, marker = -1, None
+	for index, comment in enumerate(comments):
+		if not isinstance(comment, dict) or _author(comment) != login:
+			continue
+		match = ITEM_WAIT_MARKER_RE.search(str(comment.get("body") or ""))
+		if match and match.group("run") == item["run"]:
+			marker_index, marker = index, match.groupdict()
+	if marker is None:
+		# No trusted wait marker for this run (another login, or the post
+		# failed): nothing to replay, but never strand the label.
+		return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+	for comment in comments[marker_index + 1:]:
+		if not isinstance(comment, dict):
+			continue
+		body = str(comment.get("body") or "")
+		replay = REPLAY_MARKER_RE.search(body)
+		if replay and _author(comment) == login and replay.group("run") == item["run"]:
+			return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+		if STAGE_COMMAND_RE.match(body) and _trusted_command_author(comment, login):
+			# A newer trusted command already restarted the stage.
+			return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+	stage, source = marker["stage"], marker["source"]
+	if stage == "validate" or stage == "none":
+		# The poller re-dispatches validation once the label is gone (D7).
+		return "done" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+	source_body: str | None = None
+	if source != "none":
+		source_comment = gh.get_comment(int(source))
+		if source_comment is None:
+			return "failed"
+		if source_comment.get("_gone"):
+			# The source command was deleted (HTTP 404): nothing to replay.
+			_log(f"op=capacity_resume kind=issue item={number} run={item['run']} outcome=superseded reason=source_deleted")
+			return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+		suffix = f"/repos/{gh.repository}/issues/{number}"
+		trusted = _author(source_comment) == login if stage == "clarify_respond" else _trusted_command_author(source_comment, login)
+		if not str(source_comment.get("issue_url") or "").endswith(suffix) or not trusted:
+			_log(f"op=capacity_resume kind=issue item={number} run={item['run']} outcome=superseded reason=source_untrusted")
+			return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+		source_body = str(source_comment.get("body") or "")
+	body = replay_body(stage, source_body, source, item["run"])
+	if body is None:
+		return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+	# Post the replay first, then remove the label: a failed post keeps the
+	# label so the next pass retries, and a failed removal is cleared on the
+	# next pass, which finds this run's replay marker and only removes it.
+	if not gh.comment(number, body):
+		return "failed"
+	return "replayed" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+
+
+def capacity_resume(gh: Any, *, pool_available: bool, items_out: str | None, alert_out: str | None, max_dispatch: int, workflow: str, output_path: str | None = None) -> dict[str, Any]:
+	values = {"capacity_wait": "false", "pending": "0", "resumed": "0"}
+	trackers = find_trackers(gh, "capacity")
+	if trackers is None:
+		_log("op=capacity_resume outcome=failed reason=tracker_lookup_failed")
+		_write_output(output_path, values)
+		return values
+	if not trackers:
+		_write_items(items_out, {"count": 0, "opened_at": "", "items": []})
+		_log("op=capacity_resume outcome=idle")
+		_write_output(output_path, values)
+		return values
+	values["capacity_wait"] = "true"
+	tracker = trackers[0]
+	login = str(gh.login() or "").strip().lower()
+	comments = gh.comments(tracker["number"])
+	if comments is None or not login:
+		_log(f"op=capacity_resume tracker={tracker['number']} outcome=failed reason=comments_unavailable")
+		_write_output(output_path, values)
+		return values
+	done = parse_wait_done(tracker["body"])
+	pending = pending_wait_items(comments, login=login, done=done)
+	# Record this pass's time; a failed write only means the next tick
+	# probes again (fail open toward more probes).
+	body = render_wait_probe(tracker["body"], _utc_now())
+	if not gh.patch_body(tracker["number"], body):
+		body = tracker["body"]
+		_log(f"op=capacity_resume tracker={tracker['number']} outcome=probe_marker_write_failed")
+	values["pending"] = str(len(pending))
+	_write_items(items_out, {"count": len(pending), "opened_at": tracker.get("opened") or "", "items": [{key: item[key] for key in ("kind", "item", "workflow", "run")} for item in pending]})
+	if not pool_available:
+		_log(f"op=capacity_resume tracker={tracker['number']} outcome=waiting pending={len(pending)}")
+		_write_output(output_path, values)
+		return values
+	labelled_issues: set[int] | None = None
+	counts = {"pr": 0, "issue": 0, "run": 0}
+	not_rerun: list[str] = []
+	complete = True
+	for index, item in enumerate(pending):
+		if index >= max_dispatch:
+			complete = False
+			break
+		kind = item["kind"]
+		outcome = "failed"
+		if kind == "pr" and item["item"].isdigit():
+			outcome = _resume_wait_pr(gh, item, login=login, workflow=workflow)
+		elif kind == "issue" and item["item"].isdigit():
+			if labelled_issues is None:
+				# The listing only feeds a log line (an unlabelled issue is
+				# still checked), so a failed read must not fail the item.
+				listing = gh.list_issues(CAPACITY_WAIT_LABEL)
+				labelled_issues = {entry["number"] for entry in listing or [] if isinstance(entry, dict) and isinstance(entry.get("number"), int)}
+			outcome = _resume_wait_issue(gh, item, login=login, labelled=labelled_issues)
+		elif kind == "run" and item["run"].isdigit():
+			ok, status = gh.rerun_run(int(item["run"]))
+			if ok:
+				outcome = "rerun"
+			elif status in (403, 404, 422):
+				outcome = "not_rerun"
+				not_rerun.append(f"run {item['run']} ({item['workflow']})")
+		else:
+			outcome = "done"
+		_log(f"op=capacity_resume kind={kind} item={item['item']} run={item['run']} outcome={outcome}")
+		if outcome == "failed":
+			complete = False
+			continue
+		if outcome in {"dispatched", "replayed", "rerun"}:
+			counts[kind] = counts.get(kind, 0) + 1
+		done.add(item["key"])
+		body = render_wait_done(body, done)
+		if not gh.patch_body(tracker["number"], body):
+			complete = False
+			_log(f"op=capacity_resume tracker={tracker['number']} outcome=resume_marker_write_failed")
+			break
+	resumed = sum(counts.values())
+	values["resumed"] = str(resumed)
+	if complete:
+		# Re-read the tracker before closing it: a wait recorded during this
+		# pass must keep the tracker open for the next pass.
+		latest = gh.comments(tracker["number"])
+		if latest is None or pending_wait_items(latest, login=login, done=done):
+			complete = False
+	# Refresh the items file so the pool-health alert lists only the work
+	# still waiting after this pass, not the pre-resume count.
+	remaining = [item for item in pending if item["key"] not in done]
+	_write_items(items_out, {"count": len(remaining), "opened_at": tracker.get("opened") or "", "items": [{key: item[key] for key in ("kind", "item", "workflow", "run")} for item in remaining]})
+	if not complete:
+		_log(f"op=capacity_resume tracker={tracker['number']} outcome=partial resumed={resumed}")
+		_write_output(output_path, values)
+		return values
+	lines = [f"Claude pool capacity is back; resumed {resumed} item(s) ({counts['pr']} PR(s), {counts['issue']} issue(s), {counts['run']} run(s))."]
+	if not_rerun:
+		lines.append("Not re-run (older than 30 days or not re-runnable): " + "; ".join(not_rerun))
+	if not gh.close_issue(tracker["number"]):
+		_log(f"op=capacity_resume tracker={tracker['number']} outcome=close_failed")
+		_write_output(output_path, values)
+		return values
+	gh.comment(tracker["number"], "\n".join(lines))
+	values["capacity_wait"] = "false"
+	alert = f"Claude pool capacity back in {gh.repository}: resumed {resumed} item(s) ({counts['pr']} PR(s), {counts['issue']} issue(s), {counts['run']} run(s)); tracker #{tracker['number']} closed."
+	if not_rerun:
+		alert += " Not re-run: " + "; ".join(not_rerun) + "."
+	_write_alert(alert_out, alert)
+	_log(f"op=capacity_resume tracker={tracker['number']} outcome=closed resumed={resumed}")
+	_write_output(output_path, values)
+	return values
+
+
+def _write_items(path: str | None, payload: dict[str, Any]) -> None:
+	if path:
+		try:
+			Path(path).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+		except OSError as exc:
+			_log(f"op=write_items outcome=failed reason=os_error type={type(exc).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -890,6 +1256,13 @@ def main(argv: list[str] | None = None) -> int:
 	p_mark.add_argument("--pr", type=int, required=True)
 	p_mark.add_argument("--head", default="")
 	p_mark.add_argument("--run", default="")
+	p_resume = sub.add_parser("capacity-resume")
+	p_resume.add_argument("--repo", default="")
+	p_resume.add_argument("--pool-available", default="false")
+	p_resume.add_argument("--alert-out", default="")
+	p_resume.add_argument("--items-out", default="")
+	p_resume.add_argument("--max-dispatch", type=int, default=0)
+	p_resume.add_argument("--review-workflow", default="")
 	p_sweep = sub.add_parser("sweep")
 	p_sweep.add_argument("--repo", default="")
 	p_sweep.add_argument("--status-only", action="store_true")
@@ -925,6 +1298,17 @@ def main(argv: list[str] | None = None) -> int:
 			return 0
 		if args.command == "mark-label":
 			mark_label(gh, item=args.item, pr=args.pr, head=args.head, run=args.run)
+			return 0
+		if args.command == "capacity-resume":
+			capacity_resume(
+				gh,
+				pool_available=str(args.pool_available).strip().lower() == "true",
+				items_out=args.items_out or None,
+				alert_out=args.alert_out or None,
+				max_dispatch=args.max_dispatch if args.max_dispatch > 0 else _int_env("PROVIDER_OUTAGE_RESUME_MAX_DISPATCH", 50),
+				workflow=args.review_workflow or os.environ.get("PROVIDER_OUTAGE_REVIEW_WORKFLOW", "") or ("internal-review.yml" if gh.repository == SOURCE_REPO else "ai-review.yml"),
+				output_path=os.environ.get("GITHUB_OUTPUT"),
+			)
 			return 0
 		if args.command == "sweep":
 			sweep(gh, probe=lambda: cached_probe(args.probe_cache or None), output_path=os.environ.get("GITHUB_OUTPUT"), alert_out=args.alert_out or None, status_only=args.status_only)

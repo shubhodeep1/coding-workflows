@@ -47,6 +47,11 @@ name: AI Orchestrate (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
@@ -807,6 +812,14 @@ jobs:
                 env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u OPENROUTER_API_KEY \
                 bash -c 'source scripts/ai_engine.sh && claude_run ORCHESTRATE "$1" "$2" "$3"' _ "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" \
                 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?
+              if [ "${decomposer_rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): no codex. Later steps
+                # skip; the report step records this run (kind run) and the
+                # capacity-resume pass re-runs it.
+                echo "AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred stage=orchestrate"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${decomposer_rc}" -eq 75 ]; then
                 ORCHESTRATE_ENGINE="codex"
               fi
@@ -973,6 +986,7 @@ jobs:
           done
 
       - name: Validate decomposition JSON
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         run: |
           set -euo pipefail
 
@@ -1058,6 +1072,7 @@ jobs:
             --write-back
 
       - name: Ensure orchestrator labels exist
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENGINE_INPUT: ${{ inputs.engine }}
@@ -1086,6 +1101,7 @@ jobs:
           ensure_label_exists "ai:orchestrator-validate-required" "${{ github.repository }}"
 
       - name: Create tracking issue
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1171,6 +1187,7 @@ jobs:
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Create integration branch
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         id: integration_branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1224,6 +1241,7 @@ jobs:
           echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
 
       - name: Create Wave 1 issues only
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1314,6 +1332,7 @@ jobs:
           echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
 
       - name: Build and post initial state
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -1363,6 +1382,7 @@ jobs:
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
       - name: Record decomposition candidate
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1393,6 +1413,7 @@ jobs:
             --issue-number "${TRACKING_ISSUE_NUMBER}"
 
       - name: Dispatch Wave 1
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -1429,7 +1450,7 @@ jobs:
                 --input - >/dev/null
 
       - name: Write run summary
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
         run: |
@@ -1465,7 +1486,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record orchestration run end
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1510,7 +1531,7 @@ jobs:
           memory_record_run_event "${ARGS[@]}"
 
       - name: Notify via Telegram
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}

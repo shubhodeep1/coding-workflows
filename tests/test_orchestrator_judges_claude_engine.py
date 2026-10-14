@@ -506,7 +506,8 @@ def test_poller_rb_prepare_preserves_engine_selection_log(tmp_path: Path) -> Non
 @pytest.mark.parametrize("comment_reply, expected_comment_id", [('{"id":123}', 123), ('{}', None)])
 def test_isolation_deferral_escalates_once_per_head(tmp_path: Path, comment_reply: str, expected_comment_id: int | None) -> None:
 	text = POLLER.read_text(encoding="utf-8")
-	block = text.split('        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
+	# Issue #7370: the counting branch follows the capacity-wait branch as an elif.
+	block = text.split('        elif [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
 		'        echo "::warning::Review-blocked judge failed', 1,
 	)[0]
 	state = tmp_path / "state.json"
@@ -942,7 +943,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		step = steps[names.index(name)]
 		assert step["uses"] == uses
 		assert step["continue-on-error"] is True
-		assert step["if"] == "steps.ai_engine.outputs.any_claude == 'true'"
+		assert step["if"] == "(steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')"
 		assert names.index(name) < names.index("Process each tracking issue")
 		assert names.index(name) < names.index("Run standalone stall recovery without active projects")
 	process_env = steps[names.index("Process each tracking issue")]["env"]
@@ -950,7 +951,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
 	assert process_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
 	assert steps[names.index("Resolve Claude credential")]["id"] == "claude_pool"
-	assert process_env["CLAUDE_POOL_REASON"] == "${{ steps.claude_pool.outputs.reason || '' }}"
+	assert process_env["CLAUDE_POOL_REASON"] == "${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}"
 	assert process_env["RB_JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 	assert process_env["JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 

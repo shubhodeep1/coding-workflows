@@ -456,7 +456,17 @@ for _llm_attempt in 1 2; do
 	emit_self_heal_substate "LaunchingAgentProcess" "${_llm_attempt}"
 	emit_self_heal_substate "InitializingSession" "${_llm_attempt}"
 	emit_self_heal_substate "StreamingTurn" "${_llm_attempt}"
-	if run_self_heal_codex "${_self_heal_stderr_tmp}"; then
+	_self_heal_run_rc=0
+	run_self_heal_codex "${_self_heal_stderr_tmp}" || _self_heal_run_rc=$?
+	if [ "${_self_heal_run_rc}" -eq 80 ]; then
+		# Claude capacity wait (issue #7370): no codex, no retry; the caller
+		# exits 80 so validate.yml records a wait instead of a verdict.
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		rm -f "${_self_heal_stderr_tmp}"
+		echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE_SELF_HEAL outcome=deferred stage=validate" >&2
+		exit 80
+	fi
+	if [ "${_self_heal_run_rc}" -eq 0 ]; then
 		emit_self_heal_substate "Finishing" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
 		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
 		case "${SELF_HEAL_STALL_STATE}" in

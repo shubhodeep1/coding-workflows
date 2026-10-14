@@ -27,6 +27,11 @@ name: AI Orchestrate Poller (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: orchestrate_poll
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -69,6 +74,9 @@ jobs:
 
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # The poller resumes its own judges on a later tick (issue #7370), so
+      # a capacity wait records the tracker only, never an item to re-run.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: none
     steps:
       - name: Create runtime workspace
         run: |
@@ -222,6 +230,28 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # Claude capacity wait (issue #7370): one listing of open
+          # ai:provider-outage trackers, before any early exit. No other poll
+          # call reads this label (provider_outage.py sweep runs only in
+          # review_autofix_sweep.yml). capacity_wait=true makes this tick skip
+          # the pool probe outside the hourly window (its Claude roles wait
+          # with CLAUDE_POOL_REASON=all_gated) and run the hourly resume pass
+          # inside it. A failed read fails open: capacity_wait=false. Only a
+          # tracker by a repository-associated author (the GH_PAT account that
+          # opens it) counts, so an outsider's issue cannot pause the probes.
+          capacity_wait=false
+          if outage_trackers="$(gh_retry gh api "repos/${{ github.repository }}/issues?labels=ai:provider-outage&state=open&per_page=100" 2>/dev/null)" \
+            && printf '%s' "${outage_trackers}" > "${RUNTIME_DIR}/provider_outage_trackers.json" \
+            && printf '%s' "${outage_trackers}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            if printf '%s' "${outage_trackers}" | jq -e 'any(.[]; (.pull_request | not) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity ")))' >/dev/null 2>&1; then
+              capacity_wait=true
+            fi
+          else
+            echo "::warning::Claude capacity tracker listing failed; treating capacity_wait as false."
+          fi
+          echo "capacity_wait=${capacity_wait}" >> "$GITHUB_OUTPUT"
+          echo "CLAUDE_CAPACITY_WAIT_TRACKER capacity_wait=${capacity_wait}"
 
           # Find all open issues with the orchestrator tracking label
           TRACKING_ISSUES="$(gh_retry gh issue list \
@@ -983,8 +1013,39 @@ jobs:
           echo "Claude credential preflight: any_claude=${any_claude} decided_by=${decided_by}"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
+      # Claude capacity wait (issue #7370): while a capacity tracker is open
+      # the pool is probed only in the hourly window, where the resume pass
+      # runs; between windows the poller's Claude roles wait without a probe.
+      - name: Compute Claude pool hourly window
+        id: pool_window
+        env:
+          CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
+        run: |
+          window="${CLAUDE_POOL_HEALTH_WINDOW_MINUTES:-5}"
+          [[ "${window}" =~ ^[0-9]+$ ]] || window=5
+          minute=$((10#$(date -u +%M)))
+          in_window=false
+          [ "${minute}" -ge "${window}" ] || in_window=true
+          # Scheduled ticks can arrive 25-60 minutes apart and rarely land in
+          # the first minutes of the hour, so the window also opens once an
+          # hour has passed since the last capacity-resume pass (the
+          # ai:claude-capacity-wait-probe:v1 marker on the trusted capacity
+          # tracker find_tracking already listed; no extra API call). A
+          # missing or unreadable marker opens it, which fails open toward a
+          # probe.
+          trackers_file="${RUNTIME_DIR:-}/provider_outage_trackers.json"
+          if [ "${in_window}" != true ] && [ -f "${trackers_file}" ]; then
+            last_probe="$(jq -r 'first(.[]? | select((.pull_request | not) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))) | (((.body // "") | capture("<!-- ai:claude-capacity-wait-probe:v1 at=(?<at>[0-9TZ:-]{1,40}) -->") | .at) // "")) // empty' "${trackers_file}" 2>/dev/null || true)"
+            last_epoch="$(date -u -d "${last_probe:-invalid}" +%s 2>/dev/null || echo 0)"
+            [[ "${last_epoch}" =~ ^[0-9]+$ ]] || last_epoch=0
+            if [ $(( $(date -u +%s) - last_epoch )) -ge 3300 ]; then
+              in_window=true
+            fi
+          fi
+          echo "in_window=${in_window}" >> "$GITHUB_OUTPUT"
+
       - name: Install Claude Code CLI
-        if: steps.ai_engine.outputs.any_claude == 'true'
+        if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
@@ -992,7 +1053,7 @@ jobs:
 
       - name: Resolve Claude credential
         id: claude_pool
-        if: steps.ai_engine.outputs.any_claude == 'true'
+        if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
@@ -1001,10 +1062,52 @@ jobs:
       # Hourly Telegram DEBUG for gated-only pool accounts, WARNING for rejected
       # tokens or failed probes; silent while every account is below the gate
       # and no token or probe failed (#6951).
-      - name: Alert on Claude pool accounts at the usage gate
-        if: steps.ai_engine.outputs.any_claude == 'true'
+      # Hourly Claude capacity-resume pass (issue #7370): resumes the work
+      # recorded on the open capacity tracker once an account is usable,
+      # then closes the tracker; while the pool is still gated it only lists
+      # the waiting items for the pool-health alert.
+      - name: Resume Claude capacity waits
+        id: capacity_resume
+        if: steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true'
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          CLAUDE_POOL_AVAILABLE: ${{ steps.claude_pool.outputs.available || 'false' }}
+          PROVIDER_OUTAGE_REVIEW_WORKFLOW: ${{ endsWith(github.repository, '/coding-workflows') && 'internal-review.yml' || 'ai-review.yml' }}
+          PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'false' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          set -uo pipefail
+          helper=".codex-workflow-src/scripts/provider_outage.py"
+          if [ ! -f "${helper}" ] || [ -L "${helper}" ]; then
+            echo "::warning::PROVIDER_OUTAGE op=capacity_resume outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          alert_file="$(mktemp)"
+          items_file="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" capacity-resume --repo "${REPOSITORY}" \
+            --pool-available "${CLAUDE_POOL_AVAILABLE}" --alert-out "${alert_file}" --items-out "${items_file}" || true
+          if [ -s "${items_file}" ] && jq -e '(.count | type) == "number"' "${items_file}" >/dev/null 2>&1; then
+            echo "items_json=$(jq -c . "${items_file}")" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -s "${alert_file}" ] && [ -f .codex-workflow-src/scripts/tg_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source .codex-workflow-src/scripts/tg_helpers.sh
+            # DEBUG: the "capacity back" notice reports work the pass already
+            # resumed; nobody has to act (agents.md "Telegram alert levels").
+            tg_send_msg "$(cat "${alert_file}")" "DEBUG" >/dev/null 2>&1 || true
+          fi
+          rm -f -- "${alert_file}" "${items_file}"
+
+      - name: Alert on Claude pool accounts at the usage gate
+        if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
+        continue-on-error: true
+        env:
+          CLAUDE_CAPACITY_WAIT_ITEMS: ${{ steps.capacity_resume.outputs.items_json || '' }}
           CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
           CLAUDE_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CLAUDE_POOL_HEALTH_ALERT_ENABLED || 'true' }}
           CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
@@ -1029,7 +1132,7 @@ jobs:
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
           # The security audit falls back to codex when every account is over the gate.
-          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
@@ -1229,7 +1332,7 @@ jobs:
           RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
-          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}

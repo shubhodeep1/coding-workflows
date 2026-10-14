@@ -49,6 +49,17 @@ The model provider failed (status \`${AUTOFIX_PROVIDER_STATUS:-unknown}\`, confi
 EOF
 )"
 fi
+# Claude capacity wait (issue #7370): every pool account is at its usage gate.
+if [ "${AUTOFIX_FAILURE_REASON:-}" = "claude_capacity" ]; then
+  BODY="$(cat <<EOF
+**AI review paused — Claude pool at capacity**
+
+Every Claude pool account is at its usage gate, so this review waits instead of falling back. It resumes automatically when an account is back under the gate: the hourly capacity-resume pass re-dispatches it. No \`ai:review-blocked\` label was applied and this pause does not count toward the identical-failure cap.
+
+[View workflow run](${RUN_URL}) for details.
+EOF
+)"
+fi
 # Name what failed ("Assemble failure evidence"): the failed step and
 # its first specific error line, so the cause is readable from the PR.
 if [ -n "${AUTOFIX_FAILED_STEP:-}" ] || [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then

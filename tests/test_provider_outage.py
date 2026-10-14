@@ -396,20 +396,21 @@ _FALLBACK_ALERT = (
 )
 
 
-@pytest.mark.parametrize("value", [None, "", "false", "FALSE"])
-def test_capacity_text_is_unchanged_while_wait_is_off(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
-	if value is None:
-		monkeypatch.delenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", raising=False)
-	else:
-		monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
+@pytest.mark.parametrize("value", ["false", "FALSE"])
+def test_capacity_text_is_unchanged_while_wait_is_off(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
 	assert po._capacity_wait_enabled() is False
 	assert po.tracker_body("capacity", "claude-pool", "all_gated", _CAPACITY_NOW) == _FALLBACK_BODY
 	assert po.open_alert_text("capacity", "claude-pool", "all_gated", "o/r", 7) == _FALLBACK_ALERT
 
 
-@pytest.mark.parametrize("value", ["true", "True", "TRUE"])
-def test_capacity_text_says_work_is_waiting_when_wait_is_on(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
+@pytest.mark.parametrize("value", [None, "", "true", "True", "TRUE"])
+def test_capacity_text_says_work_is_waiting_when_wait_is_on(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+	# On by default since issue #7370 (unset or empty).
+	if value is None:
+		monkeypatch.delenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", raising=False)
+	else:
+		monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
 	assert po._capacity_wait_enabled() is True
 	body = po.tracker_body("capacity", "claude-pool", "all_gated", _CAPACITY_NOW)
 	assert body.startswith("<!-- ai:provider-outage:v1 kind=capacity provider=claude-pool status=all_gated ")
@@ -418,9 +419,9 @@ def test_capacity_text_says_work_is_waiting_when_wait_is_on(monkeypatch: pytest.
 	alert = po.open_alert_text("capacity", "claude-pool", "all_gated", "o/r", 7)
 	assert "work is waiting, not falling back" in alert and "Tracker #7." in alert
 	# The outage text never depends on the capacity-wait switch.
-	monkeypatch.delenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED")
+	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", "false")
 	outage_off = po.tracker_body("outage", "openrouter", "402", _CAPACITY_NOW)
-	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value)
+	monkeypatch.setenv("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", value or "")
 	assert po.tracker_body("outage", "openrouter", "402", _CAPACITY_NOW) == outage_off
 
 

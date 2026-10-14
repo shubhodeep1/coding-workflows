@@ -38,6 +38,11 @@ on:
     - cron: "0 6 * * *"
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: workflow_log_analysis
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -513,6 +518,14 @@ jobs:
             fi
             RETRO_EXIT=$?
             set -e
+            if [ "${RETRO_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=RETRO outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role RETRO); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
               break
             fi
@@ -1350,6 +1363,14 @@ jobs:
             fi
             ANALYZE_EXIT=$?
             set -e
+            if [ "${ANALYZE_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=LOG_ANALYSIS outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role LOG_ANALYSIS); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
               codex_failure_mode=""
               break
@@ -2034,6 +2055,14 @@ jobs:
             fi
             AUDIT_EXIT=$?
             set -e
+            if [ "${AUDIT_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=LOG_AUDIT outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role LOG_AUDIT); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
               break
             fi
@@ -2623,6 +2652,14 @@ jobs:
             fi
             API_EXIT=$?
             set -e
+            if [ "${API_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=LOG_ANALYSIS outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role LOG_ANALYSIS); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
               break
             fi

@@ -21,10 +21,14 @@
 #   CLAUDE_POOL_HEALTH_WINDOW_MINUTES   send only when the UTC minute is below this (default 5)
 #   CLAUDE_POOL_HEALTH_GATE             override of claude_engine.json gate_utilization (tests)
 #   CLAUDE_ENGINE_CONFIG                claude_engine.json to read the gate from
+#   CLAUDE_CAPACITY_WAIT_ITEMS          items JSON of provider_outage.py capacity-resume
+#                                       (issue #7370); with count > 0 the message
+#                                       starts with the waiting work and is sent in
+#                                       the window even when no account is gated
 #   TG_BOT_SECRET / TG_ADMIN_CHAT_ID / ALERT_MSG_LEVEL   scripts/tg_helpers.sh
 #
 # Log: CLAUDE_POOL_HEALTH accounts=N gated=N auth_failed=N probe_failed=N
-#      alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes
+#      alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes waiting=N
 # Never fails the job.
 set -uo pipefail
 
@@ -37,7 +41,7 @@ type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { :; }
 
 pool_health_log()
 {
-	echo "CLAUDE_POOL_HEALTH accounts=${1:-0} gated=${2:-0} auth_failed=${3:-0} probe_failed=${4:-0} alert=${5}"
+	echo "CLAUDE_POOL_HEALTH accounts=${1:-0} gated=${2:-0} auth_failed=${3:-0} probe_failed=${4:-0} alert=${5} waiting=${waiting_count:-0}"
 }
 
 case "$(printf '%s' "${CLAUDE_POOL_HEALTH_ALERT_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
@@ -59,11 +63,54 @@ report="$(printf '%s' "${probes_json}" | PYTHONDONTWRITEBYTECODE=1 python3 "${sc
 	pool_health_log 0 0 0 0 invalid_probes
 	exit 0
 }
+# Waiting work recorded on the Claude capacity tracker (issue #7370).
+waiting_count=0
+waiting_text=""
+if [ -n "${CLAUDE_CAPACITY_WAIT_ITEMS:-}" ]; then
+	waiting_text="$(printf '%s' "${report}" | CLAUDE_CAPACITY_WAIT_ITEMS="${CLAUDE_CAPACITY_WAIT_ITEMS}" python3 -I -c '
+import json, os, re, sys
+try:
+	items = json.loads(os.environ["CLAUDE_CAPACITY_WAIT_ITEMS"])
+	report = json.load(sys.stdin)
+except ValueError:
+	sys.exit(0)
+count = items.get("count") if isinstance(items, dict) else None
+entries = items.get("items") if isinstance(items, dict) else None
+if not isinstance(count, int) or count <= 0 or not isinstance(entries, list):
+	sys.exit(0)
+server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+repo = os.environ.get("GITHUB_REPOSITORY", "")
+since = str(items.get("opened_at") or "unknown")
+reset = str(report.get("next_usable_at") or "unknown")
+lines = [f"Claude pool exhausted: {count} item(s) waiting since {since}; earliest reset {reset}."]
+for entry in entries[:10]:
+	if not isinstance(entry, dict):
+		continue
+	kind, item, run = str(entry.get("kind")), str(entry.get("item")), str(entry.get("run"))
+	if kind == "issue" and re.fullmatch(r"[0-9]+", item):
+		lines.append(f"- {server}/{repo}/issues/{item}")
+	elif kind == "pr" and re.fullmatch(r"[0-9]+", item):
+		lines.append(f"- {server}/{repo}/pull/{item}")
+	elif re.fullmatch(r"[0-9]+", run):
+		lines.append(f"- {server}/{repo}/actions/runs/{run}")
+if count > 10:
+	lines.append(f"... and {count - 10} more")
+print(str(count))
+print("\n".join(lines))
+' 2>/dev/null)" || waiting_text=""
+	if [ -n "${waiting_text}" ]; then
+		waiting_count="${waiting_text%%$'\n'*}"
+		waiting_text="${waiting_text#*$'\n'}"
+	fi
+fi
 read -r accounts gated auth_failed probe_failed alert < <(printf '%s' "${report}" | python3 -c '
 import json, sys
 r = json.load(sys.stdin)
 print(r["accounts"], len(r["gated"]), len(r["auth_failed"]), len(r["probe_failed"]), "true" if r["alert"] else "false")
 ')
+if [ "${alert}" != "true" ] && [ "${waiting_count}" -gt 0 ]; then
+	alert=true
+fi
 if [ "${alert}" != "true" ]; then
 	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" none
 	exit 0
@@ -72,12 +119,19 @@ fi
 window="${CLAUDE_POOL_HEALTH_WINDOW_MINUTES:-5}"
 [[ "${window}" =~ ^[0-9]+$ ]] || window=5
 minute=$((10#$(date -u +%M)))
-if [ "${minute}" -ge "${window}" ]; then
+# The capacity-resume step sets CLAUDE_CAPACITY_WAIT_ITEMS only when it ran,
+# i.e. in orchestrate_poll.yml's pool_window (which also opens an hour after
+# the last pass), so its waiting-items notice is not dropped here (#7370).
+if [ "${minute}" -ge "${window}" ] && [ "${waiting_count}" -eq 0 ]; then
 	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" outside_window
 	exit 0
 fi
 
 text="$(printf '%s' "${report}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["text"])')"
+if [ -n "${waiting_text}" ]; then
+	text="${waiting_text}${text:+
+${text}}"
+fi
 if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
 	text="${text}
 Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

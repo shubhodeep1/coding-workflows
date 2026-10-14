@@ -2904,6 +2904,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
       resolver_claude_rc=0
       _resolver_sandbox_attempt claude || resolver_claude_rc=$?
+      if [ "${resolver_claude_rc}" -eq 80 ]; then
+        # Claude capacity wait (issue #7370): no OpenCode fallback.
+        echo 'AI_ENGINE_CAPACITY_WAIT role=CONFLICT_RESOLVER outcome=deferred' >&2
+        if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+        emit_conflict_resolver_substate "Failed" "${attempt:-0}"
+        if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
+        exit 1
+      fi
       if [ "${resolver_claude_rc}" -eq 75 ]; then
         echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=claude_unavailable action=sandbox_opencode' >&2
         rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
