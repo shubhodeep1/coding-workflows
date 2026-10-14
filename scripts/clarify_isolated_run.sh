@@ -203,6 +203,9 @@ fi
 # exit 76 means Claude is unavailable for any other reason and the caller must
 # fail closed (AI_ENGINE_FALLBACK_POLICY=capacity, the default; plan item 3e,
 # D1). AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
+# Exit 80 means wait: Claude is out of capacity and
+# CLAUDE_POOL_CAPACITY_WAIT_ENABLED is true (off by default, issue #7251); the
+# caller must not run codex.
 if [ "${engine}" = claude ]; then
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	# Mirror ai_engine_fallback's record so the job's report step sees it.

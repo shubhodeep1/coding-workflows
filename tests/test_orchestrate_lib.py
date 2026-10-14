@@ -2308,6 +2308,51 @@ def test_detect_stalls_skips_needs_human_phase():
 	assert stalls == []
 
 
+# --- Claude capacity wait label (issue #7251, capacity-wait Phase 1) --------------
+
+
+def test_capacity_wait_label_outranks_the_stage_label():
+	assert orchestrate_lib.determine_phase(["ai:clarification", "ai:claude-capacity-wait"]) == "ai:claude-capacity-wait"
+	assert orchestrate_lib.determine_phase(["ai:implementing", "ai:claude-capacity-wait"]) == "ai:claude-capacity-wait"
+	# A human escalation still wins over the wait.
+	assert orchestrate_lib.determine_phase(["ai:claude-capacity-wait", "ai:needs-human"]) == "ai:needs-human"
+	priority = orchestrate_lib.PHASE_LABELS_PRIORITY
+	assert priority.index("ai:claude-capacity-wait") == priority.index("ai:needs-human") + 1
+	assert "ai:claude-capacity-wait" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:claude-capacity-wait" not in orchestrate_lib.TERMINAL_PHASES
+
+
+def test_detect_stalls_skips_capacity_wait_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:claude-capacity-wait"
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:clarification", "ai:claude-capacity-wait"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
+def test_removing_capacity_wait_label_resets_the_stall_window():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status_since_ts"] = 100
+	issue["last_seen_phase"] = "ai:claude-capacity-wait"
+	issue["stall_recovery_count"] = 1
+
+	orchestrate_lib.update_issue_timestamps(state, {"10": ["ai:clarification"]}, now_ts=5_000)
+
+	assert issue["last_seen_phase"] == "ai:clarification"
+	assert issue["status_since_ts"] == 5_000
+	assert issue["stall_recovery_count"] == 0
+
+
 def test_label_contract_matches_helper_catalog_and_phase_priority():
 	contract_path = Path(__file__).resolve().parent.parent / ".github" / "ai" / "label_contract.v1.json"
 	helper_path = Path(__file__).resolve().parent.parent / "scripts" / "label_helpers.sh"

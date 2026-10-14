@@ -1,6 +1,7 @@
 """Review Claude roles must use the credential-free sandbox, never host Claude."""
 
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -534,3 +535,25 @@ git ls-files -u -z > {str(tmp_path / "unmerged.z")!r}
 	assert _pair(tmp_path, repo).returncode == 0
 	assert (tmp_path / "pairs").read_text() == f"{LIVE_HOOK}\t{TEMPLATE_HOOK}\n"
 	assert _workspace("check-paths", repo, tmp_path / "model_paths").returncode == 0
+
+
+@pytest.mark.parametrize("path", ["scripts/review_untrusted_sandbox.sh", "scripts/clarify_isolated_run.sh"])
+def test_claude_branch_passes_the_capacity_wait_exit_through(path):
+	# Issue #7251 (capacity-wait Phase 1): ai_engine_fallback sets
+	# AI_ENGINE_FALLBACK_EXIT to 80 for a capacity wait; the runners must exit
+	# with it unchanged and never map it back to 75 or 1.
+	text = (ROOT / path).read_text(encoding="utf-8")
+	branch = text[text.index('if [ "${engine}" = claude ]; then'):]
+	assert "Exit 80 means wait" in text
+	assert "CLAUDE_POOL_CAPACITY_WAIT_ENABLED" in text
+	role_var = "claude_role" if "review" in path else "engine_role"
+	for reason in ("all_usage_limit", "all_accounts_failed"):
+		assert f'ai_engine_fallback "${{{role_var}}}" {reason}' in branch
+	assert not re.search(r'AI_ENGINE_FALLBACK_EXIT[^\n]*\|\|', branch)
+	assert "-eq 80" not in branch and "-ne 80" not in branch
+	if "review" in path:
+		assert 'rc="${AI_ENGINE_FALLBACK_EXIT}"' in branch
+		# A wait (non-zero) never reaches the validated transfer.
+		assert 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' in branch
+	else:
+		assert 'exit "${AI_ENGINE_FALLBACK_EXIT}"' in branch
