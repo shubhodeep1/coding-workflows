@@ -1882,6 +1882,14 @@ _guard_pr_merged="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '(.merged_at != nu
 if [ "${_guard_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
 fi
+# BUG-001 (analysis/workflow-optimization-2026-09-18.md): keep the live
+# head SHA from the same response (no extra API call) so the judge never
+# acts on a head it did not evaluate. Lowercased and validated as 40 hex;
+# anything else counts as unreadable.
+RB_LIVE_HEAD_SHA="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '.head.sha // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+if ! [[ "${RB_LIVE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+  RB_LIVE_HEAD_SHA=""
+fi
 unset _guard_pr_meta _guard_pr_merged
 
 if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
@@ -1900,6 +1908,33 @@ Leaving the linked issue in ai:review-blocked for operator review. Rerun the jud
   gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f body="${REFUSAL_COMMENT}" >/dev/null 2>&1 || true
   exit 0
+fi
+
+# BUG-001 (analysis/workflow-optimization-2026-09-18.md): bind every
+# action to the head the judge evaluated (RB_JUDGED_HEAD_SHA, embedded in
+# the judge prompt). A push during the judge call must not let the `fix`
+# no-change path post the head-gate success status / ai:ready-to-merge for
+# an unjudged head, nor let close_and_reissue act on it. A moved head skips
+# every action (stale_head) before any comment, label, status or close.
+# An unreadable live head refuses fix and close_and_reissue fail-closed
+# (head_unverified); merge actions keep their behaviour because their
+# `gh pr merge --match-head-commit "${RB_JUDGED_HEAD_SHA}"` already binds
+# them. judge_handled stays false so the review-blocked fallback fires.
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+  RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA:-}"
+  RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA_LC,,}"
+  if [ -n "${RB_LIVE_HEAD_SHA}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA_LC}" ]; then
+    echo "RB_JUDGE_STALE_HEAD pr=${PR_NUMBER} judged_head=${RB_JUDGED_HEAD_SHA:-unknown} live_head=${RB_LIVE_HEAD_SHA} action=${RB_ACTION}"
+    echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    echo "judge_skip_reason=stale_head" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+  if [ -z "${RB_LIVE_HEAD_SHA}" ] && { [ "${RB_ACTION}" = "fix" ] || [ "${RB_ACTION}" = "close_and_reissue" ]; }; then
+    echo "::warning::Review-blocked judge: could not read the live head of PR #${PR_NUMBER}; refusing ${RB_ACTION} (judge_skip_reason=head_unverified)."
+    echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    echo "judge_skip_reason=head_unverified" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
 fi
 
 RB_SECURITY_ORIGINAL_ACTION=""
@@ -2985,8 +3020,9 @@ print(m.group(1) if m else "")
           RB_EFFECTIVE_REISSUE_MODE="redo"
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else
-          RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
-          RB_HEAD_SHA="$(printf '%s' "${RB_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+          # BUG-001: the baseline is the head the judge evaluated, not a
+          # live re-read that may have moved during the judge call.
+          RB_HEAD_SHA="$(printf '%s' "${RB_JUDGED_HEAD_SHA:-}" | tr '[:upper:]' '[:lower:]')"
           if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             RB_EFFECTIVE_REISSUE_MODE="redo"
             RB_SPOT_FIX_REASON="head_ref_unavailable"
