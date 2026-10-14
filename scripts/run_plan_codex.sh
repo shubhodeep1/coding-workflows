@@ -157,8 +157,11 @@ Rules:
   public — AND that input is required to plan the change itself (not merely
   referenced as context the new implementation will replace), do not emit
   Q/Choices; emit exactly `BLOCKED: <short reason>`. Public 3rd-party
-  documentation URLs are NOT a BLOCKED trigger: fetch them via the web tool
-  (see the web-access rule below) and continue planning. Missing source files
+  documentation URLs are NOT a BLOCKED trigger: fetch them when a web tool is
+  available (see the web-access rule below) and continue planning. A public
+  fact that already exists (a published release tag's commit SHA, a package
+  version) is NOT a BLOCKED trigger either: without a web tool, ask for it in
+  the Q<ID>/Choices format as the web-access rule below says. Missing source files
   on the current ref are NOT external inputs — they are codebase state the
   plan can address; note them under "Risks and edge cases" as a conflict (per
   the CONFLICT DETECTION rule above) and continue planning.
