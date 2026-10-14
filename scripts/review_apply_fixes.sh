@@ -263,6 +263,13 @@ run_editor_codex_attempt() {
     else
       "${editor_opencode_cmd[@]}" claude < "${prompt_file}" > "${stdout_file}" || editor_claude_rc=$?
     fi
+    if [ "${editor_claude_rc}" -eq 80 ]; then
+      # Claude capacity wait (issue #7370): no OpenCode fallback; the run
+      # fails as claude_capacity, a pause the identical-failure cap skips.
+      echo "AI_ENGINE_CAPACITY_WAIT role=REVIEW_EDITOR outcome=deferred" >&2
+      if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+      return 80
+    fi
     [ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"
     echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=claude_unavailable action=opencode" >&2
   fi
@@ -2343,6 +2350,16 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   if [ "${cmd_rc}" -eq 79 ]; then
     echo "Editor attempt ${attempt}: OpenCode configuration/bootstrap failure; aborting without retry."
+    emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
+    exit 1
+  fi
+
+  if [ "${cmd_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no retry and no failure alert; the
+    # attempt already exported AUTOFIX_FAILURE_REASON=claude_capacity.
+    echo "Editor attempt ${attempt}: Claude pool at capacity; stopping without retry."
     emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"

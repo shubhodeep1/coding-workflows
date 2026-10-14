@@ -12,6 +12,11 @@ name: AI Implement
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: implement
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -115,6 +120,12 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       APPROVAL_COMMENT_ID: ${{ github.event.comment.id }}
+      # Claude capacity wait (issue #7370): the report step labels the issue
+      # and the capacity-resume pass re-posts the /approved command.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: issue
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ github.event.issue.number }}
+      CLAUDE_CAPACITY_WAIT_STAGE: implement
+      CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT: ${{ github.event.comment.id || '' }}
       SKIP_IMPLEMENT: "false"
       RESTORE_AWAITING_APPROVAL_ON_SKIP: "false"
 
@@ -3298,6 +3309,15 @@ jobs:
             fi
             rm -f "${attempt_stall_status_file}"
 
+            if [ "${cmd_rc}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): never codex, no retries,
+              # no diagnose or re-issue. The skip path restores
+              # ai:awaiting-approval; the report step labels the issue and the
+              # capacity-resume pass re-posts the /approved command.
+              echo "AI_ENGINE_CAPACITY_WAIT role=IMPLEMENT outcome=deferred stage=implement"
+              { echo "SKIP_IMPLEMENT=true"; echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true"; echo "CLAUDE_CAPACITY_WAIT=true"; } >> "${GITHUB_ENV}"
+              exit 0
+            fi
             if [ "${cmd_rc}" -eq 124 ]; then
               echo "::warning::Codex implement attempt ${attempt} hit the outer wall-clock limit (${attempt_wall}s)."
             fi
@@ -4624,7 +4644,8 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
-            if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
+            repair_direct_rc=0
+            CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
               AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
@@ -4638,7 +4659,14 @@ jobs:
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || repair_direct_rc=$?
+            if [ "${repair_direct_rc}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): stop without codex.
+              echo "AI_ENGINE_CAPACITY_WAIT role=IMPLEMENT_REPAIR outcome=deferred stage=implement"
+              { echo "SKIP_IMPLEMENT=true"; echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true"; echo "CLAUDE_CAPACITY_WAIT=true"; } >> "${GITHUB_ENV}"
+              exit 0
+            fi
+            if [ "${repair_direct_rc}" -ne 0 ]; then
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -6346,6 +6374,28 @@ jobs:
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh" implement before_remove
+
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          # Implement reports refused fallbacks through its own heal reporter;
+          # this step records Claude capacity waits (issue #7370) and is a
+          # no-op without fallback records.
+          fallback_support_dir="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              WORKFLOW_HEAL_ENABLED=false AI_ENGINE_FALLBACK_REPORT_WAITS_ONLY=true bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
 
       - name: Cleanup temporary artifacts
         if: always()

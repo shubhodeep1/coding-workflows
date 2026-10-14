@@ -16,7 +16,8 @@ REVIEW = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(
 SWEEP = (REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml").read_text(encoding="utf-8")
 CONSUMER = (REPO_ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
 STAGE = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
-EXCLUSION = "env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'"
+# Issue #7370: a Claude capacity wait (claude_capacity) is excluded the same way.
+EXCLUSION = "!contains(fromJSON('[\"provider_unavailable\",\"claude_capacity\"]'), env.AUTOFIX_FAILURE_REASON)"
 
 
 def _step(text: str, name: str) -> str:

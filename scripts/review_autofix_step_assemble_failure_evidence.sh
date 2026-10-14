@@ -33,6 +33,10 @@ provider_outage_reason_args=()
 provider_outage_helper="${SUPPORT_SCRIPTS_DIR:-}/provider_outage.py"
 if [ "${AUTOFIX_FAILURE_REASON:-}" = "provider_unavailable" ]; then
   provider_outage_reason_args=(--failure-reason provider_unavailable)
+elif [ "${AUTOFIX_FAILURE_REASON:-}" = "claude_capacity" ]; then
+  # Claude capacity wait (issue #7370): a repo-wide pause, kept as the marker
+  # reason so the identical-failure cap and heal streak skip it.
+  provider_outage_reason_args=(--failure-reason claude_capacity)
 elif [ -f "${provider_outage_helper}" ]; then
   provider_outage_log_args=()
   for provider_outage_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR:-/nonexistent}"/summariser_*.log \

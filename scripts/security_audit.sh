@@ -1514,14 +1514,16 @@ security_audit_claude_fallback()
 }
 
 # Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
-# post-filter reads), 1 after logging a fallback that may run codex, or 2
+# post-filter reads), 1 after logging a fallback that may run codex, 2
 # after logging a refused fallback (AI_ENGINE_FALLBACK_EXIT=76): the audit
-# then fails closed instead of running codex.
+# then fails closed instead of running codex, or 3 on a Claude capacity wait
+# (AI_ENGINE_FALLBACK_EXIT=80, issue #7370): the audit exits 80 without codex.
 security_audit_try_claude()
 {
 	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason=""
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
 		security_audit_claude_fallback all_gated
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
 		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 		return 1
 	fi
@@ -1538,6 +1540,7 @@ security_audit_try_claude()
 		# also logged AI_ENGINE_FALLBACK_REFUSED.
 		75) security_audit_claude_fallback claude_run; return 1 ;;
 		76) security_audit_claude_fallback claude_run; return 2 ;;
+		80) security_audit_claude_fallback claude_run; return 3 ;;
 		124) security_audit_claude_fallback timeout ;;
 		*) security_audit_claude_fallback "crashed_rc_${claude_rc}" ;;
 	esac
@@ -1739,6 +1742,12 @@ PY
 SECURITY_AUDIT_CLAUDE_RC=1
 if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ]; then
 	security_audit_try_claude && SECURITY_AUDIT_CLAUDE_RC=0 || SECURITY_AUDIT_CLAUDE_RC=$?
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 3 ]; then
+	# Claude capacity wait (issue #7370): no codex, no tracker write, no
+	# last-SHA update. Callers treat exit 80 as "retry later".
+	echo "security-audit: engine=claude outcome=deferred reason=claude_capacity_wait"
+	exit 80
 fi
 if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 2 ]; then
 	# A refused (non-capacity) Claude fallback never reruns on codex (D1).

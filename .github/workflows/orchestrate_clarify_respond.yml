@@ -33,6 +33,11 @@ name: AI Orchestrate Clarify Respond (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -59,6 +64,12 @@ jobs:
       cancel-in-progress: true
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # Claude capacity wait (issue #7370): the resume pass re-posts the
+      # questions comment (its first-line marker re-triggers this workflow).
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: issue
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ github.event.issue.number }}
+      CLAUDE_CAPACITY_WAIT_STAGE: clarify_respond
+      CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT: ${{ github.event.comment.id || '' }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -986,6 +997,13 @@ jobs:
             rc=0
             if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || rc=$?
+              if [ "${rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): no codex, no answer posted;
+                # the report step records the wait for the capacity-resume pass.
+                echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY_RESPOND outcome=deferred stage=clarify_respond"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${rc}" -eq 75 ]; then
                 # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
                 # attempt and the rest run the codex path (plan D1).
@@ -1017,7 +1035,7 @@ jobs:
           echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"
 
       - name: Self-critique pass for non-letter decisions
-        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -1069,6 +1087,13 @@ jobs:
             critic_rc=0
             if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || critic_rc=$?
+              if [ "${critic_rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): no codex, no answer posted;
+                # the report step records the wait for the capacity-resume pass.
+                echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY_RESPOND outcome=deferred stage=clarify_respond"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${critic_rc}" -eq 75 ]; then
                 CLARIFY_RESPOND_ENGINE="codex"
                 critic_rc=0
@@ -1095,6 +1120,13 @@ jobs:
                 revise_rc=0
                 if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
                   bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || revise_rc=$?
+                  if [ "${revise_rc}" -eq 80 ]; then
+                    # Claude capacity wait (issue #7370): no codex, no answer posted;
+                    # the report step records the wait for the capacity-resume pass.
+                    echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY_RESPOND outcome=deferred stage=clarify_respond"
+                    echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                    exit 0
+                  fi
                   if [ "${revise_rc}" -eq 75 ]; then
                     CLARIFY_RESPOND_ENGINE="codex"
                     revise_rc=0
@@ -1117,7 +1149,7 @@ jobs:
           fi
 
       - name: Semantic cache store
-        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1145,7 +1177,7 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success')
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -1159,7 +1191,7 @@ jobs:
       # paged, which is the alert clarify.yml left to this workflow.
       - name: Standalone RECOMMENDED fallback
         id: standalone_fallback
-        if: steps.check_orchestrator.outputs.mode == 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'failure'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.mode == 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'failure')
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1195,7 +1227,7 @@ jobs:
           tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
 
       - name: Data-provision guard
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true')
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true'))
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1229,7 +1261,7 @@ jobs:
       - name: Parse and post answer
         # A standalone worker failure without a RECOMMENDED fallback posts
         # nothing (the fallback step paged a human instead).
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true')
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1247,7 +1279,7 @@ jobs:
       # the PR body. The comment snapshot is the one read above; no extra
       # read. Never fails the run: the answer is already posted.
       - name: Record standalone auto-decisions
-        if: steps.check_orchestrator.outputs.mode == 'standalone' && env.SKIP_AUTO_ANSWER == 'false'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.mode == 'standalone' && env.SKIP_AUTO_ANSWER == 'false')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1294,7 +1326,7 @@ jobs:
           echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decider=$(printf '%s' "${AD_DECIDER}" | tr ' ,' '_') decisions=$(jq -r '.decisions | length' "${AD_DECISIONS_FILE}") ad_total=$(jq -r '.total' "${AD_RENDER_FILE}") setup_total=$(jq -r '.setup_total' "${AD_RENDER_FILE}")"
 
       - name: Reconfigure git auth for memory helper clones
-        if: always() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1313,7 +1345,7 @@ jobs:
         # SKIP_AUTO_ANSWER is false only after the poster posted an answer;
         # it is unset when nothing was posted (a standalone worker failure
         # with no RECOMMENDED fallback).
-        if: steps.check_orchestrator.outputs.respond == 'true' && env.SKIP_AUTO_ANSWER == 'false'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && env.SKIP_AUTO_ANSWER == 'false')
         run: |
           set -euo pipefail
 
@@ -1345,7 +1377,7 @@ jobs:
             --source-refs "${ISSUE_URL}"
 
       - name: Write run summary
-        if: always() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND || '80000' }}
         run: |
@@ -1371,7 +1403,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record memory run-end success event
-        if: success() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (success() && steps.check_orchestrator.outputs.respond == 'true')
         run: |
           set -euo pipefail
 
@@ -1398,7 +1430,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Record memory run-end failure event
-        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         run: |
           set -euo pipefail
 
@@ -1425,7 +1457,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Comment on issue failure
-        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1437,7 +1469,7 @@ jobs:
             -f body="Orchestrator clarify-respond workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
 
       - name: Telegram failure notification
-        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

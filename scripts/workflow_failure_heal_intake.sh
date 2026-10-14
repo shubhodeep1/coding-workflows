@@ -295,6 +295,11 @@ SOURCE_GEN="$(_pf '.source_gen // ""')"
 SOURCE_ROOT="$(_pf '.source_root // ""')"
 FAILURE_REASON="$(_pf '.failure_reason // ""')"
 FAILURE_STREAK="$(_pf '.failure_streak // ""')"
+if [ "${FAILURE_REASON}" = "claude_capacity" ]; then
+	# A Claude pool capacity wait is a repo-wide pause, not a defect (#7370).
+	log "skip reason=claude_capacity"
+	exit 0
+fi
 PAYLOAD_FAILURE_FINGERPRINT="$(_pf '.failure_fingerprint // ""')"
 FAILURE_EVIDENCE_FILE="${RUNTIME_DIR}/failure_evidence.txt"
 _pf '.failure_evidence // ""' > "${FAILURE_EVIDENCE_FILE}"
@@ -1723,6 +1728,11 @@ if command -v codex >/dev/null 2>&1; then
 	fi
 	if [ "${heal_model_rc}" -eq 0 ]; then
 		:
+	elif [ "${heal_model_rc}" -eq 80 ]; then
+		# Claude capacity wait (issue #7370): no codex diagnosis and no issue
+		# filed; the run is recorded for the capacity-resume pass to re-run.
+		log "skip reason=claude_capacity_wait"
+		exit 0
 	else
 		log "warn codex_exec_nonzero"
 		DIAGNOSIS_FALLBACK_REASON="failed (codex exited non-zero)"

@@ -2269,7 +2269,7 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	"""
 	for step_name, launch_line in (
 		("Run Codex implementation", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
-		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || repair_direct_rc=$?'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]

@@ -142,6 +142,9 @@ def sandbox(tmp_path: Path):
 			"FAKE_CLAUDE_BIN": str(fake),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
+			# The Claude capacity wait is on by default since issue #7370; the
+			# legacy fallback tests pin it off, the wait tests turn it on.
+			"CLAUDE_POOL_CAPACITY_WAIT_ENABLED": "false",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
 			"GH_TOKEN": "ghp_mustnotreachtheclaudecli0000000000000",
 			"OPENROUTER_API_KEY": "must-not-reach-the-cli",
@@ -1078,10 +1081,16 @@ def test_phase_workflows_report_refused_fallbacks_from_trusted_support(name: str
 	assert 'bash scripts/ai_engine_fallback_report.sh' not in step
 
 
-@pytest.mark.parametrize("name", ["implement.yml", "review_autofix.yml"])
-def test_implement_and_review_workflows_have_no_report_step(name: str) -> None:
-	text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
-	assert "ai_engine_fallback_report.sh" not in text
+@pytest.mark.parametrize("name", ["implement.yml", "scripts/review_autofix_step_claude_capacity_wait.sh"])
+def test_implement_and_review_report_only_capacity_waits(name: str) -> None:
+	# Implement and review report refusals through their own heal reporters;
+	# their report runs (issue #7370) only record capacity waits: no heal
+	# dispatch and no refusal Telegram note.
+	path = REPO_ROOT / name if name.startswith("scripts/") else REPO_ROOT / ".github" / "workflows" / name
+	text = path.read_text(encoding="utf-8")
+	runs = [line for line in text.splitlines() if re.search(r'bash "\$\{(?:fallback_report|_cw_report)\}"', line)]
+	assert runs, name
+	assert all("WORKFLOW_HEAL_ENABLED=false AI_ENGINE_FALLBACK_REPORT_WAITS_ONLY=true bash " in line for line in runs), name
 
 
 def _fake_gh(bin_dir: Path, log: Path, fail: bool = False) -> None:
@@ -1205,15 +1214,29 @@ def test_capacity_wait_turns_a_capacity_fallback_into_exit_80(sandbox: dict, rea
 
 
 @pytest.mark.parametrize("reason", CAPACITY_REASONS)
-@pytest.mark.parametrize("value", [None, "", "false", "FALSE", "yes", "1"])
-def test_capacity_wait_off_keeps_the_codex_fallback(sandbox: dict, reason: str, value: str | None) -> None:
-	extra = {} if value is None else {"CLAUDE_POOL_CAPACITY_WAIT_ENABLED": value}
+@pytest.mark.parametrize("value", ["false", "FALSE", "yes", "1"])
+def test_capacity_wait_off_keeps_the_codex_fallback(sandbox: dict, reason: str, value: str) -> None:
+	extra = {"CLAUDE_POOL_CAPACITY_WAIT_ENABLED": value}
 	result = _bash(sandbox, f'tg_send_msg() {{ :; }}; ai_engine_fallback PLAN {reason}; echo "RC=${{AI_ENGINE_FALLBACK_EXIT}}"', **extra)
 	assert _rc(result) == 75, result.stderr
 	assert "AI_ENGINE_CAPACITY_WAIT" not in result.stderr
 	assert _records(sandbox)[-1][5] == "codex"
-	invalid = value not in (None, "", "false", "FALSE")
+	invalid = value not in ("false", "FALSE")
 	assert ("invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED; capacity wait off." in result.stderr) is invalid
+
+
+@pytest.mark.parametrize("reason", CAPACITY_REASONS)
+@pytest.mark.parametrize("value", [None, ""])
+def test_capacity_wait_is_on_by_default(sandbox: dict, reason: str, value: str | None) -> None:
+	# Issue #7370 (Phase 4): unset or empty turns a capacity fallback into a wait.
+	env = dict(sandbox["env"])
+	if value is None:
+		env.pop("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", None)
+	else:
+		env["CLAUDE_POOL_CAPACITY_WAIT_ENABLED"] = value
+	result = _bash(dict(sandbox, env=env), f'tg_send_msg() {{ :; }}; ai_engine_fallback PLAN {reason}; echo "RC=${{AI_ENGINE_FALLBACK_EXIT}}"')
+	assert _rc(result) == 80, result.stderr
+	assert "invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED" not in result.stderr
 
 
 def test_capacity_wait_never_overrides_the_always_policy(sandbox: dict) -> None:
