@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7374,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7374\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7375\",\"pr_number\":7375,\"branch\":\"ai/issue-7374\",\"run_id\":\"38538973287\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38538973287\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"changelog.d/wfopt-2026-09-18-free-disk-space-pin.md\",\"tests/test_workflow_untrusted_input_contract.py\"]}",
+  "fingerprint": "2e3dbfa86bef583f143a2f19473968d248899a0d78d7c3c666228b7f2e3ed634",
+  "lineage": {
+    "issue_number": 7374,
+    "parent_ids": [],
+    "pr_number": 7375,
+    "run_id": "38538973287",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38538973287",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7375"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261014092049_1bcd6f9688",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7374,
+    "level": "run",
+    "pr_number": 7375,
+    "run_id": "38538973287"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7374: https://github.com/shubhodeep1/coding-workflows/pull/7375",
+  "timestamps": {
+    "created_at": "2026-10-14T09:20:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
