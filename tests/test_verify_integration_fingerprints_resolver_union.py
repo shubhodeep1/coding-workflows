@@ -199,6 +199,34 @@ def test_resolver_that_kept_only_the_other_side_still_fails():
 		assert "must_contain pattern missing" in out and "FINGERPRINT_RESOLVER_UNION_MERGE_V1" not in out, out
 
 
+def test_resolver_that_took_other_side_verbatim_after_sub_issue_deletion_still_fails():
+	# The sub-issue deleted a space; main edited the same line. Taking main's line
+	# verbatim keeps the captured characters in order but undoes the deletion.
+	base_line = "\tx='foo bar'"
+	sub_line = "\tx='foobar'"
+	main_line = "\tx='foo bar'  # main"
+	regex = re.escape(sub_line.strip())
+	with _sandbox_repo() as repo:
+		_write(repo, _file_with(base_line))
+		_run_git(repo, "commit", "--quiet", "-m", "base", date=_D0_BASE)
+		_run_git(repo, "checkout", "--quiet", "-b", "orchestrator/project-1")
+		_write(repo, _file_with(sub_line))
+		_run_git(repo, "commit", "--quiet", "-m", "AI implementation for issue #7358 (#7365)", date=_D1_IMPL)
+		_run_git(repo, "checkout", "--quiet", "main")
+		_write(repo, _file_with(main_line))
+		_run_git(repo, "commit", "--quiet", "-m", "main edit (#7376)", date=_D2_MAIN)
+		_run_git(repo, "checkout", "--quiet", "orchestrator/project-1")
+		_run_git(repo, "merge", "--no-ff", "--no-commit", "main", date=_D3_RESOLVE, check=False)
+		_write(repo, _file_with(main_line))
+		_run_git(repo, "commit", "--quiet", "-m", "[ai-merge-resolve] resolve merge conflicts", date=_D3_RESOLVE)
+		head = _run_git(repo, "rev-parse", "HEAD").strip()
+		state = _fingerprint_state()
+		state["7358"]["must_contain"] = [{"file": _TARGET_PATH, "regex": regex}]
+		rc, out = _verify(repo, head, state)
+		assert rc == 1, out
+		assert "FINGERPRINT_RESOLVER_UNION_MERGE_V1" not in out, out
+
+
 def test_resolver_that_dropped_part_of_the_sub_issue_line_still_fails():
 	partial = _UNION_LINE.replace("|Bad credentials", "")
 	with _sandbox_repo() as repo:

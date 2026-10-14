@@ -777,7 +777,9 @@ def _is_must_contain_resolver_union_merge_false_positive(
 					if not inserted:
 						continue
 					for other_line in other_lines:
-						if other_line and _only_inserts(other_line, merged_line) is not None and all(run in other_line for run in inserted):
+						# other_line == merged_line would make both checks vacuous: a resolver
+						# that took the other side verbatim (undoing a sub-issue deletion) must fail.
+						if other_line and other_line != merged_line and _only_inserts(other_line, merged_line) is not None and all(run in other_line for run in inserted):
 							result = sha
 							break
 					if result:
