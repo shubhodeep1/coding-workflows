@@ -390,7 +390,7 @@ _ai_engine_pool_isolated()
 
 AI_ENGINE_CLAUDE_NO_WEB_NOTE='## Engine capabilities
 
-This run uses the Claude engine. Web search and web fetch are not available here; do not try them, even where a task prompt says web search is available (that text is written for Codex runs). Take facts from outside the repository, such as a release tag'"'"'s commit SHA, a package version or an API endpoint, only from the task text and the repository. Use a fact the task states as verified as given; ask for one the task depends on that is not there instead of guessing it.'
+This run uses the Claude engine. Web search and web fetch are not available here; do not try them, even where a task prompt or these instructions say web search is available (that text is written for Codex runs). Take facts from outside the repository, such as a release tag'"'"'s commit SHA, a package version or an API endpoint, only from the task text and the repository. Use a fact the task states as verified as given. When one the task depends on is not there, do not guess it: ask for it only where this phase allows questions, otherwise emit `BLOCKED: <short reason>` or the phase'"'"'s structured result.'
 
 _ai_engine_json_field()
 {
@@ -414,7 +414,7 @@ _ai_engine_instructions_file()
 		"${_AI_ENGINE_DIR}/../unattended_system_instructions.md"; do
 		if [ -n "${candidate}" ] && [ -f "${candidate}" ]; then
 			if combined="$(mktemp "${RUNNER_TEMP:-/tmp}/claude-instructions-XXXXXXXX.md" 2>/dev/null)" \
-				&& { cat -- "${candidate}"; printf '\n\n%s\n' "${AI_ENGINE_CLAUDE_NO_WEB_NOTE}"; } > "${combined}" 2>/dev/null; then
+				&& { cat -- "${candidate}" && printf '\n\n%s\n' "${AI_ENGINE_CLAUDE_NO_WEB_NOTE}"; } > "${combined}" 2>/dev/null; then
 				printf '%s\n' "${combined}"
 			else
 				[ -z "${combined:-}" ] || rm -f -- "${combined}"

@@ -7,4 +7,4 @@ What this means for operators: a Claude-engine plan no longer stalls trying a we
 
 ### For contributors
 
-`_ai_engine_instructions_file` in `scripts/ai_engine.sh` now prints a copy of the trusted `unattended_system_instructions.md` under `RUNNER_TEMP` with `AI_ENGINE_CLAUDE_NO_WEB_NOTE` appended. It is used by `claude_run` and by the Claude branch of `scripts/clarify_isolated_run.sh`. If the copy cannot be written it prints the original path, so the run still starts. Codex runs are unchanged.
+`_ai_engine_instructions_file` in `scripts/ai_engine.sh` now prints a copy of the trusted `unattended_system_instructions.md` under `RUNNER_TEMP` with `AI_ENGINE_CLAUDE_NO_WEB_NOTE` appended. It is used by `claude_run`, by the Claude branch of `scripts/clarify_isolated_run.sh` and by the Claude roles in `scripts/review_untrusted_sandbox.sh`. If reading the original fails, it prints the original path as well. If the copy cannot be written it prints the original path, so the run still starts. Codex runs are unchanged.
