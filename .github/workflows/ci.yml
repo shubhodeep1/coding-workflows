@@ -878,9 +878,13 @@ jobs:
           # counts as failed.
           heal_shards=4
           heal_module="tests/test_workflow_failure_heal.py"
-          rm -f /tmp/heal_shard_*.txt /tmp/heal_shard_*.log /tmp/heal_shard_*.rc
+          rm -f /tmp/heal_collect.log /tmp/heal_shard_*.txt /tmp/heal_shard_*.log /tmp/heal_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${heal_module}" \
-            | grep -F "${heal_module}::" | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/heal_tests.txt
+            > /tmp/heal_collect.log 2>&1 \
+            || { cat /tmp/heal_collect.log; echo "::error::Test collection failed for ${heal_module}."; exit 1; }
+          { grep -F "${heal_module}::" /tmp/heal_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/heal_tests.txt
           heal_test_count="$(wc -l < /tmp/heal_tests.txt | tr -d '[:space:]')"
           if ! [ "${heal_test_count}" -ge 1 ] 2>/dev/null; then
             echo "::error::No tests collected from ${heal_module}."
