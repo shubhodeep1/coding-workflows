@@ -273,13 +273,7 @@ def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
 		example = _readme_wrapper_example(template_name)
 		predicate = example["jobs"][job_name].get("if")
 		assert isinstance(predicate, str), f"README {template_name}.yml example lacks jobs.{job_name}.if"
-		accepted = {_canonical_predicate(job_name)}
-		if job_name == "clarify":
-			# The PR-dependency release clause (#7328) only admits the
-			# poller's GH_PAT-verified release marker; an example without it
-			# keeps every trust clause and starts clarify on fewer comments.
-			accepted.add(_canonical_predicate(job_name).replace(" || " + RELEASE_MARKER_CLAUSE, ""))
-		assert " ".join(predicate.split()) in accepted, (
+		assert " ".join(predicate.split()) == _canonical_predicate(job_name), (
 			f"README {template_name}.yml example predicate drifted from the reusable workflow"
 		)
 		expected_uses = f"shubhodeep1/coding-workflows/.github/workflows/{PHASE_WORKFLOWS[job_name][0].rsplit('/', 1)[1]}@<40-character-release-sha>"
@@ -308,7 +302,13 @@ _GH_STUB = """gh_retry()
 	if [ "${STUB_LOGIN_FAIL:-}" = "1" ]; then
 		return 1
 	fi
-	printf '%s\\n' "${STUB_LOGIN}"
+	case "$*" in
+		*issues/comments/*)
+			[ -n "${STUB_SOURCE_COMMENT:-}" ] || return 1
+			printf '%s\\n' "${STUB_SOURCE_COMMENT}"
+			;;
+		*) printf '%s\\n' "${STUB_LOGIN}" ;;
+	esac
 }
 """
 
@@ -325,7 +325,7 @@ def _release_block() -> str:
 	return script[begin:end]
 
 
-def _run_release_block(body: str, association: str, comment_login: str, token_login: str = "pipeline-bot", login_fail: bool = False, forced: str = "true") -> dict:
+def _run_release_block(body: str, association: str, comment_login: str, token_login: str = "pipeline-bot", login_fail: bool = False, forced: str = "true", source_comment: str = "") -> dict:
 	import os
 	import subprocess
 	import tempfile
@@ -349,6 +349,8 @@ def _run_release_block(body: str, association: str, comment_login: str, token_lo
 			"COMMENT_USER_LOGIN": comment_login,
 			"STUB_LOGIN": token_login,
 			"STUB_LOGIN_FAIL": "1" if login_fail else "",
+			"STUB_SOURCE_COMMENT": source_comment,
+			"GITHUB_REPOSITORY": "o/r",
 		}
 		result = subprocess.run(["bash", "-c", script], env=env, cwd=workdir, capture_output=True, text=True, check=True)
 	last = result.stdout.strip().splitlines()[-1]
@@ -364,14 +366,16 @@ def test_clarify_release_marker_clause_is_pinned_in_every_wrapper() -> None:
 	for relative_path in PHASE_WORKFLOWS["clarify"]:
 		predicate = _normalized_job_predicate(relative_path, "clarify")
 		assert RELEASE_MARKER_CLAUSE in predicate, f"{relative_path} lost the PR-dependency release clause"
-	_assert_clauses(
-		RELEASE_MARKER_CLAUSE,
-		(
-			"github.event.comment.user.type == 'User'",
-			"!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
-			"github.event.issue.pull_request == null",
-		),
-	)
+		# The release clause is the only path for an author without a trusted
+		# association; ordinary /reclarify comments still require one.
+		assert predicate.count("!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)") == 1, relative_path
+		_assert_clauses(
+			predicate,
+			(
+				"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association) && "
+				"(startsWith(github.event.comment.body, '/reclarify')",
+			),
+		)
 
 
 def test_clarify_release_runs_in_its_own_concurrency_group() -> None:
@@ -421,6 +425,46 @@ def test_clarify_release_classification_verifies_the_pipeline_login() -> None:
 		assert (trusted_other["release"], trusted_other["forced"], trusted_other["trusted"]) == ("false", "true", "true"), body
 
 
+def test_clarify_release_replay_is_verified_against_its_source_comment() -> None:
+	import json
+
+	replay = "/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=777 -->"
+
+	def source(login: str = "Pipeline-Bot", issue: str = "42", body: str = RELEASE_BODY) -> str:
+		return json.dumps({"user": {"login": login}, "issue_url": f"https://api.github.com/repos/o/r/issues/{issue}", "body": body})
+
+	verified = _run_release_block(replay, "OWNER", "pipeline-bot", source_comment=source(body=RELEASE_BODY + "\r\n"))
+	assert (verified["release"], verified["forced"], verified["trusted"]) == ("true", "false", "true")
+	assert "reason=verified_replay outcome=restart issue=42" in verified["stdout"]
+
+	for bad in (
+		source(login="maintainer"),
+		source(issue="142"),
+		source(body="/reclarify"),
+		"",
+	):
+		other = _run_release_block(replay, "OWNER", "pipeline-bot", source_comment=bad)
+		assert (other["release"], other["forced"], other["trusted"]) == ("false", "true", "true"), bad
+		assert "reason=replay_source_unverified outcome=human_reclarify" in other["stdout"], bad
+
+	by_human = _run_release_block(replay, "OWNER", "maintainer", source_comment=source())
+	assert (by_human["release"], by_human["forced"]) == ("false", "true")
+	assert "reason=author_mismatch outcome=human_reclarify" in by_human["stdout"]
+
+	plain = _run_release_block("/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=x -->", "OWNER", "pipeline-bot", source_comment=source())
+	assert (plain["release"], plain["forced"]) == ("false", "true")
+	assert "pr_dependency_release" not in plain["stdout"]
+
+
+def test_clarify_memory_events_skip_untrusted_comments() -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8"))
+	steps = {step.get("name"): step for step in workflow["jobs"]["clarify"]["steps"]}
+	gate = "steps.clarify_route.outputs.comment_route_trusted != 'false'"
+	for name in ("Record clarification run start", "Record clarification run completed", "Record clarification run failed"):
+		assert gate in str(steps[name].get("if", "")), name
+	assert 'echo "comment_route_trusted=${COMMENT_ROUTE_TRUSTED}" >> "$GITHUB_OUTPUT"' in _clarify_route_step()["run"]
+
+
 def test_clarify_route_untrusted_comment_writes_nothing() -> None:
 	script = _clarify_route_step()["run"]
 	assert "gate=route reason=untrusted_comment_author outcome=skip issue=${ISSUE_NUMBER}" in script
@@ -449,9 +493,9 @@ def test_clarify_route_restarts_a_verified_release_as_automated() -> None:
 	import subprocess
 	import tempfile
 
-	if shutil.which("jq") is None:
-		# The route step needs jq; CI runners carry it.
-		return
+	# The route step needs jq; CI runners carry it. Fail rather than pass
+	# without running the scenarios.
+	assert shutil.which("jq") is not None, "jq is required for the clarify route test"
 	step = _clarify_route_step()
 	with tempfile.TemporaryDirectory() as workdir:
 		root = Path(workdir)
