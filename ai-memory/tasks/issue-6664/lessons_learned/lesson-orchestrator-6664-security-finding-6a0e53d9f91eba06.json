@@ -1,0 +1,27 @@
+{
+  "discovered_at": "2026-10-14T02:42:42Z",
+  "issue_number": 6664,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Unattended Claude pipeline completion: Claude in every role (phase 3) and blocker reduction (phase 4)\" (#6664): the security pass reported findings that needed fixes (13 time(s)). Causes: A01:2021-Broken Access Control in scripts/security_audit.sh:2006: Include changed and deleted hunks when attributing findings. Keep findings in changed files blocking whenever attributio; STRIDE: Information Disclosure in scripts/summarize_reviewer_consensus.sh:394: Never process PR-derived review text with host OpenCode. On sandbox failure, fail closed and retry automatically; allow; A08:2021-Software and Data Integrity Failures in scripts/review_synthesise_smoke.sh:560: Run synthesized tests in a credential-free, network-restricted sandbox; never execute model-generated shell in the crede; A01:2021-Broken Access Control in scripts/security_audit.sh:2092: Check dependencies at both base and head. Keep older-line findings blocking after guard deletions unless automated prove; A; A08:2021-Software and Data Integrity Failures in scripts/review_synthesise_smoke.sh:499: Never execute generated bodies on the host; route them to a credential-free, network-disabled sandbox and fail closed wh; A08:2021-Software and Data Integrity Failures in scripts/validate_driver.sh:790: Dispatch synthesized tests only to a credential-free, network-disabled sandbox; skip them if sandbox setup f; A08:2021-Software and Data Integrity Failures in scripts/review_synthesise_smoke.sh:499: Run generated bodies only in a credential-free, network-disabled sandbox; make the wrapper refuse execution elsewhere.; A08:2021-Software and Data Integrity Failures in scripts/validate_driver.sh:790: Route every synthesized test to a credential-free, network-disabled sandbox; skip it automatically if isolatio; A03:2021-Injection in scripts/validate_process.sh:1586: Apply strict manifest-value validation or shell-context escaping, and make the fallback runner isolate rendered tests or; STRIDE: Information Disclosure in scripts/validate_process.sh:4182: Run the entire harness in a credential-free, separate user and PID namespace with isolated Docker access; fail closed if; STRIDE: Information Disclosure in scripts/validate_process.sh:4186: Apply the same credential-free user and PID isolation to the fallback runner, or fail closed rather than execute tests o; A05:2021-Security Mi; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:18370: Use one observed head SHA for checks and freshness, and require --match-head-commit on every direct or auto-merge attemp; STRIDE: Tampering in scripts/orchestrate_poll_process.sh:21250: Defer merges on unknown freshness results; retry automatically on the next tick or use a verified local diff before proc; STRIDE: Spoofin; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:18370: Resolve the head SHA once from `merge_pr_json` and pass that same SHA to `_pr_checks_completed`, `_pr_base_fresh_for_mer; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:21256: Add `--match-head-commit \"${_pw_head_sha}\"` to both merge calls. Skip the merge when `_pw_head_sha` is not a full SHA.; A01:; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:18483: Resolve the head SHA once from merge_pr_json and reject it unless it is 40 hex characters. Pass that same SHA to _pr_che; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:21369: Add --match-head-commit \"${_pw_head_sha}\" to both merge calls, and skip the merge when _pw_head_sha is not a full 40-hex; A0; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:18609: Read the head SHA once from merge_pr_json and refuse the merge unless it is 40 hex characters. Pass that SHA to _pr_chec; A01:2021-Broken Access Control in scripts/orchestrate_poll_process.sh:21495: Add --match-head-commit \"${_pw_head_sha}\" to both merge calls. Skip the merge when _pw_head_sha is not a full 40-hex SHA; A0; A01:2021",
+  "phase": "orchestrator_completion",
+  "pr_number": 7346,
+  "record_id": "lesson-orchestrator-6664-security-finding-6a0e53d9f91eba06",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security_finding",
+    "project:6664",
+    "file:scripts/security_audit.sh",
+    "file:scripts/summarize_reviewer_consensus.sh",
+    "file:scripts/review_synthesise_smoke.sh",
+    "file:scripts/validate_driver.sh",
+    "file:scripts/validate_process.sh",
+    "file:scripts/review_run_judge_interim.sh",
+    "file:scripts/validation_refresh_runner.py",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:scripts/workflow_failure_heal.py",
+    "file:scripts/pr_checks_lib.sh",
+    "file:scripts/workflow_failure_heal_autofix_report.sh",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/review_head_gate.sh"
+  ]
+}
