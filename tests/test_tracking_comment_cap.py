@@ -312,6 +312,15 @@ def test_cap_prune_falls_back_to_run_comments_when_the_reread_fails(tmp_path: Pa
 	assert _calls(mock) == ["GET refresh"] + [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)]
 
 
+def test_cap_prune_does_not_retry_ids_deleted_earlier_in_the_run(tmp_path: Path) -> None:
+	# An earlier prune deleted 10, 11, 20, 21; the cap re-read then fails and the
+	# fallback COMMENTS snapshot still lists them, so they must not be retried.
+	script = "prune_state_comment_chains\nprune_state_comment_chains refresh\n"
+	result, mock = _run_poller_functions(tmp_path, script, _three_old_chains(), MOCK_REFRESH_FAILS="1")
+	assert result.returncode == 0, result.stderr
+	assert _calls(mock) == [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)] + ["GET refresh"]
+
+
 def test_direct_tracking_posts_do_not_end_the_run() -> None:
 	# Judge verdict, judge override and the two "Project Failed" posts (Q139).
 	text = POLLER.read_text(encoding="utf-8")

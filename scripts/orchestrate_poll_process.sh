@@ -3364,7 +3364,7 @@ post_state_comment() {
 # Logs: STATE_PRUNE tracking_issue=<n> deleted=<n> failed=<n> remaining=<n> outcome=done|budget_exhausted|skip [reason=]
 prune_state_comment_chains() {
   local refresh="${1:-}" raw_file
-  local enabled max_deletes base plan_file done_file comments_file plan_json ids id deleted=0 failed=0 used remaining
+  local enabled max_deletes base plan_file done_file tried_file comments_file plan_json ids id deleted=0 failed=0 used remaining
   enabled="$(printf '%s' "${ORCH_STATE_PRUNE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
   case "${enabled}" in
     false|0|no|off) return 0 ;;
@@ -3385,8 +3385,11 @@ prune_state_comment_chains() {
   base="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/state_prune_${TRACKING_NUM}"
   plan_file="${base}.plan"
   done_file="${base}.done"
+  # Ids already tried before a refresh: still skipped, but outside the new budget.
+  tried_file="${base}.tried"
   if [ "${refresh}" = "refresh" ]; then
     rm -f "${plan_file}"
+    cat "${done_file}" >> "${tried_file}" 2>/dev/null || true
     : > "${done_file}"
   fi
   if [ ! -s "${plan_file}" ]; then
@@ -3422,9 +3425,9 @@ prune_state_comment_chains() {
       return 0
     fi
   fi
-  touch "${done_file}"
+  touch "${done_file}" "${tried_file}"
   used="$(wc -l < "${done_file}" | tr -d '[:space:]')"
-  ids="$(grep -vxF -f "${done_file}" "${plan_file}" | grep -E '^[1-9][0-9]*$' || true)"
+  ids="$(grep -vxF -f "${done_file}" -f "${tried_file}" "${plan_file}" | grep -E '^[1-9][0-9]*$' || true)"
   [ -n "${ids}" ] || return 0
   while IFS= read -r id; do
     [ "${used}" -lt "${max_deletes}" ] || break
@@ -3437,7 +3440,7 @@ prune_state_comment_chains() {
       failed=$((failed + 1))
     fi
   done <<< "${ids}"
-  remaining="$(grep -vxF -f "${done_file}" "${plan_file}" | grep -cE '^[1-9][0-9]*$' || true)"
+  remaining="$(grep -vxF -f "${done_file}" -f "${tried_file}" "${plan_file}" | grep -cE '^[1-9][0-9]*$' || true)"
   if [ "${remaining:-0}" -gt 0 ]; then
     echo "STATE_PRUNE tracking_issue=${TRACKING_NUM} deleted=${deleted} failed=${failed} remaining=${remaining} outcome=budget_exhausted"
   else
