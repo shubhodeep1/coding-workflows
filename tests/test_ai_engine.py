@@ -1270,7 +1270,7 @@ def _fake_tracker(tmp_path: Path, opened: bool, tracker: str = "900") -> Path:
 	return stub
 
 
-def _run_wait_report(tmp_path: Path, records: str, opened: bool = True, comments: dict | None = None, **extra: str):
+def _run_wait_report(tmp_path: Path, records: str, opened: bool = True, comments: dict | None = None, tracker: str = "900", **extra: str):
 	bin_dir = tmp_path / "wbin"
 	bin_dir.mkdir(exist_ok=True)
 	log = tmp_path / "wait-gh.log"
@@ -1291,7 +1291,7 @@ def _run_wait_report(tmp_path: Path, records: str, opened: bool = True, comments
 		"GITHUB_WORKFLOW_REF": "owner/consumer/.github/workflows/ai-plan.yml@refs/heads/main",
 		"REPORT_WORKFLOW_NAME": "Plan",
 		"PYTHONDONTWRITEBYTECODE": "1",
-		"CLAUDE_CAPACITY_WAIT_TRACKER_PY": str(_fake_tracker(tmp_path, opened)),
+		"CLAUDE_CAPACITY_WAIT_TRACKER_PY": str(_fake_tracker(tmp_path, opened, tracker)),
 		**extra,
 	}
 	result = subprocess.run(
@@ -1316,8 +1316,9 @@ def test_report_records_a_capacity_wait_on_the_item_and_tracker(tmp_path: Path) 
 	assert result.returncode == 0, result.stderr
 	assert any("issues/7/labels" in call and "labels[]=ai:claude-capacity-wait" in call for call in calls)
 	assert posts == [
-		"7\t<!-- ai:claude-capacity-wait:v1 stage=planning source=123 run=42 role=PLAN,CLARIFY -->",
+		# The tracker records the run first; the item is labelled only after.
 		"900\t<!-- ai:claude-capacity-wait-item:v1 kind=issue item=7 workflow=ai-plan.yml run=42 role=PLAN,CLARIFY -->",
+		"7\t<!-- ai:claude-capacity-wait:v1 stage=planning source=123 run=42 role=PLAN,CLARIFY -->",
 	]
 	tracker_call = (tmp_path / "tracker-calls.txt").read_text(encoding="utf-8")
 	assert "open --repo owner/consumer --kind capacity --provider claude-pool --status all_gated" in tracker_call
@@ -1382,3 +1383,30 @@ def test_report_ignores_a_wait_record_with_a_non_capacity_class(tmp_path: Path) 
 	assert result.returncode == 0
 	assert "outcome=none records=1 codex_fallbacks=0 waits=0" in result.stdout
 	assert calls == []
+
+
+def test_report_wait_does_not_label_the_item_when_the_tracker_record_fails(tmp_path: Path) -> None:
+	# provider_outage.py open failed (no tracker number): a label without a
+	# tracker marker would hide the item from stall recovery and from the
+	# resume pass, so the item is not labelled.
+	result, calls, posts = _run_wait_report(
+		tmp_path, WAIT_RECORD, tracker="", CLAUDE_CAPACITY_WAIT_ITEM_KIND="issue", CLAUDE_CAPACITY_WAIT_ITEM_NUMBER="7",
+	)
+	assert result.returncode == 0, result.stderr
+	assert not any("/labels" in call for call in calls)
+	assert posts == ["7\t<!-- ai:claude-capacity-wait:v1 stage=none source=none run=42 role=PLAN -->"]
+	assert "label=skipped marker=posted tracker=none tracker_marker=failed" in result.stdout
+	assert "not labelled ai:claude-capacity-wait because the tracker record failed" in result.stdout
+
+
+def test_report_wait_alert_names_an_unavailable_tracker(tmp_path: Path) -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	assert 'tracker_ref="tracker unavailable (lookup or create failed)"' in text
+	assert "tracker #none" not in text
+
+
+@pytest.mark.parametrize("value", [" true", "true ", "\tTRUE\n"])
+def test_capacity_wait_switch_trims_whitespace_like_provider_outage(sandbox: dict, value: str) -> None:
+	result = _bash(sandbox, 'tg_send_msg() { :; }; ai_engine_fallback PLAN all_gated; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"', CLAUDE_POOL_CAPACITY_WAIT_ENABLED=value)
+	assert _rc(result) == 80, result.stderr
+	assert "invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED" not in result.stderr

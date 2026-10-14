@@ -19849,7 +19849,9 @@ PY
     # invoking the judge (e.g. the empty-editor failure mode) never
     # escape.  ai:review-blocked is now recovered here via the
     # dispatch_rb_judge action (see execute_stall_recovery_action).
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
+    # ai:claude-capacity-wait (issue #7251) is owned by the capacity-wait
+    # resume pass, like DEDICATED_HANDLER_PHASES in orchestrate_lib.py.
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:claude-capacity-wait" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 

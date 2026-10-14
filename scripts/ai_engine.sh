@@ -227,6 +227,10 @@ ai_engine_capacity_wait_enabled()
 	# the resume pass that re-dispatches waiting work lands in Phase 4, which
 	# flips this default to on. Do not enable it before then.
 	local raw="${CLAUDE_POOL_CAPACITY_WAIT_ENABLED:-}"
+	# Trim surrounding whitespace like provider_outage.py's .strip(), so both
+	# read the same value as on or off.
+	raw="${raw#"${raw%%[![:space:]]*}"}"
+	raw="${raw%"${raw##*[![:space:]]}"}"
 	case "${raw,,}" in
 		true) return 0 ;;
 		""|false) return 1 ;;

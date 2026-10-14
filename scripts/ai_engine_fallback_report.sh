@@ -24,7 +24,8 @@
 # true; issue #7251, capacity-wait Phase 1) are recorded instead:
 #
 #   1. the work item (CLAUDE_CAPACITY_WAIT_ITEM_KIND issue|pr with a number)
-#      gets the `ai:claude-capacity-wait` label and one
+#      gets the `ai:claude-capacity-wait` label (only after step 2 recorded
+#      the run on the tracker; step 2 runs first) and one
 #      `<!-- ai:claude-capacity-wait:v1 stage= source= run= role= -->` comment
 #      (skipped when the GH_PAT login already posted one for this run);
 #   2. the `kind=capacity` provider-outage tracker is opened or reused
@@ -32,7 +33,8 @@
 #      `<!-- ai:claude-capacity-wait-item:v1 kind= item= workflow= run= role= -->`
 #      comment (skipped when the GH_PAT login already posted one for this
 #      item and run);
-#   3. one Telegram WARNING is sent only when this call opened the tracker.
+#   3. one Telegram WARNING is sent only when this call opened the tracker
+#      (or provider_outage.py could not read or create one).
 #   Markers posted by any other login never count for deduplication.
 #
 # API calls (CLAUDE.md §15): one dispatch per refused (role, reason) pair, at
@@ -227,28 +229,6 @@ report_capacity_wait()
 	fi
 	comments_file="${REPORT_DIR}/wait-comments.json"
 
-	if [ "${kind}" != "run" ]; then
-		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPO}/issues/${number}/labels" -f "labels[]=${CAPACITY_WAIT_LABEL}" >/dev/null 2>&1; then
-			label_state="applied"
-		else
-			label_state="failed"
-			echo "::warning::Claude capacity wait: could not label ${kind} #${number} ${CAPACITY_WAIT_LABEL}."
-		fi
-		marker_state="failed"
-		if gh_retry gh api --paginate --slurp "repos/${REPO}/issues/${number}/comments?per_page=100" > "${comments_file}" 2>/dev/null; then
-			local present_rc=0
-			wait_marker_present "${comments_file}" "${login}" "<!-- ai:claude-capacity-wait:v1 [^>]*\brun=${run_token} " || present_rc=$?
-			if [ "${present_rc}" -eq 0 ]; then
-				marker_state="present"
-			elif [ "${present_rc}" -eq 1 ]; then
-				if gh_retry gh api -X POST "repos/${REPO}/issues/${number}/comments" -f "body=Claude pool at capacity: this work is waiting for a Claude account instead of falling back to codex/OpenCode (roles ${roles}, stage ${stage})."$'\n\n'"<!-- ai:claude-capacity-wait:v1 stage=${stage} source=${source_comment} run=${run_token} role=${roles} -->" >/dev/null 2>&1; then
-					marker_state="posted"
-				fi
-			fi
-		fi
-		[ "${marker_state}" != "failed" ] || echo "::warning::Claude capacity wait: could not record the wait marker on ${kind} #${number}."
-	fi
-
 	if [ ! -f "${TRACKER_PY}" ] || [ -L "${TRACKER_PY}" ]; then
 		log "wait outcome=skip reason=tracker_helper_missing item=${kind}:${number}"
 		tracker_marker="failed"
@@ -275,13 +255,42 @@ report_capacity_wait()
 		# the tracker (or could not read or create one), so this alerts once.
 		if [ -s "${alert_file}" ] && [ ! -L "${alert_file}" ]; then
 			if type tg_send_msg >/dev/null 2>&1; then
-				tg_send_msg "Claude pool exhausted in ${REPO}: work is waiting, not falling back. Hourly re-check; tracker #${tracker}."$'\n'"Run: ${REPORTER_RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+				local tracker_ref="tracker #${tracker}"
+				[ "${tracker}" != "none" ] || tracker_ref="tracker unavailable (lookup or create failed)"
+				tg_send_msg "Claude pool exhausted in ${REPO}: work is waiting, not falling back. Hourly re-check; ${tracker_ref}."$'\n'"Run: ${REPORTER_RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 				alert_state="sent"
 			else
 				alert_state="unavailable"
 			fi
 		fi
 	fi
+	if [ "${kind}" != "run" ]; then
+		# Label only once the tracker lists this run: the label makes stall
+		# recovery leave the item alone, and the resume pass finds waiting work
+		# through the tracker markers, so a label without one would strand it.
+		if [ "${tracker_marker}" != "posted" ] && [ "${tracker_marker}" != "present" ]; then
+			echo "::warning::Claude capacity wait: ${kind} #${number} not labelled ${CAPACITY_WAIT_LABEL} because the tracker record failed."
+		elif GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPO}/issues/${number}/labels" -f "labels[]=${CAPACITY_WAIT_LABEL}" >/dev/null 2>&1; then
+			label_state="applied"
+		else
+			label_state="failed"
+			echo "::warning::Claude capacity wait: could not label ${kind} #${number} ${CAPACITY_WAIT_LABEL}."
+		fi
+		marker_state="failed"
+		if gh_retry gh api --paginate --slurp "repos/${REPO}/issues/${number}/comments?per_page=100" > "${comments_file}" 2>/dev/null; then
+			local present_rc=0
+			wait_marker_present "${comments_file}" "${login}" "<!-- ai:claude-capacity-wait:v1 [^>]*\brun=${run_token} " || present_rc=$?
+			if [ "${present_rc}" -eq 0 ]; then
+				marker_state="present"
+			elif [ "${present_rc}" -eq 1 ]; then
+				if gh_retry gh api -X POST "repos/${REPO}/issues/${number}/comments" -f "body=Claude pool at capacity: this work is waiting for a Claude account instead of falling back to codex/OpenCode (roles ${roles}, stage ${stage})."$'\n\n'"<!-- ai:claude-capacity-wait:v1 stage=${stage} source=${source_comment} run=${run_token} role=${roles} -->" >/dev/null 2>&1; then
+					marker_state="posted"
+				fi
+			fi
+		fi
+		[ "${marker_state}" != "failed" ] || echo "::warning::Claude capacity wait: could not record the wait marker on ${kind} #${number}."
+	fi
+
 	log "wait item=${kind}:${number} roles=${roles} label=${label_state} marker=${marker_state} tracker=${tracker} tracker_marker=${tracker_marker} alert=${alert_state}"
 	return 0
 }

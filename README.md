@@ -2777,11 +2777,12 @@ stream-json `result` usage line that `scripts/cost_audit.py` totals under
 `AI_ENGINE_CAPACITY_WAIT role= reason=`. The job's report step
 (`scripts/ai_engine_fallback_report.sh`) then labels the work item
 `ai:claude-capacity-wait` (from `CLAUDE_CAPACITY_WAIT_ITEM_KIND` /
-`_ITEM_NUMBER`), posts one
+`_ITEM_NUMBER`) only after the run is listed on the capacity tracker, posts one
 `<!-- ai:claude-capacity-wait:v1 stage= source= run= role= -->` comment on it,
 opens or reuses the `kind=capacity` tracker and lists the run there with a
 `<!-- ai:claude-capacity-wait-item:v1 kind= item= workflow= run= role= -->`
-comment, and sends one Telegram WARNING when it opened the tracker. Only
+comment, and sends one Telegram WARNING when it opened the tracker (or could
+not read or create one). Only
 markers by the `GH_PAT` login count. The stall poller leaves an item with the
 label alone; removing the label restarts its stall window. This is Phase 1 of
 the capacity-wait plan: the switch defaults to off and stays off until the

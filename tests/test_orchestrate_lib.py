@@ -2353,6 +2353,14 @@ def test_removing_capacity_wait_label_resets_the_stall_window():
 	assert issue["stall_recovery_count"] == 0
 
 
+def test_standalone_stall_loop_skips_capacity_wait_phase():
+	# The standalone stall loop has its own skip list; it must leave a
+	# waiting item alone like DEDICATED_HANDLER_PHASES does (issue #7251).
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert '[ "${phase}" = "ai:claude-capacity-wait" ]' in skip
+
+
 def test_label_contract_matches_helper_catalog_and_phase_priority():
 	contract_path = Path(__file__).resolve().parent.parent / ".github" / "ai" / "label_contract.v1.json"
 	helper_path = Path(__file__).resolve().parent.parent / "scripts" / "label_helpers.sh"
