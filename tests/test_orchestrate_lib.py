@@ -108,6 +108,10 @@ def _run_bash_resolver(fixture_path: Path, bin_dir: Path) -> tuple[int, str, str
 			"GH_FIXTURE_FILE": str(fixture_path),
 			"REPO": "owner/repo",
 			"ISSUE": "101",
+			# The Python resolver has no CI-triage PR-branch routing (it has no
+			# workflow callers), so the parity check runs bash with it off;
+			# tests/test_resolve_integration_ref_ci_triage.py covers routing.
+			"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "false",
 		}
 	)
 	proc = subprocess.run(

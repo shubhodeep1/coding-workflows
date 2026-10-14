@@ -182,6 +182,18 @@ def _make_poller_sandbox(
 				stdout=subprocess.DEVNULL,
 				stderr=subprocess.DEVNULL,
 			)
+	# Disable git's auto-gc and auto-maintenance in the throwaway repo. Both
+	# can detach (setsid) and keep writing under .git/objects after the
+	# poller exits, racing TemporaryDirectory cleanup with
+	# "[Errno 39] Directory not empty" (CI run 38343038127).
+	for _key, _value in (("gc.auto", "0"), ("maintenance.auto", "false")):
+		subprocess.run(
+			["git", "-C", str(target), "config", _key, _value],
+			check=False,
+			env=git_env,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "main"],
 		check=True,
@@ -361,6 +373,21 @@ def _run_poller_subprocess(
 				f"stdout:\n{stdout}\n"
 				f"stderr:\n{stderr}"
 			)
+		# Reap descendants that outlived the poller (background jobs still
+		# writing into the sandbox) before the caller removes the tempdir.
+		try:
+			os.killpg(proc.pid, signal.SIGKILL)
+		except (ProcessLookupError, PermissionError):
+			pass
+		# killpg only queues the signal; wait (bounded, ~1s) until the group
+		# is gone so the tempdir removal cannot race a dying writer.
+		_reap_deadline = time.monotonic() + 1.0
+		while time.monotonic() < _reap_deadline:
+			try:
+				os.killpg(proc.pid, 0)
+			except (ProcessLookupError, PermissionError):
+				break
+			time.sleep(0.02)
 		return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 	finally:
 		if owns_sandbox:
@@ -1163,11 +1190,23 @@ esac
 			mock_security_audit.write_text(
 				"#!/usr/bin/env bash\n"
 				"set -euo pipefail\n"
-				"python3 - \"${SECURITY_AUDIT_CAPTURE}\" \"${1:-}\" <<'PY'\n"
-				"import json, os, sys\n"
+				"python3 - \"${SECURITY_AUDIT_CAPTURE}\" \"${1:-}\" \"${BASH_SOURCE[0]}\" <<'PY'\n"
+				"import json, os, subprocess, sys\n"
 				"from pathlib import Path\n"
+				"def _git_out(*git_args):\n"
+				"  try:\n"
+				"    return subprocess.run(['git', *git_args], capture_output=True, text=True, check=False).stdout.strip()\n"
+				"  except OSError:\n"
+				"    return ''\n"
 				"Path(sys.argv[1]).write_text(json.dumps({\n"
 				"  'project_spec_path': sys.argv[2],\n"
+				"  'script_path': os.path.realpath(sys.argv[3]),\n"
+				"  'cwd': os.path.realpath(os.getcwd()),\n"
+				"  'toplevel': os.path.realpath(_git_out('rev-parse', '--show-toplevel') or '/nonexistent'),\n"
+				"  'tree_head': _git_out('rev-parse', 'HEAD'),\n"
+				"  'tree_status': _git_out('status', '--porcelain', '--untracked-files=no'),\n"
+				"  'support_dir': os.environ.get('SECURITY_AUDIT_SUPPORT_DIR'),\n"
+				"  'fp_exclusions': os.environ.get('SECURITY_AUDIT_FP_EXCLUSIONS'),\n"
 				"  'output_mode': os.environ.get('SECURITY_AUDIT_OUTPUT_MODE'),\n"
 				"  'diff_base': os.environ.get('SECURITY_AUDIT_DIFF_BASE'),\n"
 				"  'diff_head': os.environ.get('SECURITY_AUDIT_DIFF_HEAD'),\n"
@@ -2394,7 +2433,7 @@ if args[0] == 'api':
 				sys.exit(p.returncode)
 			print(p.stdout, end='')
 		else:
-			issue_payload = {'body': issue.get('body', ''), 'state': issue_state,
+			issue_payload = {'body': issue.get('body', ''), 'title': issue.get('title', ''), 'state': issue_state,
 				'number': num, 'repository_url': 'https://api.github.com/repos/owner/repo',
 				'labels': [{'name': label} for label in issue.get('labels', [])]}
 			# Opt-in author fields (automation-path gate tests, #6838).
@@ -24734,6 +24773,92 @@ def _extract_bash_function(script: str, signature: str) -> str:
 	start = script.index(signature)
 	end = script.index("\n}\n", start) + 3
 	return script[start:end]
+
+
+def test_finalize_fallback_reads_final_pr_once():
+	"""API-001: the final-PR fallback in finalize_integration_merge_if_needed
+	reads ``pulls/${final_pr}`` once and parses state and merged_at locally,
+	instead of one REST call per field."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(script, "finalize_integration_merge_if_needed() {")
+	assert "pulls/${final_pr}\" --jq '.state'" not in body
+	assert "pulls/${final_pr}\" --jq '.merged_at != null'" not in body
+	fetch = '_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq \'.\' || echo ""'
+	assert body.count(fetch) == 1, body.count(fetch)
+	assert "jq -r '.state' 2>/dev/null" in body
+	assert "jq -r '.merged_at != null'" in body
+
+
+def test_restore_7126_summarize_blockers_shares_supersede_defs():
+	"""Static guard, project #7126: _summarize_final_merge_blockers applies
+	the same cancelled/superseded rules as _pr_checks_completed (#7127),
+	through PR_CHECKS_JQ_SUPERSEDE_DEFS from scripts/pr_checks_lib.sh."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(script, "_summarize_final_merge_blockers()\n{")
+	assert 'summary_supersede_defs="${PR_CHECKS_JQ_SUPERSEDE_DEFS:-}"' in body
+	assert body.count('--arg bound "__unbound__" "${summary_supersede_defs}"\'') == 2
+	assert body.count("| _mark_superseded") == 2
+	accept = (
+		'.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" '
+		'and (.conclusion != "cancelled" or (._superseded | not))'
+	)
+	assert body.count(accept) == 2
+	assert '.conclusion == "cancelled"' not in body
+
+
+def test_implementation_failed_sweep_reads_issue_once():
+	"""API-002: the implementation-failed reissue reads the issue once and
+	parses title and body locally."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "issues/${if_issue}\" --jq '.title'" not in script
+	assert "issues/${if_issue}\" --jq '.body'" not in script
+	fetch = 'IF_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq \'.\' || echo "")"'
+	assert script.count(fetch) == 1, script.count(fetch)
+	assert "jq -r '.title' 2>/dev/null" in script
+	assert "jq -r '.body' 2>/dev/null" in script
+
+
+def test_local_issue_parse_keeps_null_body_literal():
+	"""A null issue body keeps parsing to the literal ``null``, the output
+	the former per-field ``--jq '.body'`` read produced (see the note in
+	scripts/gh_helpers.sh), so the re-issued body is unchanged."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	payload = json.dumps({"title": "t", "body": None})
+	for expr, expected in ((".title", "t"), (".body", "null")):
+		out = subprocess.run(
+			["jq", "-r", expr], input=payload, capture_output=True, text=True, check=True
+		).stdout.rstrip("\n")
+		assert out == expected, (expr, out)
+	merged = subprocess.run(
+		["jq", "-r", ".merged_at != null"], input=json.dumps({"state": "closed"}),
+		capture_output=True, text=True, check=True,
+	).stdout.strip()
+	assert merged == "false"
+
+
+def test_clear_final_merge_ineligibility_helper_comment_is_accurate():
+	"""DEAD-002: the helper either has a caller, or its comment no longer
+	claims the finalize merge-success path calls it."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	name = "_clear_final_merge_ineligibility_state"
+	definition = f"{name}()\n{{"
+	def_idx = script.index(definition)
+	callers = [
+		line for line in script.splitlines()
+		if name in line and not line.lstrip().startswith("#") and line.strip() != f"{name}()"
+	]
+	comment_lines = []
+	for line in reversed(script[:def_idx].rstrip("\n").splitlines()):
+		if not line.startswith("#"):
+			break
+		comment_lines.append(line)
+	comment = "\n".join(reversed(comment_lines))
+	if not callers:
+		assert "Called from the" not in comment, comment
+		assert "finalize_integration_merge_if_needed" not in comment, comment
+	assert "ensure_security_pass_repair_branch" in comment, comment
+	assert "mark_validation_complete" in comment, comment
 
 
 def _judge_checkout_repo(tmp_path: Path) -> tuple[Path, str]:

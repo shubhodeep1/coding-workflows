@@ -1040,12 +1040,13 @@ jobs:
           RELEASE_TAG: ${{ steps.verify_release_manifest.outputs.tag }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           UPDATER_PR_DELIVERY_ENABLED: ${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'true' }}
+          # Passed via env: so the run body carries no expressions (tests/test_workflow_file_size_limit.py 18,000-char guard).
           CHANGELOG_ASSEMBLED: ${{ steps.changelog_assemble.outputs.changelog_assembled }}
           CHANGELOG_FRAGMENT_COUNT: ${{ steps.changelog_assemble.outputs.changelog_fragment_count }}
           CHANGELOG_LAYOUT: ${{ steps.changelog_assemble.outputs.changelog_layout }}
           AGENTS_ASSEMBLED: ${{ steps.agents_assemble.outputs.agents_assembled }}
-          AGENTS_FRAGMENT_COUNT: ${{ steps.agents_assemble.outputs.agents_fragment_count }}
           AGENTS_FILE: ${{ steps.agents_assemble.outputs.agents_file }}
+          AGENTS_FRAGMENT_COUNT: ${{ steps.agents_assemble.outputs.agents_fragment_count }}
         run: |
           set -euo pipefail
 
@@ -1096,11 +1097,11 @@ jobs:
           fi
           # Assembly both rewrites CHANGELOG.md and deletes the folded
           # fragments, so stage with -A to pick up the removals.
-          if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
+          if [ "${CHANGELOG_ASSEMBLED:-}" = "true" ]; then
             git add -A -- CHANGELOG.md changelog.d
           fi
           # Same for agents.d/: the agents file is rewritten and fragments deleted.
-          if [ "${AGENTS_ASSEMBLED}" = "true" ]; then
+          if [ "${AGENTS_ASSEMBLED:-}" = "true" ]; then
             git add -A -- "${AGENTS_FILE}" agents.d
           fi
 
@@ -1187,11 +1188,11 @@ jobs:
           if [ -n "$CHANGELOG_ASSET_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragment assets:\n${CHANGELOG_ASSET_LIST}\n"
           fi
-          if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
-            COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${CHANGELOG_FRAGMENT_COUNT} fragment(s), layout ${CHANGELOG_LAYOUT}).\n"
+          if [ "${CHANGELOG_ASSEMBLED:-}" = "true" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${CHANGELOG_FRAGMENT_COUNT:-} fragment(s), layout ${CHANGELOG_LAYOUT:-}).\n"
           fi
-          if [ "${AGENTS_ASSEMBLED}" = "true" ]; then
-            COMMIT_BODY="${COMMIT_BODY}agents.d fragments assembled into ${AGENTS_FILE} (${AGENTS_FRAGMENT_COUNT} fragment(s)).\n"
+          if [ "${AGENTS_ASSEMBLED:-}" = "true" ]; then
+            COMMIT_BODY="${COMMIT_BODY}agents.d fragments assembled into ${AGENTS_FILE:-} (${AGENTS_FRAGMENT_COUNT:-} fragment(s)).\n"
           fi
 
           if git diff --cached --quiet; then

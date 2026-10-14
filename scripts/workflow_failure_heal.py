@@ -3361,6 +3361,205 @@ def non_retryable_route(payload: dict[str, Any], *, comments: Iterable[dict[str,
 	return result
 
 
+# ---------------------------------------------------------------------------
+# Non-retryable failure backfill (issue #7291)
+# ---------------------------------------------------------------------------
+
+# A scheduled pass (scripts/workflow_failure_heal_non_retryable_backfill.sh)
+# re-sends a non-retryable review/autofix failure the intake never diagnosed
+# (a run from before #6756, or a lost dispatch). It posts this marker after a
+# confirmed dispatch so a report the intake rejects is sent only once. Trusted
+# only when written by the pass's own (GH_PAT) account.
+NON_RETRYABLE_BACKFILL_MARKER_TAG = "ai:workflow-heal-non-retryable-backfill:v1"
+_NON_RETRYABLE_BACKFILL_MARKER_RE = re.compile(r"<!--\s*" + re.escape(NON_RETRYABLE_BACKFILL_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES = 60
+_BACKFILL_RUN_ID_RE = re.compile(r"^[0-9]{1,20}$")
+# Backfill-local, own-line marker patterns built from the public tags: a marker
+# quoted inline in PR-influenced text (a "First error" code span) must not pick
+# the run, and the selector does not depend on shared private regexes.
+_BACKFILL_FAILURE_MARKER_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+_BACKFILL_FAILURE_CAP_MARKER_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+
+
+def render_non_retryable_backfill_marker(pr_number: Any, head_sha: str, reason: str, run_id: Any) -> str:
+	return (
+		f"<!-- {NON_RETRYABLE_BACKFILL_MARKER_TAG} pr={safe_token(pr_number, 20)} head={safe_token(head_sha, 40).lower()} "
+		f"reason={safe_token(reason)} run={safe_token(run_id, 20)} -->"
+	)
+
+
+def render_non_retryable_backfill_comment(pr_number: Any, head_sha: str, reason: str, run_id: Any) -> str:
+	"""PR comment the backfill posts after a confirmed dispatch, ending with its marker.
+
+	The text carries no autofix failure/success comment prefix, so failure
+	streaks and the identical-failure cap do not count it.
+	"""
+	head = safe_token(head_sha, 40).lower()
+	return "\n".join(
+		[
+			f"Workflow failure heal backfill: sent the earlier non-retryable failure (`{safe_token(reason)}`, run {safe_token(run_id, 20)}, head `{head[:12]}`) "
+			"to the workflow failure heal intake, which had not diagnosed it. The intake verifies the run and posts its diagnosis here.",
+			"",
+			render_non_retryable_backfill_marker(pr_number, head_sha, reason, run_id),
+		]
+	)
+
+
+def _comment_created_at(comment: dict[str, Any]) -> datetime | None:
+	return _parse_iso(comment.get("created_at") or comment.get("createdAt"))
+
+
+def select_non_retryable_backfill_candidate(
+	comments: Iterable[Any],
+	*,
+	pr_number: Any,
+	head_sha: str,
+	author_login: str,
+	now: datetime,
+	min_age_minutes: int = DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES,
+) -> dict[str, Any]:
+	"""Decide whether a PR carries a non-retryable failure the intake never diagnosed.
+
+	``comments`` is the PR's issue-comment list, oldest first. Only comments by
+	``author_login`` (the trusted pipeline account) are read, so another
+	author's marker can neither nominate nor suppress a report. Scanning from
+	the newest trusted comment: provider-outage markers and comments, failure
+	markers for another head and cap markers are skipped; an editor summary
+	before any current-head failure marker means a later run got further
+	(``superseded``); the first ``review-autofix-failure:v1`` marker for the
+	head decides. It must name a non-retryable reason, carry a 64-hex ``fp``
+	and a numeric ``run``, have no trusted diagnosis marker for the same pr,
+	head and reason, no trusted backfill marker for the same run, and be at
+	least ``min_age_minutes`` old (an unreadable time counts as too recent).
+	"""
+	pr = str(pr_number or "").strip()
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	result: dict[str, Any] = {"eligible": False, "reason": "", "pr": pr, "head": head, "failure_reason": "", "fp": "", "run": "", "support": ""}
+	if not pr.isdigit() or not is_valid_sha(head) or not author:
+		result["reason"] = "missing_inputs"
+		return result
+	trusted = [comment for comment in comments if isinstance(comment, dict) and _comment_author(comment) == author]
+	deciding: tuple[dict[str, Any], dict[str, str]] | None = None
+	for comment in reversed(trusted):
+		body = sanitize_text(comment.get("body"))
+		match = _BACKFILL_FAILURE_MARKER_RE.search(body)
+		if match is not None:
+			fields = _marker_fields(match)
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON or fields.get("head", "").lower() != head:
+				continue
+			deciding = (comment, fields)
+			break
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _BACKFILL_FAILURE_CAP_MARKER_RE.search(body):
+			continue
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			result["reason"] = "superseded"
+			return result
+	if deciding is None:
+		result["reason"] = "no_current_head_marker"
+		return result
+	comment, fields = deciding
+	failure_reason = fields.get("reason", "")
+	result["failure_reason"] = failure_reason
+	if failure_reason not in NON_RETRYABLE_FAILURE_REASONS:
+		result["reason"] = "retryable"
+		return result
+	fp = fields.get("fp", "")
+	run = fields.get("run", "")
+	if not _FP_HEX_RE.match(fp) or not _BACKFILL_RUN_ID_RE.match(run):
+		result["reason"] = "marker_run_missing"
+		return result
+	result.update({"fp": fp, "run": run, "support": _normalized_support_sha(fields.get("support"))})
+	for other in trusted:
+		body = sanitize_text(other.get("body"))
+		for diag in _NON_RETRYABLE_MARKER_RE.finditer(body):
+			diag_fields = _marker_fields(diag)
+			if diag_fields.get("pr") == pr and diag_fields.get("head", "").lower() == head and diag_fields.get("reason") == failure_reason:
+				result["reason"] = "already_diagnosed"
+				return result
+		for sent in _NON_RETRYABLE_BACKFILL_MARKER_RE.finditer(body):
+			sent_fields = _marker_fields(sent)
+			if (
+				sent_fields.get("pr") == pr
+				and sent_fields.get("head", "").lower() == head
+				and sent_fields.get("reason") == failure_reason
+				and sent_fields.get("run") == run
+			):
+				result["reason"] = "already_backfilled"
+				return result
+	created = _comment_created_at(comment)
+	try:
+		min_age = max(0, int(min_age_minutes))
+	except (TypeError, ValueError):
+		min_age = DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES
+	if created is None or (now - created).total_seconds() < min_age * 60:
+		result["reason"] = "too_recent"
+		return result
+	result["eligible"] = True
+	result["reason"] = "eligible"
+	return result
+
+
+def _graphql_comment_to_rest(node: Any) -> dict[str, Any] | None:
+	if not isinstance(node, dict):
+		return None
+	author = node.get("author") if isinstance(node.get("author"), dict) else {}
+	return {
+		"id": node.get("databaseId"),
+		"body": node.get("body") if isinstance(node.get("body"), str) else "",
+		"created_at": node.get("createdAt") if isinstance(node.get("createdAt"), str) else "",
+		"user": {"login": author.get("login") if isinstance(author.get("login"), str) else ""},
+	}
+
+
+def non_retryable_backfill_candidates(
+	pr_nodes: Iterable[Any],
+	*,
+	author_login: str,
+	now: datetime,
+	min_age_minutes: int = DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES,
+) -> dict[str, Any]:
+	"""Run the selector over GraphQL open-PR nodes (``number``, ``isCrossRepository``,
+	``headRefOid``, ``comments.nodes``). Each candidate carries its comments in
+	the REST shape the autofix reporter reads."""
+	candidates: list[dict[str, Any]] = []
+	skipped: list[dict[str, Any]] = []
+	for node in pr_nodes:
+		if not isinstance(node, dict):
+			continue
+		pr = safe_token(node.get("number"), 20)
+		if not pr.isdigit():
+			continue
+		if node.get("isCrossRepository") is not False:
+			skipped.append({"pr": pr, "reason": "cross_repository"})
+			continue
+		head = str(node.get("headRefOid") or "").strip().lower()
+		if not is_valid_sha(head):
+			skipped.append({"pr": pr, "reason": "invalid_head"})
+			continue
+		comment_block = node.get("comments") if isinstance(node.get("comments"), dict) else {}
+		raw_nodes = comment_block.get("nodes") if isinstance(comment_block.get("nodes"), list) else []
+		comments = [item for item in (_graphql_comment_to_rest(raw) for raw in raw_nodes) if item is not None]
+		decision = select_non_retryable_backfill_candidate(
+			comments, pr_number=pr, head_sha=head, author_login=author_login, now=now, min_age_minutes=min_age_minutes,
+		)
+		if not decision["eligible"]:
+			skipped.append({"pr": pr, "reason": decision["reason"]})
+			continue
+		candidates.append(
+			{
+				"pr": pr,
+				"head": head,
+				"failure_reason": decision["failure_reason"],
+				"fp": decision["fp"],
+				"run": decision["run"],
+				"support": decision["support"],
+				"comments": comments,
+			}
+		)
+	return {"candidates": candidates, "skipped": skipped}
+
+
 # Reason-specific remediation text: only the host-only stop is a host-executed
 # path; an unsupported path is a symlink or a name the sandbox cannot carry,
 # and missing support is a workflow-support defect, not a PR defect.
@@ -4359,6 +4558,38 @@ def _cmd_non_retryable_route(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_non_retryable_backfill_candidates(args: argparse.Namespace) -> int:
+	empty = {"candidates": [], "skipped": []}
+	if not is_valid_repo_slug(args.repo):
+		sys.stderr.write("detail=invalid_repo\n")
+		_write_json(empty)
+		return 0
+	try:
+		nodes = _load_json_file(args.prs_json)
+	except (OSError, ValueError):
+		nodes = None
+	if isinstance(nodes, dict) and isinstance(nodes.get("nodes"), list):
+		nodes = nodes["nodes"]
+	if not isinstance(nodes, list):
+		sys.stderr.write("detail=prs_json_unreadable\n")
+		_write_json(empty)
+		return 0
+	now = _parse_iso(args.now) if args.now else datetime.now(timezone.utc)
+	if now is None:
+		sys.stderr.write("detail=invalid_now\n")
+		_write_json(empty)
+		return 0
+	_write_json(non_retryable_backfill_candidates(nodes, author_login=args.author_login, now=now, min_age_minutes=args.min_age_minutes))
+	return 0
+
+
+def _cmd_non_retryable_backfill_comment(args: argparse.Namespace) -> int:
+	if not str(args.pr).isdigit() or not is_valid_sha(str(args.head).lower()) or args.reason not in NON_RETRYABLE_FAILURE_REASONS or not _BACKFILL_RUN_ID_RE.match(str(args.run)):
+		raise ValueError("invalid backfill marker fields")
+	sys.stdout.write(render_non_retryable_backfill_comment(args.pr, args.head, args.reason, args.run) + "\n")
+	return 0
+
+
 def _cmd_non_retryable_label_suppressed(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
@@ -4934,6 +5165,21 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--trusted-login", required=True)
 	p.add_argument("--intake-run-url", default="")
 	p.set_defaults(func=_cmd_non_retryable_route)
+
+	p = sub.add_parser("non-retryable-backfill-candidates", help="Pick open PRs whose trusted current-head failure marker is non-retryable and was never diagnosed (issue #7291); prints JSON")
+	p.add_argument("--prs-json", required=True, help="GraphQL open-PR nodes with their last comments")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--author-login", required=True)
+	p.add_argument("--min-age-minutes", type=int, default=DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES)
+	p.add_argument("--now", default="", help="ISO time for tests; default now (UTC)")
+	p.set_defaults(func=_cmd_non_retryable_backfill_candidates)
+
+	p = sub.add_parser("non-retryable-backfill-comment", help="Render the PR comment the backfill posts after a confirmed dispatch")
+	p.add_argument("--pr", required=True)
+	p.add_argument("--head", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--run", required=True)
+	p.set_defaults(func=_cmd_non_retryable_backfill_comment)
 
 	p = sub.add_parser("non-retryable-label-suppressed", help="Print true when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker")
 	p.add_argument("--comments-json", required=True)
