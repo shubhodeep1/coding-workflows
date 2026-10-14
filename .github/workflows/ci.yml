@@ -1357,8 +1357,10 @@ jobs:
       # (run 38562929820, budget-watch issue #7382). Step timings were not
       # readable when this was planned; this is the heaviest test step
       # static-checks inherited, by test count and subprocess count. This job
-      # measured about 535-604s (runs 38250939132 and 38251668637). Step name
-      # and body are unchanged.
+      # measured about 535-604s (runs 38250939132 and 38251668637), before this
+      # step was added. The "this job about 4" in the next comment dates from
+      # 2026-10-09, before the two steps below moved here, so it is out of date.
+      # Step name and body are unchanged.
       - name: Regression tests wired by the CI wiring guard (part 1)
         run: |
           set -euo pipefail
