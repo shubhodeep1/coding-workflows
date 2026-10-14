@@ -5,13 +5,27 @@
   "entry_id": "processed_command_7356_6160361389_approved",
   "issue_number": 7356,
   "metadata": {
+    "branch": "ai/issue-7356",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "agents.d/7355-rb-judge-head-binding.md",
+      "changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md",
+      "scripts/review_rb_judge.sh",
+      "tests/test_review_rb_judge_head_binding.py",
+      "tests/test_review_rb_judge_label_propagation.py"
+    ],
+    "issue_number": 7356,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7356",
+    "pr_number": 7364,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7364",
+    "run_attempt": "1",
+    "run_id": "38507501930",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38507501930"
   },
   "run_attempt": 1,
   "run_id": "38507501930",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-14T03:46:04Z",
+  "status": "completed",
+  "timestamp": "2026-10-14T04:05:57Z",
   "workflow": "implement"
 }
