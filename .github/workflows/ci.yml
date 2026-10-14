@@ -864,7 +864,73 @@ jobs:
       - name: Workflow failure heal contract and driver tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py
+          # Budget-watch issue #7387: this job took 15m12s of its 20 minutes on
+          # main (run 38584572151), almost all of it in this step. Moving the
+          # step whole did not work: in PR run 38602731355 it needed more than
+          # 7 minutes on top of the 12.8 minutes `tests-promote-stall-and-review`
+          # already used, and that job was cancelled at its timeout. Nearly all
+          # of the step's time is tests/test_workflow_failure_heal.py (297 of
+          # the first command's 397 tests), so that module now runs in local
+          # shards in parallel, the way the orchestrate-poll step runs its
+          # largest module. Each test builds its own temp dirs, and shards are
+          # separate pytest processes, so they share no state. Shards split by
+          # test function (parametrized cases stay together), every collected
+          # function runs exactly once, and a shard with no recorded exit code
+          # counts as failed.
+          heal_shards=4
+          heal_module="tests/test_workflow_failure_heal.py"
+          rm -f /tmp/heal_collect.log /tmp/heal_shard_*.txt /tmp/heal_shard_*.log /tmp/heal_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${heal_module}" \
+            > /tmp/heal_collect.log 2>&1 \
+            || { cat /tmp/heal_collect.log; echo "::error::Test collection failed for ${heal_module}."; exit 1; }
+          { grep -F "${heal_module}::" /tmp/heal_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/heal_tests.txt
+          heal_test_count="$(wc -l < /tmp/heal_tests.txt | tr -d '[:space:]')"
+          if ! [ "${heal_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from ${heal_module}."
+            exit 1
+          fi
+          echo "${heal_module}: ${heal_test_count} test functions across ${heal_shards} shards"
+          heal_shard_pids=()
+          for shard in $(seq 0 "$((heal_shards - 1))"); do
+            awk -v n="${shard}" -v total="${heal_shards}" 'NR % total == n' \
+              /tmp/heal_tests.txt > "/tmp/heal_shard_${shard}.txt"
+            [ -s "/tmp/heal_shard_${shard}.txt" ] || continue
+            (
+              mapfile -t shard_tests < "/tmp/heal_shard_${shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${shard_tests[@]}" > "/tmp/heal_shard_${shard}.log" 2>&1
+              echo "$?" > "/tmp/heal_shard_${shard}.rc"
+            ) &
+            heal_shard_pids+=("$!")
+          done
+          # Reap every shard before judging any, so none is left orphaned.
+          for shard_pid in "${heal_shard_pids[@]}"; do
+            wait "${shard_pid}" || true
+          done
+          heal_failed_shards=()
+          for shard in $(seq 0 "$((heal_shards - 1))"); do
+            [ -s "/tmp/heal_shard_${shard}.txt" ] || continue
+            echo "::group::${heal_module} shard ${shard}"
+            cat "/tmp/heal_shard_${shard}.log" || true
+            echo "::endgroup::"
+            shard_rc="$(cat "/tmp/heal_shard_${shard}.rc" 2>/dev/null || true)"
+            if [ "${shard_rc}" != "0" ]; then
+              heal_failed_shards+=("${shard}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups.
+          for shard in "${heal_failed_shards[@]}"; do
+            echo "--- ${heal_module} shard ${shard} failed; last 40 log lines:"
+            tail -n 40 "/tmp/heal_shard_${shard}.log" || true
+          done
+          if [ "${#heal_failed_shards[@]}" -gt 0 ]; then
+            echo "::error::${heal_module} shards failed: ${heal_failed_shards[*]}"
+            exit 1
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py
           # Model-provider outage classifier, tracker and resume (issue #6633).
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py tests/test_claude_capacity_wait_call_sites.py
 
