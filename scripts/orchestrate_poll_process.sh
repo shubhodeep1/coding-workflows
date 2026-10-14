@@ -18672,9 +18672,13 @@ handle_unblock_judge_project_hooks() {
         && jq -e --argjson item "${req_item}" --arg id "${req_id}" 'any((.waves // [])[]?.issues[]?; .github_issue == $item and .id != $id and ((.status // "") | IN("merged", "skipped") | not))' "${STATE_FILE}" >/dev/null 2>&1; then
         # Resume only a wave-origin failure: a project that a validation,
         # security-pass or integration failure terminalized stays failed,
-        # because skipping the original does not clear that failure.
+        # because skipping the original does not clear that failure. So does
+        # one parked for a person (ai:blocked waits for /judge_resume;
+        # ai:needs-human is the needs-human digest).
         repair_resume="true"
-        if has_label "${TRACKING_LABELS}" "ai:validation-failed" \
+        if has_label "${TRACKING_LABELS}" "ai:blocked" \
+          || has_label "${TRACKING_LABELS}" "ai:needs-human" \
+          || has_label "${TRACKING_LABELS}" "ai:validation-failed" \
           || has_label "${TRACKING_LABELS}" "ai:validate-failed" \
           || has_label "${TRACKING_LABELS}" "ai:harness-broken" \
           || has_label "${TRACKING_LABELS}" "ai:security-pass-failed" \
@@ -18803,13 +18807,13 @@ handle_unblock_judge_project_hooks() {
          | .issue_number_map = ((.issue_number_map // {}) | with_entries(if .value == $item then .value = $num else . end))
          | .issue_number_map[$id] = $num
          | if .status == "failed" then .status = "in_progress" else . end' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp"
     else
       jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
         '.issue_number_map[$id] = $num
          | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
          | if .status == "failed" then .status = "in_progress" else . end' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp"
     fi
     post_state_comment || true
     if [ "${req_reissue}" != "true" ]; then

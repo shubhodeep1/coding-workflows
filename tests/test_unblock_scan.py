@@ -461,6 +461,8 @@ def test_fixup_hook_marks_an_earlier_appended_reissue_original_skipped(tmp_path:
 @pytest.mark.parametrize("labels,integration_failed", [
 	(["ai:validation-failed"], False),
 	(["ai:security-pass-failed"], False),
+	(["ai:blocked"], False),
+	(["ai:needs-human"], False),
 	([], True),
 ])
 def test_fixup_hook_repair_keeps_an_unrelated_failure(tmp_path: Path, labels: list[str], integration_failed: bool) -> None:
