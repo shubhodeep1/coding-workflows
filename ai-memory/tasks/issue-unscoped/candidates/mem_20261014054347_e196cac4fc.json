@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1929-1933 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The stale-head guard lets a differing live head proceed when it is an ancestor of the judged head (`git merge-base --is-ancestor`). The issue says to skip whenever a valid live SHA differs from the judged SHA. A force-push back to an earlier commit during the judge call is therefore not caught, and `close_and_reissue` keeps the judged SHA as its baseline (line 3040).\n  WHY: The ancestry check cannot tell the run's own unpushed local commits from a concurrent force-push to an ancestor, so the judge can act on a head that is no longer on the PR. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2, saying the exemption is needed because the judge runs before the push step, and the others rated it MAJOR. The highest severity is kept.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_rb_judge.sh:1929-1933 | severity=NIT | confidence=2\n  PROBLEM: The `git merge-base --is-ancestor \"${RB_LIVE_HEAD_SHA}\" \"${RB_JUDGED_HEAD_SHA_LC}\"` exemption lets a live head that is an ancestor of the judged head proceed. This is narrower than the issue's \"differs means skip\", so a force-push back to an older commit during the judge run is not caught.\n  WHY: The reviewer calls the exemption needed, because the judge runs before the push step and a run with its own unpushed commits always has a live head behind the judged head. A force-push back needs a deliberate human action inside the judge window. The reviewer found no concrete failure beyond this accepted tradeoff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:1910-1963 | severity=MAJOR | confidence=4\n  PROBLEM: The guard proceeds whenever the live PR head is an ancestor of RB_JUDGED_HEAD_SHA. The issue spec has no such exception.\n  WHY: A force-push to an earlier commit during the judge call produces the same ancestry relationship as an unpushed local commit. `close_and_reissue` then builds on a stale baseline (line 3040), and `fix` actions reason from a head no longer on the PR. Merge paths fail safely through `--match-head-commit`. The test at tests/test_review_rb_judge_head_binding.py:272-287 cannot exercise the force-push-back shape.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:1931-1933 | severity=MAJOR | confidence=5\n  PROBLEM: The stale-head guard permits a differing live head when it is an ancestor of the judged head, despite the task requiring a skip whenever the valid live SHA differs.\n  WHY: If the PR is force-pushed back to an earlier commit during the judge call, the judge proceeds with `close_and_reissue` and keeps the judged SHA as the baseline (line 3040). That retains code no longer on the live PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh:1931-1933 | severity=MAJOR | confidence=4\n  PROBLEM: The guard permits a differing live head when it is an ancestor of `RB_JUDGED_HEAD_SHA`, but it cannot tell the run's own unpushed commit from a concurrent force-push to an earlier commit.\n  WHY: After a force-push to an ancestor, `close_and_reissue` preserves the judged SHA as the reissue baseline (line 3040) although the live PR is at an earlier commit. The test at tests/test_review_rb_judge_head_binding.py:272-287 asserts this exception as intended, and the issue does not qualify it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ea800c637d8ea277761ed3bcad523d883c20afd4b250b6e76f8819ce3ea9a0e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7364,
+    "run_id": "38514438667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38514438667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014054347_e196cac4fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7364,
+    "run_id": "38514438667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T05:43:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
