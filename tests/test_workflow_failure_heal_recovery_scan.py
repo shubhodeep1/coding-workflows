@@ -47,6 +47,8 @@ def fail():
 	sys.stderr.write("HTTP 500\n")
 	sys.exit(1)
 if args[:2] == ["issue", "close"]:
+	if state.get("close_fail"):
+		fail()
 	state.setdefault("closed", []).append(args[2:])
 	out("")
 if args[:1] != ["api"]:
@@ -350,3 +352,27 @@ def test_scan_closes_an_issue_already_replaced() -> None:
 		assert "heal_scope_recovery outcome=skip reason=already_replaced issue=31 close=done" in result.stdout
 		assert state["closed"] == [["31", "--repo", SELF_REPO, "--reason", "not planned"]]
 		assert not intake_env.exists() and "posted" not in state
+
+
+def test_scan_defers_an_intake_heal_issue_list_failure() -> None:
+	# The intake logs this read failure without a reason= token and exits 1.
+	with tempfile.TemporaryDirectory(prefix="heal-scan-list-fail-") as tmp_name:
+		result, state, _, _, _ = _run(Path(tmp_name), _state([_heal_issue(31)]), intake_output="WORKFLOW_HEAL error heal_issue_list_failed", intake_rc=1)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "heal_scope_recovery outcome=deferred reason=heal_issue_list_failed issue=31 attempts=0 max=3 intake_rc=1" in result.stdout
+		assert "posted" not in state
+		assert "intake_failures=0" in result.stdout
+
+
+def test_scan_warns_when_an_already_replaced_issue_cannot_be_closed() -> None:
+	comments_path = f"repos/{SELF_REPO}/issues/31/comments"
+	marker = {"id": 2, "body": "replaced\n\n" + heal.render_heal_scope_recovery_marker(901, SELF_REPO), "user": {"login": LOGIN}}
+	with tempfile.TemporaryDirectory(prefix="heal-scan-close-fail-") as tmp_name:
+		state = _state([_heal_issue(31)], {comments_path: [marker]})
+		state["close_fail"] = True
+		result, _, _, intake_env, tg_log = _run(Path(tmp_name), state)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "reason=already_replaced issue=31 close=failed" in result.stdout
+		warnings = [line for line in tg_log.read_text(encoding="utf-8").splitlines() if line.startswith("WARNING\t")]
+		assert len(warnings) == 1 and "could not close already-replaced" in warnings[0]
+		assert not intake_env.exists()

@@ -285,6 +285,9 @@ while IFS= read -r -u 3 candidate; do
 				CLOSE_STATE="done"
 			fi
 			log "heal_scope_recovery outcome=skip reason=already_replaced issue=${NUMBER} close=${CLOSE_STATE}"
+			if [ "${CLOSE_STATE}" = "failed" ]; then
+				tg_send_msg "Workflow failure heal: the recovery scan could not close already-replaced https://github.com/${SELF_REPO}/issues/${NUMBER}; it retries every hour."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			fi
 			continue
 		fi
 		log "heal_scope_recovery outcome=skip reason=${CHECK_REASON} issue=${NUMBER}"
@@ -370,25 +373,30 @@ while IFS= read -r -u 3 candidate; do
 		log "heal_scope_recovery outcome=scan reason=replaced issue=${NUMBER} intake_rc=${INTAKE_RC}"
 		continue
 	fi
-	if [ "${INTAKE_RC}" -ne 0 ]; then
-		INTAKE_FAILURES=$((INTAKE_FAILURES + 1))
-	fi
 	# The intake ends a replay that recovered nothing with a generic
 	# `reason=not_recovered` line; the specific reason logged before it wins.
 	REASON="$(grep -E '^WORKFLOW_HEAL (heal_scope_recovery outcome=(skip|no_replacement)|skip|report_auth=rejected|error) reason=' "${INTAKE_LOG}" \
 		| grep -v ' reason=not_recovered ' | tail -n 1 | sed -n 's/.* reason=\([a-z0-9_]*\).*/\1/p' || true)"
+	if [ -z "${REASON}" ] && grep -q '^WORKFLOW_HEAL error heal_issue_list_failed' "${INTAKE_LOG}"; then
+		# The intake's heal-issue list read failed (its log line has no reason= token).
+		REASON="heal_issue_list_failed"
+	fi
 	if [ -z "${REASON}" ] && grep -q ' reason=not_recovered ' "${INTAKE_LOG}"; then
 		REASON="not_recovered"
 	fi
 	[ -n "${REASON}" ] || REASON="intake_failed"
 	case "${REASON}" in
-		budget_budget_exhausted|budget_failed|comments_unavailable|identity_unavailable|issue_record_missing)
+		budget_budget_exhausted|budget_failed|comments_unavailable|identity_unavailable|issue_record_missing|heal_issue_list_failed)
 			# A cap or read failure that clears on its own: no attempt is
-			# recorded, so it cannot retire the issue; the next run retries.
-			log "heal_scope_recovery outcome=deferred reason=${REASON} issue=${NUMBER} attempts=${ATTEMPTS} max=${MAX_ATTEMPTS}"
+			# recorded, so it cannot retire the issue, and it does not count as
+			# an intake failure (the intake alerts on its own); the next run retries.
+			log "heal_scope_recovery outcome=deferred reason=${REASON} issue=${NUMBER} attempts=${ATTEMPTS} max=${MAX_ATTEMPTS} intake_rc=${INTAKE_RC}"
 			continue
 			;;
 	esac
+	if [ "${INTAKE_RC}" -ne 0 ]; then
+		INTAKE_FAILURES=$((INTAKE_FAILURES + 1))
+	fi
 	_post_attempt_marker "${NUMBER}" "${REASON}" "${ATTEMPTS}"
 done 3< <(jq -c '.[]' "${CANDIDATES_FILE}")
 

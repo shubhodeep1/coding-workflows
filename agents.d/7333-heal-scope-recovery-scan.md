@@ -44,10 +44,12 @@ runs no intake, so it does not use the run's per-tick slot. Other heal kinds log
 `reason=kind_unsupported` and still need a fresh verified report.
 The scan records the intake's specific skip reason, not its final
 `reason=not_recovered` line. `budget_budget_exhausted`, `budget_failed`,
-`comments_unavailable`, `identity_unavailable` and `issue_record_missing` clear
-on their own: they log `outcome=deferred` and post no attempt marker. An open
+`comments_unavailable`, `identity_unavailable`, `issue_record_missing` and the
+intake's `error heal_issue_list_failed` read failure clear on their own: they log
+`outcome=deferred`, post no attempt marker and do not count as intake failures. An open
 issue that already carries a trusted recovery marker (a failed close after
-`outcome=replaced`) is closed by the scan (`reason=already_replaced close=done|failed`).
+`outcome=replaced`) is closed by the scan (`reason=already_replaced close=done|failed`;
+a failed close sends a WARNING).
 `HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off with recovery.
 
 Non-retryable reports and recovery (#7333 gap 2): a verified (OIDC)
