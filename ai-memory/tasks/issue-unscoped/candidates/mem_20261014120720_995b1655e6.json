@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description Q141: `post_tracking_comment` edits a repeated comment instead of posting it, using the comment list the poller already loaded, \"so it adds no API calls\". The prior-round hardening was to cache `unblock_trusted_login` so `_tracking_comment_recent_file` does not re-resolve the login inside the subshell.\n  expected_change_site: scripts/orchestrate_poll_process.sh `post_tracking_comment`, the `unblock_trusted_login >/dev/null || true` line at the top of the function\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The call runs before the `if [[ ! \"${comment_body}\" =~ ^[[:space:]]*/ ]]` branch, so it also runs for `/`-prefixed command bodies, which never use repeat detection. The reviewer rated this a NIT and said it was a restatement of Sonnet's hardening suggestion, not a new finding.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening suggestion (not a finding): scripts/orchestrate_poll_process.sh, `prune_state_comment_chains` DELETE branch (about line 3444). A failed DELETE is only counted in `failed=`, and the HTTP error never reaches the log. Suggested fix: print `::warning::STATE_PRUNE could not delete comment ${id}` to stderr on the failure branch. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nHardening suggestion 1: scripts/orchestrate_poll_process.sh, `prune_state_comment_chains` DELETE branch. A failed DELETE is only counted in `failed=`, and the HTTP error is swallowed. Suggested fix: print `::warning::STATE_PRUNE could not delete comment ${id}` to stderr. HARDENING_RISK_SCORE: 1\nHardening suggestion 2: scripts/orchestrate_poll_process.sh, `post_tracking_comment`. `unblock_trusted_login` is called at the start of the function, which may cost an API call even when no tracking comment is posted. Suggested fix: move the call inside the `if [[ ! \"${comment_body}\" =~ ^[[:space:]]*/ ]] && recent_file=\"$(_tracking_comment_recent_file)\"; then` branch. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (NIT, ISSUE_CONFIDENCE: 3)\n  Requirement: PR description Q141: `post_tracking_comment` edits a repeated comment instead of posting it, using the comment list the poller already loaded, \"so it adds no API calls\". The prior-round hardening was to cache `unblock_trusted_login` so `_tracking_comment_recent_file` does not re-resolve the login inside the subshell.\n  Expected change site: scripts/orchestrate_poll_process.sh `post_tracking_comment`, the `unblock_trusted_login >/dev/null || true` line at the top of the function\n  Evidence of absence: The call runs before the `if [[ ! \"${comment_body}\" =~ ^[[:space:]]*/ ]]` branch, so it also runs for `/`-prefixed command bodies. The reviewer said this restates Sonnet's hardening suggestion.\nHardening suggestion: scripts/orchestrate_poll_process.sh, `post_tracking_comment`, the `unblock_trusted_login >/dev/null || true` line. The call runs for every body, including `/` commands that never enter the repeat-detection branch. Suggested fix: move it inside the `if [[ ! \"${comment_body}\" =~ ^[[:space:]]*/ ]]` branch, before the `_tracking_comment_recent_file` command substitution. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nThe reviewer reported that no task was provided: the input held only the system instructions header and an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6f89ded063a6224bc099127cd55c56b25f4de4031ff0548e43fe2b7ea189a19c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7376,
+    "run_id": "38557506482",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38557506482",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014120720_995b1655e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7376,
+    "run_id": "38557506482"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-14T12:07:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
