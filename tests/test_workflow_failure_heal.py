@@ -1577,6 +1577,15 @@ if args[:1] == ["api"]:
 		if branch in state.get("branches", ["stable", "main"]):
 			out(json.dumps({"name": branch}))
 		fail("HTTP 404")
+	if "search/issues" in rest:
+		# The intake's --jq projection is not applied here; the fixture holds
+		# the projected records per repository (Q147 re-issue lookup).
+		query = next((a[2:] for a in rest if a.startswith("q=")), "")
+		state.setdefault("searches", []).append(query)
+		if state.get("search_fail"):
+			fail("HTTP 403")
+		repo_slug = query.split()[0][len("repo:"):] if query.startswith("repo:") else ""
+		out(json.dumps(state.get("reissue_search", {}).get(repo_slug, [])))
 	fail("unexpected api path " + path + " args=" + " ".join(rest))
 if args[:2] == ["label", "create"]:
 	state.setdefault("labels_created", []).append(args[2:])
@@ -7698,3 +7707,208 @@ def test_heal_scope_recovery_scan_workflow_wiring() -> None:
 	# reconstructed is accepted only by recovery and needs a schedule event.
 	assert intake_script.count('"${REPORT_AUTH}" != "reconstructed"') == 1
 	assert '[ "${GITHUB_EVENT_NAME:-}" != "schedule" ]' in intake_script
+
+
+# ---------------------------------------------------------------------------
+# Re-issue lineage (Q147), already-fixed siblings (Q148), recovery runs from
+# occurrence comments (Q149): #7082 was filed next to the open re-issue #7059
+# of #6866, and the recovery scan could not rebuild it (runs_missing).
+# ---------------------------------------------------------------------------
+
+REISSUE_SOURCE = f"{CONSUMER_REPO}#4174"
+
+
+def _reissue(number: int, origin: int, *, state: str = "open", author: str = NR_LOGIN, repository: str | None = None, prefix: str = "", state_reason: str | None = None, labels: list[str] | None = None) -> dict:
+	record = {
+		"number": number,
+		"state": state,
+		"state_reason": state_reason,
+		"title": f"Re-issue of #{origin}: something",
+		"body": prefix + f"Re-issued by the unblock judge from #{origin}.\n\nSpecification: fix it\n\nWhy: blocked",
+		"author": author,
+		"labels": labels or [],
+		"html_url": f"https://github.com/{SELF_REPO}/issues/{number}",
+		"pull_request": False,
+	}
+	if repository:
+		record["repository"] = repository
+	return record
+
+
+def _lineage_heal_issue(number: int, *, state: str = "closed", fp: str = "6" * 64, source: str = REISSUE_SOURCE, author: str = NR_LOGIN, repository: str | None = None) -> dict:
+	issue = _sourced_heal_issue(number, state=state, fp=fp, source=source, repository=repository)
+	issue["author"] = author
+	return issue
+
+
+def test_reissue_origin_reads_only_the_first_line_that_is_not_a_marker() -> None:
+	assert heal.reissue_origin("Re-issued by the unblock judge from #6866.\n\nSpecification: x") == 6866
+	assert heal.reissue_origin("<!-- ai:security-finding:abc -->\n\nRe-issued by the unblock judge from #12.\n") == 12
+	assert heal.reissue_origin("Some text\nRe-issued by the unblock judge from #12.") is None
+	assert heal.reissue_origin("Re-issued by the unblock judge from #12 (quoted).") is None
+	assert heal.reissue_origin("") is None and heal.reissue_origin(None) is None
+
+
+def test_budget_decision_records_a_report_on_the_open_reissue_of_its_lineage() -> None:
+	closed = _lineage_heal_issue(6866)
+	report_fp = "7" * 64
+	kwargs = {"fp": report_fp, "source_key": REISSUE_SOURCE, "preferred_repo": SELF_REPO}
+	assert heal.budget_decision([closed], **kwargs)["action"] == "open"
+	decision = heal.budget_decision([closed], reissues=[_reissue(7059, 6866)], **kwargs)
+	assert decision["action"] == "duplicate" and decision["match"] == "reissue"
+	assert decision["existing_issue"] == 7059 and decision["reissue_of"] == 6866
+	assert decision["gen"] == 1 and decision["root"] == "6" * 64
+	# The same fingerprint links the lineage too, without a source key.
+	assert heal.budget_decision([closed], fp="6" * 64, reissues=[_reissue(7059, 6866)])["match"] == "reissue"
+	# A re-issue of a re-issue is followed back to the heal issue.
+	chain = [_reissue(7059, 6866, state="closed"), _reissue(7200, 7059)]
+	assert heal.budget_decision([closed], reissues=chain, **kwargs)["existing_issue"] == 7200
+	# Anything not written by the heal issue's author, a closed re-issue, an
+	# unrelated heal issue and a broken chain are not the lineage.
+	assert heal.budget_decision([closed], reissues=[_reissue(7059, 6866, author="mallory")], **kwargs)["action"] == "open"
+	assert heal.budget_decision([closed], reissues=[_reissue(7059, 6866, state="closed")], **kwargs)["action"] == "open"
+	assert heal.budget_decision([closed], reissues=[_reissue(7200, 7059, author="mallory"), _reissue(7059, 6866, state="closed")], **kwargs)["action"] == "open"
+	other = _lineage_heal_issue(6000, fp="5" * 64, source=f"{CONSUMER_REPO}#1")
+	assert heal.budget_decision([closed, other], reissues=[_reissue(7059, 6000)], **kwargs)["action"] == "open"
+	assert heal.budget_decision([closed], reissues=[_reissue(7059, 9999)], **kwargs)["action"] == "open"
+	# An open heal issue with the same fingerprint still wins.
+	open_same = _lineage_heal_issue(7300, state="open", fp=report_fp, source=f"{CONSUMER_REPO}#2")
+	won = heal.budget_decision([closed, open_same], reissues=[_reissue(7059, 6866)], **kwargs)
+	assert won["match"] == "fingerprint" and won["existing_issue"] == 7300
+	# A re-issue in another repository than its heal issue is not followed.
+	assert heal.budget_decision([closed], reissues=[_reissue(7059, 6866, repository=CONSUMER_REPO)], **kwargs)["action"] == "open"
+
+
+def test_budget_cli_reads_reissues_json(tmp_path: Path) -> None:
+	issues = tmp_path / "issues.json"
+	issues.write_text(json.dumps([_lineage_heal_issue(6866)]), encoding="utf-8")
+	reissues = tmp_path / "reissues.json"
+	reissues.write_text(json.dumps([_reissue(7059, 6866)]), encoding="utf-8")
+	base = [sys.executable, str(REPO_ROOT / "scripts/workflow_failure_heal.py"), "budget", "--issues-json", str(issues), "--fingerprint", "7" * 64, "--source-key", REISSUE_SOURCE]
+	first = subprocess.run(base, capture_output=True, text=True, check=True)
+	assert json.loads(first.stdout)["action"] == "open"
+	second = subprocess.run(base + ["--reissues-json", str(reissues)], capture_output=True, text=True, check=True)
+	assert json.loads(second.stdout)["match"] == "reissue"
+	reissues.write_text("not json", encoding="utf-8")
+	third = subprocess.run(base + ["--reissues-json", str(reissues)], capture_output=True, text=True, check=True)
+	assert json.loads(third.stdout)["action"] == "open"
+
+
+def _reissue_intake_state(**overrides) -> dict:
+	state = _intake_state(jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}, job_logs={"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"})
+	state["heal_issues"] = [_lineage_heal_issue(31, repository=SELF_REPO)]
+	state["reissue_search"] = {SELF_REPO: [_reissue(40, 31, repository=SELF_REPO)]}
+	state.update(overrides)
+	return state
+
+
+def test_intake_records_a_report_on_the_open_reissue() -> None:
+	result, state_after, _ = _run_intake(_autofix_payload(), _reissue_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL reissue_lookup outcome=found existing_issue=40 existing_repo=" + SELF_REPO + " reissue_of=31" in result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=40" in result.stdout and "match=reissue" in result.stdout
+	assert "issues_created" not in state_after
+	occurrence = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/40/comments"]
+	assert occurrence and f"{heal.MARKER_PREFIX}occurrence" in occurrence[0]["body"]
+	# Both repositories that can own the heal issue are searched once each.
+	assert [query.split()[0] for query in state_after["searches"]] == [f"repo:{SELF_REPO}", f"repo:{CONSUMER_REPO}"]
+	assert all('"Re-issued by the unblock judge from"' in query for query in state_after["searches"])
+	assert "heal_scope_recovery outcome=eligible" not in result.stdout
+	assert not any("codex" in " ".join(call) for call in state_after["calls"])
+
+
+def test_intake_reissue_lookup_fails_open_and_has_an_off_switch() -> None:
+	failed, failed_state, _ = _run_intake(_autofix_payload(), _reissue_intake_state(search_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert failed.returncode == 0, failed.stderr + failed.stdout
+	assert f"reissue_lookup outcome=skip reason=search_failed repo={SELF_REPO}" in failed.stdout
+	assert "match=reissue" not in failed.stdout
+	off, off_state, _ = _run_intake(_autofix_payload(), _reissue_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"HEAL_REISSUE_DEDUPE_ENABLED": "false"})
+	assert off.returncode == 0, off.stderr + off.stdout
+	assert "searches" not in off_state and "reissue_lookup" not in off.stdout
+	invalid, invalid_state, _ = _run_intake(_autofix_payload(), _reissue_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"HEAL_REISSUE_DEDUPE_ENABLED": "maybe"})
+	assert "reissue_lookup outcome=skip reason=invalid_switch" in invalid.stderr and "searches" not in invalid_state
+	# No closed heal issue in the lineage: nothing to search for.
+	fresh, fresh_state, _ = _run_intake(_autofix_payload(), _reissue_intake_state(heal_issues=[]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert fresh.returncode == 0 and "searches" not in fresh_state
+
+
+def test_reissue_lookup_wiring() -> None:
+	workflow = (REPO_ROOT / ".github/workflows/workflow-failure-heal-intake.yml").read_text(encoding="utf-8")
+	assert "HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}" in workflow
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	lookup = intake.index("\n_heal_reissue_lookup\n")
+	assert intake.index('python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"') < lookup < intake.index("ACTION=\"$(jq -r '.action' \"${DECISION_FILE}\")\"")
+	body = intake[intake.index("_heal_reissue_lookup()\n"):lookup]
+	assert 'if [ "${REPORT_AUTH}" = "reconstructed" ]; then\n\t\treturn 0\n\tfi' in body
+
+
+def _occurrence_comment(payload: dict, run_id: str, *, author: str = NR_LOGIN) -> dict:
+	moved = dict(payload, run_refs=[{"repo": CONSUMER_REPO, "run_id": run_id, "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{run_id}"}])
+	return {"id": int(run_id), "body": heal.compose_occurrence_comment(moved, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/1"), "user": {"login": author}}
+
+
+def test_reconstruct_recovery_payload_reads_runs_from_trusted_occurrences() -> None:
+	payload = _recovery_autofix_payload()
+	issue = _composed_autofix_heal_issue(payload)
+	issue["body"] = "\n".join(line for line in issue["body"].split("\n") if not line.startswith("- **Failed run:** "))
+
+	def run(comments):
+		return heal.reconstruct_recovery_payload(issue=issue, heal_comments=comments, pull=_pr(), pull_comments=[], pipeline_login=NR_LOGIN, self_repo=SELF_REPO)
+
+	assert run([])["reason"] == "runs_missing"
+	result = run([_occurrence_comment(payload, "777"), _occurrence_comment(payload, "778")])
+	assert result["status"] == "ok", result
+	# The newest matching occurrence names the run.
+	assert [ref["run_id"] for ref in heal.validate_payload(result["payload"])["run_refs"]] == ["778"]
+	assert result["expected_fp"] == _intake_autofix_fp(payload)
+	# Untrusted authors, another head, another pull request, or a marker that
+	# is not the first line do not count.
+	assert run([_occurrence_comment(payload, "777", author="mallory")])["reason"] == "runs_missing"
+	other_head = _occurrence_comment(dict(payload, head_sha=SHA_A), "777")
+	assert run([other_head])["reason"] == "runs_missing"
+	other_pr = _occurrence_comment(dict(payload, issue_number=4175, issue_url=f"https://github.com/{CONSUMER_REPO}/pull/4175"), "777")
+	assert run([other_pr])["reason"] == "runs_missing"
+	quoted = _occurrence_comment(payload, "777")
+	quoted["body"] = "quoted:\n" + quoted["body"]
+	assert run([quoted])["reason"] == "runs_missing"
+	# A run named in the body still wins.
+	with_body = _composed_autofix_heal_issue(payload)
+	kept = heal.reconstruct_recovery_payload(issue=with_body, heal_comments=[_occurrence_comment(payload, "778")], pull=_pr(), pull_comments=[], pipeline_login=NR_LOGIN, self_repo=SELF_REPO)
+	assert [ref["run_id"] for ref in heal.validate_payload(kept["payload"])["run_refs"]] == ["500"]
+
+
+def _fixed_heal_item(number: int, payload: dict, *, state: str = "closed", state_reason: str | None = "completed", labels: tuple[str, ...] = ("ai:workflow-heal", "ai:merged"), author: str = NR_LOGIN) -> dict:
+	issue = _composed_autofix_heal_issue(payload, number=number)
+	issue.update({"state": state, "state_reason": state_reason, "labels": [{"name": name} for name in labels], "author": author, "repository": SELF_REPO})
+	return issue
+
+
+def test_heal_already_fixed_candidates() -> None:
+	payload = _recovery_autofix_payload()
+	item = _fixed_heal_item(7082, payload, state="open", state_reason=None, labels=("ai:workflow-heal", "ai:needs-human"))
+	original = _fixed_heal_item(6866, payload, state_reason="not_planned", labels=("ai:workflow-heal",))
+	reissue = _reissue(7059, 6866, state="closed", state_reason="completed", labels=["ai:merged"], repository=SELF_REPO)
+	sibling = _fixed_heal_item(7000, payload)
+
+	def run(item=item, heal_issues=(original,), reissues=(reissue,), login=NR_LOGIN):
+		return heal.heal_already_fixed_candidates(item=item, heal_issues=list(heal_issues), reissues=list(reissues), pipeline_login=login)
+
+	assert run() == {"status": "candidates", "candidates": [7059]}
+	assert run(heal_issues=(original, sibling)) == {"status": "candidates", "candidates": [7059, 7000]}
+	# Not fixed: not merged, closed as not planned, still open, or by someone else.
+	assert run(reissues=(dict(reissue, labels=[]),)) == {"status": "none", "reason": "no_fixed_sibling"}
+	assert run(reissues=(dict(reissue, state_reason="not_planned"),))["status"] == "none"
+	assert run(reissues=(dict(reissue, state="open"),))["status"] == "none"
+	assert run(reissues=(dict(reissue, author="mallory"),))["status"] == "none"
+	# Another failure reason or source is another failure.
+	other_reason = _fixed_heal_item(6866, _recovery_autofix_payload(failure_reason=HOST_ONLY_REASON), state_reason="not_planned", labels=("ai:workflow-heal",))
+	assert run(heal_issues=(other_reason,))["status"] == "none"
+	assert run(heal_issues=(original, _fixed_heal_item(7000, _recovery_autofix_payload(issue_number=4175)))) == {"status": "candidates", "candidates": [7059]}
+	# The item itself is never its own sibling, and only a trusted item is checked.
+	assert run(heal_issues=(dict(item, state="closed", state_reason="completed", labels=[{"name": "ai:merged"}]),), reissues=()) == {"status": "none", "reason": "no_fixed_sibling"}
+	assert run(item=dict(item, author="mallory")) == {"status": "none", "reason": "untrusted_item_author"}
+	assert run(login="") == {"status": "none", "reason": "identity_unavailable"}
+	assert run(item=dict(item, body="no markers")) == {"status": "none", "reason": "markers_missing"}
+	# At most three candidates, newest first.
+	many = [_fixed_heal_item(number, payload) for number in (7001, 7002, 7003, 7004)]
+	assert run(heal_issues=many, reissues=())["candidates"] == [7004, 7003, 7002]

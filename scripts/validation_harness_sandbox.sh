@@ -28,6 +28,16 @@
 # the job, and the daemon is restarted with cgroupfs: reasons
 # container_start_failed_systemd / container_start_failed_reused; #7063).
 # Values are never logged.
+#
+# PID namespace (finding validation-harness-credential-inheritance, project
+# security pass for #6664): the harness and the namespace self-check start
+# inside a new PID and mount namespace created by root (`unshare --pid --fork
+# --mount-proc --propagation private --kill-child`) before dropping to the sandbox user, so a test
+# cannot list runner processes or read their /proc entries. When no namespace
+# can be created every phase fails closed (pid_namespace_unavailable,
+# pid_namespace_launch_failed); there is no launch without it. Root records
+# the host pid of `unshare` in a root-owned 0700 state directory, and cleanup
+# kills only that pid after checking it is still a root `unshare` process.
 
 set -euo pipefail
 
@@ -45,14 +55,22 @@ VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE
 # Empty (the default) keeps <workspace>/validation/logs. validation-refresh
 # sets it so logs stay outside the consumer clone it diffs for drift.
 VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-}"
-# Cgroup setup for the sandbox's rootless dockerd: `auto` (the default) tries a
-# systemd user session first and falls back to cgroupfs; `cgroupfs` skips the
-# systemd attempt. Either way a test container that the daemon refuses to
-# start (or a probe image the daemon refuses to import) fails provision; only
-# a probe the host cannot build, or whose command cannot run inside the
-# container (exit 126/127 without a cgroup error), passes as
-# container_probe_inconclusive.
-VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-auto}"
+# Cgroup setup for the sandbox's rootless dockerd: `cgroupfs` (the default)
+# starts no systemd user manager for the sandbox user, and releases one left
+# by an earlier opt-in `auto` provision. `auto` (opt-in) tries a systemd user
+# session first and falls back to cgroupfs; while that user manager runs, a
+# container could ask it to start processes in the host PID namespace, so
+# `selfcheck` then fails closed with user_manager_reachable_from_container
+# (#7380). Any other value is treated as `cgroupfs`. Either way a test
+# container that the daemon refuses to start (or a probe image the daemon
+# refuses to import) fails provision; only a probe the host cannot build, or
+# whose command cannot run inside the container (exit 126/127 without a
+# cgroup error), passes as container_probe_inconclusive.
+VALIDATION_HARNESS_SANDBOX_CGROUP_MODE="${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE:-cgroupfs}"
+# Root-owned directory for the namespace launch state (the host pid of
+# `unshare` and the launch marker). It must be absolute and outside the
+# sandbox home, so the sandbox user can neither write nor replace it.
+VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR="${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR:-/run/ai-validation-harness}"
 SANDBOX_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 sandbox_log()
@@ -92,6 +110,21 @@ validate_config()
 	is_positive_int "${VALIDATION_HARNESS_SANDBOX_MAX_COPYBACK_BYTES}" || sandbox_fail "${phase}" invalid_copyback_cap
 	is_positive_int "${VALIDATION_HARNESS_SANDBOX_MAX_FILES}" || sandbox_fail "${phase}" invalid_file_cap
 	is_positive_int "${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT}" || VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT=90
+	local state_dir="${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR}" state_home=""
+	# At least two components (never `/run` or `/tmp` itself), no `//`, no trailing `/`.
+	[[ "${state_dir}" =~ ^/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$ ]] || sandbox_fail "${phase}" invalid_pidns_state_dir
+	case "/${state_dir}/" in
+		*/../*|*/./*) sandbox_fail "${phase}" invalid_pidns_state_dir ;;
+	esac
+	case "${state_dir}" in
+		*//*|*/) sandbox_fail "${phase}" invalid_pidns_state_dir ;;
+	esac
+	state_home="$(sandbox_home || true)"
+	if [ -n "${state_home}" ]; then
+		case "${state_dir%/}/" in
+			"${state_home%/}/"*) sandbox_fail "${phase}" invalid_pidns_state_dir ;;
+		esac
+	fi
 }
 
 require_sudo()
@@ -190,6 +223,110 @@ as_sandbox()
 	sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
 }
 
+# Prove a PID namespace can be created; never fall back to a launch without one.
+pidns_supported()
+{
+	sudo -n unshare --pid --fork --mount-proc --propagation private --kill-child -- true >/dev/null 2>&1 \
+		|| sandbox_fail "$1" pid_namespace_unavailable
+}
+
+# Create the root-owned state directory (0700, outside the sandbox home).
+ensure_pidns_state_dir()
+{
+	local dir="${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR}"
+	if sudo -n test -L "${dir}"; then
+		sandbox_fail "$1" pidns_state_dir_failed
+	fi
+	# `install -d` re-applies mode and owner to an existing directory, so an
+	# existing path is used only when it already is a root-owned 0700 directory.
+	if sudo -n test -e "${dir}"; then
+		[ "$(sudo -n stat -c '%u %a %F' -- "${dir}" 2>/dev/null || true)" = "0 700 directory" ] || sandbox_fail "$1" pidns_state_dir_failed
+		return 0
+	fi
+	sudo -n install -d -m 0700 -o root -g root "${dir}" >/dev/null 2>&1 || sandbox_fail "$1" pidns_state_dir_failed
+}
+
+pidns_state_base()
+{
+	local key="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
+	printf '%s/%s' "${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR}" "${key//[^A-Za-z0-9_-]/_}"
+}
+
+# The only launch path for the harness and the namespace self-check.
+# Usage: as_sandbox_in_pidns <pidfile|-> <startedfile|-> cmd...
+# Root writes the host pid of `unshare` (the outer `exec` keeps $$) to
+# <pidfile>, then, inside the new namespace and before dropping to the
+# sandbox user, creates <startedfile>. Every value is a positional argument;
+# nothing is spliced into the `sh -c` text. The `env -i` allowlist is the one
+# as_sandbox uses.
+#
+# In `auto` cgroup mode the sandbox user has a systemd user manager in the
+# host PID namespace; `systemd-run --user` through its sockets would start
+# commands outside this namespace. Before the drop, root bind-mounts
+# /dev/null over every socket under <runtime_dir> except docker.sock inside
+# the new mount namespace (`--propagation private`, so the daemon outside
+# keeps its bus). Every socket is found with `find`, not a fixed list: the
+# sandbox user owns <runtime_dir> and could rename `systemd/` to hide
+# `private` from a fixed path. A symlink at <runtime_dir>, bus or
+# systemd/private, or a failed mount, exits 125 before <startedfile>
+# exists, so `run` fails with pid_namespace_launch_failed. An entry that
+# vanishes between `find` and `mount` (a containerd shim socket) holds no
+# socket and is skipped, so it cannot fail the launch. A socket renamed in
+# that window is skipped at its old name too, so after the mask root lists
+# the sockets again and exits 125 when any one other than docker.sock is
+# left unmasked (a bind-mounted /dev/null is no longer a socket).
+as_sandbox_in_pidns()
+{
+	local pidfile="$1" started="$2" uid runtime_dir
+	shift 2
+	uid="$(sandbox_uid || true)"
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 125
+	runtime_dir="$(sandbox_runtime_dir)"
+	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --propagation private --kill-child -- "$@"' pidns "${pidfile}" \
+		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; if [ -n "$(find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -print -quit)" ]; then exit 125; fi; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
+		'for s do [ -e "$s" ] || continue; mount --bind /dev/null "$s" || { if [ -e "$s" ]; then exit 1; fi; }; done' \
+		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
+}
+
+# Kill the namespace recorded in <pidfile>: only when the file is a root-owned
+# regular file holding a pid > 1 that is still a root `unshare` process (pid
+# reuse guard). Its forked child is the namespace's init; killing it takes
+# down every process inside the namespace. Always returns 0.
+pidns_kill_recorded()
+{
+	local pidfile="$1" meta pid comm owner child
+	meta="$(sudo -n stat -c '%u %F' -- "${pidfile}" 2>/dev/null || true)"
+	[ "${meta}" = "0 regular file" ] || return 0
+	pid="$(sudo -n cat -- "${pidfile}" 2>/dev/null | head -n 1 || true)"
+	{ [[ "${pid}" =~ ^[0-9]{1,10}$ ]] && [ "${pid}" -gt 1 ]; } || return 0
+	comm="$(sudo -n cat -- "/proc/${pid}/comm" 2>/dev/null || true)"
+	owner="$(sudo -n stat -c '%u' -- "/proc/${pid}" 2>/dev/null || true)"
+	{ [ "${comm}" = "unshare" ] && [ "${owner}" = "0" ]; } || return 0
+	while IFS= read -r child; do
+		{ [[ "${child}" =~ ^[0-9]{1,10}$ ]] && [ "${child}" -gt 1 ]; } || continue
+		sudo -n kill -KILL -- "${child}" >/dev/null 2>&1 || true
+	done < <(sudo -n pgrep -P "${pid}" 2>/dev/null || true)
+	sudo -n kill -KILL -- "${pid}" >/dev/null 2>&1 || true
+	return 0
+}
+
+# 0 when the sandbox user runs at least one dockerd and every one of them is
+# in a PID namespace other than <host_ns> (rootlesskit --pidns). Read as root
+# from host pids; the sandbox-written docker.pid is never trusted.
+docker_pidns_isolated()
+{
+	local host_ns="$1" uid pid ns found=0
+	uid="$(sandbox_uid)" || return 1
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 1
+	while IFS= read -r pid; do
+		[[ "${pid}" =~ ^[0-9]{1,10}$ ]] || continue
+		ns="$(sudo -n readlink "/proc/${pid}/ns/pid" 2>/dev/null || true)"
+		{ [ -n "${ns}" ] && [ "${ns}" != "${host_ns}" ]; } || return 1
+		found=1
+	done < <(sudo -n pgrep -u "${uid}" -x dockerd 2>/dev/null || true)
+	[ "${found}" -eq 1 ]
+}
+
 rootless_docker_ready()
 {
 	as_sandbox docker info >/dev/null 2>&1
@@ -209,6 +346,7 @@ SANDBOX_CGROUP_ROOT="${SANDBOX_CGROUP_ROOT:-/sys/fs/cgroup}"
 SANDBOX_SESSION_WAIT_SECS="${SANDBOX_SESSION_WAIT_SECS:-15}"
 is_positive_int "${SANDBOX_SESSION_WAIT_SECS}" || SANDBOX_SESSION_WAIT_SECS=15
 SANDBOX_PROBE_IMAGE="ai-validation-probe:local"
+SANDBOX_LINGER_DIR="${SANDBOX_LINGER_DIR:-/var/lib/systemd/linger}"
 
 # Start a systemd user session for the sandbox user (linger keeps
 # user@<uid>.service running without a login). Returns 0 once the user bus
@@ -227,12 +365,83 @@ sandbox_systemd_session()
 	done
 }
 
+# Undo sandbox_systemd_session (#7380): disable linger and stop the sandbox
+# user's systemd user manager, so no manager is left that a container could
+# ask to start a transient unit in the host PID namespace. Best effort, always
+# returns 0; `selfcheck` (user_manager_route_open) is the enforcer. Callers
+# run it before (re)creating the runtime dir, because stopping the user
+# manager can remove the /run/user/<uid> tmpfs.
+sandbox_release_systemd_session()
+{
+	local user="$1" uid="$2" waited=0
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 0
+	if [ -z "$(sudo -n pgrep -u "${uid}" -x systemd 2>/dev/null || true)" ] \
+		&& ! sudo -n test -e "${SANDBOX_LINGER_DIR}/${user}" >/dev/null 2>&1; then
+		return 0
+	fi
+	if command -v loginctl >/dev/null 2>&1; then
+		sudo -n loginctl disable-linger "${user}" >/dev/null 2>&1 || true
+	fi
+	sudo -n systemctl stop "user@${uid}.service" >/dev/null 2>&1 || true
+	sudo -n systemctl stop "user-runtime-dir@${uid}.service" >/dev/null 2>&1 || true
+	while [ -n "$(sudo -n pgrep -u "${uid}" -x systemd 2>/dev/null || true)" ]; do
+		[ "${waited}" -ge "${SANDBOX_SESSION_WAIT_SECS}" ] && break
+		sleep 1
+		waited=$((waited + 1))
+	done
+	sandbox_log provision ok systemd_user_session_released
+	return 0
+}
+
+# Root-side check (#7380), read from host pids and the host mount namespace,
+# never from files the sandbox writes. Returns 0 when a systemd user manager
+# or a bus daemon runs as the sandbox uid, or its user bus or a socket under
+# <runtime_dir>/systemd exists: a container started through the rootless
+# daemon could bind-mount that socket and start a transient unit in the host
+# PID namespace. Returns 1 when the uid cannot be resolved, 2 when the route
+# is closed. Rootlesskit's and containerd's own sockets are not counted:
+# they cannot start host processes, and every run has them.
+user_manager_route_open()
+{
+	local uid rt name out rc
+	uid="$(sandbox_uid || true)"
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 1
+	rt="/run/user/${uid}"
+	# The runtime dir holds the daemon's docker.sock, so it exists here; a
+	# failed check means sudo denies `test`, and a denied `test -S`/`test -e`
+	# below would read as "no socket". A denied pgrep is already caught by
+	# docker_pidns_isolated, which needs a pgrep match.
+	sudo -n test -d "${rt}" >/dev/null 2>&1 || return 1
+	for name in systemd dbus-daemon dbus-broker; do
+		rc=0
+		out="$(sudo -n pgrep -u "${uid}" -x "${name}" 2>/dev/null)" || rc=$?
+		[ -n "${out}" ] && return 0
+		# pgrep exits 1 for no match; 2 or more is an error, so the state is
+		# unknown and selfcheck fails closed.
+		[ "${rc}" -le 1 ] || return 1
+	done
+	if sudo -n test -S "${rt}/bus" >/dev/null 2>&1; then
+		return 0
+	fi
+	if sudo -n test -e "${rt}/systemd" >/dev/null 2>&1; then
+		rc=0
+		out="$(sudo -n find "${rt}/systemd" -xdev -type s -print -quit 2>/dev/null)" || rc=$?
+		[ -n "${out}" ] && return 0
+		# A failed search of an existing directory may hide a socket.
+		[ "${rc}" -eq 0 ] || return 1
+	fi
+	return 2
+}
+
 # Start the sandbox user's rootless dockerd and wait until it answers.
 # <mode> is `systemd` (inside the user session) or `cgroupfs`.
 start_rootless_dockerd()
 {
 	local mode="$1" home="$2" runtime_dir="$3" waited=0
-	local -a daemon_env=("PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}") daemon_args=()
+	# --pidns: rootlesskit gives the daemon (and every container it starts,
+	# `--pid=host` ones included) its own PID namespace, so the harness cannot
+	# reach runner processes through Docker (#7349). selfcheck verifies it.
+	local -a daemon_env=("PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}" "DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS=--pidns") daemon_args=()
 	if [ "${mode}" = systemd ]; then
 		daemon_env+=("DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus")
 	else
@@ -331,28 +540,36 @@ rootless_docker_container_probe()
 	return 2
 }
 
-# Bring up a daemon that can start containers: systemd user session first
-# (unless VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=cgroupfs), cgroupfs when the
-# session cannot be set up or a container would not start under it. Every
-# outcome is logged; a daemon whose test container fails under both drivers
-# fails provisioning closed (container_start_failed).
+# Bring up a daemon that can start containers. The default (`cgroupfs`)
+# releases any systemd user session left for the sandbox user and uses
+# cgroupfs. Opt-in `auto` tries a systemd user session first and falls back to
+# cgroupfs (releasing the session) when it cannot be set up or a container
+# would not start under it; `selfcheck` then refuses while a user manager runs
+# (#7380). Every outcome is logged; a daemon whose test container fails under
+# both drivers fails provisioning closed (container_start_failed).
 sandbox_start_verified_dockerd()
 {
 	local user="$1" uid="$2" home="$3" runtime_dir="$4" mode="" probe_rc=0
 	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
 		auto|cgroupfs) ;;
-		*) sandbox_log provision ok cgroup_mode_unrecognized_using_auto ;;
+		*) sandbox_log provision ok cgroup_mode_unrecognized_using_cgroupfs ;;
 	esac
 	case "${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}" in
-		cgroupfs) mode=cgroupfs ;;
-		*)
+		auto)
 			if sandbox_systemd_session "${user}" "${uid}"; then
 				mode=systemd
 				sandbox_log provision ok systemd_user_session
 			else
 				mode=cgroupfs
 				sandbox_log provision ok systemd_user_session_unavailable
+				# enable-linger may have succeeded before the session timed out.
+				sandbox_release_systemd_session "${user}" "${uid}"
 			fi
+			;;
+		*)
+			mode=cgroupfs
+			# Clear a linger left by an earlier opt-in `auto` provision.
+			sandbox_release_systemd_session "${user}" "${uid}"
 			;;
 	esac
 	sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
@@ -369,6 +586,8 @@ sandbox_start_verified_dockerd()
 		sandbox_log provision retry "container_start_failed_${mode}"
 		stop_rootless_dockerd "${runtime_dir}"
 		mode=cgroupfs
+		sandbox_release_systemd_session "${user}" "${uid}"
+		sudo -n install -d -m 0700 -o "${user}" -g "$(id -gn "${user}")" "${runtime_dir}" || sandbox_fail provision runtime_dir_failed
 		start_rootless_dockerd cgroupfs "${home}" "${runtime_dir}" || sandbox_fail provision rootless_dockerd_start_timeout
 		probe_rc=0
 		rootless_docker_container_probe || probe_rc=$?
@@ -502,6 +721,9 @@ cmd_provision()
 	runtime_dir="/run/user/${uid}"
 	sandbox_start_verified_dockerd "${user}" "${uid}" "${home}" "${runtime_dir}"
 
+	pidns_supported provision
+	ensure_pidns_state_dir provision
+
 	# Keep the credentialed job's own state unreadable to the sandbox user.
 	for dir in "${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}"; do
 		[ -n "${dir}" ] && [ -d "${dir}" ] && [ -O "${dir}" ] || continue
@@ -541,12 +763,38 @@ docker info >/dev/null 2>&1 || fail rootless_docker_unavailable
 printf 'ok\n'
 PROBE
 
+# Runs as the sandbox user inside the new PID namespace.
+read -r -d '' SELFCHECK_PIDNS_PROBE <<'PIDNS_PROBE' || true
+caller_pid="$1"; host_ns="$2"
+fail() { printf '%s\n' "$1"; exit 1; }
+own_ns="$(readlink /proc/self/ns/pid 2>/dev/null || true)"
+if [ -z "${own_ns}" ] || [ -z "${host_ns}" ] || [ "${own_ns}" = "${host_ns}" ]; then
+	fail pid_namespace_shared
+fi
+if [ -n "${caller_pid}" ] && [ "${caller_pid}" != "$$" ] && [ "${caller_pid}" != "${PPID}" ] && [ "${caller_pid}" != "1" ] \
+	&& [ -e "/proc/${caller_pid}" ]; then
+	if cat "/proc/${caller_pid}/environ" >/dev/null 2>&1 || cat "/proc/${caller_pid}/cmdline" >/dev/null 2>&1; then
+		fail caller_pid_visible
+	fi
+fi
+case "$(cat /proc/1/comm 2>/dev/null || true)" in
+	systemd|init) fail host_init_visible ;;
+esac
+# The user manager runs in the host PID namespace; every socket under the
+# runtime dir except docker.sock (wherever it was moved) must be masked.
+rt="/run/user/$(id -u)"
+if [ -d "${rt}" ] && [ -n "$(find "${rt}" -xdev -type s ! -path "${rt}/docker.sock" -print -quit 2>/dev/null)" ]; then
+	fail user_manager_reachable
+fi
+printf 'ok\n'
+PIDNS_PROBE
+
 cmd_selfcheck()
 {
 	validate_config selfcheck
 	require_sudo selfcheck
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail selfcheck sandbox_user_missing
-	local caller_pid="${1:-${PPID}}" home verdict
+	local caller_pid="${1:-${PPID}}" home verdict host_ns
 	home="$(sandbox_home)"
 	build_sandbox_env "${home}" "${home}/work" "$(sandbox_docker_host)"
 	verdict="$(as_sandbox bash -c "${SELFCHECK_PROBE}" selfcheck "${caller_pid}" \
@@ -555,6 +803,25 @@ cmd_selfcheck()
 		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
 		sandbox_fail selfcheck "${verdict}"
 	fi
+	# Second pass inside a PID namespace created the same way as the harness's.
+	pidns_supported selfcheck
+	host_ns="$(readlink "/proc/$$/ns/pid" 2>/dev/null || true)"
+	[ -n "${host_ns}" ] || sandbox_fail selfcheck pid_namespace_unverifiable
+	verdict="$(as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}" 2>/dev/null | tail -n 1 || true)"
+	if [ "${verdict}" != "ok" ]; then
+		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
+		sandbox_fail selfcheck "${verdict}"
+	fi
+	# The harness reaches Docker; a daemon in the host PID namespace would let
+	# a `--pid=host` container list runner processes.
+	docker_pidns_isolated "${host_ns}" || sandbox_fail selfcheck docker_pid_namespace_shared
+	# A container started through that daemon is outside the harness's mount
+	# namespace; a systemd user manager for the sandbox uid would let it start
+	# processes in the host PID namespace (#7380). An unknown state (rc 1)
+	# fails closed too.
+	local route_rc=0
+	user_manager_route_open || route_rc=$?
+	[ "${route_rc}" -eq 2 ] || sandbox_fail selfcheck user_manager_reachable_from_container
 	sandbox_log selfcheck ok
 	sandbox_status "ok selfcheck"
 }
@@ -713,22 +980,21 @@ cmd_cleanup()
 	validate_config cleanup
 	command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 || { sandbox_log cleanup fail sudo_unavailable; return 0; }
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || { sandbox_log cleanup ok no_sandbox_user; return 0; }
-	local home work pgid compose
+	local home work compose state_base
 	home="$(sandbox_home)"
 	work="$(sandbox_work_dir)"
+	state_base="$(pidns_state_base)"
 	build_sandbox_env "${home}" "${home}/work" "$(sandbox_docker_host)"
-	pgid="$(sudo -n cat "${work}.pgid" 2>/dev/null || true)"
-	if [[ "${pgid}" =~ ^[0-9]+$ ]] && [ "${pgid}" -gt 1 ]; then
-		# The marker is written by (and writable to) the untrusted sandbox
-		# user, so the kill runs as that user, never as root: a forged value
-		# can then only reach processes the sandbox user already controls.
-		as_sandbox kill -KILL -- "-${pgid}" >/dev/null 2>&1 || true
-	fi
+	# Root kills only the `unshare` pid root itself recorded in the root-owned
+	# state directory. ${work}.pgid (written by older helper copies) lives in
+	# a directory the sandbox user owns, so it is removed but never read.
+	pidns_kill_recorded "${state_base}.pid"
 	compose="${work}/validation/docker-compose.test.yml"
 	if sudo -n test -f "${compose}"; then
 		as_sandbox bash -c 'cd "$1" && docker compose -f "$2" down -v --remove-orphans' cleanup "${work}" "${compose}" >/dev/null 2>&1 || true
 	fi
 	as_sandbox rm -rf -- "${work}" "${work}.pgid" >/dev/null 2>&1 || true
+	sudo -n rm -f -- "${state_base}.pid" "${state_base}.started" >/dev/null 2>&1 || true
 	sandbox_log cleanup ok
 }
 
@@ -739,7 +1005,7 @@ cmd_run()
 	shift
 	require_sudo run
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail run sandbox_user_missing
-	local home work workspace entry_rel stage_status extract_status harness_exit copyback_dest
+	local home work workspace entry_rel stage_status extract_status harness_exit copyback_dest state_base pidfile started
 	local -a overlays=()
 	home="$(sandbox_home)"
 	work="$(sandbox_work_dir)"
@@ -752,6 +1018,7 @@ cmd_run()
 	build_sandbox_env "${home}" "${work}/.tmp" "$(sandbox_docker_host)"
 	rootless_docker_ready || sandbox_fail run rootless_docker_unavailable
 	[ -f "${SANDBOX_HELPER_DIR}/codex_isolated_workspace.py" ] || sandbox_fail run support_missing
+	pidns_supported run
 
 	case "${entry}" in
 		/*)
@@ -776,6 +1043,11 @@ cmd_run()
 	fi
 
 	cmd_cleanup >/dev/null 2>&1 || true
+	ensure_pidns_state_dir run
+	state_base="$(pidns_state_base)"
+	pidfile="${state_base}.pid"
+	started="${state_base}.started"
+	sudo -n rm -f -- "${pidfile}" "${started}" >/dev/null 2>&1 || true
 	build_sandbox_env "${home}" "${work}/.tmp" "$(sandbox_docker_host)"
 	as_sandbox mkdir -p -- "${work}/.tmp" || sandbox_fail run work_dir_failed
 	set +e
@@ -790,13 +1062,17 @@ cmd_run()
 	sandbox_log run ok staged
 
 	set +e
-	# setsid gives the harness its own process group so cleanup can stop it
-	# even after the caller SIGKILLs this helper (signals to sudo do not
-	# reach the sandbox user's processes).
-	as_sandbox setsid --wait bash -c 'printf "%s\n" "$$" > "$1.pgid"; cd "$1" || exit 1; shift; exec bash "$@"' \
+	# The harness runs inside its own PID namespace; cleanup stops it through
+	# the root-recorded `unshare` pid even after the caller SIGKILLs this
+	# helper (signals to sudo do not reach the sandbox user's processes).
+	as_sandbox_in_pidns "${pidfile}" "${started}" setsid --wait bash -c 'cd "$1" || exit 1; shift; exec bash "$@"' \
 		harness "${work}" "${entry_rel}" "$@"
 	harness_exit=$?
 	set -e
+	# Only a marker root wrote inside the namespace proves the harness ran
+	# there; never retry without the namespace.
+	sudo -n test -f "${started}" || sandbox_fail run pid_namespace_launch_failed
+	sudo -n rm -f -- "${pidfile}" "${started}" >/dev/null 2>&1 || true
 
 	set +e
 	as_sandbox bash -c 'cd "$1" && if [ -d validation/logs ]; then tar -c -f - validation/logs; else tar -c -f - --files-from /dev/null; fi' \

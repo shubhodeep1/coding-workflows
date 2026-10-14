@@ -1296,16 +1296,23 @@ jobs:
           1. Determine if the issue is clear enough to implement.
           2. If clarification is required, ask concise clarification questions.
           3. Ask only essential questions needed for implementation.
-          4. Prefer repo-local context first. Web search IS available (the `web_search`
-             tool is enabled in the codex config — see `scripts/write_codex_config.sh`'s
-             `--web-search live` default) — use it for public 3rd-party API docs, library
-             reference, RFCs, standards, and similar publicly-readable resources. Do NOT
-             use it for private/auth-walled resources or anything that requires a
-             credential.
-          5. If an external API/service is involved, fetch its official docs via the
-             web tool, verify the source is the official vendor/library or relevant
-             standards publisher, and identify the expected endpoints, signature
-             scheme, and payload shapes so planning can include concrete call details.
+          4. Prefer repo-local context first. Web search is available only when this
+             run has a web tool: Codex runs do (the `web_search` tool is enabled in the
+             codex config — see `scripts/write_codex_config.sh`'s `--web-search live`
+             default). Claude-engine runs have no web search or web fetch; their system
+             instructions say so. When a web tool is available, use it for public
+             3rd-party API docs, library reference, RFCs, standards, and similar
+             publicly-readable resources. Do NOT use it for private/auth-walled
+             resources or anything that requires a credential.
+          5. If an external API/service is involved and a web tool is available, fetch
+             its official docs, verify the source is the official vendor/library or
+             relevant standards publisher, and identify the expected endpoints,
+             signature scheme, and payload shapes so planning can include concrete call
+             details. Without a web tool, take external facts (a release tag's commit
+             SHA, a package version, an API endpoint or signature) only from the issue
+             body, its answers, the comment thread or the repository, never try to look
+             them up, use a fact the issue states as verified as given, and ask for a
+             fact the task depends on that is in none of those places.
           6. Flag any factual conflicts between the issue description and the codebase
              (e.g., a name in the issue doesn't match the name in the code).
           7. Do NOT write code.
@@ -1318,10 +1325,11 @@ jobs:
              Only when the task depends on the content of an auth-walled or
              private URL absent from the issue and repository, emit exactly
              `BLOCKED: <short reason>` instead of Q/Choices.
-             Public 3rd-party documentation is NOT a BLOCKED trigger: fetch it with the
-             web tool and proceed with `STATUS: CLEAR` (or Q-IDs if other genuine
-             ambiguities remain) only when the relevant public docs are found; if they
-             are genuinely unavailable, ask a clarification question instead of
+             Public 3rd-party documentation is NOT a BLOCKED trigger: when a web tool
+             is available (point 4), fetch it and proceed with `STATUS: CLEAR` (or
+             Q-IDs if other genuine ambiguities remain) only when the relevant public
+             docs are found; without a web tool, or if the docs are genuinely
+             unavailable, follow point 5 and ask a clarification question instead of
              inventing details.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):

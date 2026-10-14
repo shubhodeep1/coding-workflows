@@ -13,6 +13,7 @@ import io
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -281,15 +282,30 @@ def test_validation_refresh_self_test_runs_only_through_sandbox() -> None:
 	assert '("self_test", self_test_command)' not in runner
 
 
+def _function_body(name: str) -> str:
+	text = HELPER.read_text(encoding="utf-8")
+	match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
+	assert match is not None, name
+	return match.group(0)
+
+
 def test_cleanup_never_kills_the_sandbox_written_pgid_as_root() -> None:
 	# ${work}.pgid is written by the untrusted sandbox user; a forged value
 	# must not reach a root-privileged kill (it could target runner processes).
-	text = HELPER.read_text(encoding="utf-8")
-	cleanup = re.search(r"^cmd_cleanup\(\)\n\{\n.*?^\}\n", text, re.M | re.S)
-	assert cleanup is not None
-	body = cleanup.group(0)
-	assert 'as_sandbox kill -KILL -- "-${pgid}"' in body
-	assert "sudo -n kill" not in body
+	# Root kills only the `unshare` pid root recorded in the root-owned state
+	# directory, after checking the file and the process (#7349).
+	body = _function_body("cmd_cleanup")
+	assert 'pidns_kill_recorded "${state_base}.pid"' in body
+	assert 'sudo -n cat "${work}.pgid"' not in body
+	assert "pgid=" not in body and '"-${pgid}"' not in body
+	assert 'as_sandbox rm -rf -- "${work}" "${work}.pgid"' in body
+	kill = _function_body("pidns_kill_recorded")
+	assert '[ "${meta}" = "0 regular file" ]' in kill
+	assert '[ "${comm}" = "unshare" ] && [ "${owner}" = "0" ]' in kill
+	assert '[ "${pid}" -gt 1 ]' in kill
+	assert "pgid" not in kill
+	assert 'state_base="$(pidns_state_base)"' in body
+	assert '"${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR}"' in _function_body("pidns_state_base")
 
 
 # --- rootless package install on runners without Docker's apt source ---------
@@ -538,12 +554,15 @@ def test_nightly_sandbox_check_fails_when_no_log_copies_back() -> None:
 # without a user session for the sandbox user every container start failed with
 # "open /sys/fs/cgroup/user.slice/user-<uid>.slice/cgroup.controllers"
 # (#6902, #6664). Provision now sets up the session, proves a container starts,
-# and falls back to cgroupfs before failing closed.
+# and falls back to cgroupfs before failing closed. Since #7380 that systemd
+# path is opt-in (`auto`); the default `cgroupfs` releases any leftover user
+# manager, and every path that ends in cgroupfs releases it first.
 
-def _driver(tmp: Path, *, session: bool, probe: dict[str, int], mode: str = "auto", ready: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _driver(tmp: Path, *, session: bool, probe: dict[str, int], mode: str | None = "auto", ready: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
 	"""Run sandbox_start_verified_dockerd with its collaborators stubbed out.
 
 	probe maps the daemon's driver (systemd/cgroupfs/reused) to the probe's exit code.
+	mode None leaves VALIDATION_HARNESS_SANDBOX_CGROUP_MODE unset (the default).
 	"""
 	calls = tmp / "calls"
 	status = tmp / "status"
@@ -555,15 +574,17 @@ build_sandbox_env() {{ :; }}
 declare -A PROBE=({probes})
 DAEMON="{"reused" if ready else ""}"
 sandbox_systemd_session() {{ echo "session $*" >> "{calls}"; {"return 0" if session else "return 1"}; }}
+sandbox_release_systemd_session() {{ echo "release $*" >> "{calls}"; }}
 rootless_docker_ready() {{ [ -n "${{DAEMON}}" ]; }}
 start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
 stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
 rootless_docker_container_probe() {{ echo "probe ${{DAEMON}}" >> "{calls}"; return "${{PROBE[$DAEMON]:-1}}"; }}
 sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/1002
 '''
-	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
-		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp), "VALIDATION_HARNESS_SANDBOX_CGROUP_MODE": mode,
-			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+	env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)}
+	if mode is not None:
+		env["VALIDATION_HARNESS_SANDBOX_CGROUP_MODE"] = mode
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, env=env)
 	return result, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
 
 
@@ -578,7 +599,7 @@ def test_a_working_systemd_session_is_used_once_a_container_starts(tmp_path: Pat
 def test_a_container_that_fails_under_systemd_restarts_the_daemon_with_cgroupfs(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=True, probe={"systemd": 1, "cgroupfs": 0})
 	assert result.returncode == 0, result.stderr
-	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd", "stop", "start cgroupfs", "probe cgroupfs"]
+	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd", "stop", "release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
 	assert "outcome=retry reason=container_start_failed_systemd" in result.stderr
 	assert "outcome=ok reason=container_probe_cgroupfs" in result.stderr
 
@@ -586,7 +607,7 @@ def test_a_container_that_fails_under_systemd_restarts_the_daemon_with_cgroupfs(
 def test_no_systemd_session_goes_straight_to_cgroupfs(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=False, probe={"cgroupfs": 0})
 	assert result.returncode == 0, result.stderr
-	assert calls == ["session ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+	assert calls == ["session ai-validation 1002", "release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
 	assert "outcome=ok reason=systemd_user_session_unavailable" in result.stderr
 
 
@@ -601,7 +622,21 @@ def test_a_container_that_fails_under_both_drivers_fails_provision_closed(tmp_pa
 def test_cgroupfs_mode_never_touches_the_systemd_session(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode="cgroupfs")
 	assert result.returncode == 0, result.stderr
-	assert calls == ["start cgroupfs", "probe cgroupfs"]
+	assert calls == ["release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+
+
+def test_cgroupfs_is_the_default_cgroup_mode(tmp_path: Path) -> None:
+	result = subprocess.run(["bash", "-c", f'source "{HELPER}"; printf "%s" "${{VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}}"'],
+		capture_output=True, text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "cgroupfs"
+
+
+def test_the_default_mode_never_starts_a_systemd_session(tmp_path: Path) -> None:
+	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode=None)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+	assert "reason=cgroup_mode_unrecognized" not in result.stderr
 
 
 def test_an_inconclusive_probe_keeps_the_daemon_and_says_so(tmp_path: Path) -> None:
@@ -614,7 +649,7 @@ def test_an_inconclusive_probe_keeps_the_daemon_and_says_so(tmp_path: Path) -> N
 def test_a_reused_daemon_is_tested_too_and_replaced_when_containers_fail(tmp_path: Path) -> None:
 	result, calls = _driver(tmp_path, session=True, probe={"reused": 1, "cgroupfs": 0}, ready=True)
 	assert result.returncode == 0, result.stderr
-	assert calls == ["session ai-validation 1002", "probe reused", "stop", "start cgroupfs", "probe cgroupfs"]
+	assert calls == ["session ai-validation 1002", "probe reused", "stop", "release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
 
 
 CGROUP_ERR = "docker: Error response from daemon: open /sys/fs/cgroup/user.slice/user-1002.slice/cgroup.controllers: no such file or directory"
@@ -785,6 +820,7 @@ source "{HELPER}"
 sudo() {{ :; }}
 build_sandbox_env() {{ :; }}
 sandbox_systemd_session() {{ return 0; }}
+sandbox_release_systemd_session() {{ :; }}
 DAEMON=""
 start_rootless_dockerd() {{ echo "start $1" >> "{calls}"; DAEMON="$1"; }}
 stop_rootless_dockerd() {{ echo "stop" >> "{calls}"; DAEMON=""; }}
@@ -799,7 +835,8 @@ sandbox_start_verified_dockerd ai-validation 1002 /home/ai-validation /run/user/
 echo "HARNESS_LAUNCHED" >> "{calls}"
 '''
 	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
-		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status)})
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status),
+			"VALIDATION_HARNESS_SANDBOX_CGROUP_MODE": "auto"})
 	assert result.returncode == 3, result.stderr
 	lines = calls.read_text(encoding="utf-8").splitlines()
 	assert lines == ["start systemd", "run systemd", "stop", "start cgroupfs", "run cgroupfs"]
@@ -815,11 +852,597 @@ def test_a_non_integer_session_wait_falls_back_to_the_default(tmp_path: Path) ->
 	assert result.stdout == "15"
 
 
-def test_an_unrecognized_cgroup_mode_is_logged_and_uses_auto(tmp_path: Path) -> None:
-	result, calls = _driver(tmp_path, session=True, probe={"systemd": 0}, mode="cgoupfs")
+def test_an_unrecognized_cgroup_mode_is_logged_and_uses_cgroupfs(tmp_path: Path) -> None:
+	# A typo must never opt into the systemd user session (#7380).
+	result, calls = _driver(tmp_path, session=True, probe={"cgroupfs": 0}, mode="autoo")
 	assert result.returncode == 0, result.stderr
-	assert "outcome=ok reason=cgroup_mode_unrecognized_using_auto" in result.stderr
-	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]
+	assert "outcome=ok reason=cgroup_mode_unrecognized_using_cgroupfs" in result.stderr
+	assert calls == ["release ai-validation 1002", "start cgroupfs", "probe cgroupfs"]
+
+
+def _release(tmp: Path, *, manager: bool = True, linger: bool = True, loginctl_rc: int = 0) -> tuple[subprocess.CompletedProcess, str]:
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "loginctl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(bin_dir / "loginctl").chmod(0o755)
+	log = tmp / "sudo.log"
+	stopped = tmp / "stopped"
+	script = f'''
+source "{HELPER}"
+sudo() {{
+	shift
+	echo "$*" >> "{log}"
+	case "$1" in
+		loginctl) return {loginctl_rc} ;;
+		systemctl) : > "{stopped}" ;;
+		pgrep) {"[ -e '" + str(stopped) + "' ] || echo 77" if manager else ":"} ;;
+		test) {"return 0" if linger else "return 1"} ;;
+	esac
+	return 0
+}}
+sleep() {{ :; }}
+sandbox_release_systemd_session ai-validation 1002
+echo "rc=$?"
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "HOME": str(tmp), "SANDBOX_SESSION_WAIT_SECS": "2"})
+	return result, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_the_release_disables_linger_and_stops_the_user_manager(tmp_path: Path) -> None:
+	result, sudo_log = _release(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "rc=0" in result.stdout
+	assert "loginctl disable-linger ai-validation" in sudo_log
+	assert "systemctl stop user@1002.service" in sudo_log
+	assert "outcome=ok reason=systemd_user_session_released" in result.stderr
+
+
+def test_the_release_returns_zero_when_loginctl_fails(tmp_path: Path) -> None:
+	result, sudo_log = _release(tmp_path, loginctl_rc=1)
+	assert result.returncode == 0, result.stderr
+	assert "rc=0" in result.stdout
+	assert "systemctl stop user@1002.service" in sudo_log
+
+
+def test_the_release_does_nothing_when_no_manager_or_linger_exists(tmp_path: Path) -> None:
+	result, sudo_log = _release(tmp_path, manager=False, linger=False)
+	assert "rc=0" in result.stdout
+	assert "loginctl" not in sudo_log and "systemctl" not in sudo_log
+	assert "systemd_user_session_released" not in result.stderr
+
+# --- PID namespace for the harness (#7349, finding validation-harness-credential-inheritance) ---
+# The harness and the namespace self-check start in a new PID and mount
+# namespace created by root, so a test cannot list runner processes or read
+# their /proc entries. No namespace means fail closed, never a host launch.
+
+
+def test_the_harness_launches_only_inside_a_pid_namespace() -> None:
+	launcher = _function_body("as_sandbox_in_pidns")
+	assert "exec unshare --pid --fork --mount-proc --propagation private --kill-child -- " in launcher
+	assert "unshare --pid --fork --mount-proc --propagation private --kill-child -- true" in _function_body("pidns_supported")
+	assert 'sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"' in launcher
+	run = _function_body("cmd_run")
+	assert 'as_sandbox_in_pidns "${pidfile}" "${started}" setsid --wait bash -c' in run
+	assert "as_sandbox setsid" not in run
+	assert ".pgid" not in run
+	assert 'sudo -n test -f "${started}" || sandbox_fail run pid_namespace_launch_failed' in run
+	assert run.index("pidns_supported run") < run.index("python3 -I -c \"${STAGE_PY}\"")
+	# as_sandbox itself is unchanged and is no longer used to start the harness.
+	assert _function_body("as_sandbox").count("sudo -n -u") == 1
+
+
+def test_provision_and_selfcheck_require_a_pid_namespace() -> None:
+	provision = _function_body("cmd_provision")
+	assert provision.index("pidns_supported provision") < provision.index("sandbox_log provision ok")
+	assert provision.index("ensure_pidns_state_dir provision") < provision.index("sandbox_log provision ok")
+	selfcheck = _function_body("cmd_selfcheck")
+	assert "pidns_supported selfcheck" in selfcheck
+	assert 'as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}"' in selfcheck
+	assert selfcheck.index("pidns_supported selfcheck") < selfcheck.index("sandbox_log selfcheck ok")
+
+
+def _pidns_probe() -> str:
+	text = HELPER.read_text(encoding="utf-8")
+	return text.split("<<'PIDNS_PROBE' || true\n", 1)[1].split("\nPIDNS_PROBE\n", 1)[0]
+
+
+def test_the_namespace_probe_names_each_isolation_failure() -> None:
+	probe = _pidns_probe()
+	for token in ("pid_namespace_shared", "caller_pid_visible", "host_init_visible", "user_manager_reachable"):
+		assert f"fail {token}" in probe, token
+
+
+def _run_probe(*args: str) -> str:
+	result = subprocess.run(["bash", "-c", _pidns_probe(), "probe", *args], capture_output=True, text=True, timeout=30)
+	return result.stdout.strip().splitlines()[-1]
+
+
+def test_the_namespace_probe_fails_in_the_host_namespace() -> None:
+	host_ns = os.readlink(f"/proc/{os.getpid()}/ns/pid")
+	assert _run_probe("", host_ns) == "pid_namespace_shared"
+	assert _run_probe("", "") == "pid_namespace_shared"
+
+
+def test_the_namespace_probe_fails_when_the_caller_is_visible() -> None:
+	# A fake host namespace id passes the first check; a separate "caller"
+	# process is visible and readable in the shared /proc. (The probe skips
+	# its own pid and its parent's, which belong to the namespace.)
+	caller = subprocess.Popen(["sleep", "30"])
+	try:
+		assert _run_probe(str(caller.pid), "pid:[0]") == "caller_pid_visible"
+	finally:
+		caller.kill()
+		caller.wait()
+
+
+def _sourced(tmp: Path, body: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+	script = f'''
+source "{HELPER}"
+id() {{ case "$1" in -un) echo someone-else ;; *) echo 4242 ;; esac; }}
+sandbox_home() {{ echo "{tmp}/home"; }}
+{body}
+'''
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=tmp,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp),
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(tmp / "status"),
+			"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp / "state"), **(env or {})})
+
+
+def test_selfcheck_fails_closed_when_no_pid_namespace_can_be_created(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+as_sandbox() { echo ok; }
+sudo() { shift; case "$1" in true) return 0 ;; unshare) return 1 ;; esac; return 0; }
+cmd_selfcheck 1
+echo REACHED
+''')
+	assert result.returncode == 3, result.stderr
+	assert "phase=selfcheck outcome=fail reason=pid_namespace_unavailable" in result.stderr
+	assert "REACHED" not in result.stdout
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail selfcheck pid_namespace_unavailable\n"
+
+
+def test_selfcheck_fails_when_the_namespace_probe_does(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+as_sandbox() { echo ok; }
+as_sandbox_in_pidns() { echo caller_pid_visible; }
+sudo() { shift; return 0; }
+cmd_selfcheck 1
+''')
+	assert result.returncode == 3, result.stderr
+	assert "reason=caller_pid_visible" in result.stderr
+
+
+@pytest.mark.parametrize("state_dir", ("relative/state", "/tmp/a/../b", "/tmp/bad dir", "/run", "/tmp", "/run//", "/run/x/", "//run/x"))
+def test_an_invalid_state_dir_is_refused(state_dir: str) -> None:
+	result = _run(["selfcheck"], env={"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": state_dir,
+		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": "/dev/null"})
+	assert result.returncode == 3
+	assert b"reason=invalid_pidns_state_dir" in result.stderr
+
+
+def test_a_state_dir_under_the_sandbox_home_is_refused(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, "validate_config run", env={"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp_path / "home" / "state")})
+	assert result.returncode == 3
+	assert "reason=invalid_pidns_state_dir" in result.stderr
+
+
+@pytest.mark.parametrize("meta", ("0 755 directory", "1000 700 directory", "0 700 regular file", ""))
+def test_an_existing_state_dir_that_is_not_root_0700_is_refused(tmp_path: Path, meta: str) -> None:
+	# `install -d` would chmod/chown an existing directory (e.g. /run/user).
+	calls = tmp_path / "calls"
+	result = _sourced(tmp_path, f'''
+sudo() {{
+	shift
+	case "$1" in
+		test) [ "$2" = -e ] && return 0; return 1 ;;
+		stat) echo "{meta}" ;;
+		install) echo install >> "{calls}" ;;
+	esac
+	return 0
+}}
+ensure_pidns_state_dir run
+echo REACHED
+''')
+	assert result.returncode == 3, result.stderr
+	assert "reason=pidns_state_dir_failed" in result.stderr
+	assert "REACHED" not in result.stdout
+	assert not calls.exists(), "an existing directory must never be passed to install"
+
+
+def test_an_existing_root_0700_state_dir_is_reused_without_install(tmp_path: Path) -> None:
+	calls = tmp_path / "calls"
+	result = _sourced(tmp_path, f'''
+sudo() {{
+	shift
+	case "$1" in
+		test) [ "$2" = -e ] && return 0; return 1 ;;
+		stat) echo "0 700 directory" ;;
+		install) echo install >> "{calls}" ;;
+	esac
+	return 0
+}}
+ensure_pidns_state_dir run
+echo REACHED
+''')
+	assert result.returncode == 0, result.stderr
+	assert "REACHED" in result.stdout
+	assert not calls.exists()
+
+
+# The rootless daemon gets its own PID namespace (rootlesskit --pidns), so a
+# `--pid=host` container cannot list runner processes; selfcheck verifies it.
+def test_the_rootless_daemon_starts_in_its_own_pid_namespace() -> None:
+	body = _function_body("start_rootless_dockerd")
+	assert '"DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS=--pidns"' in body
+	selfcheck = _function_body("cmd_selfcheck")
+	assert 'docker_pidns_isolated "${host_ns}" || sandbox_fail selfcheck docker_pid_namespace_shared' in selfcheck
+	assert selfcheck.index("docker_pidns_isolated") < selfcheck.index("sandbox_log selfcheck ok")
+
+
+def _docker_ns(tmp: Path, pids: str, ns: dict[str, str], host: str = "pid:[1]") -> int:
+	cases = "".join(f"\t\t\t/proc/{pid}/ns/pid) echo '{value}' ;;\n" for pid, value in ns.items())
+	result = _sourced(tmp, f'''
+sudo() {{
+	shift
+	case "$1" in
+		pgrep) printf '%b' '{pids}' ;;
+		readlink)
+			case "$2" in
+{cases}			esac ;;
+	esac
+	return 0
+}}
+docker_pidns_isolated '{host}'
+''')
+	return result.returncode
+
+
+def test_docker_pidns_isolated_accepts_only_namespaced_daemons(tmp_path: Path) -> None:
+	assert _docker_ns(tmp_path, "55\\n", {"55": "pid:[2]"}) == 0
+	assert _docker_ns(tmp_path, "55\\n", {"55": "pid:[1]"}) == 1
+	assert _docker_ns(tmp_path, "", {}) == 1, "no daemon is not proof of isolation"
+	assert _docker_ns(tmp_path, "55\\n56\\n", {"55": "pid:[2]", "56": "pid:[1]"}) == 1
+	assert _docker_ns(tmp_path, "55\\n", {}) == 1, "an unreadable namespace fails closed"
+
+
+def test_selfcheck_fails_when_the_daemon_shares_the_host_pid_namespace(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+as_sandbox() { echo ok; }
+as_sandbox_in_pidns() { echo ok; }
+sudo() {
+	shift
+	case "$1" in
+		pgrep) echo 55 ;;
+		readlink) readlink "/proc/$$/ns/pid" ;;
+	esac
+	return 0
+}
+cmd_selfcheck 1
+echo REACHED
+''')
+	assert result.returncode == 3, result.stderr
+	assert "phase=selfcheck outcome=fail reason=docker_pid_namespace_shared" in result.stderr
+	assert "REACHED" not in result.stdout
+
+
+# --- No reachable systemd user manager (#7380) ---------------------------------
+# A container started through the rootless daemon is outside the harness's
+# mount namespace; a user manager for the sandbox uid would let it start a
+# transient unit in the host PID namespace. selfcheck refuses while one exists.
+
+def _route_selfcheck(tmp: Path, *, process: str = "", bus: bool = False, socket: bool = False) -> subprocess.CompletedProcess:
+	return _sourced(tmp, f'''
+as_sandbox() {{ echo ok; }}
+as_sandbox_in_pidns() {{ echo ok; }}
+sudo() {{
+	shift
+	case "$1" in
+		pgrep)
+			case "$*" in
+				*"-x dockerd"*) echo 55 ;;
+				*"-x {process or 'none'}") echo 77 ;;
+			esac ;;
+		readlink) case "$2" in /proc/55/ns/pid) echo "pid:[999]" ;; *) readlink "$2" ;; esac ;;
+		test) case "$*" in "test -S "*/bus) {"return 0" if bus else "return 1"} ;; esac ;;
+		find) {"echo /run/user/4242/systemd/private" if socket else ":"} ;;
+	esac
+	return 0
+}}
+cmd_selfcheck 1
+echo REACHED
+''')
+
+
+@pytest.mark.parametrize("kwargs", ({"process": "systemd"}, {"process": "dbus-daemon"}, {"process": "dbus-broker"}, {"bus": True}, {"socket": True}))
+def test_selfcheck_fails_while_a_user_manager_is_reachable(tmp_path: Path, kwargs: dict) -> None:
+	result = _route_selfcheck(tmp_path, **kwargs)
+	assert result.returncode == 3, result.stderr
+	assert "phase=selfcheck outcome=fail reason=user_manager_reachable_from_container" in result.stderr
+	assert "REACHED" not in result.stdout
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail selfcheck user_manager_reachable_from_container\n"
+
+
+def test_selfcheck_passes_without_a_user_manager(tmp_path: Path) -> None:
+	result = _route_selfcheck(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "phase=selfcheck outcome=ok" in result.stderr
+	assert "REACHED" in result.stdout
+
+
+def test_an_unresolvable_uid_fails_the_route_check_closed(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+sandbox_uid() { return 1; }
+rc=0; user_manager_route_open || rc=$?
+echo "rc=${rc}"
+''')
+	assert "rc=1" in result.stdout
+
+
+def test_a_denied_test_command_fails_the_route_check_closed(tmp_path: Path) -> None:
+	# sudo denying `test` exits 1, like "no such socket"; it must not read as closed.
+	result = _sourced(tmp_path, '''
+sandbox_uid() { echo 4242; }
+sudo() { shift; case "$1" in pgrep) return 1 ;; test) return 1 ;; esac; return 0; }
+rc=0; user_manager_route_open || rc=$?
+echo "rc=${rc}"
+''')
+	assert "rc=1" in result.stdout
+
+
+@pytest.mark.parametrize("failing", ("pgrep", "find"))
+def test_a_failed_inspection_fails_the_route_check_closed(tmp_path: Path, failing: str) -> None:
+	# An inspection error must not read as "no user manager" (#7380 review).
+	result = _sourced(tmp_path, f'''
+sandbox_uid() {{ echo 4242; }}
+sudo() {{
+	shift
+	case "$1" in
+		pgrep) {"return 3" if failing == "pgrep" else "return 1"} ;;
+		test) case "$*" in "test -S "*) return 1 ;; esac; return 0 ;;
+		find) {"return 1" if failing == "find" else "return 0"} ;;
+	esac
+	return 0
+}}
+rc=0; user_manager_route_open || rc=$?
+echo "rc=${{rc}}"
+''')
+	assert "rc=1" in result.stdout
+
+
+def test_the_route_check_runs_after_the_docker_check_and_before_ok() -> None:
+	selfcheck = _function_body("cmd_selfcheck")
+	assert "user_manager_route_open" in selfcheck
+	assert 'sandbox_fail selfcheck user_manager_reachable_from_container' in selfcheck
+	assert selfcheck.index("docker_pidns_isolated") < selfcheck.index("user_manager_route_open") < selfcheck.index("sandbox_log selfcheck ok")
+
+
+def _cleanup(tmp: Path, *, meta: str = "0 regular file", pid: str = "4321", comm: str = "unshare", owner: str = "0") -> tuple[int, list[str]]:
+	calls = tmp / "calls"
+	result = _sourced(tmp, f'''
+as_sandbox() {{ return 0; }}
+sudo() {{
+	shift
+	local last="${{@: -1}}"
+	case "$1" in
+		true) return 0 ;;
+		stat) case "$last" in *.pid) echo "{meta}" ;; /proc/*) echo "{owner}" ;; esac ;;
+		cat) case "$last" in *.pid) echo "{pid}" ;; */comm) echo "{comm}" ;; esac ;;
+		pgrep) echo 4322 ;;
+		kill) echo "kill $*" >> "{calls}" ;;
+		test) return 1 ;;
+	esac
+	return 0
+}}
+cmd_cleanup
+''')
+	assert "outcome=ok" in result.stderr, result.stderr
+	return result.returncode, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+
+
+def test_cleanup_kills_the_recorded_namespace(tmp_path: Path) -> None:
+	rc, calls = _cleanup(tmp_path)
+	assert rc == 0
+	assert calls == ["kill kill -KILL -- 4322", "kill kill -KILL -- 4321"]
+
+
+@pytest.mark.parametrize("kwargs", (
+	{"pid": "1"}, {"pid": "0"}, {"pid": "12;id"}, {"comm": "bash"}, {"owner": "1000"},
+	{"meta": "1000 regular file"}, {"meta": "0 symbolic link"}, {"meta": ""},
+))
+def test_cleanup_kills_nothing_it_cannot_verify(tmp_path: Path, kwargs: dict) -> None:
+	rc, calls = _cleanup(tmp_path, **kwargs)
+	assert rc == 0
+	assert calls == []
+
+
+# Fake sudo/unshare binaries: sudo strips its options (and -o/-g for install)
+# and runs the command as the test user; unshare skips to `--`.
+FAKE_SUDO = """#!/bin/bash
+while [ "$#" -gt 0 ]; do case "$1" in -n) shift ;; -u) shift 2 ;; --) shift; break ;; *) break ;; esac; done
+if [ "$1" = install ]; then
+	shift; args=()
+	while [ "$#" -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+	exec install "${args[@]}"
+fi
+exec "$@"
+"""
+FAKE_UNSHARE = """#!/bin/bash
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+case "${FAKE_UNSHARE_MODE}" in
+	fail) exit 1 ;;
+	nolaunch) [ "$1" = true ] && exit 0; exit 1 ;;
+esac
+exec "$@"
+"""
+
+
+def _run_harness(tmp: Path, mode: str) -> tuple[subprocess.CompletedProcess, Path]:
+	if shutil.which("setsid") is None or shutil.which("git") is None:
+		pytest.skip("needs setsid and git")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	for name, body in (("sudo", FAKE_SUDO), ("unshare", FAKE_UNSHARE)):
+		(bin_dir / name).write_text(body, encoding="utf-8")
+		(bin_dir / name).chmod(0o755)
+	ws = tmp / "ws"
+	(ws / "validation").mkdir(parents=True)
+	subprocess.run(["git", "init", "-q", str(ws)], check=True, capture_output=True)
+	marker = tmp / "ran"
+	(ws / "validation" / "entry.sh").write_text(
+		f"touch {marker}\nmkdir -p validation/logs\necho hi > validation/logs/t.log\nexit 7\n", encoding="utf-8")
+	script = f'''
+source "{HELPER}"
+id() {{ case "$1" in -un) echo someone-else ;; *) echo 4242 ;; esac; }}
+sandbox_home() {{ echo "{tmp}/home"; }}
+rootless_docker_ready() {{ return 0; }}
+cmd_run validation/entry.sh
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=ws,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "HOME": str(tmp), "FAKE_UNSHARE_MODE": mode,
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(tmp / "status"),
+			"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp / "state")})
+	return result, marker
+
+
+def test_run_launches_the_harness_through_the_namespace_and_returns_its_exit(tmp_path: Path) -> None:
+	result, marker = _run_harness(tmp_path, "ok")
+	assert result.returncode == 7, result.stderr
+	assert marker.exists()
+	assert (tmp_path / "ws" / "validation" / "logs" / "t.log").read_text(encoding="utf-8") == "hi\n"
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "ok run 7\n"
+	# The launch state is removed once the harness has finished.
+	assert list((tmp_path / "state").iterdir()) == []
+
+
+def test_run_fails_closed_when_no_pid_namespace_can_be_created(tmp_path: Path) -> None:
+	result, marker = _run_harness(tmp_path, "fail")
+	assert result.returncode == 3, result.stderr
+	assert "phase=run outcome=fail reason=pid_namespace_unavailable" in result.stderr
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail run pid_namespace_unavailable\n"
+	assert not marker.exists(), "the harness must never run without the namespace"
+
+
+def test_run_fails_closed_when_the_namespace_launch_never_starts(tmp_path: Path) -> None:
+	result, marker = _run_harness(tmp_path, "nolaunch")
+	assert result.returncode == 3, result.stderr
+	assert "phase=run outcome=fail reason=pid_namespace_launch_failed" in result.stderr
+	assert not marker.exists()
+
+
+# The sandbox user's systemd user manager (auto cgroup mode) runs in the host
+# PID namespace; `systemd-run --user` through its sockets would start commands
+# outside the harness namespace. Root masks both sockets before the drop.
+def _mksock(path: Path) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	os.mknod(path, stat.S_IFSOCK | 0o600)
+
+
+# Fake `mount --bind /dev/null <path>` ($3 is the path): `mask` replaces the
+# socket with a regular file, as a real bind mount hides it; `fail` refuses;
+# `noop` succeeds without masking; `vanish` loses the race (path gone, exit 1).
+FAKE_MOUNT_ACTIONS = {
+	"mask": 'rm -f "$3" && : > "$3"; exit 0',
+	"fail": "exit 1",
+	"noop": "exit 0",
+	"vanish": 'rm -f "$3"; exit 1',
+}
+
+
+def _pidns_launch(tmp: Path, bus: str, private: str = "systemd/private", mount_mode: str = "mask") -> tuple[str, list[str], Path]:
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	for name, body in (("sudo", FAKE_SUDO), ("unshare", FAKE_UNSHARE),
+			("mount", f'#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\n{FAKE_MOUNT_ACTIONS[mount_mode]}\n')):
+		(bin_dir / name).write_text(body, encoding="utf-8")
+		(bin_dir / name).chmod(0o755)
+	runtime = tmp / "rt"
+	runtime.mkdir()
+	_mksock(runtime / private)
+	_mksock(runtime / "docker.sock")
+	(runtime / "notes.txt").write_text("", encoding="utf-8")
+	if bus == "socket":
+		_mksock(runtime / "bus")
+	elif bus == "symlink":
+		(runtime / "bus").symlink_to(tmp / "elsewhere")
+	started = tmp / "started"
+	result = _sourced(tmp, f'''
+sandbox_runtime_dir() {{ echo "{runtime}"; }}
+SANDBOX_ENV_ARGS=("PATH=$PATH")
+rc=0
+as_sandbox_in_pidns - "{started}" true || rc=$?
+echo "rc=${{rc}}"
+''', env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MOUNT_LOG": str(tmp / "mounts")})
+	mounts = tmp / "mounts"
+	return result.stdout.strip().splitlines()[-1], sorted(mounts.read_text(encoding="utf-8").splitlines()) if mounts.exists() else [], runtime
+
+
+def test_the_namespace_masks_the_user_manager_sockets_before_the_drop(tmp_path: Path) -> None:
+	rc, mounts, runtime = _pidns_launch(tmp_path, "socket")
+	assert rc == "rc=0"
+	# Every socket except docker.sock; regular files are left alone.
+	assert mounts == [f"--bind /dev/null {runtime}/bus", f"--bind /dev/null {runtime}/systemd/private"]
+	assert (tmp_path / "started").exists()
+	launcher = _function_body("as_sandbox_in_pidns")
+	assert launcher.index('find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock"') < launcher.index(': > "$1"')
+
+
+def test_a_renamed_user_manager_socket_is_still_masked(tmp_path: Path) -> None:
+	# The sandbox user owns the runtime dir and can rename systemd/; the mask
+	# finds sockets wherever they are, not at fixed paths.
+	rc, mounts, runtime = _pidns_launch(tmp_path, "none", private="systemd2/private")
+	assert rc == "rc=0"
+	assert mounts == [f"--bind /dev/null {runtime}/systemd2/private"]
+
+
+def test_a_failed_socket_mask_stops_the_launch(tmp_path: Path) -> None:
+	rc, mounts, _ = _pidns_launch(tmp_path, "socket", mount_mode="fail")
+	assert rc == "rc=125"
+	assert mounts, "the mask was attempted"
+	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
+
+
+def test_a_socket_that_vanishes_before_the_mask_is_skipped(tmp_path: Path) -> None:
+	# A socket removed between `find` and `mount` (a containerd shim cleaning
+	# up) holds nothing to reach; it must not fail the launch closed.
+	launcher = _function_body("as_sandbox_in_pidns")
+	mask = re.search(r"'(for s do \[ -e \"\$s\" \] \|\| continue; mount [^']*)'", launcher)
+	assert mask is not None
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "mount").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\n', encoding="utf-8")
+	(bin_dir / "mount").chmod(0o755)
+	present = tmp_path / "present"
+	present.write_text("", encoding="utf-8")
+	result = subprocess.run(["sh", "-c", mask.group(1), "mask", str(tmp_path / "gone"), str(present)],
+		capture_output=True, text=True, timeout=30,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MOUNT_LOG": str(tmp_path / "mounts")})
+	assert result.returncode == 0, result.stderr
+	assert (tmp_path / "mounts").read_text(encoding="utf-8").splitlines() == [f"--bind /dev/null {present}"]
+
+
+def test_a_socket_left_unmasked_stops_the_launch(tmp_path: Path) -> None:
+	# A socket renamed between `find` and `mount` is skipped at its old name;
+	# the recheck after the mask must still refuse the launch.
+	rc, mounts, _ = _pidns_launch(tmp_path, "socket", mount_mode="noop")
+	assert rc == "rc=125"
+	assert mounts, "the mask was attempted"
+	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
+
+
+def test_a_socket_removed_between_check_and_mount_does_not_fail_the_launch(tmp_path: Path) -> None:
+	rc, mounts, runtime = _pidns_launch(tmp_path, "socket", mount_mode="vanish")
+	assert rc == "rc=0"
+	assert mounts == [f"--bind /dev/null {runtime}/bus", f"--bind /dev/null {runtime}/systemd/private"]
+	assert (tmp_path / "started").exists()
+
+
+def test_a_symlinked_user_manager_socket_stops_the_launch(tmp_path: Path) -> None:
+	rc, mounts, _ = _pidns_launch(tmp_path, "symlink")
+	assert rc == "rc=125"
+	assert mounts == []
+	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
 
 
 # --- fallback runner isolation (#7350, finding validation-fallback-parent-credential-exposure) ---
@@ -880,7 +1503,7 @@ def test_sandbox_run_stages_outside_entry_as_overlay_and_rejects_dotdot() -> Non
 	assert body.index("rootless_docker_ready || sandbox_fail run rootless_docker_unavailable") < stage
 	# The entry runs only from its staged copy inside the sandbox work dir.
 	assert 'as_sandbox test -f "${work}/${entry_rel}"' in body
-	assert 'as_sandbox setsid --wait bash' in body
+	assert 'as_sandbox_in_pidns "${pidfile}" "${started}" setsid --wait bash' in body
 	for line in body.splitlines():
 		assert not re.match(r'^\s*(?:bash\s+|sh\s+|exec\s+|source\s+|\.\s+)?"?\$\{entry\}"?(\s|$)', line), line
 
@@ -924,6 +1547,11 @@ _RUNTIME_SUDO_STUB = """#!/bin/bash
 [ "$1" = -n ] && shift
 [ "$1" = -u ] && shift 2
 [ "$1" = -- ] && shift
+if [ "$1" = install ]; then
+	shift; args=()
+	while [ "$#" -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+	exec install "${args[@]}"
+fi
 for word in "$@"; do
 	case "${word}" in
 		env|-i|*=*) continue ;;
@@ -945,8 +1573,9 @@ def _runtime_sandbox(root: Path) -> tuple[Path, Path, dict[str, str]]:
 	home = root / "home"
 	home.mkdir()
 	(bin_dir / "sudo").write_text(_RUNTIME_SUDO_STUB, encoding="utf-8")
+	(bin_dir / "unshare").write_text(FAKE_UNSHARE, encoding="utf-8")
 	(bin_dir / "getent").write_text(f"#!/bin/sh\nprintf '%s:x:65534:65534::{home}:/bin/sh\\n' \"$2\"\n", encoding="utf-8")
-	for stub in ("sudo", "getent"):
+	for stub in ("sudo", "unshare", "getent"):
 		(bin_dir / stub).chmod(0o755)
 	workspace = root / "workspace"
 	workspace.mkdir()
@@ -959,6 +1588,8 @@ def _runtime_sandbox(root: Path) -> tuple[Path, Path, dict[str, str]]:
 		"VALIDATION_HARNESS_SANDBOX_USER": "nobody",
 		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(root / "status"),
 		"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST": str(root / "copyback"),
+		"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(root / "state"),
+		"FAKE_UNSHARE_MODE": "ok",
 		"GITHUB_RUN_ID": "7350",
 		"GITHUB_RUN_ATTEMPT": "1",
 	}

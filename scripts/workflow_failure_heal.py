@@ -2792,6 +2792,36 @@ def _recovery_evidence(body: str) -> str | None:
 	return body[opening:closing]
 
 
+def _recovery_occurrence_runs(comments: list[Any], *, pipeline_login: str, source_repo: str, source_number: int, head_sha: str) -> list[dict[str, Any]]:
+	"""Failed runs from the newest trusted occurrence comment for the same report.
+
+	A heal issue composed without run summaries names no ``Failed run`` in its
+	body (#7082), but the intake records each later report from the same pull
+	request as an occurrence comment that does. Only an occurrence comment
+	posted by ``pipeline_login`` counts, and only one whose source pull request
+	and head SHA lines match the body's; the intake still verifies the run's
+	provenance before anything is replaced.
+	"""
+	login = pipeline_login.strip().casefold() if isinstance(pipeline_login, str) else ""
+	if not login:
+		return []
+	source_suffix = f"({source_repo}#{source_number})"
+	head_line = f"- **Head SHA:** `{head_sha}`"
+	for comment in reversed(comments):
+		text = comment.get("body") if isinstance(comment, dict) else None
+		if not isinstance(text, str) or _comment_author_login(comment).casefold() != login:
+			continue
+		lines = sanitize_text(text).splitlines()
+		if not lines or lines[0].strip() != f"<!-- {MARKER_PREFIX}occurrence -->":
+			continue
+		if head_line not in lines or not any(line.startswith("- **Source pull request:** ") and line.endswith(source_suffix) for line in lines):
+			continue
+		runs = extract_run_refs([line for line in lines if line.startswith("- **Failed run:** ")], repo=source_repo)
+		if runs:
+			return runs
+	return []
+
+
 def reconstruct_recovery_payload(
 	*,
 	issue: dict[str, Any],
@@ -2844,6 +2874,8 @@ def reconstruct_recovery_payload(
 	head_sha = head.group(1)
 	run_lines = [line for line in body.splitlines() if line.startswith("- **Failed run:** ")]
 	runs = extract_run_refs(run_lines, repo=source_repo)
+	if not runs:
+		runs = _recovery_occurrence_runs(comments, pipeline_login=pipeline_login, source_repo=source_repo, source_number=source_number, head_sha=head_sha)
 	if not runs:
 		return {"status": "skip", "reason": "runs_missing"}
 	evidence = _recovery_evidence(body)
@@ -3798,6 +3830,157 @@ def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, truste
 # ---------------------------------------------------------------------------
 
 
+# Unblock-judge re-issues (Q147). unblock_actions.py files the re-issue of a
+# blocked heal issue as an ordinary issue, without the ai:workflow-heal label
+# or heal markers, whose body opens with this line, and closes the original
+# "not planned". The re-issue carries the lineage on: a later report for the
+# same failure is an occurrence on it, not a new generation (#7082).
+_REISSUE_ORIGIN_RE = re.compile(r"Re-issued by the unblock judge from #([1-9][0-9]{0,9})\.")
+REISSUE_CHAIN_MAX_DEPTH = 5
+
+
+def reissue_origin(body: Any) -> int | None:
+	"""The issue a re-issue was made from: its first line that is not a marker."""
+	for raw in sanitize_text(body).splitlines():
+		line = raw.strip()
+		if not line or (line.startswith("<!--") and line.endswith("-->")):
+			continue
+		match = _REISSUE_ORIGIN_RE.fullmatch(line)
+		return int(match.group(1)) if match else None
+	return None
+
+
+def resolve_reissue_roots(reissues: Iterable[Any], heal_issues: Iterable[Any]) -> dict[tuple[str, int], dict[str, Any]]:
+	"""Map each re-issue ``(repository, number)`` to the heal issue it came from.
+
+	A re-issue of a re-issue is followed back, up to ``REISSUE_CHAIN_MAX_DEPTH``
+	steps, to the first heal issue (one with a ``fp=`` marker) in the same
+	repository. Every issue on the chain must be written by the root heal
+	issue's author, which is the pipeline account that filed it; anything else
+	is left out.
+	"""
+	heal_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+	for issue in heal_issues:
+		number = _positive_int(issue.get("number")) if isinstance(issue, dict) else None
+		if number is None or issue.get("pull_request") or not _FP_HEX_RE.match(parse_heal_markers(issue.get("body")).get("fp", "")):
+			continue
+		heal_by_key[(str(issue.get("repository") or ""), number)] = issue
+	reissue_by_key: dict[tuple[str, int], tuple[dict[str, Any], int]] = {}
+	for issue in reissues:
+		number = _positive_int(issue.get("number")) if isinstance(issue, dict) else None
+		origin = reissue_origin(issue.get("body")) if number is not None else None
+		if origin is None or issue.get("pull_request"):
+			continue
+		reissue_by_key[(str(issue.get("repository") or ""), number)] = (issue, origin)
+	roots: dict[tuple[str, int], dict[str, Any]] = {}
+	for key, (issue, origin) in reissue_by_key.items():
+		repo = key[0]
+		authors = {_comment_author_login(issue)}
+		current = origin
+		root = None
+		for _ in range(REISSUE_CHAIN_MAX_DEPTH):
+			if (repo, current) in heal_by_key:
+				root = heal_by_key[(repo, current)]
+				break
+			step = reissue_by_key.get((repo, current))
+			if step is None:
+				break
+			authors.add(_comment_author_login(step[0]))
+			current = step[1]
+		if root is None:
+			continue
+		root_author = _comment_author_login(root)
+		if root_author and {author.casefold() for author in authors} == {root_author.casefold()}:
+			roots[key] = root
+	return roots
+
+
+_FAILURE_REASON_LINE_RE = re.compile(r"^- \*\*Failure reason:\*\* `([^`\n]{1,120})`$", re.MULTILINE)
+HEAL_ALREADY_FIXED_MAX_CANDIDATES = 3
+
+
+def _heal_failure_key(issue: dict[str, Any]) -> tuple[str, str] | None:
+	"""``(source, failure reason)`` of a pipeline-composed heal issue, or None.
+
+	Kinds without a failure-reason line (release runs, escalations, engine
+	fallbacks) use the fingerprint instead, so only the same failure matches.
+	"""
+	body = sanitize_text(issue.get("body"))
+	markers = parse_heal_markers(body)
+	source = markers.get("source", "")
+	if not source or not _FP_HEX_RE.match(markers.get("fp", "")):
+		return None
+	reason = _FAILURE_REASON_LINE_RE.search(body.split("\n---\n", 1)[0])
+	return (source, f"reason:{reason.group(1)}" if reason else f"fp:{markers['fp']}")
+
+
+def _issue_labels(issue: dict[str, Any]) -> set[str]:
+	labels = issue.get("labels")
+	names: set[str] = set()
+	for label in labels if isinstance(labels, list) else []:
+		name = label.get("name") if isinstance(label, dict) else label
+		if isinstance(name, str):
+			names.add(name)
+	return names
+
+
+def heal_already_fixed_candidates(
+	*,
+	item: dict[str, Any],
+	heal_issues: Iterable[Any],
+	reissues: Iterable[Any],
+	pipeline_login: str,
+) -> dict[str, Any]:
+	"""Closed siblings whose fix already merged, for a blocked heal issue (Q148).
+
+	A sibling is a heal issue, or an unblock-judge re-issue of one, written by
+	``pipeline_login``, for the same source and failure reason as ``item``
+	(see ``_heal_failure_key``), closed as completed with ``ai:merged``. The
+	caller still finds the merged pull request for each candidate before it
+	closes ``item``. Returns ``{"status": "candidates", "candidates": [N, ...]}``
+	(newest first, at most HEAL_ALREADY_FIXED_MAX_CANDIDATES) or
+	``{"status": "none", "reason": <token>}``.
+	"""
+	login = pipeline_login.strip().casefold() if isinstance(pipeline_login, str) else ""
+	if not login or not isinstance(item, dict):
+		return {"status": "none", "reason": "identity_unavailable"}
+	if _comment_author_login(item).casefold() != login:
+		return {"status": "none", "reason": "untrusted_item_author"}
+	key = _heal_failure_key(item)
+	if key is None:
+		return {"status": "none", "reason": "markers_missing"}
+	item_number = _positive_int(item.get("number"))
+	heal_list = [issue for issue in heal_issues if isinstance(issue, dict)]
+	reissue_list = [issue for issue in reissues if isinstance(issue, dict)]
+
+	def _fixed(issue: dict[str, Any]) -> bool:
+		return (
+			str(issue.get("state") or "").lower() == "closed"
+			and str(issue.get("state_reason") or "").lower() == "completed"
+			and "ai:merged" in _issue_labels(issue)
+			and _comment_author_login(issue).casefold() == login
+		)
+
+	found: set[int] = set()
+	for issue in heal_list:
+		number = _positive_int(issue.get("number"))
+		if number is None or number == item_number or issue.get("pull_request") or not _fixed(issue):
+			continue
+		if _heal_failure_key(issue) == key:
+			found.add(number)
+	roots = resolve_reissue_roots(reissue_list, heal_list)
+	for issue in reissue_list:
+		number = _positive_int(issue.get("number"))
+		if number is None or number == item_number or not _fixed(issue):
+			continue
+		root = roots.get((str(issue.get("repository") or ""), number))
+		if root is not None and _comment_author_login(root).casefold() == login and _heal_failure_key(root) == key:
+			found.add(number)
+	if not found:
+		return {"status": "none", "reason": "no_fixed_sibling"}
+	return {"status": "candidates", "candidates": sorted(found, reverse=True)[:HEAL_ALREADY_FIXED_MAX_CANDIDATES]}
+
+
 def budget_decision(
 	issues: Iterable[dict[str, Any]],
 	*,
@@ -3813,6 +3996,7 @@ def budget_decision(
 	linked_heal_issue: int | None = None,
 	source_issue: str | None = None,
 	trusted_author: str | None = None,
+	reissues: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -3834,6 +4018,14 @@ def budget_decision(
 	a fresh generation-1 heal issue each round. A reported ``source_gen`` /
 	``source_root`` takes precedence only when ``source_issue`` identifies a
 	listed heal issue authored by ``trusted_author`` with matching markers.
+
+	``reissues`` (optional) lists issues whose body opens with the unblock
+	judge's ``Re-issued by the unblock judge from #N.`` line. When no open heal
+	issue matches, an open re-issue of a closed heal issue in this report's
+	lineage (same fingerprint, same source, or the linked heal issue) is the
+	duplicate (``match: reissue``), so the report becomes an occurrence on it
+	instead of a new generation (Q147). See ``resolve_reissue_roots`` for the
+	author rule.
 	"""
 	now = now or _utc_now()
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -3844,6 +4036,9 @@ def budget_decision(
 	source_duplicate: dict[str, Any] | None = None
 	# Closed heal issues from the same source PR, and the heal issue that PR fixes.
 	prior_source_lineage: list[tuple[int, int, str, str]] = []
+	# Closed heal issues of this lineage, by (repository, number), for re-issues.
+	closed_lineage: set[tuple[str, int]] = set()
+	listed_issues: list[dict[str, Any]] = []
 	source_key_match = _SOURCE_KEY_RE.match(str(source_key or ""))
 	source_key = source_key if source_key_match else None
 	linked_heal_repo = source_key_match.group("repo") if source_key_match else ""
@@ -3872,6 +4067,7 @@ def budget_decision(
 		number = _positive_int(issue.get("number"))
 		if number is None:
 			continue
+		listed_issues.append(issue)
 		issue_repository = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
 		if source_issue_number == number and source_issue_match and (
 			issue_repository == source_issue_match.group("repo")
@@ -3896,8 +4092,10 @@ def budget_decision(
 		elif markers.get("fp") == fp:
 			gen = _positive_int(markers.get("gen")) or 1
 			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
+			closed_lineage.add((issue_repository, number))
 		elif same_source or is_linked_heal_issue:
 			prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
+			closed_lineage.add((issue_repository, number))
 
 	duplicate_match = "fingerprint"
 	if duplicate is None and source_duplicate is not None:
@@ -3915,6 +4113,36 @@ def budget_decision(
 			"open_count": len(open_issues),
 			"today_count": created_today,
 		}
+	if reissues is not None and closed_lineage:
+		reissue_list = [item for item in reissues if isinstance(item, dict)]
+		roots = resolve_reissue_roots(reissue_list, listed_issues)
+		reissue_duplicate: dict[str, Any] | None = None
+		reissue_root: dict[str, Any] | None = None
+		for item in reissue_list:
+			repository = item.get("repository") if is_valid_repo_slug(item.get("repository")) else ""
+			number = _positive_int(item.get("number"))
+			if number is None or str(item.get("state") or "").lower() != "open":
+				continue
+			root_issue = roots.get((str(item.get("repository") or ""), number))
+			if root_issue is None or (repository, _positive_int(root_issue.get("number")) or 0) not in closed_lineage:
+				continue
+			chosen = _preferred_duplicate(reissue_duplicate, item)
+			if chosen is item:
+				reissue_duplicate, reissue_root = item, root_issue
+		if reissue_duplicate is not None and reissue_root is not None:
+			root_markers = parse_heal_markers(reissue_root.get("body"))
+			return {
+				"action": "duplicate",
+				"match": "reissue",
+				"existing_issue": _positive_int(reissue_duplicate.get("number")),
+				"existing_url": sanitize_text(reissue_duplicate.get("html_url"), 300),
+				"existing_repo": reissue_duplicate.get("repository") if is_valid_repo_slug(reissue_duplicate.get("repository")) else "",
+				"reissue_of": _positive_int(reissue_root.get("number")),
+				"gen": _positive_int(root_markers.get("gen")) or 1,
+				"root": root_markers.get("root") or fp,
+				"open_count": len(open_issues),
+				"today_count": created_today,
+			}
 
 	gen = 1
 	root = fp
@@ -5127,9 +5355,32 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		linked_heal_issue=heal_fix_branch_issue(args.source_head_branch),
 		source_issue=args.source_issue or None,
 		trusted_author=args.trusted_author or None,
+		reissues=_load_reissues(args.reissues_json) if args.reissues_json else None,
 	)
 	_write_json(decision)
 	return 0
+
+
+def _cmd_heal_already_fixed(args: argparse.Namespace) -> int:
+	item = _load_json_file(args.item_json)
+	heal_issues = _load_json_file(args.heal_issues_json)
+	result = heal_already_fixed_candidates(
+		item=item if isinstance(item, dict) else {},
+		heal_issues=heal_issues if isinstance(heal_issues, list) else [],
+		reissues=_load_reissues(args.reissues_json) if args.reissues_json else [],
+		pipeline_login=args.pipeline_login,
+	)
+	_write_json(result)
+	return 0
+
+
+def _load_reissues(path: str) -> list[dict[str, Any]]:
+	"""A JSON list of re-issue records; anything unreadable counts as none."""
+	try:
+		data = _load_json_file(path)
+	except (OSError, ValueError):
+		return []
+	return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
 
 
 def _cmd_is_deterministic(args: argparse.Namespace) -> int:
@@ -5534,7 +5785,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--max-per-day", type=int, default=DEFAULT_MAX_ISSUES_PER_DAY)
 	p.add_argument("--source-key", default="", help="owner/repo#N of the reported pull request (review/autofix reports)")
 	p.add_argument("--source-head-branch", default="", help="head branch of that pull request; ai/issue-<N> links heal issue N")
+	p.add_argument("--reissues-json", default="", help="issues opening with the unblock judge's re-issue line (Q147)")
 	p.set_defaults(func=_cmd_budget)
+
+	p = sub.add_parser("heal-already-fixed", help="Closed siblings whose fix merged, for a blocked heal issue (Q148)")
+	p.add_argument("--item-json", required=True)
+	p.add_argument("--heal-issues-json", required=True)
+	p.add_argument("--reissues-json", default="")
+	p.add_argument("--pipeline-login", required=True)
+	p.set_defaults(func=_cmd_heal_already_fixed)
 
 	p = sub.add_parser("parse-classification", help="Read the classification token from the diagnosis")
 	p.add_argument("--diagnosis-file", required=True)
