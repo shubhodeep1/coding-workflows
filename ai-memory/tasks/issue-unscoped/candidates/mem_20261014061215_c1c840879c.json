@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `files_touched` plan grant lists `agents.d/7351-validation-refresh-credential-blanking.md` and `changelog.d/7351-validation-refresh-credential-blanking.md` as deliverables. The agents fragment says the runner blanks \"every name in `REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES`\", so the documented list must match the tuple of blanked names.\n  expected_change_site: line 2 of `agents.d/7351-validation-refresh-credential-blanking.md` and line 2 of `changelog.d/7351-validation-refresh-credential-blanking.md`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: The tuple in `scripts/validation_refresh_runner.py:71-84` has ten names, including `ACTIONS_ID_TOKEN_REQUEST_TOKEN` (line 82) and `ACTIONS_ID_TOKEN_REQUEST_URL` (line 83), which an earlier autofix round added, and `test_refresh_pipeline_credential_names_cover_control_plane_secrets` now requires both of them. Both fragment hunks list only the original eight names, ending at `ANTHROPIC_API_KEY`, and name neither OIDC variable. The last-run diff changed only `tests/test_validation_refresh_runner.py`. The editor deferred this fix as a sandbox-excluded path (PR comments 6160646275 and 6161388303; z-ai_glm-5_3-flash says this happened in three successive editor runs), so it must be fixed outside the sandbox. The reviewers disagree on whether the files are present: anthropic_claude-sonnet-5_5 says neither fragment file is in the review checkout, while z-ai_glm-5_3-flash says both files exist in the working checkout and were read. All reviewers rated the severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The plan grant lists agents.d/7351-validation-refresh-credential-blanking.md and changelog.d/7351-validation-refresh-credential-blanking.md as deliverables. The agents fragment says the runner blanks \"every name in REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES\" and then lists those names.\n  Expected change site: line 2 of agents.d/7351-validation-refresh-credential-blanking.md and line 2 of changelog.d/7351-validation-refresh-credential-blanking.md.\n  Evidence of absence: The tuple in scripts/validation_refresh_runner.py (lines 71-84) has ten names. ACTIONS_ID_TOKEN_REQUEST_TOKEN (line 82) and ACTIONS_ID_TOKEN_REQUEST_URL (line 83) were added in an earlier autofix round, and test_refresh_pipeline_credential_names_cover_control_plane_secrets now requires both. Both fragment hunks still end the list at ANTHROPIC_API_KEY. Neither fragment file is in the review checkout, which matches the editor's earlier \"sandbox-excluded path\" deferrals (PR comments 6160646275 and 6161388303). The fix must be made outside the editor sandbox.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The approved plan grant includes both fragments as deliverables documenting the credential blanking change.\n  Expected change site: agents.d/7351-validation-refresh-credential-blanking.md and changelog.d/7351-validation-refresh-credential-blanking.md\n  Evidence of absence: Both fragments list eight credential names and omit ACTIONS_ID_TOKEN_REQUEST_TOKEN and ACTIONS_ID_TOKEN_REQUEST_URL, which are in REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES and are now required by the updated test.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The agents fragment says the runner \"blanks every name in `REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES`\". The changelog fragment says it blanks eight names, ending at `ANTHROPIC_API_KEY`. Both fragments should list all 10 names in the tuple, including the two OIDC request variables.\n  Expected change site: line 2 of `agents.d/7351-validation-refresh-credential-blanking.md` and line 2 of `changelog.d/7351-validation-refresh-credential-blanking.md`\n  Evidence of absence: Both fragments list 8 names ending at `ANTHROPIC_API_KEY`. The tuple at `scripts/validation_refresh_runner.py:71-84` has 10 names, and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and `ACTIONS_ID_TOKEN_REQUEST_URL` are missing from both fragments. The last-run diff touched only `tests/test_validation_refresh_runner.py`. The editor sandbox cannot edit these files (PR comments 6160646275, 6161388303), so this must be fixed outside the sandbox.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: The `files_touched` plan grant lists `agents.d/7351-validation-refresh-credential-blanking.md` and `changelog.d/7351-validation-refresh-credential-blanking.md` as deliverables. The agents fragment claims to name \"every name in `REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES`\", so the documentation must match the tuple.\n  Expected change site: line 2 of `agents.d/7351-validation-refresh-credential-blanking.md` and line 2 of `changelog.d/7351-validation-refresh-credential-blanking.md`.\n  Evidence of absence: `REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES` in `scripts/validation_refresh_runner.py:71-84` has ten names, including `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and `ACTIONS_ID_TOKEN_REQUEST_URL`, which are now pinned by `test_refresh_pipeline_credential_names_cover_control_plane_secrets`. Both fragments list only the original eight names, ending at `ANTHROPIC_API_KEY`. Three successive editor runs deferred this as a sandbox-excluded path (PR comments 6160646275 and 6161388303). Both files exist in the working checkout and were read; only line 2 of each needs the two names appended.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b486aaf578ac095dc9126079c8bbf72112df9391be3d0572c2ab453ddbef9a79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7353,
+    "run_id": "38509678617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38509678617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014061215_c1c840879c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7353,
+    "run_id": "38509678617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T06:12:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
