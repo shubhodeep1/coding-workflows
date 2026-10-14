@@ -151,6 +151,35 @@ tg_delete_msg()
 }
 
 # ---------------------------------------------------------------
+# _tg_newest_comments_json — Print the issue's newest page of comments
+# (up to 100), oldest first within the page.
+# The issue-comments endpoint has no `direction` parameter: the former
+# `?per_page=30&direction=desc` returned the OLDEST 30 comments, so on a
+# busy tracking issue the marker was never found and every message posted
+# a new one (447 `tg_cleanup` comments on tele-funtoken-msg-scoring#3928).
+# API calls: 2 (the issue read for its comment count, then the last page).
+# The existing comments read could not be reused: it never returned the
+# newest page. Fails (status 1) when either read fails; callers then
+# create a new marker as before.
+# Usage: _tg_newest_comments_json 42
+# ---------------------------------------------------------------
+_tg_newest_comments_json()
+{
+	local issue_num="$1" api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues" issue_json total last_page
+	issue_json=$(curl_gh_api -s \
+		-H "Authorization: token ${GH_TOKEN}" \
+		-H "Accept: application/vnd.github.v3+json" \
+		"${api_base}/${issue_num}") || return 1
+	total=$(printf '%s' "${issue_json}" | jq -r '.comments // empty' 2>/dev/null) || return 1
+	[[ "${total}" =~ ^[0-9]+$ ]] || return 1
+	last_page=$(( total > 0 ? (total + 99) / 100 : 1 ))
+	curl_gh_api -s \
+		-H "Authorization: token ${GH_TOKEN}" \
+		-H "Accept: application/vnd.github.v3+json" \
+		"${api_base}/${issue_num}/comments?per_page=100&page=${last_page}"
+}
+
+# ---------------------------------------------------------------
 # tg_store_msg_id — Store a message ID on a GitHub issue comment.
 # Appends to an existing tracking comment if one exists, or
 # creates a new one.  Comment body pattern:
@@ -169,12 +198,9 @@ tg_store_msg_id()
 
 	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
 
-	# Look for an existing tracking comment (scan last 30 comments)
+	# Look for an existing tracking comment among the newest 100 comments
 	local comments_json
-	comments_json=$(curl_gh_api -s \
-		-H "Authorization: token ${GH_TOKEN}" \
-		-H "Accept: application/vnd.github.v3+json" \
-		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
+	comments_json=$(_tg_newest_comments_json "${issue_num}") || {
 		echo "::warning::Failed to fetch existing tracking comments for issue #${issue_num}; creating a new tracking comment" >&2
 		# Fallback: create a new tracking comment
 		curl -s -X POST \
@@ -187,9 +213,9 @@ tg_store_msg_id()
 
 	local tracking_id tracking_body
 	tracking_id=$(printf '%s' "${comments_json}" | jq -r \
-		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | first | .id // empty' 2>/dev/null)
+		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | last | .id // empty' 2>/dev/null)
 	tracking_body=$(printf '%s' "${comments_json}" | jq -r \
-		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | first | .body // empty' 2>/dev/null)
+		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | last | .body // empty' 2>/dev/null)
 
 	if [ -n "${tracking_id}" ] && [ -n "${tracking_body}" ]; then
 		# Append to existing tracking comment
@@ -243,10 +269,7 @@ tg_store_phase_msg_id()
 	local marker="<!-- tg_phase:${phase}:"
 
 	local comments_json
-	comments_json=$(curl_gh_api -s \
-		-H "Authorization: token ${GH_TOKEN}" \
-		-H "Accept: application/vnd.github.v3+json" \
-		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
+	comments_json=$(_tg_newest_comments_json "${issue_num}") || {
 		echo "::warning::Failed to fetch existing phase tracking comments for issue #${issue_num} phase=${phase}; creating a new tracking comment" >&2
 		curl -s -X POST \
 			-H "Authorization: token ${GH_TOKEN}" \
@@ -259,10 +282,10 @@ tg_store_phase_msg_id()
 	local tracking_id tracking_body
 	tracking_id=$(printf '%s' "${comments_json}" | jq -r \
 		--arg m "${marker}" \
-		'[.[] | select(.body | contains($m))] | first | .id // empty' 2>/dev/null)
+		'[.[] | select(.body | contains($m))] | last | .id // empty' 2>/dev/null)
 	tracking_body=$(printf '%s' "${comments_json}" | jq -r \
 		--arg m "${marker}" \
-		'[.[] | select(.body | contains($m))] | first | .body // empty' 2>/dev/null)
+		'[.[] | select(.body | contains($m))] | last | .body // empty' 2>/dev/null)
 
 	if [ -n "${tracking_id}" ] && [ -n "${tracking_body}" ]; then
 		local new_body

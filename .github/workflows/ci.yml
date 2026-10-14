@@ -32,6 +32,9 @@ jobs:
     # tests-heal-plan-and-validation, so that figure no longer covers the
     # whole job: re-measure it before moving more steps here. budget-watch
     # warns at 75% of the timeout (11m15s for this job).
+    # It took 15m18s of its 15 minutes on main (run 38562929820, budget-watch
+    # issue #7382), so "Regression tests wired by the CI wiring guard
+    # (part 1)" was moved out to tests-release-and-log-analysis.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -442,49 +445,12 @@ jobs:
       # Moved from tests-heal-plan-and-validation, which measured 15m08s of
       # its 20 minutes on main (run 38222993326, issue #7250); static-checks
       # measured about 2 minutes. Step names and bodies are unchanged.
+      # "Regression tests wired by the CI wiring guard (part 1)", moved here
+      # with it, moved on to tests-release-and-log-analysis in #7382.
       - name: Implement post-Codex recovery unit tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
-      - name: Regression tests wired by the CI wiring guard (part 1)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_cli.py \
-            tests/test_branch_rebuild.py \
-            tests/test_clarify_sandbox_base_image_preseed.py \
-            tests/test_codex_thread_reuse_review.py \
-            tests/test_family_python_mongo_flask.py \
-            tests/test_family_python_repo_checks.py \
-            tests/test_implement_heal_preflight.py \
-            tests/test_implement_pr_body_tracking_refs.py \
-            tests/test_orchestrate_final_merge_required_checks_gate.py \
-            tests/test_prompt_compaction.py \
-            tests/test_render_validation_templates_node_hardhat_regressions.py \
-            tests/test_render_validation_templates_node_runtime_regressions.py \
-            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
-            tests/test_review_commit_new_files_preserved.py \
-            tests/test_review_conflict_resolve_sandbox_only.py \
-            tests/test_review_freshness_ci_failed.py \
-            tests/test_review_head_gate.py \
-            tests/test_review_parse_consolidator.py \
-            tests/test_review_pipeline_integration.py \
-            tests/test_review_rb_judge_reissue_baseline.py \
-            tests/test_review_sandbox_install_timeout.py \
-            tests/test_review_static_context_readme.py \
-            tests/test_semble_helpers.py \
-            tests/test_validate_driver_credential_scrub.py \
-            tests/test_validate_lint_graceful_shutdown_hooks.py \
-            tests/test_validate_lint_init_true.py \
-            tests/test_validate_preflight_canary_tools_scope.py \
-            tests/test_validate_process_manifest_shell_safety.py \
-            tests/test_validate_process_render_recovery.py \
-            tests/test_validation_import_audit_stdlib.py \
-            tests/test_verify_integration_fingerprints_partial_removal.py \
-            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py \
-            tests/test_workflow_support_ref_follows_pin.py
 
       # Moved from tests-heal-plan-and-validation, which measured 15m04s of
       # its 20 minutes on main (run 38481381592, issue #7334). Per-step
@@ -981,6 +947,10 @@ jobs:
       # timings were not readable when this was planned; these are the hooks
       # job's heaviest subprocess-driven steps. None needs git history, the
       # prepared .claude/ live copies or Node, which only the hooks job has.
+      # Three of those six steps (the Claude-engine judges, the validation
+      # harness sandbox and the check-failure triage security tests) moved on
+      # to tests-release-and-log-analysis after this job took 15m19s of its
+      # 20 minutes on main (run 38564033998, budget-watch issue #7383).
       - name: Activation verification tests (port P4)
         run: |
           set -euo pipefail
@@ -991,26 +961,15 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
 
-      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+      - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
-
-      - name: Validation harness sandbox tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py
 
       - name: Validation shell-quoting and credential-scrub tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py
-
-      - name: Check-failure triage workflow security tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1386,6 +1345,53 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      # Moved from static-checks, which took 15m18s of its 15 minutes on main
+      # (run 38562929820, budget-watch issue #7382). Step timings were not
+      # readable when this was planned; this is the heaviest test step
+      # static-checks inherited, by test count and subprocess count. This job
+      # measured about 535-604s (runs 38250939132 and 38251668637), before this
+      # step was added. The "this job about 4" in the next comment dates from
+      # 2026-10-09, before the two steps below moved here, so it is out of date.
+      # Step name and body are unchanged.
+      - name: Regression tests wired by the CI wiring guard (part 1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_cli.py \
+            tests/test_branch_rebuild.py \
+            tests/test_clarify_sandbox_base_image_preseed.py \
+            tests/test_codex_thread_reuse_review.py \
+            tests/test_family_python_mongo_flask.py \
+            tests/test_family_python_repo_checks.py \
+            tests/test_implement_heal_preflight.py \
+            tests/test_implement_pr_body_tracking_refs.py \
+            tests/test_orchestrate_final_merge_required_checks_gate.py \
+            tests/test_prompt_compaction.py \
+            tests/test_render_validation_templates_node_hardhat_regressions.py \
+            tests/test_render_validation_templates_node_runtime_regressions.py \
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
+            tests/test_review_commit_new_files_preserved.py \
+            tests/test_review_conflict_resolve_sandbox_only.py \
+            tests/test_review_freshness_ci_failed.py \
+            tests/test_review_head_gate.py \
+            tests/test_review_parse_consolidator.py \
+            tests/test_review_pipeline_integration.py \
+            tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_install_timeout.py \
+            tests/test_review_static_context_readme.py \
+            tests/test_semble_helpers.py \
+            tests/test_validate_driver_credential_scrub.py \
+            tests/test_validate_lint_graceful_shutdown_hooks.py \
+            tests/test_validate_lint_init_true.py \
+            tests/test_validate_preflight_canary_tools_scope.py \
+            tests/test_validate_process_manifest_shell_safety.py \
+            tests/test_validate_process_render_recovery.py \
+            tests/test_validation_import_audit_stdlib.py \
+            tests/test_verify_integration_fingerprints_partial_removal.py \
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
+            tests/test_workflow_retro_fanout.py \
+            tests/test_workflow_support_ref_follows_pin.py
 
       # Moved from tests-hooks-and-orchestrator, which measured 19.6 of its
       # 20 minutes on main (2026-10-09) and timed out on PR heads; these two
@@ -1793,6 +1799,29 @@ jobs:
           python3 -m coverage erase
           python3 -m coverage run tests/test_semantic_cache.py
           python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
+
+      # Moved from tests-heal-plan-and-validation, which took 15m19s of its
+      # 20 minutes on main (run 38564033998, budget-watch issue #7383). Step
+      # timings were not readable when this was planned; these are that job's
+      # most subprocess-heavy steps (bash or git per test case). This job
+      # measured 535-604s on 2026-10-12, the only job with measured headroom.
+      # None of the three needs Node or the prepared .claude/ live copies, and
+      # this job already has full git history and the same pip set.
+      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+
+      - name: Validation harness sandbox tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+      - name: Check-failure triage workflow security tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
