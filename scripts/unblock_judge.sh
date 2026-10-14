@@ -1279,7 +1279,8 @@ unblock_main()
 						# updatedAt) waits UNBLOCK_JUDGE_RETRY_HOURS before re-dispatching.
 						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the condition could not be read this time, so the unblock judge checks again later. This hold uses no round. Last checked ${now}.
 
-<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" || true
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
+							|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
 						unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_check_unavailable"
 						return 0
 					fi
