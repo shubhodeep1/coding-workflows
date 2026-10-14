@@ -265,7 +265,9 @@ pidns_state_base()
 # sandbox user owns <runtime_dir> and could rename `systemd/` to hide
 # `private` from a fixed path. A symlink at <runtime_dir>, bus or
 # systemd/private, or a failed mount, exits 125 before <startedfile>
-# exists, so `run` fails with pid_namespace_launch_failed.
+# exists, so `run` fails with pid_namespace_launch_failed. An entry that
+# vanishes between `find` and `mount` (a containerd shim socket) holds no
+# socket and is skipped, so it cannot fail the launch.
 as_sandbox_in_pidns()
 {
 	local pidfile="$1" started="$2" uid runtime_dir
@@ -274,8 +276,8 @@ as_sandbox_in_pidns()
 	[[ "${uid}" =~ ^[0-9]+$ ]] || return 125
 	runtime_dir="$(sandbox_runtime_dir)"
 	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --propagation private --kill-child -- "$@"' pidns "${pidfile}" \
-		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
-		'for s do mount --bind /dev/null "$s" || exit 1; done' \
+		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
+		'for s do [ -e "$s" ] || continue; mount --bind /dev/null "$s" || exit 1; done' \
 		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
 }
 

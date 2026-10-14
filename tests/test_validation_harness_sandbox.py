@@ -1209,7 +1209,7 @@ def test_the_namespace_masks_the_user_manager_sockets_before_the_drop(tmp_path: 
 	assert mounts == [f"--bind /dev/null {runtime}/bus", f"--bind /dev/null {runtime}/systemd/private"]
 	assert (tmp_path / "started").exists()
 	launcher = _function_body("as_sandbox_in_pidns")
-	assert launcher.index('find "$2" -xdev -type s ! -path "$2/docker.sock"') < launcher.index(': > "$1"')
+	assert launcher.index('find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock"') < launcher.index(': > "$1"')
 
 
 def test_a_renamed_user_manager_socket_is_still_masked(tmp_path: Path) -> None:
@@ -1225,6 +1225,25 @@ def test_a_failed_socket_mask_stops_the_launch(tmp_path: Path) -> None:
 	assert rc == "rc=125"
 	assert mounts, "the mask was attempted"
 	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
+
+
+def test_a_socket_that_vanishes_before_the_mask_is_skipped(tmp_path: Path) -> None:
+	# A socket removed between `find` and `mount` (a containerd shim cleaning
+	# up) holds nothing to reach; it must not fail the launch closed.
+	launcher = _function_body("as_sandbox_in_pidns")
+	mask = re.search(r"'(for s do \[ -e \"\$s\" \] \|\| continue; mount [^']*)'", launcher)
+	assert mask is not None
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "mount").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOUNT_LOG"\n', encoding="utf-8")
+	(bin_dir / "mount").chmod(0o755)
+	present = tmp_path / "present"
+	present.write_text("", encoding="utf-8")
+	result = subprocess.run(["sh", "-c", mask.group(1), "mask", str(tmp_path / "gone"), str(present)],
+		capture_output=True, text=True, timeout=30,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MOUNT_LOG": str(tmp_path / "mounts")})
+	assert result.returncode == 0, result.stderr
+	assert (tmp_path / "mounts").read_text(encoding="utf-8").splitlines() == [f"--bind /dev/null {present}"]
 
 
 def test_a_symlinked_user_manager_socket_stops_the_launch(tmp_path: Path) -> None:
