@@ -493,8 +493,8 @@ def test_gate_empty_sentinel_allows_all(tmp_path):
 
 
 def test_gate_acceptable_conclusions_pass(tmp_path):
-	"""success / neutral / skipped / cancelled — all acceptable for required
-	checks."""
+	"""success / neutral / skipped — the only acceptable conclusions for
+	required checks."""
 	_make_gh_stub(tmp_path, gh_state={
 		"pr": {"2955": {"head_sha": "deadbeefcafe", "base_ref": "main"}},
 		"protection": {"main": "404"},
@@ -502,7 +502,6 @@ def test_gate_acceptable_conclusions_pass(tmp_path):
 			{"name": "ck-success", "status": "completed", "conclusion": "success"},
 			{"name": "ck-neutral", "status": "completed", "conclusion": "neutral"},
 			{"name": "ck-skipped", "status": "completed", "conclusion": "skipped"},
-			{"name": "ck-cancelled", "status": "completed", "conclusion": "cancelled"},
 		]},
 	})
 	result = _run_shell(
@@ -510,11 +509,32 @@ def test_gate_acceptable_conclusions_pass(tmp_path):
 		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={
 			"ORCH_FINAL_MERGE_REQUIRED_CHECKS":
-				"ck-success,ck-neutral,ck-skipped,ck-cancelled",
+				"ck-success,ck-neutral,ck-skipped",
 		},
 	)
 	assert result.returncode == 0, result.stderr
 	assert "EXIT=0" in result.stdout
+
+
+def test_gate_cancelled_required_check_blocks(tmp_path):
+	"""A cancelled required check with no newer run of that name blocks."""
+	_make_gh_stub(tmp_path, gh_state={
+		"pr": {"2955": {"head_sha": "deadbeefcafe", "base_ref": "main"}},
+		"protection": {"main": "404"},
+		"check_runs": {"deadbeefcafe": [
+			{"name": "ck-success", "status": "completed", "conclusion": "success"},
+			{"name": "ck-cancelled", "status": "completed", "conclusion": "cancelled"},
+		]},
+	})
+	result = _run_shell(
+		tmp_path,
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
+		env_overrides={
+			"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "ck-success,ck-cancelled",
+		},
+	)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=1" in result.stdout
 
 
 def test_gate_explicit_head_sha_and_base_ref_skip_pr_fetch(tmp_path):
@@ -818,3 +838,26 @@ def test_summarize_blockers_matches_required_set_and_pending_semantics(tmp_path)
 	assert "review / gate (failure)" in out
 	assert "Copilot (failure)" not in out
 	assert "Snyk (in_progress)" in out
+
+
+def test_summarize_blockers_includes_cancelled_required_check(tmp_path):
+	"""The Layer 2 alert lists a cancelled required check as a blocker, and
+	a cancelled run superseded by a newer successful run is not listed."""
+	_make_gh_stub(tmp_path, gh_state={
+		"pr": {"2955": {"head_sha": "abc1234", "base_ref": "main"}},
+		"protection": {"main": "404"},
+		"check_runs": {"abc1234": [
+			{"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"},
+			{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+			{"id": 3, "name": "review / gate", "status": "completed", "conclusion": "cancelled"},
+		]},
+	})
+	result = _run_shell(
+		tmp_path,
+		'_summarize_final_merge_blockers 2955 abc1234',
+		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,review / gate"},
+	)
+	assert result.returncode == 0, result.stderr
+	out = result.stdout.strip()
+	assert "review / gate (cancelled)" in out
+	assert "CI (" not in out

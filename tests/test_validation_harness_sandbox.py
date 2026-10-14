@@ -1063,3 +1063,192 @@ def test_run_fails_closed_when_the_namespace_launch_never_starts(tmp_path: Path)
 	assert result.returncode == 3, result.stderr
 	assert "phase=run outcome=fail reason=pid_namespace_launch_failed" in result.stderr
 	assert not marker.exists()
+
+
+# --- fallback runner isolation (#7350, finding validation-fallback-parent-credential-exposure) ---
+# When scripts/validate_driver.sh is absent at startup, validate_process.sh runs
+# its own fallback runner (VALIDATION_RUNNER_FILE under RUNTIME_DIR). It must
+# reach the tests only through the credential-scrubbed sandbox launch, never on
+# the host as the credentialed controller's user.
+
+SANDBOX_LAUNCH = '"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}"'
+
+
+def _phase3_slice(text: str) -> str:
+	phase3 = text.split("# Phase 3: Execute validation harness", 1)[1].split("tail -n 200 \"${VALIDATION_LOG_FILE}\"", 1)[0]
+	assert phase3.strip()
+	return phase3
+
+
+def test_validate_process_fallback_runner_launches_only_through_scrubbed_sandbox() -> None:
+	text = PROCESS.read_text(encoding="utf-8")
+	phase3 = _phase3_slice(text)
+	# The fallback arm selects the trusted runtime runner; the canonical arm only the wrapper.
+	assert re.search(
+		r'if \[ "\$\{VALIDATION_USE_CANONICAL_WRAPPER\}" = "true" \]; then\s*\n'
+		r'\s*GENERATED_VALIDATE_SCRIPT_PATH="validation/validate\.sh"\s*\n'
+		r'\s*else\s*\n\s*ensure_runtime_validation_driver\s*\n'
+		r'\s*GENERATED_VALIDATE_SCRIPT_PATH="\$\{VALIDATION_RUNNER_FILE\}"\s*\n\s*fi',
+		phase3,
+	), "fallback arm must resolve to VALIDATION_RUNNER_FILE"
+	assignments = re.findall(r'^\s*GENERATED_VALIDATE_SCRIPT_PATH=(.*)$', phase3, re.M)
+	assert assignments == ['"validation/validate.sh"', '"${VALIDATION_RUNNER_FILE}"']
+	# Exactly one launch uses the selected entry, and it is the scrubbed sandbox run.
+	uses = [line for line in phase3.splitlines() if '"${GENERATED_VALIDATE_SCRIPT_PATH}"' in line]
+	assert len(uses) == 1, uses
+	assert uses[0].lstrip().startswith(SANDBOX_LAUNCH), uses[0]
+	# The credential scrub array starts with `env`, is defined and extended before the launch.
+	launch_index = text.index(SANDBOX_LAUNCH)
+	scrub_def = re.search(r'^VALIDATION_HARNESS_CREDENTIAL_SCRUB=\(\n\s*env\n', text, re.M)
+	assert scrub_def is not None and scrub_def.start() < launch_index
+	scrub_call = re.search(r'^validation_harness_scrub_append$', text, re.M)
+	assert scrub_call is not None and scrub_call.start() < launch_index
+	# Nothing in Phase 3 runs the runner or the selected entry directly.
+	assert not re.search(
+		r'^\s*(?:bash\s+|sh\s+|exec\s+|source\s+|\.\s+)?"?\$\{(?:VALIDATION_RUNNER_FILE|GENERATED_VALIDATE_SCRIPT_PATH)\}"?(\s|$)',
+		phase3, re.M,
+	)
+	assert not re.search(r'^\s*(bash|sh)\s+"?\$\{?VALIDATION_RUNNER_FILE', phase3, re.M)
+
+
+def test_sandbox_run_stages_outside_entry_as_overlay_and_rejects_dotdot() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	body = text.split("cmd_run()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "sandbox_log run ok staged" in body, "cmd_run slice is wrong"
+	assert 'entry_rel=".validation-harness/$(basename -- "${entry}")"' in body
+	assert 'overlays+=("${entry_rel}=${entry}")' in body
+	assert "*/../*) sandbox_fail run entry_unsafe ;;" in body
+	stage = body.index('python3 -I -c "${STAGE_PY}"')
+	assert body.index("require_sudo run") < stage
+	assert body.index("rootless_docker_ready || sandbox_fail run rootless_docker_unavailable") < stage
+	# The entry runs only from its staged copy inside the sandbox work dir.
+	assert 'as_sandbox test -f "${work}/${entry_rel}"' in body
+	assert 'as_sandbox_in_pidns "${pidfile}" "${started}" setsid --wait bash' in body
+	for line in body.splitlines():
+		assert not re.match(r'^\s*(?:bash\s+|sh\s+|exec\s+|source\s+|\.\s+)?"?\$\{entry\}"?(\s|$)', line), line
+
+
+@pytest.mark.parametrize("sudo_body,extra_env,reasons", (
+	("exit 1", {}, (b"sudo_unavailable",)),
+	(
+		'if [ "$1" = -n ] && [ "$2" = true ]; then exit 0; fi\nexit 1',
+		{"VALIDATION_HARNESS_SANDBOX_USER": "nobody"},
+		(b"rootless_docker_unavailable", b"sandbox_user_missing"),
+	),
+))
+def test_sandbox_run_never_executes_an_outside_workspace_entry_on_the_host(sudo_body, extra_env, reasons) -> None:
+	with tempfile.TemporaryDirectory() as workspace_dir, tempfile.TemporaryDirectory() as runtime_dir:
+		workspace = Path(workspace_dir)
+		runtime = Path(runtime_dir)
+		marker = runtime / "ran"
+		# Mirrors the fallback runner validate_process.sh writes under RUNTIME_DIR.
+		outside_entry = runtime / "runner.sh"
+		outside_entry.write_text(f"#!/bin/bash\ntouch {marker}\n", encoding="utf-8")
+		outside_entry.chmod(0o755)
+		bin_dir = _stub_bin(runtime, sudo_body)
+		status = runtime / "status"
+		env = {
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(status),
+			**extra_env,
+		}
+		result = _run(["run", str(outside_entry)], env=env, cwd=workspace)
+		assert result.returncode == 3, result.stderr
+		assert b"VALIDATION_HARNESS_SANDBOX phase=run outcome=fail" in result.stderr
+		assert any(reason in result.stderr for reason in reasons), result.stderr
+		assert status.read_text().startswith("fail ")
+		assert not marker.exists(), "the fallback runner must never run on the host"
+
+
+# Runtime companions to the source-text checks above: a stub `sudo` runs the
+# sandbox user's commands locally (and answers `docker info`), so cmd_run gets
+# past its preflight and the staging, traversal and launch paths execute.
+_RUNTIME_SUDO_STUB = """#!/bin/bash
+[ "$1" = -n ] && shift
+[ "$1" = -u ] && shift 2
+[ "$1" = -- ] && shift
+if [ "$1" = install ]; then
+	shift; args=()
+	while [ "$#" -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+	exec install "${args[@]}"
+fi
+for word in "$@"; do
+	case "${word}" in
+		env|-i|*=*) continue ;;
+		docker) exit 0 ;;
+		*) break ;;
+	esac
+done
+exec "$@"
+"""
+
+
+def _runtime_sandbox(root: Path) -> tuple[Path, Path, dict[str, str]]:
+	if subprocess.run(["id", "-u", "nobody"], capture_output=True).returncode != 0:
+		pytest.skip("needs a `nobody` account to stand in for the sandbox user")
+	if subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip() == "nobody":
+		pytest.skip("the test user must differ from the sandbox user")
+	bin_dir = root / "bin"
+	bin_dir.mkdir()
+	home = root / "home"
+	home.mkdir()
+	(bin_dir / "sudo").write_text(_RUNTIME_SUDO_STUB, encoding="utf-8")
+	(bin_dir / "unshare").write_text(FAKE_UNSHARE, encoding="utf-8")
+	(bin_dir / "getent").write_text(f"#!/bin/sh\nprintf '%s:x:65534:65534::{home}:/bin/sh\\n' \"$2\"\n", encoding="utf-8")
+	for stub in ("sudo", "unshare", "getent"):
+		(bin_dir / stub).chmod(0o755)
+	workspace = root / "workspace"
+	workspace.mkdir()
+	(workspace / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+	subprocess.run(["git", "init", "-q", str(workspace)], check=True, env=git_env)
+	subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True, env=git_env)
+	env = {
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"VALIDATION_HARNESS_SANDBOX_USER": "nobody",
+		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(root / "status"),
+		"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST": str(root / "copyback"),
+		"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(root / "state"),
+		"FAKE_UNSHARE_MODE": "ok",
+		"GITHUB_RUN_ID": "7350",
+		"GITHUB_RUN_ATTEMPT": "1",
+	}
+	return home / "work" / "7350-1", workspace, env
+
+
+def test_sandbox_run_executes_an_outside_entry_only_from_its_staged_overlay(tmp_path: Path) -> None:
+	work, workspace, env = _runtime_sandbox(tmp_path)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	outside_entry = runtime / "runner.sh"
+	outside_entry.write_text(
+		'#!/bin/bash\nmkdir -p validation/logs\nprintf "%s\\n%s\\n" "$(pwd -P)" "$0" > validation/logs/entry.txt\n',
+		encoding="utf-8",
+	)
+	outside_entry.chmod(0o755)
+	result = _run(["run", str(outside_entry)], env=env, cwd=workspace)
+	assert result.returncode == 0, result.stderr
+	assert b"phase=run outcome=ok reason=staged" in result.stderr
+	staged = work / ".validation-harness" / "runner.sh"
+	assert staged.read_bytes() == outside_entry.read_bytes(), "outside entry must be staged as an overlay"
+	assert (work / "tracked.txt").read_text() == "tracked\n"
+	ran_from, script = (tmp_path / "copyback" / "entry.txt").read_text().splitlines()
+	assert ran_from == str(work.resolve())
+	assert script == ".validation-harness/runner.sh", "the entry must run from its staged copy, not the host path"
+	assert not (workspace / "validation").exists(), "nothing may be written into the host workspace"
+
+
+@pytest.mark.parametrize("relative", (True, False))
+def test_sandbox_run_rejects_a_dotdot_entry_before_staging(tmp_path: Path, relative: bool) -> None:
+	work, workspace, env = _runtime_sandbox(tmp_path)
+	marker = tmp_path / "ran"
+	(tmp_path / "escape.sh").write_text(f"#!/bin/bash\ntouch {marker}\n", encoding="utf-8")
+	entry = "validation/../../escape.sh"
+	if not relative:
+		entry = f"{workspace.resolve()}/{entry}"
+	result = _run(["run", entry], env=env, cwd=workspace)
+	assert result.returncode == 3, result.stderr
+	assert b"phase=run outcome=fail reason=entry_unsafe" in result.stderr
+	assert (tmp_path / "status").read_text().startswith("fail run entry_unsafe")
+	assert not marker.exists()
+	assert not work.exists(), "a rejected entry must not be staged"

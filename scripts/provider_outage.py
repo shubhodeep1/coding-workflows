@@ -70,6 +70,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -126,6 +127,21 @@ def _bool_env(name: str, default: bool) -> bool:
 	if not raw:
 		return default
 	return raw in {"1", "true", "yes", "on"}
+
+
+def _capacity_wait_enabled() -> bool:
+	"""CLAUDE_POOL_CAPACITY_WAIT_ENABLED, parsed like scripts/ai_engine.sh.
+
+	Phase 1 of the capacity-wait plan (issue #7251): unset, empty or `false`
+	is off (the default until the Phase 4 resume pass flips it), `true` in any
+	letter case is on, and any other value is off with a warning.
+	"""
+	raw = os.environ.get("CLAUDE_POOL_CAPACITY_WAIT_ENABLED", "").strip().lower()
+	if raw == "true":
+		return True
+	if raw not in {"", "false"}:
+		print("::warning::provider_outage: invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED; capacity wait off.", file=sys.stderr)
+	return False
 
 
 def _int_env(name: str, default: int) -> int:
@@ -423,6 +439,12 @@ def tracker_body(kind: str, provider: str, status: str, now: dt.datetime) -> str
 			"label and file no per-PR heal issue. Check the provider account and the `OPENROUTER_API_KEY` secret. "
 			"The scheduled sweep probes the provider and closes this issue on recovery."
 		)
+	elif _capacity_wait_enabled():
+		text = (
+			f"Every Claude pool account was at its usage gate (`{status}`); work is waiting, not falling back to "
+			"codex/OpenCode; resumed hourly. Each waiting run is listed below with an "
+			"`ai:claude-capacity-wait-item` marker."
+		)
 	else:
 		text = (
 			f"Every Claude pool account was at its usage gate (`{status}`); roles fell back to codex/OpenCode. "
@@ -466,6 +488,8 @@ def open_tracker(gh: Any, *, kind: str, provider: str, status: str, release_run:
 
 
 def open_alert_text(kind: str, provider: str, status: str, repository: str, number: Any) -> str:
+	if kind == "capacity" and _capacity_wait_enabled():
+		return f"Claude pool capacity: every account is at its usage gate ({status}) in {repository}; work is waiting, not falling back; resumed hourly. Tracker #{number}."
 	if kind == "capacity":
 		return f"Claude pool capacity: every account is at its usage gate ({status}) in {repository}; roles fall back to codex/OpenCode. Tracker #{number}."
 	return (

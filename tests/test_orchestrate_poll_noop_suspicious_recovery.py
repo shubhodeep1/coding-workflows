@@ -210,7 +210,7 @@ def test_standalone_snapshot_batches_clean_prs_and_skips_draft_claude_reads() ->
 	text = POLLER.read_text()
 	conflict = text[text.index('echo "Standalone PR conflict sweep"'):text.index('echo "Standalone conflict sweep complete.')]
 	noop = text[text.index('echo "Standalone PR noop-suspicious recovery sweep"'):]
-	assert '--json number,headRefName,headRefOid,baseRefName,isDraft' in conflict
+	assert '--json number,headRefName,headRefOid,baseRefName,isDraft,isCrossRepository,headRepositoryOwner' in conflict
 	assert '--limit 3000' in conflict
 	assert '_standalone_aliases+="p${_standalone_num}: pullRequest(' in conflict
 	assert 'gh_retry gh api graphql -f query=' in conflict
@@ -493,16 +493,44 @@ def test_sweep_force_merge_gate_skips_when_no_productive_commit():
 	assert "no prior [ai-autofix] / [judge-fix] commit" in sweep
 
 
-def test_sweep_force_merge_gate_d_checks_required_checks():
-	"""Gate D blocks force-merge when any completed required check is
-	failure/cancelled/timed_out/action_required. Mirrors the workflow's
-	own auto-merge safety (it would not auto-merge a PR with failing
-	checks either)."""
+def _gate_d_block() -> str:
+	"""Return the sweep slice from the Gate D marker to the force-merge."""
 	sweep = _sweep_block()
-	for conclusion in ("failure", "cancelled", "timed_out", "action_required"):
-		assert conclusion in sweep, (
-			f"Gate D must treat conclusion={conclusion} as a blocker."
-		)
+	start = sweep.find("# Gate D")
+	end = sweep.find("# All gates passed", start)
+	assert start != -1 and end != -1, "Gate D block markers missing"
+	return sweep[start:end]
+
+
+def test_sweep_force_merge_gate_d_checks_required_checks():
+	"""Gate D blocks force-merge through the shared required-checks gate
+	(scripts/pr_checks_lib.sh), which treats any required check-run whose
+	newest run is not success/neutral/skipped (failure, cancelled,
+	timed_out, action_required) as a blocker, and fails closed when the
+	gate is unavailable."""
+	gate_d = _gate_d_block()
+	assert "_pr_checks_completed" in gate_d
+	assert "command -v _pr_checks_completed" in gate_d
+	assert "reason=helper_unavailable" in gate_d
+
+
+def test_sweep_force_merge_gate_d_uses_shared_checks_gate():
+	"""Gate D must call the shared wait gate with a zero-minute budget (one
+	evaluation, no sleep; it wraps _pr_checks_completed with the required-set
+	filter and requires the named CI check, issue #7126) and must not carry
+	its own check-runs query, so pr_checks_lib.sh stays the single source of
+	truth."""
+	gate_d = _gate_d_block()
+	gate_d_code = _strip_shell_comments(gate_d)
+	assert '_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0' in gate_d_code
+	assert "command -v _pr_wait_for_required_checks" in gate_d_code
+	assert "check-runs?per_page=100" not in gate_d_code
+	assert "PR_CHECKS_WAIT_OUTCOME" in gate_d_code
+	assert "NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))" in gate_d_code
+	assert "Noop-suspicious force-merge gate D failed" in gate_d_code
+	# Base ref comes from the Gate A PR read, with the cached base as fallback.
+	assert "N_BASE_REF=\"$(echo \"${N_PR_JSON}\" | jq -r '.base.ref" in gate_d_code
+	assert 'N_BASE_REF="${N_BASE:-}"' in gate_d_code
 
 
 def test_sweep_skips_orchestrator_project_branches():
@@ -853,6 +881,362 @@ def test_cap_skip_marker_literal_matches_workflow():
 	wf = _workflow_text()
 	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} " in wf
 	assert "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " in _cap_skip_block()
+
+
+# ---------------------------------------------------------------------------
+# Behavioural harness for the force-merge fallback (issue #7126): runs the
+# real sweep slice with stubbed GitHub helpers.
+
+NOOP_HEAD = "c" * 40
+PIPELINE_LOGIN = "pipeline-bot"
+CODEX_IDENTITY = {"name": "codex-bot", "email": "codex@users.noreply.github.com"}
+
+
+def _noop_sweep_slice() -> str:
+	text = _poller_text()
+	start = text.index('NOOP_WARNING_LITERAL="')
+	end = text.index("write_state_snapshot_actions_runs_export || true", start)
+	return text[start:end]
+
+
+def _noop_snapshot(**overrides) -> list:
+	pr = {"number": 5, "headRefName": "ai/issue-5", "headRefOid": NOOP_HEAD,
+		"baseRefName": "main", "isDraft": False, "isCrossRepository": False,
+		"headRepositoryOwner": {"login": "o"}}
+	pr.update(overrides)
+	return [pr]
+
+
+def _noop_comments(login: str = PIPELINE_LOGIN, summary_login: str | None = None, count: int = 3,
+		warning_head: str | None = NOOP_HEAD) -> list:
+	# Real warnings end with the review-autofix-failure:v1 marker naming the
+	# reviewed head; warning_head=None drops it.
+	marker = (f"\n\n<!-- review-autofix-failure:v1 head={warning_head} reason=editor_empty_noop "
+		f"fp={'a' * 64} degraded=0 -->") if warning_head else ""
+	rows = [{"id": 100 + i, "created_at": f"2026-10-02T0{i}:00:00Z", "user": {"login": login},
+		"body": "⚠️ **Editor no-op suspicious** retry" + marker} for i in range(count)]
+	rows.append({"id": 200, "created_at": "2026-10-02T09:00:00Z",
+		"user": {"login": summary_login or login},
+		"body": "AI autofix editor summary\ntotal 2; applied 0; already applied 0; ignored 2"})
+	return rows
+
+
+def _noop_commits(identity: dict | None = None) -> list:
+	ident = dict(identity or CODEX_IDENTITY, date="2026-10-01T00:00:00Z")
+	return [{"sha": NOOP_HEAD, "commit": {"message": "[ai-autofix] fix", "committer": ident, "author": ident}}]
+
+
+def _noop_pr(head_sha: str = NOOP_HEAD, head_repo: str | None = "o/r") -> dict:
+	return {"state": "open", "draft": False, "mergeable": True, "mergeable_state": "clean",
+		"head": {"sha": head_sha, "repo": ({"full_name": head_repo} if head_repo else None)},
+		"base": {"ref": "main"}, "labels": []}
+
+
+def _noop_activity(actor: str = PIPELINE_LOGIN, before: str = "0" * 40, after: str = NOOP_HEAD) -> list:
+	# Repository activity API rows, newest first; the push actor is the
+	# authenticated pusher.
+	return [{"activity_type": "push", "ref": "refs/heads/ai/issue-5", "before": before,
+		"after": after, "actor": {"login": actor}}]
+
+
+def _run_noop_sweep(*, snapshot=None, comments=None, commits=None, pr=None,
+		wait_outcome: str = "ok", wait_total: str = "5", login: str = PIPELINE_LOGIN,
+		runs_read: str = "true", activity=None, ci_name: str = "lint") -> dict:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		log = root / "log"
+		fixtures = {
+			"snapshot": snapshot if snapshot is not None else _noop_snapshot(),
+			"comments": comments if comments is not None else _noop_comments(),
+			"commits": commits if commits is not None else _noop_commits(),
+			"pr": pr if pr is not None else _noop_pr(),
+			"activity": activity if activity is not None else _noop_activity(),
+		}
+		for name, value in fixtures.items():
+			(root / f"{name}.json").write_text(json.dumps(value))
+		script = """
+set -euo pipefail
+FX="$1"; LOG="$2"
+rec() { printf '%s\\n' "$*" >> "${LOG}"; }
+gh_retry() { "$@"; }
+gh() { rec "GH $*"; return 0; }
+_safe_gh_jq() {
+	local a
+	for a in "$@"; do
+		case "${a}" in
+			repos/*/issues/*/comments*) rec "READ comments"; cat "${FX}/comments.json"; return 0 ;;
+			repos/*/pulls/*/commits*) rec "READ commits"; cat "${FX}/commits.json"; return 0 ;;
+			repos/*/activity*) rec "READ activity ${a}"; [ -s "${FX}/activity.json" ] || return 1; cat "${FX}/activity.json"; return 0 ;;
+			repos/*/pulls/*) rec "READ pr"; cat "${FX}/pr.json"; return 0 ;;
+			user) printf '%s' "${TRUSTED}"; return 0 ;;
+		esac
+	done
+	return 1
+}
+UNBLOCK_TRUSTED_LOGIN=""
+unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="${TRUSTED}"; printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"; }
+tg_send_msg() { rec "TG $2 $1"; }
+_gh_url() { printf 'https://example.invalid/%s' "$1"; }
+_dispatch_review_for_conflicts() { rec "DISPATCH $1"; return 0; }
+validate_editor_audit_arithmetic() { return 0; }
+_pr_checks_completed() { return 0; }
+_pr_wait_for_required_checks() {
+	rec "WAIT $*"
+	PR_CHECKS_WAIT_OUTCOME="${WAIT_OUTCOME}"
+	PR_CHECKS_LAST_TOTAL="${WAIT_TOTAL}"
+	PR_CHECKS_RUNS_READ="${WAIT_RUNS_READ}"
+	PR_CHECKS_LAST_CI_NAME="${WAIT_CI_NAME}"
+	case "${WAIT_OUTCOME}" in ok|allow_all) return 0 ;; *) return 1 ;; esac
+}
+GITHUB_REPOSITORY="o/r"
+ORCHESTRATOR_ENGINE_SHA=""
+declare -A _STANDALONE_NOOP_CLEAR_PRS=()
+STANDALONE_PRS="$(cat "${FX}/snapshot.json")"
+STANDALONE_COUNT="$(printf '%s' "${STANDALONE_PRS}" | jq 'length')"
+""" + _noop_sweep_slice()
+		env = {**os.environ, "TRUSTED": login, "WAIT_OUTCOME": wait_outcome, "WAIT_TOTAL": wait_total,
+			"WAIT_RUNS_READ": runs_read, "WAIT_CI_NAME": ci_name, "PYTHONDONTWRITEBYTECODE": "1"}
+		result = subprocess.run(["bash", "-c", script, "sweep", str(root), str(log)], cwd=tmp, env=env,
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr + result.stdout
+		lines = log.read_text().splitlines() if log.exists() else []
+		return {
+			"stdout": result.stdout,
+			"log": lines,
+			"merges": [line for line in lines if line.startswith("GH pr merge")],
+			"dispatches": [line for line in lines if line.startswith("DISPATCH")],
+			"alerts": [line for line in lines if line.startswith("TG ERROR")],
+			"reads": [line for line in lines if line.startswith("READ")],
+		}
+
+
+def test_noop_fork_pr_is_skipped_before_any_read():
+	for snap in (_noop_snapshot(isCrossRepository=True), _noop_snapshot(isCrossRepository=None),
+			_noop_snapshot(headRepositoryOwner=None), _noop_snapshot(headRepositoryOwner={"login": "mallory"})):
+		if snap[0]["isCrossRepository"] is None:
+			del snap[0]["isCrossRepository"]
+		out = _run_noop_sweep(snapshot=snap)
+		assert not out["reads"] and not out["merges"] and not out["dispatches"], out
+		assert "head repository not this repository" in out["stdout"]
+
+
+def test_noop_head_owner_compare_is_case_insensitive():
+	out = _run_noop_sweep(snapshot=_noop_snapshot(headRepositoryOwner={"login": "O"}))
+	assert len(out["merges"]) == 1, out
+
+
+def test_noop_untrusted_comments_drive_nothing():
+	out = _run_noop_sweep(comments=_noop_comments(login="mallory"))
+	assert not out["merges"] and not out["dispatches"], out
+
+
+def test_noop_untrusted_summary_fails_gate_b():
+	out = _run_noop_sweep(comments=_noop_comments(summary_login="mallory"))
+	assert not out["merges"], out
+	assert any("gate B" in a for a in out["alerts"]), out
+
+
+def test_noop_forged_productive_commit_fails_gate_c():
+	out = _run_noop_sweep(commits=_noop_commits({"name": "mallory", "email": "m@x"}))
+	assert not out["merges"], out
+	assert any("gate C" in a for a in out["alerts"]), out
+
+
+def test_noop_productive_commit_not_pushed_by_pipeline_fails_gate_c():
+	"""Issue #7126: git identity is forgeable, so the qualifying commit must
+	also be inside a push by the pipeline login."""
+	out = _run_noop_sweep(activity=_noop_activity(actor="mallory"))
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "pushed by the pipeline account" in out["alerts"][0], out
+	assert any("gate=C_pusher" in line for line in out["log"]), out
+	assert any("activity?ref=refs%2Fheads%2Fai%2Fissue-5" in line for line in out["log"]), out
+
+
+def test_noop_pipeline_push_before_forged_commit_does_not_cover_it():
+	"""A trusted push that ends before the qualifying commit does not cover it."""
+	base = "b" * 40
+	commits = [{"sha": base, "commit": {"message": "human change",
+			"committer": dict(CODEX_IDENTITY, date="2026-09-30T00:00:00Z"),
+			"author": dict(CODEX_IDENTITY, date="2026-09-30T00:00:00Z")}}] + _noop_commits()
+	out = _run_noop_sweep(commits=commits, activity=_noop_activity(after=base))
+	assert not out["merges"], out
+	assert any("gate=C_pusher" in line for line in out["log"]), out
+	covered = _run_noop_sweep(commits=commits, activity=_noop_activity(before=base))
+	assert len(covered["merges"]) == 1, covered
+
+
+def test_noop_unreadable_activity_waits_without_paging():
+	"""A non-array activity payload is a failed read: retry next sweep, no page."""
+	out = _run_noop_sweep(activity={"message": "Server Error"})
+	assert not out["merges"] and not out["alerts"], out
+	assert "reason=activity_unreadable" in out["stdout"]
+	# An empty (readable) listing has no covering push: fail closed, page once.
+	empty = _run_noop_sweep(activity=[])
+	assert not empty["merges"] and any("gate=C_pusher" in line for line in empty["log"]), empty
+
+
+def test_noop_full_activity_page_names_its_cause():
+	"""A full 100-record page without a covering push still fails closed and
+	pages once, but the alert names the truncated page as the cause."""
+	full = _noop_activity(actor="mallory") * 100
+	out = _run_noop_sweep(activity=full)
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "reason=activity_page_full" in out["alerts"][0], out
+	assert "reason=activity_page_full" not in _run_noop_sweep(activity=_noop_activity(actor="mallory"))["alerts"][0]
+
+
+def test_noop_unreadable_ci_runs_with_no_check_runs_waits_without_paging():
+	"""The unreadable runs listing is checked before the empty-listing page."""
+	out = _run_noop_sweep(runs_read="false", wait_total="0")
+	assert not out["merges"] and not out["alerts"], out
+	assert "reason=ci_runs_unreadable" in out["stdout"]
+
+
+def test_noop_pending_checks_wait_without_paging():
+	out = _run_noop_sweep(wait_outcome="timeout")
+	assert not out["merges"] and not out["alerts"], out
+	assert "gate D waiting" in out["stdout"]
+	assert any(line == f"WAIT 5 {NOOP_HEAD} main 0" for line in out["log"]), out
+
+
+def test_noop_failed_checks_page_once():
+	out = _run_noop_sweep(wait_outcome="failed")
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "gate D" in out["alerts"][0], out
+	assert any("gate=D_check" in line for line in out["log"]), out
+
+
+def test_noop_no_check_runs_fails_closed():
+	out = _run_noop_sweep(wait_total="0")
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "reason=no_check_runs" in out["alerts"][0], out
+
+
+def test_noop_allow_all_without_ci_check_fails_closed():
+	"""Issue #7126: under the allow-all sentinel the shared gate counts no
+	check-runs, so without a named CI check nothing shows a check ran."""
+	for ci_name in ("none", ""):
+		out = _run_noop_sweep(wait_outcome="allow_all", wait_total="", ci_name=ci_name)
+		assert not out["merges"], out
+		assert len(out["alerts"]) == 1 and "reason=no_check_runs_verified" in out["alerts"][0], out
+	assert len(_run_noop_sweep(wait_outcome="allow_all", wait_total="", ci_name="lint")["merges"]) == 1
+
+
+def test_noop_unreadable_ci_runs_wait_without_paging():
+	"""Issue #7126: the shared helper reads an unreadable actions/runs
+	listing as zero pending runs; Gate D must not merge on that."""
+	out = _run_noop_sweep(runs_read="false")
+	assert not out["merges"] and not out["alerts"], out
+	assert "reason=ci_runs_unreadable" in out["stdout"]
+	assert len(_run_noop_sweep(runs_read="disabled")["merges"]) == 1
+
+
+def test_noop_all_gates_pass_merge_bound_to_head():
+	out = _run_noop_sweep()
+	assert len(out["merges"]) == 1, out
+	assert f"--match-head-commit {NOOP_HEAD}" in out["merges"][0]
+	assert "--squash --auto" in out["merges"][0]
+
+
+def test_noop_warning_for_other_head_waits_without_paging():
+	"""Issue #7126: the audit Gate B validated must come from a review of
+	the head being merged. A newer push the review has not finished with
+	waits for the next sweep without paging."""
+	out = _run_noop_sweep(comments=_noop_comments(warning_head="e" * 40))
+	assert not out["merges"] and not out["alerts"], out
+	assert "latest noop warning reviewed" in out["stdout"]
+
+
+def test_noop_warning_without_head_marker_fails_closed():
+	out = _run_noop_sweep(comments=_noop_comments(warning_head=None))
+	assert not out["merges"], out
+	assert len(out["alerts"]) == 1 and "reviewed-head marker" in out["alerts"][0], out
+	assert any("gate=B_head" in line for line in out["log"]), out
+
+
+def test_noop_snapshot_without_head_logs_missing_snapshot():
+	out = _run_noop_sweep(snapshot=_noop_snapshot(headRefOid=""))
+	assert not out["merges"], out
+	assert "open-PR snapshot has no head SHA" in out["stdout"]
+	assert "head moved during sweep" not in out["stdout"]
+
+
+def test_noop_head_moved_during_sweep_skips():
+	out = _run_noop_sweep(pr=_noop_pr(head_sha="d" * 40))
+	assert not out["merges"] and not out["alerts"], out
+	assert "head moved during sweep" in out["stdout"]
+
+
+def test_noop_live_fork_head_skips():
+	for repo in ("mallory/r", None):
+		out = _run_noop_sweep(pr=_noop_pr(head_repo=repo))
+		assert not out["merges"], out
+
+
+def test_noop_unresolved_login_fails_closed():
+	out = _run_noop_sweep(login="")
+	assert not out["merges"] and not out["dispatches"], out
+
+
+def test_noop_under_threshold_trusted_warning_dispatches():
+	out = _run_noop_sweep(comments=_noop_comments(count=1))
+	assert len(out["dispatches"]) == 1 and not out["merges"], out
+
+
+def test_every_poller_merge_is_head_bound():
+	"""Issue #7126: every `gh pr merge` the poller runs is bound to the head
+	its checks were read for. The merge_with_followup site passes its
+	--match-head-commit through an array, as does the final integration
+	merge (an open final PR always has a validated head there)."""
+	array_bound = {"_rb_mwf_match_arg", "finalize_merge_match_arg"}
+	for line in _strip_shell_comments(_poller_text()).splitlines():
+		if "gh pr merge " not in line or line.strip().startswith("echo"):
+			continue
+		if "'gh pr merge" in line or '"gh pr merge' in line:
+			continue  # message text, not an invocation
+		assert "--match-head-commit" in line or any(name in line for name in array_bound), line
+
+
+def test_noop_productive_identity_matches_commit_writers():
+	text = _poller_text()
+	assert 'NOOP_PRODUCTIVE_COMMIT_NAME="codex-bot"' in text
+	assert 'NOOP_PRODUCTIVE_COMMIT_EMAIL="codex@users.noreply.github.com"' in text
+	for rel in ("scripts/review_commit_changes.sh", "scripts/review_rb_judge.sh"):
+		writer = (REPO_ROOT / rel).read_text()
+		assert re.search(r'git config user\.name "codex-bot"', writer), rel
+		assert re.search(r'git config user\.email "codex@users\.noreply\.github\.com"', writer), rel
+
+
+def test_noop_force_merge_controls_named_by_security_pass_findings_stay_in_place():
+	"""Security-pass fix cycle 2 of #7126 re-reported
+	`noop-force-merge-forged-comment-gates` and
+	`noop-gate-d-ignores-pending-checks-unbound-merge` because the audit read
+	the default branch's support copy of this script. Pin each control those
+	findings name, so a later sync that drops one fails here."""
+	text = _poller_text()
+	conflict = text[text.index('echo "Standalone PR conflict sweep"'):text.index(SWEEP_HEADER)]
+	pr_list = [line for line in conflict.splitlines() if "--json number,headRefName" in line]
+	assert pr_list, "the open-PR snapshot must request its fields explicitly"
+	assert all("isCrossRepository" in line and "headRepositoryOwner" in line for line in pr_list), pr_list
+	sweep_code = _strip_shell_comments(_sweep_block())
+	selections = [m.start() for m in re.finditer(r'--arg lit "\$\{NOOP_WARNING_LITERAL\}"', sweep_code)]
+	assert len(selections) >= 3, "noop-warning selections moved; re-check the author filter"
+	for start in selections:
+		jq_filter = sweep_code[start:sweep_code.index("2>/dev/null", start)]
+		assert '(.user.login // "") == $login' in jq_filter, jq_filter
+	summary_lines = [line for line in sweep_code.splitlines() if 'startswith("AI autofix editor summary")' in line]
+	assert summary_lines and all('(.user.login // "") == $login' in line for line in summary_lines), summary_lines
+	# Gate C: a qualifying commit must carry the pipeline git identity and
+	# arrive in a push by the pipeline login on this head ref.
+	gate_c = sweep_code[sweep_code.index("N_PROD_PUSHED="):sweep_code.index('if [ "${N_PROD_PUSHED}" != "true" ]')]
+	assert '--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}"' in gate_c and '--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}"' in gate_c, gate_c
+	assert '(.value.commit.committer.name // "") == $name' in gate_c and '(.value.commit.author.email // "") == $email' in gate_c, gate_c
+	assert '(.actor.login // "") == $login and (.ref // "") == $ref' in gate_c, gate_c
+	assert "select(.b < $k and $k <= .a)" in gate_c, gate_c
+	assert '_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0' in sweep_code
+	merges = [line for line in sweep_code.splitlines() if "gh pr merge" in line and "--squash" in line]
+	assert len(merges) == 1, merges
+	assert '--match-head-commit "${N_HEAD_SHA}"' in merges[0], merges
 
 
 def main() -> int:

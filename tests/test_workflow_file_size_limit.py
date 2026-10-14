@@ -25,6 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 GITHUB_WORKFLOW_FILE_SIZE_LIMIT_BYTES = 512_000
 WORKFLOW_FILE_SIZE_GUARD_BYTES = 480_000
+# GitHub evaluates a run: body that contains any ${{ }} expression as one
+# expression string and rejects it at 21,000 characters, so every run of the
+# workflow fails at startup. The guard leaves 3,000 characters of headroom.
+GITHUB_RUN_EXPRESSION_LIMIT_CHARS = 21_000
+RUN_EXPRESSION_GUARD_CHARS = 18_000
 
 
 def _workflow_files() -> list[Path]:
@@ -51,6 +56,45 @@ def test_every_workflow_file_is_below_size_guard() -> None:
 		+ ", ".join(f"{name}={size:,} bytes" for name, size in oversized)
 		+ ". Move the largest inline run: bodies into scripts/ in this PR "
 		"(agents.md, 'Workflow file size limit'); do not raise the guard."
+	)
+
+
+def test_threshold_leaves_headroom_below_expression_limit() -> None:
+	assert RUN_EXPRESSION_GUARD_CHARS < GITHUB_RUN_EXPRESSION_LIMIT_CHARS
+
+
+def test_interpolated_run_bodies_below_expression_guard() -> None:
+	import yaml
+
+	files = _workflow_files()
+	assert files, f"No workflow files found under {WORKFLOWS_DIR}"
+	oversized: list[str] = []
+	for path in files:
+		document = yaml.safe_load(path.read_text(encoding="utf-8"))
+		jobs = document.get("jobs") if isinstance(document, dict) else None
+		if not isinstance(jobs, dict):
+			continue
+		for job_id, job in jobs.items():
+			steps = job.get("steps") if isinstance(job, dict) else None
+			if not isinstance(steps, list):
+				continue
+			for index, step in enumerate(steps):
+				if not isinstance(step, dict):
+					continue
+				run = step.get("run")
+				if not isinstance(run, str) or "${{" not in run:
+					continue
+				if len(run) >= RUN_EXPRESSION_GUARD_CHARS:
+					step_name = step.get("name") or f"#{index}"
+					oversized.append(
+						f"{path.relative_to(REPO_ROOT).as_posix()} job={job_id} step={step_name} length={len(run):,}"
+					)
+	assert not oversized, (
+		"run: bodies containing ${{ }} at or above the "
+		f"{RUN_EXPRESSION_GUARD_CHARS:,}-character guard (GitHub rejects such a body as one "
+		f"expression string at {GITHUB_RUN_EXPRESSION_LIMIT_CHARS:,} characters): "
+		+ "; ".join(oversized)
+		+ ". Move the ${{ }} values into the step's env: block, or move the body into scripts/."
 	)
 
 

@@ -101,6 +101,10 @@
       "color": "e11d48",
       "description": "Escalated for human intervention; autonomous stall recovery is paused"
     },
+    "ai:claude-capacity-wait": {
+      "color": "fbca04",
+      "description": "Claude pool at capacity; work is waiting for the hourly resume pass"
+    },
     "ai:blocked": {
       "color": "b60205",
       "description": "Orchestrator auto-answer loop blocked pending human intervention"

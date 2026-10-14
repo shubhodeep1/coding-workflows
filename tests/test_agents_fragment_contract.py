@@ -49,8 +49,8 @@ def test_consumer_sync_folds_agents_fragments_and_reports_them() -> None:
 	assert 'echo "Upstream has no scripts/assemble_agents.py at this ref' in step
 	assert workflow.index("name: Assemble changelog fragments") < workflow.index("name: Assemble agents.md fragments") < workflow.index("name: Compare and update workflow wrappers")
 	commit_step = _step(workflow, "Commit and push updates")
-	assert "AGENTS_FILE: ${{ steps.agents_assemble.outputs.agents_file }}" in commit_step
 	assert 'git add -A -- "${AGENTS_FILE}" agents.d' in commit_step
+	assert "AGENTS_FILE: ${{ steps.agents_assemble.outputs.agents_file }}" in commit_step
 	assert "agents.d fragments assembled into" in commit_step
 	notify = _step(workflow, "Send Telegram notification")
 	assert "agents.d fragments assembled into ${AGENTS_FILE}: ${AGENTS_FRAGMENT_COUNT} fragment(s)." in notify

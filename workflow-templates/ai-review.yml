@@ -65,6 +65,35 @@ jobs:
       force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
     secrets: inherit
 
+  # Non-retryable failure backfill (issue #7291): re-send a review/autofix
+  # failure whose trusted current-head marker names a non-retryable reason the
+  # heal intake never diagnosed, so the PR gets the intake's diagnosis and
+  # ai:needs-human. All writes use GH_PAT; the job has no id-token.
+  non-retryable-backfill:
+    if: ${{ github.event_name == 'schedule' && vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false' && vars.WORKFLOW_HEAL_ENABLED != 'false' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted non-retryable backfill support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .non-retryable-backfill-support
+          persist-credentials: false
+      - name: Backfill non-retryable autofix failure reports
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK || '3' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS || '50' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES || '60' }}
+        run: bash .non-retryable-backfill-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
+
   security-hold-sweep:
     # Issue #7099: wait for the provider-outage probe and skip dispatch while
     # it reports a pause. A skipped or failed probe job leaves `paused` empty,

@@ -2673,7 +2673,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
