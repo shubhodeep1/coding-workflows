@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u274c Runtime validation harness sandbox unavailable Isolated validation harness unavailable; tests were not executed (fail-closed). Reason: `selfcheck probe_failed`",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": null,
+      "recorded_at": "2026-10-14T22:31:46Z",
+      "run_attempt": null,
+      "run_id": null,
+      "run_url": null,
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "38495191749740828223296f8913d5fe2cd8b149",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
