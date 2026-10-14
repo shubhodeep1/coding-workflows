@@ -291,6 +291,9 @@ def _run_unblock_scan(tmp_path: Path, *, with_helper: bool = True) -> tuple[str,
 		# The needs-human digest upkeep that shares the scan's tick slot is
 		# covered by its own tests; stub it so this scan sees no parked items.
 		"needs_human_digest_prune() { :; }\n"
+		# The issue #7251 dependency wait has its own tests; it is off for this
+		# two-issue scenario, and the stub keeps a runner hold file out of play.
+		"issue_7251_dependency_wait_held() { return 1; }\n"
 		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf \'%s\' "${UNBLOCK_TRUSTED_LOGIN}"; }\n'
 		'run_unblock_scan || echo "UNBLOCK_SCAN rc=$?"\n',
 		encoding="utf-8",
@@ -319,6 +322,9 @@ def _run_unblock_scan(tmp_path: Path, *, with_helper: bool = True) -> tuple[str,
 def test_unblock_scan_skips_held_issue_without_starving_others(tmp_path: Path, with_helper: bool):
 	log, calls = _run_unblock_scan(tmp_path, with_helper=with_helper)
 	dispatched = [c for c in calls if c[:2] == ["workflow", "run"]]
+	# A helper or set -u variable the fixture does not supply fails here by name.
+	assert "command not found" not in log, log
+	assert "unbound variable" not in log, log
 	assert "UNBLOCK_SCAN item=700 kind=issue outcome=skip reason=pr_dependency_held" in log, log
 	assert dispatched == [["workflow", "run", "unblock_judge_dispatch.yml", "--repo", "owner/repo", "-f", "item=701"]], log
 	assert "UNBLOCK_SCAN item=701 kind=issue outcome=dispatched" in log, log
