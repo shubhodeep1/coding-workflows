@@ -26,7 +26,10 @@ jobs:
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
     # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
-    # cold runner.
+    # cold runner. Since #7250 and #7334 it also runs test steps moved from
+    # tests-heal-plan-and-validation, so that figure no longer covers the
+    # whole job: re-measure it before moving more steps here. budget-watch
+    # warns at 75% of the timeout (11m15s for this job).
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -481,8 +484,9 @@ jobs:
             tests/test_workflow_support_ref_follows_pin.py
 
       # Moved from tests-heal-plan-and-validation, which measured 15m04s of
-      # its 20 minutes on main (run 38481381592, issue #7334). Step names and
-      # bodies are unchanged.
+      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
+      # timings for that run were not available when these steps were
+      # chosen. Step names and bodies are unchanged.
       - name: Validation self-test unit tests
         run: |
           set -euo pipefail
