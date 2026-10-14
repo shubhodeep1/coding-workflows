@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-14T08:49:15Z",
+  "tick_at": "2026-10-14T09:01:02Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -56,12 +56,12 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "13",
+      "integration_ahead_by": "14",
       "issue_counts": {
         "closed": 1,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 4,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -73,7 +73,7 @@
       "status": "failed",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-18 recommendations (verified subset)",
       "total_waves": 3,
-      "wave_complete": true
+      "wave_complete": false
     }
   ]
 }
