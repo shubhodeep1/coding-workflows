@@ -466,6 +466,27 @@ def test_heal_evidence_is_fenced_and_editors_are_isolated() -> None:
 	assert "=== END UNTRUSTED WORKFLOW FAILURE EVIDENCE ===" in evidence
 
 
+SECRET_IN_REMOTE_URL = re.compile(r"x-access-token:\s*\$\{\{\s*secrets\.")
+ENV_BOUND_PUSH_URL = 'x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}'
+
+
+def test_workflows_do_not_interpolate_secrets_into_remote_urls() -> None:
+	"""A secret written into run: text lands in the generated step script; bind it through env."""
+	paths = sorted(WORKFLOW_DIR.glob("*.yml")) + sorted((REPO_ROOT / "workflow-templates").glob("*.yml"))
+	assert paths
+	offenders = []
+	for path in paths:
+		for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+			if SECRET_IN_REMOTE_URL.search(line):
+				offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+	assert not offenders, f"secrets interpolated into remote URLs: {offenders}"
+	assert ENV_BOUND_PUSH_URL in str(_step("implement.yml", "implement", "Push branch").get("run"))
+	review = (WORKFLOW_DIR / "review_autofix.yml").read_text(encoding="utf-8")
+	push_step = review.split("- name: Push all pending commits", 1)[1].split("\n      - name:", 1)[0]
+	assert ENV_BOUND_PUSH_URL in push_step
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in push_step
+
+
 def run_all_contract_tests() -> None:
 	for name, test_func in sorted(globals().items()):
 		if name.startswith("test_") and callable(test_func):
