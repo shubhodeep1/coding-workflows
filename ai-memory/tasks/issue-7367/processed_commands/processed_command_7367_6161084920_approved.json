@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7367_6161084920_approved",
   "issue_number": 7367,
   "metadata": {
+    "branch": "ai/issue-7367",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/unblock-7357-r1-push-token-env.md",
+      "tests/test_workflow_untrusted_input_contract.py"
+    ],
+    "issue_number": 7367,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7367",
+    "pr_number": 7369,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7369",
+    "run_attempt": "1",
+    "run_id": "38512957224",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38512957224"
   },
   "run_attempt": 1,
   "run_id": "38512957224",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-14T04:48:00Z",
+  "status": "completed",
+  "timestamp": "2026-10-14T05:09:52Z",
   "workflow": "implement"
 }
