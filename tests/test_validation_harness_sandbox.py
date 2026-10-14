@@ -281,15 +281,30 @@ def test_validation_refresh_self_test_runs_only_through_sandbox() -> None:
 	assert '("self_test", self_test_command)' not in runner
 
 
+def _function_body(name: str) -> str:
+	text = HELPER.read_text(encoding="utf-8")
+	match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
+	assert match is not None, name
+	return match.group(0)
+
+
 def test_cleanup_never_kills_the_sandbox_written_pgid_as_root() -> None:
 	# ${work}.pgid is written by the untrusted sandbox user; a forged value
 	# must not reach a root-privileged kill (it could target runner processes).
-	text = HELPER.read_text(encoding="utf-8")
-	cleanup = re.search(r"^cmd_cleanup\(\)\n\{\n.*?^\}\n", text, re.M | re.S)
-	assert cleanup is not None
-	body = cleanup.group(0)
-	assert 'as_sandbox kill -KILL -- "-${pgid}"' in body
-	assert "sudo -n kill" not in body
+	# Root kills only the `unshare` pid root recorded in the root-owned state
+	# directory, after checking the file and the process (#7349).
+	body = _function_body("cmd_cleanup")
+	assert 'pidns_kill_recorded "${state_base}.pid"' in body
+	assert 'sudo -n cat "${work}.pgid"' not in body
+	assert "pgid=" not in body and '"-${pgid}"' not in body
+	assert 'as_sandbox rm -rf -- "${work}" "${work}.pgid"' in body
+	kill = _function_body("pidns_kill_recorded")
+	assert '[ "${meta}" = "0 regular file" ]' in kill
+	assert '[ "${comm}" = "unshare" ] && [ "${owner}" = "0" ]' in kill
+	assert '[ "${pid}" -gt 1 ]' in kill
+	assert "pgid" not in kill
+	assert 'state_base="$(pidns_state_base)"' in body
+	assert '"${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR}"' in _function_body("pidns_state_base")
 
 
 # --- rootless package install on runners without Docker's apt source ---------
@@ -820,3 +835,231 @@ def test_an_unrecognized_cgroup_mode_is_logged_and_uses_auto(tmp_path: Path) -> 
 	assert result.returncode == 0, result.stderr
 	assert "outcome=ok reason=cgroup_mode_unrecognized_using_auto" in result.stderr
 	assert calls == ["session ai-validation 1002", "start systemd", "probe systemd"]
+
+# --- PID namespace for the harness (#7349, finding validation-harness-credential-inheritance) ---
+# The harness and the namespace self-check start in a new PID and mount
+# namespace created by root, so a test cannot list runner processes or read
+# their /proc entries. No namespace means fail closed, never a host launch.
+
+
+def test_the_harness_launches_only_inside_a_pid_namespace() -> None:
+	launcher = _function_body("as_sandbox_in_pidns")
+	assert "exec unshare --pid --fork --mount-proc --kill-child -- " in launcher
+	assert 'sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"' in launcher
+	run = _function_body("cmd_run")
+	assert 'as_sandbox_in_pidns "${pidfile}" "${started}" setsid --wait bash -c' in run
+	assert "as_sandbox setsid" not in run
+	assert ".pgid" not in run
+	assert 'sudo -n test -f "${started}" || sandbox_fail run pid_namespace_launch_failed' in run
+	assert run.index("pidns_supported run") < run.index("python3 -I -c \"${STAGE_PY}\"")
+	# as_sandbox itself is unchanged and is no longer used to start the harness.
+	assert _function_body("as_sandbox").count("sudo -n -u") == 1
+
+
+def test_provision_and_selfcheck_require_a_pid_namespace() -> None:
+	provision = _function_body("cmd_provision")
+	assert provision.index("pidns_supported provision") < provision.index("sandbox_log provision ok")
+	assert provision.index("ensure_pidns_state_dir provision") < provision.index("sandbox_log provision ok")
+	selfcheck = _function_body("cmd_selfcheck")
+	assert "pidns_supported selfcheck" in selfcheck
+	assert 'as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}"' in selfcheck
+	assert selfcheck.index("pidns_supported selfcheck") < selfcheck.index("sandbox_log selfcheck ok")
+
+
+def _pidns_probe() -> str:
+	text = HELPER.read_text(encoding="utf-8")
+	return text.split("<<'PIDNS_PROBE' || true\n", 1)[1].split("\nPIDNS_PROBE\n", 1)[0]
+
+
+def test_the_namespace_probe_names_each_isolation_failure() -> None:
+	probe = _pidns_probe()
+	for token in ("pid_namespace_shared", "caller_pid_visible", "host_init_visible"):
+		assert f"fail {token}" in probe, token
+
+
+def _run_probe(*args: str) -> str:
+	result = subprocess.run(["bash", "-c", _pidns_probe(), "probe", *args], capture_output=True, text=True, timeout=30)
+	return result.stdout.strip().splitlines()[-1]
+
+
+def test_the_namespace_probe_fails_in_the_host_namespace() -> None:
+	host_ns = os.readlink(f"/proc/{os.getpid()}/ns/pid")
+	assert _run_probe("", host_ns) == "pid_namespace_shared"
+	assert _run_probe("", "") == "pid_namespace_shared"
+
+
+def test_the_namespace_probe_fails_when_the_caller_is_visible() -> None:
+	# A fake host namespace id passes the first check; a separate "caller"
+	# process is visible and readable in the shared /proc. (The probe skips
+	# its own pid and its parent's, which belong to the namespace.)
+	caller = subprocess.Popen(["sleep", "30"])
+	try:
+		assert _run_probe(str(caller.pid), "pid:[0]") == "caller_pid_visible"
+	finally:
+		caller.kill()
+		caller.wait()
+
+
+def _sourced(tmp: Path, body: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+	script = f'''
+source "{HELPER}"
+id() {{ case "$1" in -un) echo someone-else ;; *) echo 4242 ;; esac; }}
+sandbox_home() {{ echo "{tmp}/home"; }}
+{body}
+'''
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=tmp,
+		env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp),
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(tmp / "status"),
+			"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp / "state"), **(env or {})})
+
+
+def test_selfcheck_fails_closed_when_no_pid_namespace_can_be_created(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+as_sandbox() { echo ok; }
+sudo() { shift; case "$1" in true) return 0 ;; unshare) return 1 ;; esac; return 0; }
+cmd_selfcheck 1
+echo REACHED
+''')
+	assert result.returncode == 3, result.stderr
+	assert "phase=selfcheck outcome=fail reason=pid_namespace_unavailable" in result.stderr
+	assert "REACHED" not in result.stdout
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail selfcheck pid_namespace_unavailable\n"
+
+
+def test_selfcheck_fails_when_the_namespace_probe_does(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+as_sandbox() { echo ok; }
+as_sandbox_in_pidns() { echo caller_pid_visible; }
+sudo() { shift; return 0; }
+cmd_selfcheck 1
+''')
+	assert result.returncode == 3, result.stderr
+	assert "reason=caller_pid_visible" in result.stderr
+
+
+@pytest.mark.parametrize("state_dir", ("relative/state", "/tmp/a/../b", "/tmp/bad dir"))
+def test_an_invalid_state_dir_is_refused(state_dir: str) -> None:
+	result = _run(["selfcheck"], env={"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": state_dir,
+		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": "/dev/null"})
+	assert result.returncode == 3
+	assert b"reason=invalid_pidns_state_dir" in result.stderr
+
+
+def test_a_state_dir_under_the_sandbox_home_is_refused(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, "validate_config run", env={"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp_path / "home" / "state")})
+	assert result.returncode == 3
+	assert "reason=invalid_pidns_state_dir" in result.stderr
+
+
+def _cleanup(tmp: Path, *, meta: str = "0 regular file", pid: str = "4321", comm: str = "unshare", owner: str = "0") -> tuple[int, list[str]]:
+	calls = tmp / "calls"
+	result = _sourced(tmp, f'''
+as_sandbox() {{ return 0; }}
+sudo() {{
+	shift
+	local last="${{@: -1}}"
+	case "$1" in
+		true) return 0 ;;
+		stat) case "$last" in *.pid) echo "{meta}" ;; /proc/*) echo "{owner}" ;; esac ;;
+		cat) case "$last" in *.pid) echo "{pid}" ;; */comm) echo "{comm}" ;; esac ;;
+		pgrep) echo 4322 ;;
+		kill) echo "kill $*" >> "{calls}" ;;
+		test) return 1 ;;
+	esac
+	return 0
+}}
+cmd_cleanup
+''')
+	assert "outcome=ok" in result.stderr, result.stderr
+	return result.returncode, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+
+
+def test_cleanup_kills_the_recorded_namespace(tmp_path: Path) -> None:
+	rc, calls = _cleanup(tmp_path)
+	assert rc == 0
+	assert calls == ["kill kill -KILL -- 4322", "kill kill -KILL -- 4321"]
+
+
+@pytest.mark.parametrize("kwargs", (
+	{"pid": "1"}, {"pid": "0"}, {"pid": "12;id"}, {"comm": "bash"}, {"owner": "1000"},
+	{"meta": "1000 regular file"}, {"meta": "0 symbolic link"}, {"meta": ""},
+))
+def test_cleanup_kills_nothing_it_cannot_verify(tmp_path: Path, kwargs: dict) -> None:
+	rc, calls = _cleanup(tmp_path, **kwargs)
+	assert rc == 0
+	assert calls == []
+
+
+# Fake sudo/unshare binaries: sudo strips its options (and -o/-g for install)
+# and runs the command as the test user; unshare skips to `--`.
+FAKE_SUDO = """#!/bin/bash
+while [ "$#" -gt 0 ]; do case "$1" in -n) shift ;; -u) shift 2 ;; --) shift; break ;; *) break ;; esac; done
+if [ "$1" = install ]; then
+	shift; args=()
+	while [ "$#" -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+	exec install "${args[@]}"
+fi
+exec "$@"
+"""
+FAKE_UNSHARE = """#!/bin/bash
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+case "${FAKE_UNSHARE_MODE}" in
+	fail) exit 1 ;;
+	nolaunch) [ "$1" = true ] && exit 0; exit 1 ;;
+esac
+exec "$@"
+"""
+
+
+def _run_harness(tmp: Path, mode: str) -> tuple[subprocess.CompletedProcess, Path]:
+	if shutil.which("setsid") is None or shutil.which("git") is None:
+		pytest.skip("needs setsid and git")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	for name, body in (("sudo", FAKE_SUDO), ("unshare", FAKE_UNSHARE)):
+		(bin_dir / name).write_text(body, encoding="utf-8")
+		(bin_dir / name).chmod(0o755)
+	ws = tmp / "ws"
+	(ws / "validation").mkdir(parents=True)
+	subprocess.run(["git", "init", "-q", str(ws)], check=True, capture_output=True)
+	marker = tmp / "ran"
+	(ws / "validation" / "entry.sh").write_text(
+		f"touch {marker}\nmkdir -p validation/logs\necho hi > validation/logs/t.log\nexit 7\n", encoding="utf-8")
+	script = f'''
+source "{HELPER}"
+id() {{ case "$1" in -un) echo someone-else ;; *) echo 4242 ;; esac; }}
+sandbox_home() {{ echo "{tmp}/home"; }}
+rootless_docker_ready() {{ return 0; }}
+cmd_run validation/entry.sh
+'''
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, cwd=ws,
+		env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "HOME": str(tmp), "FAKE_UNSHARE_MODE": mode,
+			"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(tmp / "status"),
+			"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp / "state")})
+	return result, marker
+
+
+def test_run_launches_the_harness_through_the_namespace_and_returns_its_exit(tmp_path: Path) -> None:
+	result, marker = _run_harness(tmp_path, "ok")
+	assert result.returncode == 7, result.stderr
+	assert marker.exists()
+	assert (tmp_path / "ws" / "validation" / "logs" / "t.log").read_text(encoding="utf-8") == "hi\n"
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "ok run 7\n"
+	# The launch state is removed once the harness has finished.
+	assert list((tmp_path / "state").iterdir()) == []
+
+
+def test_run_fails_closed_when_no_pid_namespace_can_be_created(tmp_path: Path) -> None:
+	result, marker = _run_harness(tmp_path, "fail")
+	assert result.returncode == 3, result.stderr
+	assert "phase=run outcome=fail reason=pid_namespace_unavailable" in result.stderr
+	assert (tmp_path / "status").read_text(encoding="utf-8") == "fail run pid_namespace_unavailable\n"
+	assert not marker.exists(), "the harness must never run without the namespace"
+
+
+def test_run_fails_closed_when_the_namespace_launch_never_starts(tmp_path: Path) -> None:
+	result, marker = _run_harness(tmp_path, "nolaunch")
+	assert result.returncode == 3, result.stderr
+	assert "phase=run outcome=fail reason=pid_namespace_launch_failed" in result.stderr
+	assert not marker.exists()
