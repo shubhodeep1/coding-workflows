@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:494-571 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The \"GitHub API audit (CLAUDE.md \u00a714)\" comment in \"Decide clarify route\" says a single GET /user runs only for an exact release marker. The branch (line 529) also fires for replay-shaped comments, and a verified replay adds a second GET of the source comment (line 548). The later `pr_dependency.py pr-dependency` call (line 654) omits `--trusted-login`, so scripts/pr_dependency.py repeats `GET /user` (lines 33-34, 221, 238-240).\n  WHY: Nothing breaks. The comment is inaccurate, and a release run whose comment author has no trusted association makes one avoidable REST call. Passing `--trusted-login \"${_rel_login:-}\"` and rewording the comment fixes both. Severity is NIT in all four sources, and I mapped it to low. Reviewer confidence ranged from 3 to 4.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/clarify.yml (Decide clarify route, release classification block; audit comment above the `gh api user` call; later `pr_dependency.py pr-dependency` call) | severity=NIT | confidence=3\n  PROBLEM: The audit comment says the single GET /user runs only for an exact release marker. The branch also runs for replay-shaped comments (`[ -n \"${_rel_replay_source}\" ]`), and a verified replay adds a second GET of the source comment. `pr_dependency.py pr-dependency` is called without `--trusted-login`, and the script (lines 33-34, 221) repeats `gh api user` when the author association is untrusted.\n  WHY: Nothing breaks. The comment is inaccurate, and a release run can make one extra REST call. Passing `_rel_login` as `--trusted-login` (about 2 lines) would remove it.\n- Task completeness: no gaps reported. The reviewer noted that Gap 2 (poller release route) is implemented and that Gap 1 (`_AI_ENGINE_EXIT_REFUSED`) belongs to PR #6667.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/clarify.yml:494-571 | severity=NIT | confidence=4\n  PROBLEM: The GitHub API audit comment in the Decide clarify route step inaccurately describes the scope of REST calls.\n  WHY: The comment claims a single GET /user call occurs for a verified release marker. The logic makes further REST calls when replaying failures, and pr_dependency.py can invoke its own REST calls. This misleads maintainers and hinders debugging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- (No findings reported.)\n  Hardening suggestion only (risk score 1): .github/workflows/clarify.yml line 654 and lines 530-533. The `pr_dependency.py pr-dependency` call lacks `--trusted-login`, so `scripts/pr_dependency.py::evaluate` (line 240) calls `fetch_login()` and repeats the `GET /user` that line 536 already made. The audit comment at lines 530-533 is misleading, because line 529 also fires for replay-shaped comments and line 548 adds a second GET. Suggested fix: pass `--trusted-login \"${_rel_login:-}\"` only when `_rel_login` is non-empty, and tighten the comment.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/clarify.yml:524-533, 548, 654 | severity=NIT | confidence=3\n  PROBLEM: The \"GitHub API audit\" comment at lines 524-533 says the GET /user runs only for an exact release marker. The condition at line 529 also fires for replay-shaped comments, and a verified replay issues a second `GET issues/comments/<id>` at line 548. `pr_dependency.py pr-dependency` is called at line 654 without `--trusted-login`, so it repeats the GET /user (scripts/pr_dependency.py:238-240).\n  WHY: Nothing breaks. The comment is inaccurate, and one avoidable REST call is made per release run. Ordinary replays are logged as `gate=pr_dependency_release reason=replay_source_unverified outcome=human_reclarify`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f54a068aae9bf81271d359a3f1df97b80ec4f39a92fff7937021128f496390d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7331,
+    "run_id": "38500977668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38500977668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014030046_22a8f6114c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7331,
+    "run_id": "38500977668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T03:00:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
