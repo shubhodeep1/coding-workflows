@@ -351,7 +351,8 @@ def test_project_close_retry_allows_its_own_abandoned_state_write(tmp_path: Path
 
 def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,
 	trusted_members: list[int] | None = None, include_trusted_state_comment: bool = True,
-	trusted_integration_branch: str | None = None, request_body: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
+	trusted_integration_branch: str | None = None, request_body: str | None = None,
+	tracking_labels: list[str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
 	text = POLLER.read_text(encoding="utf-8")
 	start = text.index("handle_unblock_judge_project_hooks() {")
 	hook = text[start:text.index("\n}\n", start) + 3]
@@ -374,7 +375,7 @@ def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | No
 		comments.insert(1, {"user": {"login": "mallory"},
 			"body": f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={forged_manifest} -->\n{base64.b64encode(forged_payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"})
 	harness = '''
-has_label() { return 1; }
+has_label() { printf '%s' "$1" | jq -e --arg l "$2" 'type == "array" and index($l) != null' >/dev/null 2>&1; }
 unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN=pipeline-bot; }
 _fetch_pr_json() { echo "$1" >> "$PR_CALLS_FILE"; printf '%s\\n' "$MOCK_PR_JSON"; }
 ensure_label_exists() { :; }
@@ -384,13 +385,15 @@ gh_retry() {
 		echo create >> "$CREATES_FILE"
 		printf '%s\n' "$@" >> "$CREATES_FILE.args"
 		echo https://github.com/o/r/issues/901
+	else
+		printf '%s\n' "$*" >> "$CREATES_FILE.other"
 	fi
 }
 post_state_comment() { :; }
 post_tracking_comment() { :; }
 ''' + hook + '\nhandle_unblock_judge_project_hooks\n'
 	env = dict(os.environ, STATE_FILE=str(state_file), PR_CALLS_FILE=str(pr_calls), CREATES_FILE=str(creates),
-		MOCK_PR_JSON=json.dumps(pr) if pr is not None else "{}", TRACKING_NUM="40", TRACKING_LABELS="[]",
+		MOCK_PR_JSON=json.dumps(pr) if pr is not None else "{}", TRACKING_NUM="40", TRACKING_LABELS=json.dumps(tracking_labels or []),
 		GITHUB_REPOSITORY="o/r", PROJECT_STATUS="failed", COMMENTS=json.dumps(comments), UNBLOCK_JUDGE_ENABLED="true")
 	result = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, check=False)
 	return result, json.loads(state_file.read_text(encoding="utf-8")), pr_calls.read_text().splitlines() if pr_calls.exists() else [], creates.read_text().splitlines() if creates.exists() else []
@@ -402,6 +405,124 @@ def test_fixup_hook_accepts_project_members_without_pr_read(tmp_path: Path, item
 	assert result.returncode == 0, result.stderr
 	assert calls == [] and creates == ["create"]
 	assert state["issue_number_map"][f"unblock-{item}-r1"] == 901
+
+
+def _reissue_state(entries: list[dict], extra_map: dict | None = None) -> dict:
+	return {"integration_branch": "orchestrator/project-40", "current_wave": 1, "status": "failed",
+		"issue_number_map": dict({"issue-5": 5}, **(extra_map or {})), "waves": [{"issues": entries}]}
+
+
+REISSUE_BODY = "<!-- ai:unblock-fixup-request:v1 item=5 id=unblock-5-r1 -->\n### Re-issue of #5: Pin the action\n\nRe-issued by the unblock judge from #5."
+
+
+def test_fixup_hook_reissue_takes_the_original_wave_entry(tmp_path: Path) -> None:
+	# Incident #7355: the re-issue was appended next to the closed original,
+	# so the project read as failed with "#7357: closed".
+	state = _reissue_state([{"id": "issue-5", "github_issue": 5, "status": "in_progress"}])
+	result, state, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=REISSUE_BODY)
+	assert result.returncode == 0, result.stderr
+	assert creates == ["create"]
+	issues = state["waves"][0]["issues"]
+	assert len(issues) == 1
+	assert issues[0]["id"] == "issue-5" and issues[0]["github_issue"] == 901 and issues[0]["status"] == "pending"
+	assert issues[0]["unblock_request_id"] == "unblock-5-r1" and issues[0]["unblock_reissued_from"] == 5
+	# The request id is recorded too, so a later re-issue of the entry cannot hide it.
+	assert state["issue_number_map"] == {"issue-5": 901, "unblock-5-r1": 901}
+	assert state["status"] == "in_progress"
+	assert "retarget=true" in result.stdout
+	# The closed original gets no "waiting for fix-up" marker.
+	assert not (tmp_path / "creates.other").exists()
+
+
+def test_fixup_hook_reissue_is_not_filed_twice(tmp_path: Path) -> None:
+	state = _reissue_state([{"id": "issue-5", "github_issue": 901, "status": "pending", "unblock_request_id": "unblock-5-r1"}])
+	state["issue_number_map"] = {"issue-5": 901}
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [901], state=state, request_body=REISSUE_BODY)
+	assert result.returncode == 0, result.stderr
+	assert creates == [] and after == state
+
+
+def test_fixup_hook_marks_an_earlier_appended_reissue_original_skipped(tmp_path: Path) -> None:
+	state = _reissue_state([
+		{"id": "issue-5", "github_issue": 5, "status": "closed"},
+		{"id": "unblock-5-r1", "github_issue": 901, "status": "done"},
+	], {"unblock-5-r1": 901})
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=REISSUE_BODY)
+	assert result.returncode == 0, result.stderr
+	assert creates == []
+	original, successor = after["waves"][0]["issues"]
+	assert original["status"] == "skipped" and original["unblock_superseded_by"] == 901
+	assert successor == {"id": "unblock-5-r1", "github_issue": 901, "status": "done"}
+	# A failed project resumes, or the main loop skips it as terminal.
+	assert after["status"] == "in_progress"
+	assert "outcome=superseded" in result.stdout
+
+
+@pytest.mark.parametrize("labels,integration_failed", [
+	(["ai:validation-failed"], False),
+	(["ai:security-pass-failed"], False),
+	(["ai:blocked"], False),
+	(["ai:needs-human"], False),
+	([], True),
+])
+def test_fixup_hook_repair_keeps_an_unrelated_failure(tmp_path: Path, labels: list[str], integration_failed: bool) -> None:
+	# The repair skips the original but must not clear a failure it did not cause.
+	state = _reissue_state([
+		{"id": "issue-5", "github_issue": 5, "status": "closed"},
+		{"id": "unblock-5-r1", "github_issue": 901, "status": "done"},
+	], {"unblock-5-r1": 901})
+	if integration_failed:
+		state["integration_sync_status"] = "failed"
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=REISSUE_BODY,
+		tracking_labels=labels)
+	assert result.returncode == 0, result.stderr
+	assert creates == []
+	assert after["waves"][0]["issues"][0]["status"] == "skipped"
+	assert after["status"] == "failed"
+	assert "outcome=superseded" in result.stdout
+
+
+@pytest.mark.parametrize("entries", [
+	[{"id": "issue-5", "github_issue": 5, "status": "merged"}],
+	[{"id": "issue-5", "github_issue": 5, "status": "skipped"}],
+])
+def test_fixup_hook_leaves_a_finished_original_alone(tmp_path: Path, entries: list[dict]) -> None:
+	state = _reissue_state(entries + [{"id": "unblock-5-r1", "github_issue": 901, "status": "pending"}], {"unblock-5-r1": 901})
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=REISSUE_BODY)
+	assert result.returncode == 0, result.stderr
+	assert creates == [] and after == state
+
+
+def test_fixup_hook_reissue_never_revives_a_skipped_original(tmp_path: Path) -> None:
+	# A later re-issue request must not set a superseded (skipped) entry back to pending.
+	skipped = {"id": "issue-5", "github_issue": 5, "status": "skipped", "unblock_superseded_by": 900}
+	state = _reissue_state([skipped])
+	body = REISSUE_BODY.replace("unblock-5-r1", "unblock-5-r2")
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=body)
+	assert result.returncode == 0, result.stderr
+	assert creates == ["create"]
+	assert after["waves"][0]["issues"] == [skipped, {"id": "unblock-5-r2", "github_issue": 901, "status": "pending"}]
+	assert "retarget=false" in result.stdout
+
+
+@pytest.mark.parametrize("body", [
+	# A security original stays open, so its successor is appended.
+	"<!-- ai:unblock-fixup-request:v1 item=5 id=unblock-5-r1 -->\n### Re-issue of #5: Pin the action\n\n<!-- ai:security-finding:abc-1 -->\nRe-issued.",
+	# A fix-up or descope keeps the original, which resumes after it merges.
+	"<!-- ai:unblock-fixup-request:v1 item=5 id=unblock-5-r1 -->\n### Unblock fix-up for #5: Re-issue of #5: old title\nOnly this part.",
+])
+def test_fixup_hook_appends_when_the_original_stays(tmp_path: Path, body: str) -> None:
+	state = _reissue_state([{"id": "issue-5", "github_issue": 5, "status": "in_progress"}])
+	result, after, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], state=state, request_body=body)
+	assert result.returncode == 0, result.stderr
+	assert creates == ["create"]
+	assert after["waves"][0]["issues"] == [
+		{"id": "issue-5", "github_issue": 5, "status": "in_progress"},
+		{"id": "unblock-5-r1", "github_issue": 901, "status": "pending"},
+	]
+	assert after["issue_number_map"]["unblock-5-r1"] == 901
+	assert "retarget=false" in result.stdout
+	assert "ai:unblock-wait:v1 item=5 fixup=901" in (tmp_path / "creates.other").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("finding_line,labelled", [
