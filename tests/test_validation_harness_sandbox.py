@@ -937,7 +937,7 @@ cmd_selfcheck 1
 	assert "reason=caller_pid_visible" in result.stderr
 
 
-@pytest.mark.parametrize("state_dir", ("relative/state", "/tmp/a/../b", "/tmp/bad dir"))
+@pytest.mark.parametrize("state_dir", ("relative/state", "/tmp/a/../b", "/tmp/bad dir", "/run", "/tmp", "/run//", "/run/x/", "//run/x"))
 def test_an_invalid_state_dir_is_refused(state_dir: str) -> None:
 	result = _run(["selfcheck"], env={"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": state_dir,
 		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": "/dev/null"})
@@ -949,6 +949,105 @@ def test_a_state_dir_under_the_sandbox_home_is_refused(tmp_path: Path) -> None:
 	result = _sourced(tmp_path, "validate_config run", env={"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp_path / "home" / "state")})
 	assert result.returncode == 3
 	assert "reason=invalid_pidns_state_dir" in result.stderr
+
+
+@pytest.mark.parametrize("meta", ("0 755 directory", "1000 700 directory", "0 700 regular file", ""))
+def test_an_existing_state_dir_that_is_not_root_0700_is_refused(tmp_path: Path, meta: str) -> None:
+	# `install -d` would chmod/chown an existing directory (e.g. /run/user).
+	calls = tmp_path / "calls"
+	result = _sourced(tmp_path, f'''
+sudo() {{
+	shift
+	case "$1" in
+		test) [ "$2" = -e ] && return 0; return 1 ;;
+		stat) echo "{meta}" ;;
+		install) echo install >> "{calls}" ;;
+	esac
+	return 0
+}}
+ensure_pidns_state_dir run
+echo REACHED
+''')
+	assert result.returncode == 3, result.stderr
+	assert "reason=pidns_state_dir_failed" in result.stderr
+	assert "REACHED" not in result.stdout
+	assert not calls.exists(), "an existing directory must never be passed to install"
+
+
+def test_an_existing_root_0700_state_dir_is_reused_without_install(tmp_path: Path) -> None:
+	calls = tmp_path / "calls"
+	result = _sourced(tmp_path, f'''
+sudo() {{
+	shift
+	case "$1" in
+		test) [ "$2" = -e ] && return 0; return 1 ;;
+		stat) echo "0 700 directory" ;;
+		install) echo install >> "{calls}" ;;
+	esac
+	return 0
+}}
+ensure_pidns_state_dir run
+echo REACHED
+''')
+	assert result.returncode == 0, result.stderr
+	assert "REACHED" in result.stdout
+	assert not calls.exists()
+
+
+# The rootless daemon gets its own PID namespace (rootlesskit --pidns), so a
+# `--pid=host` container cannot list runner processes; selfcheck verifies it.
+def test_the_rootless_daemon_starts_in_its_own_pid_namespace() -> None:
+	body = _function_body("start_rootless_dockerd")
+	assert '"DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS=--pidns"' in body
+	selfcheck = _function_body("cmd_selfcheck")
+	assert 'docker_pidns_isolated "${host_ns}" || sandbox_fail selfcheck docker_pid_namespace_shared' in selfcheck
+	assert selfcheck.index("docker_pidns_isolated") < selfcheck.index("sandbox_log selfcheck ok")
+
+
+def _docker_ns(tmp: Path, pids: str, ns: dict[str, str], host: str = "pid:[1]") -> int:
+	cases = "".join(f"\t\t\t/proc/{pid}/ns/pid) echo '{value}' ;;\n" for pid, value in ns.items())
+	result = _sourced(tmp, f'''
+sudo() {{
+	shift
+	case "$1" in
+		pgrep) printf '%b' '{pids}' ;;
+		readlink)
+			case "$2" in
+{cases}			esac ;;
+	esac
+	return 0
+}}
+docker_pidns_isolated '{host}'
+''')
+	return result.returncode
+
+
+def test_docker_pidns_isolated_accepts_only_namespaced_daemons(tmp_path: Path) -> None:
+	assert _docker_ns(tmp_path, "55\\n", {"55": "pid:[2]"}) == 0
+	assert _docker_ns(tmp_path, "55\\n", {"55": "pid:[1]"}) == 1
+	assert _docker_ns(tmp_path, "", {}) == 1, "no daemon is not proof of isolation"
+	assert _docker_ns(tmp_path, "55\\n56\\n", {"55": "pid:[2]", "56": "pid:[1]"}) == 1
+	assert _docker_ns(tmp_path, "55\\n", {}) == 1, "an unreadable namespace fails closed"
+
+
+def test_selfcheck_fails_when_the_daemon_shares_the_host_pid_namespace(tmp_path: Path) -> None:
+	result = _sourced(tmp_path, '''
+as_sandbox() { echo ok; }
+as_sandbox_in_pidns() { echo ok; }
+sudo() {
+	shift
+	case "$1" in
+		pgrep) echo 55 ;;
+		readlink) readlink "/proc/$$/ns/pid" ;;
+	esac
+	return 0
+}
+cmd_selfcheck 1
+echo REACHED
+''')
+	assert result.returncode == 3, result.stderr
+	assert "phase=selfcheck outcome=fail reason=docker_pid_namespace_shared" in result.stderr
+	assert "REACHED" not in result.stdout
 
 
 def _cleanup(tmp: Path, *, meta: str = "0 regular file", pid: str = "4321", comm: str = "unshare", owner: str = "0") -> tuple[int, list[str]]:

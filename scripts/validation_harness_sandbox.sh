@@ -107,9 +107,13 @@ validate_config()
 	is_positive_int "${VALIDATION_HARNESS_SANDBOX_MAX_FILES}" || sandbox_fail "${phase}" invalid_file_cap
 	is_positive_int "${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT}" || VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT=90
 	local state_dir="${VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR}" state_home=""
-	[[ "${state_dir}" =~ ^/[A-Za-z0-9._/-]+$ ]] || sandbox_fail "${phase}" invalid_pidns_state_dir
+	# At least two components (never `/run` or `/tmp` itself), no `//`, no trailing `/`.
+	[[ "${state_dir}" =~ ^/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$ ]] || sandbox_fail "${phase}" invalid_pidns_state_dir
 	case "/${state_dir}/" in
 		*/../*|*/./*) sandbox_fail "${phase}" invalid_pidns_state_dir ;;
+	esac
+	case "${state_dir}" in
+		*//*|*/) sandbox_fail "${phase}" invalid_pidns_state_dir ;;
 	esac
 	state_home="$(sandbox_home || true)"
 	if [ -n "${state_home}" ]; then
@@ -229,6 +233,12 @@ ensure_pidns_state_dir()
 	if sudo -n test -L "${dir}"; then
 		sandbox_fail "$1" pidns_state_dir_failed
 	fi
+	# `install -d` re-applies mode and owner to an existing directory, so an
+	# existing path is used only when it already is a root-owned 0700 directory.
+	if sudo -n test -e "${dir}"; then
+		[ "$(sudo -n stat -c '%u %a %F' -- "${dir}" 2>/dev/null || true)" = "0 700 directory" ] || sandbox_fail "$1" pidns_state_dir_failed
+		return 0
+	fi
 	sudo -n install -d -m 0700 -o root -g root "${dir}" >/dev/null 2>&1 || sandbox_fail "$1" pidns_state_dir_failed
 }
 
@@ -276,6 +286,23 @@ pidns_kill_recorded()
 	return 0
 }
 
+# 0 when the sandbox user runs at least one dockerd and every one of them is
+# in a PID namespace other than <host_ns> (rootlesskit --pidns). Read as root
+# from host pids; the sandbox-written docker.pid is never trusted.
+docker_pidns_isolated()
+{
+	local host_ns="$1" uid pid ns found=0
+	uid="$(sandbox_uid)" || return 1
+	[[ "${uid}" =~ ^[0-9]+$ ]] || return 1
+	while IFS= read -r pid; do
+		[[ "${pid}" =~ ^[0-9]{1,10}$ ]] || continue
+		ns="$(sudo -n readlink "/proc/${pid}/ns/pid" 2>/dev/null || true)"
+		{ [ -n "${ns}" ] && [ "${ns}" != "${host_ns}" ]; } || return 1
+		found=1
+	done < <(sudo -n pgrep -u "${uid}" -x dockerd 2>/dev/null || true)
+	[ "${found}" -eq 1 ]
+}
+
 rootless_docker_ready()
 {
 	as_sandbox docker info >/dev/null 2>&1
@@ -318,7 +345,10 @@ sandbox_systemd_session()
 start_rootless_dockerd()
 {
 	local mode="$1" home="$2" runtime_dir="$3" waited=0
-	local -a daemon_env=("PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}") daemon_args=()
+	# --pidns: rootlesskit gives the daemon (and every container it starts,
+	# `--pid=host` ones included) its own PID namespace, so the harness cannot
+	# reach runner processes through Docker (#7349). selfcheck verifies it.
+	local -a daemon_env=("PATH=${SANDBOX_PATH}" "HOME=${home}" "XDG_RUNTIME_DIR=${runtime_dir}" "DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS=--pidns") daemon_args=()
 	if [ "${mode}" = systemd ]; then
 		daemon_env+=("DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus")
 	else
@@ -673,6 +703,9 @@ cmd_selfcheck()
 		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
 		sandbox_fail selfcheck "${verdict}"
 	fi
+	# The harness reaches Docker; a daemon in the host PID namespace would let
+	# a `--pid=host` container list runner processes.
+	docker_pidns_isolated "${host_ns}" || sandbox_fail selfcheck docker_pid_namespace_shared
 	sandbox_log selfcheck ok
 	sandbox_status "ok selfcheck"
 }
