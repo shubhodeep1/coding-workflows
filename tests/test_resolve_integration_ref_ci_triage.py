@@ -68,27 +68,40 @@ def test_ci_triage_fixture(fixture: Path) -> None:
 def test_fixture_set_covers_every_refusal_reason_and_the_happy_paths() -> None:
 	reasons = set()
 	routed = []
+	routed_by_default = []
 	flag_off = []
 	for fixture in FIXTURES:
 		data = json.loads(fixture.read_text(encoding="utf-8"))
 		if data.get("expected_exit_code") == 3:
 			assert data.get("expected_error_reason"), f"{fixture.name} must name its refusal reason"
 			reasons.add(data["expected_error_reason"])
+		# The self-test harness turns routing off for a fixture without the
+		# key; a JSON null unsets it, which exercises the resolver's default.
 		flag = (data.get("env") or {}).get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")
-		if flag.lower() != "true":
+		if flag is not None and flag.lower() != "true":
 			flag_off.append(fixture.name)
 			assert data.get("expected_exit_code") == 0 and data.get("expected_stdout") == "", fixture.name
 		elif data.get("expected_stdout"):
 			routed.append(fixture.name)
+			if flag is None:
+				routed_by_default.append(fixture.name)
 	assert REFUSAL_REASONS <= reasons, sorted(REFUSAL_REASONS - reasons)
-	assert flag_off, "need a default-off fixture"
+	assert flag_off, "need a flag-off fixture"
 	assert routed, "need a routed fixture"
+	assert routed_by_default, "need a fixture that routes with the flag unset"
 
 
-def test_refusal_exit_code_is_three_and_default_is_off() -> None:
+def test_refusal_exit_code_is_three_and_default_is_on() -> None:
 	text = RESOLVER.read_text(encoding="utf-8")
 	assert "CI_TRIAGE_REFUSED_RC=3" in text
-	assert '"${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}"' in text
+	assert '"${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}"' in text
+	assert '"${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}"' not in text
+
+
+def test_unrecognised_flag_value_warns_and_stays_off() -> None:
+	result = _run_case(FIXTURE_DIR / "flag_unrecognised_value_is_off.json")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "self-test passed" in result.stdout
 
 
 def test_ci_triage_fixtures_stay_out_of_the_parity_directory() -> None:
