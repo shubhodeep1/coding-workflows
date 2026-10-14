@@ -157,13 +157,20 @@ def test_terminal_close_is_accepted() -> None:
 
 
 def test_menu_exhausted_is_terminal() -> None:
-	used = [v for v in ledger.VERDICTS if v not in ("close", "auto_answer", "override_guard", "reissue")]
+	# `wait` records a hold, not a round, so it is never "used"; it leaves the
+	# menu when waits are off or the item's holds are spent.
+	used = [v for v in ledger.VERDICTS if v not in ("close", "auto_answer", "override_guard", "reissue", "wait")]
 	entries = ledger.parse_markers([_comment(_marker(item=100 + n, verdict=verdict))
 		for n, verdict in enumerate(used)], BOT)
 	project = [dict(entry, item=100) for entry in entries]
-	decision = ledger.decide(7, "blocked", FP, [], project, NOW, kind="project")
+	decision = ledger.decide(7, "blocked", FP, [], project, NOW, kind="project", wait_enabled=False)
 	assert decision["terminal_reason"] == "menu_exhausted"
 	assert decision["allowed"] == ["close"]
+	decision = ledger.decide(7, "blocked", FP, [], project, NOW, kind="project")
+	assert not decision["terminal"] and decision["allowed"] == ["wait"]
+	spent = [{"kind": "item_closed", "ref": str(10 + n), "state": "expired"} for n in range(ledger.MAX_HOLDS_PER_ITEM)]
+	decision = ledger.decide(7, "blocked", FP, [], project, NOW, kind="project", holds=spent)
+	assert decision["terminal_reason"] == "menu_exhausted" and decision["holds_used"] == ledger.MAX_HOLDS_PER_ITEM
 
 
 def test_a_marker_on_both_item_and_tracking_issue_counts_once() -> None:
@@ -1087,6 +1094,14 @@ if endpoint == "repos/o/r/actions/artifacts/202/zip" and os.environ.get("FAKE_GH
 	json.dump(state, open(state_path, "w"))
 	sys.stdout.buffer.write(base64.b64decode(os.environ["FAKE_GH_ZIP"]))
 	sys.exit(0)
+if endpoint.startswith(("repos/o/r/actions/variables/", "repos/o/r/actions/secrets/")):
+	kind = "VARIABLES" if "/variables/" in endpoint else "SECRETS"
+	name = endpoint.rsplit("/", 1)[1]
+	state.setdefault("actions_reads", []).append(endpoint)
+	if name in os.environ.get("FAKE_GH_ACTIONS_" + kind, "").split(","):
+		done(name)
+	json.dump(state, open(state_path, "w"))
+	sys.exit(1)
 if endpoint.startswith("repos/o/r/actions/runs/"):
 	run_id = endpoint.rsplit("/", 1)[1]
 	runs = json.loads(os.environ.get("FAKE_GH_RUNS", "{}"))
@@ -1109,6 +1124,9 @@ method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_EXPLANATION") and f.get("body", "").startswith("Unblock judge could not act on `"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL_HOLD") and " hold=" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_WAIT_MARKER") and "<!-- ai:unblock-wait:v1 item=7 fixup=" in f.get("body", ""):
@@ -1136,6 +1154,9 @@ if method == "DELETE":
 	state["labels_removed"].append(endpoint)
 	done("{}")
 if method == "PATCH":
+	if os.environ.get("FAKE_GH_FAIL_HOLD_REFRESH") and "Last checked" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_CLOSE") and f.get("state") == "closed":
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -1196,6 +1217,15 @@ if endpoint.startswith("repos/o/r/git/ref/heads/"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	done(json.dumps({"ref": "refs/heads/" + endpoint[len("repos/o/r/git/ref/heads/"):]}))
+hold_pr = json.loads(os.environ.get("FAKE_GH_HOLD_PR", "null"))
+if hold_pr is not None and endpoint == "repos/o/r/pulls/" + str(hold_pr.get("number")):
+	done(json.dumps(hold_pr))
+if endpoint.startswith("repos/o/r/compare/"):
+	state.setdefault("compares", []).append(endpoint)
+	if os.environ.get("FAKE_GH_FAIL_COMPARE"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(os.environ.get("FAKE_GH_COMPARE_STATUS", ""))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
 	head_repo = os.environ.get("FAKE_GH_PR_HEAD_REPO", "o/r")
@@ -1217,6 +1247,8 @@ if method == "GET" and endpoint == "repos/o/r/issues/7" and not jq:
 if endpoint.startswith("repos/o/r/issues/"):
 	number = endpoint.rsplit("/", 1)[1]
 	issue = state["issues"].get(number, {})
+	if jq == '.state // ""':
+		done(issue.get("state") or "")
 	if jq == "{state, state_reason, labels: [.labels[]?.name]}":
 		done(json.dumps({"state": issue.get("state"), "state_reason": issue.get("state_reason"), "labels": [label["name"] for label in issue.get("labels", [])]}))
 	done(json.dumps(issue))
@@ -3172,3 +3204,348 @@ def test_judge_merged_fixup_retries_a_failed_regrant_resume(tmp_path: Path) -> N
 	assert "outcome=followup_handoff" not in result.stdout
 	assert not any("reason=operator_handoff" in comment["body"] for comment in state["comments"])
 	assert state["comments"][-1]["body"] == "/approved"
+
+
+# --- `wait` verdict and holds (Q116, Q126) -------------------------------------
+
+def _hold_comment(kind: str, ref: str, *, state: str = "", created_at: str = "2026-10-04T11:00:00Z", login: str = BOT, comment_id: int = 321) -> dict:
+	comment = _comment("Waiting.\n\n" + ledger.hold_marker(7, kind, ref, state), login, created_at)
+	comment["id"] = comment_id
+	return comment
+
+
+def test_wait_is_offered_until_disabled_or_spent_and_never_counts_a_round() -> None:
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW)
+	assert "wait" in decision["allowed"] and decision["holds_used"] == 0
+	assert "wait" not in ledger.decide(7, "blocked", FP, [], None, NOW, wait_enabled=False)["allowed"]
+	holds = [{"kind": "item_closed", "ref": str(50 + n), "state": "done"} for n in range(ledger.MAX_HOLDS_PER_ITEM)]
+	spent = ledger.decide(7, "blocked", FP, [], None, NOW, holds=holds)
+	assert "wait" not in spent["allowed"] and spent["item_rounds"] == 0
+	assert spent["holds_met"] == ["item_closed:50", "item_closed:51", "item_closed:52"]
+	with pytest.raises(ledger.UsageError):
+		ledger.marker(7, "blocked", FP, "wait", 1)
+	forged = f"<!-- ai:unblock:v1 item=7 stop=blocked fingerprint={FP} verdict=wait round=1 -->"
+	assert ledger.parse_markers([_comment(forged)], BOT) == []
+
+
+@pytest.mark.parametrize("wait_for,ref", [
+	({"kind": "pr_on_branch", "pr": 7066, "branch": "stable"}, "7066@stable"),
+	({"kind": "pr_on_branch", "pr": 12, "branch": "orchestrator/project-9"}, "12@orchestrator/project-9"),
+	({"kind": "item_closed", "item": 50}, "50"),
+	({"kind": "placeholder_retired", "placeholder": "DOC_SYNC_UNSET_OPERATOR_STEP"}, "DOC_SYNC_UNSET_OPERATOR_STEP"),
+])
+def test_wait_validates_and_normalises_each_condition(wait_for: dict, ref: str) -> None:
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW)
+	verdict = ledger.validate({"verdict": "wait", "reason": "r", "wait_for": wait_for}, decision, "o/r")
+	assert (verdict["hold_kind"], verdict["hold_ref"]) == (wait_for["kind"], ref)
+	assert ledger.HOLD_MARKER_RE.match(ledger.hold_marker(7, wait_for["kind"], ref))
+
+
+@pytest.mark.parametrize("wait_for", [
+	None, {}, {"kind": "forever"}, {"kind": "pr_on_branch", "pr": 0, "branch": "main"},
+	{"kind": "pr_on_branch", "pr": 5, "branch": "../main"}, {"kind": "pr_on_branch", "pr": 5, "branch": "-x"},
+	{"kind": "pr_on_branch", "pr": "5", "branch": "main"}, {"kind": "item_closed", "item": 7},
+	{"kind": "item_closed", "item": True}, {"kind": "placeholder_retired", "placeholder": "FOO_ENABLED"},
+	{"kind": "placeholder_retired", "placeholder": "lower_UNSET_OPERATOR_STEP"},
+])
+def test_wait_refuses_conditions_the_judge_cannot_check(wait_for: object) -> None:
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW)
+	with pytest.raises(ledger.UsageError):
+		ledger.validate({"verdict": "wait", "reason": "r", "wait_for": wait_for}, decision, "o/r")
+
+
+def test_wait_refuses_a_condition_this_item_already_saw_met() -> None:
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW, holds=[{"kind": "item_closed", "ref": "50", "state": "done"}])
+	with pytest.raises(ledger.UsageError, match="already met"):
+		ledger.validate({"verdict": "wait", "reason": "r", "wait_for": {"kind": "item_closed", "item": 50}}, decision, "o/r")
+	assert ledger.validate({"verdict": "wait", "reason": "r", "wait_for": {"kind": "item_closed", "item": 51}}, decision, "o/r")["hold_ref"] == "51"
+
+
+def test_only_trusted_hold_markers_for_this_item_count(tmp_path: Path) -> None:
+	comments = [
+		_hold_comment("item_closed", "50", state="done"),
+		_hold_comment("item_closed", "51", login="someone"),
+		_comment("<!-- ai:unblock-wait:v1 item=8 hold=item_closed ref=52 -->"),
+		_comment("<!-- ai:unblock-wait:v1 item=7 fixup=53 -->"),
+	]
+	assert [(h["ref"], h["state"]) for h in ledger.parse_holds(comments, BOT, 7)] == [("50", "done")]
+	path = tmp_path / "comments.json"
+	path.write_text(json.dumps(comments), encoding="utf-8")
+	base = ["decide", "--item", "7", "--stop", "blocked", "--fingerprint", FP, "--comments-file", str(path),
+		"--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"]
+	code, decision = _cli(*base)
+	assert code == 0 and decision["holds_used"] == 1 and decision["holds_met"] == ["item_closed:50"] and "wait" in decision["allowed"]
+	code, decision = _cli(*base, "--wait-disabled")
+	assert code == 0 and "wait" not in decision["allowed"]
+	code, out = _cli("hold-marker", "--item", "7", "--kind", "pr_on_branch", "--ref", "07066@main")
+	assert code == 1 and "canonical" in out["error"]
+
+
+def test_hold_followup_posts_the_stop_resume_and_plan_has_no_ops_for_wait() -> None:
+	assert actions.plan({"verdict": "wait", "reason": "r", "hold_kind": "item_closed", "hold_ref": "50"}, _ctx()) == []
+	ops = actions.reset_ops(_ctx(), f"waited for {actions.hold_description('item_closed', '50')}")
+	assert _bodies(ops) == ["/answer waited for #50 closed"]
+	assert actions.hold_description("pr_on_branch", "7066@stable") == "pull request #7066 merged and on `stable`"
+
+
+def test_judge_wait_verdict_records_a_hold_and_no_round(tmp_path: Path) -> None:
+	verdict = {"verdict": "wait", "reason": "the fix is merged but not on stable", "wait_for": {"kind": "pr_on_branch", "pr": 7066, "branch": "stable"}}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict)
+	assert "verdict=wait op=hold hold=pr_on_branch ref=7066@stable outcome=held" in result.stdout, result.stdout
+	assert len(state["comments"]) == 1
+	body = state["comments"][0]["body"]
+	assert body.startswith("## Unblock judge: `wait`")
+	assert body.rstrip().splitlines()[-1] == "<!-- ai:unblock-wait:v1 item=7 hold=pr_on_branch ref=7066@stable -->"
+	assert "ai:unblock:v1" not in body and state["labels_removed"] == [] and state["patched"] == []
+
+
+def test_judge_holds_while_unmet_and_resumes_once_met(tmp_path: Path) -> None:
+	hold = _hold_comment("item_closed", "50")
+	result, state = _judge(tmp_path, ISSUE, comments=[hold], issues={"50": {"state": "open"}})
+	assert "op=hold hold=item_closed ref=50 outcome=holding" in result.stdout, result.stdout
+	assert state["comments"] == [] and state["patched"][0][0] == "repos/o/r/issues/comments/321"
+	assert state["patched"][0][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=50 -->")
+	result, state = _judge(tmp_path, ISSUE, comments=[hold], issues={"50": {"state": "closed"}})
+	assert "op=hold hold=item_closed ref=50 outcome=met" in result.stdout, result.stdout
+	assert [c["body"] for c in state["comments"]] == ["/answer waited for #50 closed"]
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=50 done -->")
+	# A failed read never resumes and never ends the hold; it refreshes the
+	# open hold so the scan's retry interval applies.
+	result, state = _judge(tmp_path, ISSUE, comments=[hold], issues={"50": {}})
+	assert "reason=hold_check_unavailable" in result.stdout and state["comments"] == []
+	assert [p[0] for p in state["patched"]] == ["repos/o/r/issues/comments/321"]
+	assert state["patched"][0][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=50 -->")
+	# A failed resume keeps the hold open for the next run.
+	result, state = _judge(tmp_path, ISSUE, comments=[hold], issues={"50": {"state": "closed"}}, FAKE_GH_FAIL_RESUME="1")
+	assert "outcome=skip reason=followup_failed" in result.stdout and state["patched"] == []
+
+
+@pytest.mark.parametrize("pr,compare,expected", [
+	({"number": 66, "state": "closed", "merged": True, "merge_commit_sha": "b" * 40}, "behind", "outcome=met"),
+	({"number": 66, "state": "closed", "merged": True, "merge_commit_sha": "b" * 40}, "identical", "outcome=met"),
+	({"number": 66, "state": "closed", "merged": True, "merge_commit_sha": "b" * 40}, "ahead", "outcome=holding"),
+	({"number": 66, "state": "open", "merged": False, "merge_commit_sha": None}, "", "outcome=holding"),
+	({"number": 66, "state": "closed", "merged": False, "merge_commit_sha": None}, "", "outcome=expired reason=cannot_be_met"),
+])
+def test_judge_checks_a_pull_request_reaching_a_branch(tmp_path: Path, pr: dict, compare: str, expected: str) -> None:
+	hold = _hold_comment("pr_on_branch", "66@stable")
+	result, state = _judge(tmp_path, ISSUE, comments=[hold], verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		FAKE_GH_HOLD_PR=json.dumps(pr), FAKE_GH_COMPARE_STATUS=compare)
+	assert f"hold=pr_on_branch ref=66@stable {expected}" in result.stdout, result.stdout
+	if pr["merged"]:
+		assert state["compares"] == ["repos/o/r/compare/stable..." + "b" * 40]
+	if expected.startswith("outcome=expired"):
+		# The hold ends and the item is judged again as a normal round.
+		assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stdout
+
+
+def test_judge_ends_a_hold_after_the_max_days_or_when_waits_are_off(tmp_path: Path) -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": "i"}
+	old = _hold_comment("item_closed", "50", created_at="2026-09-01T00:00:00Z")
+	result, state = _judge(tmp_path, ISSUE, comments=[old], issues={"50": {"state": "open"}}, verdict=verdict)
+	assert "outcome=expired reason=max_days" in result.stdout, result.stdout
+	assert state["patched"][0][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=50 expired -->")
+	assert "outcome=acted" in result.stdout
+	result, state = _judge(tmp_path, ISSUE, comments=[old], issues={"50": {"state": "open"}}, verdict=verdict, UNBLOCK_JUDGE_WAIT_MAX_DAYS="60")
+	assert "outcome=holding" in result.stdout, result.stdout
+	result, state = _judge(tmp_path, ISSUE, comments=[_hold_comment("item_closed", "50")], issues={"50": {"state": "open"}},
+		verdict=verdict, UNBLOCK_JUDGE_WAIT_ENABLED="false")
+	assert "outcome=expired reason=waits_disabled" in result.stdout and "outcome=acted" in result.stdout, result.stdout
+
+
+def test_judge_ignores_an_untrusted_hold(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_hold_comment("item_closed", "50", login="someone")],
+		issues={"50": {"state": "open"}}, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"})
+	assert "op=hold" not in result.stdout and "outcome=acted" in result.stdout, result.stdout
+
+
+def _target_repo(tmp_path: Path, text: str) -> Path:
+	repo = tmp_path / "target"
+	repo.mkdir(parents=True)
+	(repo / "agents.md").write_text(text, encoding="utf-8")
+	(repo / "CHANGELOG.md").write_text("- History: DOC_SYNC_UNSET_OPERATOR_STEP was pending.\n", encoding="utf-8")
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"], check=True)
+	return repo
+
+
+def test_judge_waits_until_an_operator_placeholder_is_retired(tmp_path: Path) -> None:
+	hold = _hold_comment("placeholder_retired", "DOC_SYNC_UNSET_OPERATOR_STEP")
+	pending = _target_repo(tmp_path / "a", "Gate the new path on DOC_SYNC_UNSET_OPERATOR_STEP.\n")
+	result, state = _judge(tmp_path / "a", ISSUE, comments=[hold], TARGET_DIR=str(pending))
+	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
+	# Only the changelog still names it: the step is done.
+	retired = _target_repo(tmp_path / "b", "Nothing pending.\n")
+	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(retired))
+	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=met" in result.stdout, result.stdout
+	assert state["comments"][0]["body"].startswith("/answer waited for operator step")
+	(tmp_path / "c").mkdir()
+	result, state = _judge(tmp_path / "c", ISSUE, comments=[hold], TARGET_DIR=str(tmp_path / "missing"))
+	assert "reason=hold_check_unavailable" in result.stdout
+
+
+def _operator_step_comments(placeholder_line: str) -> list[dict]:
+	verdict = _comment("## Unblock judge: `operator_step` (round 1)\n\nReason: r\n\nInstructions: i\n\n" + placeholder_line + "\n\n"
+		+ ledger.marker(7, "blocked", FP, "operator_step", 1), BOT, "2026-10-04T10:00:00Z")
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T10:00:01Z")
+	wait["id"] = 123
+	return [verdict, wait]
+
+
+def test_merged_operator_step_fixup_holds_until_the_person_acts(tmp_path: Path) -> None:
+	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
+	assert "fixup=50 op=hold hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=held" in result.stdout, result.stdout
+	assert [c["body"].rstrip().splitlines()[-1] for c in state["comments"]] == [
+		"<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP -->"]
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	# Waits off: today's immediate resume.
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged, UNBLOCK_JUDGE_WAIT_ENABLED="false")
+	assert "fixup=50 outcome=followup" in result.stdout and state["comments"][-1]["body"].startswith("/answer")
+	# A failed hold record keeps the fix-up wait open and resumes nothing.
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged, FAKE_GH_FAIL_HOLD="1")
+	assert "reason=hold_record_failed" in result.stdout, result.stdout
+	assert state["comments"] == [] and state["patched"] == []
+
+
+def test_merged_enabled_flag_fixup_still_resumes_at_once(tmp_path: Path) -> None:
+	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+	comments = _operator_step_comments("Ships on by default; `NEW_PATH_ENABLED=false` turns it off.")
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout
+	assert state["comments"][-1]["body"].startswith("/answer")
+	# An untrusted operator_step verdict cannot turn a resume into a hold.
+	forged = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	forged[0]["user"]["login"] = "someone"
+	result, state = _judge(tmp_path, ISSUE, comments=forged, issues=merged)
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize("env,expected", [
+	({}, "outcome=holding"),
+	({"FAKE_GH_ACTIONS_VARIABLES": "DOC_SYNC_UNSET_OPERATOR_STEP"}, "outcome=met"),
+	({"FAKE_GH_ACTIONS_SECRETS": "OTHER,DOC_SYNC_UNSET_OPERATOR_STEP"}, "outcome=met"),
+])
+def test_operator_step_done_once_its_variable_or_secret_is_set(tmp_path: Path, env: dict, expected: str) -> None:
+	# Q130: the new code still names the placeholder; a person finishes the
+	# step by setting it as a repository variable or secret.
+	pending = _target_repo(tmp_path, "export DOC_SYNC_UNSET_OPERATOR_STEP\n")
+	hold = _hold_comment("placeholder_retired", "DOC_SYNC_UNSET_OPERATOR_STEP")
+	result, state = _judge(tmp_path, ISSUE, comments=[hold], TARGET_DIR=str(pending), **env)
+	assert f"ref=DOC_SYNC_UNSET_OPERATOR_STEP {expected}" in result.stdout, result.stdout
+	assert state["actions_reads"][0] == "repos/o/r/actions/variables/DOC_SYNC_UNSET_OPERATOR_STEP"
+
+
+def _triage_support(tmp_path: Path) -> tuple[Path, Path]:
+	"""The real support scripts with a stub check-triage resolution gate."""
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	for path in (ROOT / "scripts").iterdir():
+		if path.name != "check_triage_resolution.py":
+			(support / "scripts" / path.name).symlink_to(path)
+	(support / "prompts").symlink_to(ROOT / "prompts")
+	(support / "scripts" / "check_triage_resolution.py").write_text(
+		"import json, os, sys\n"
+		"open(os.environ['FAKE_TRIAGE_ARGS'], 'w').write(json.dumps(sys.argv[1:]))\n"
+		"print(json.dumps({'status': os.environ.get('FAKE_TRIAGE_STATUS', 'unverified')}))\n"
+		"sys.exit(int(os.environ.get('FAKE_TRIAGE_RC', '0')))\n",
+		encoding="utf-8",
+	)
+	target = tmp_path / "target"
+	target.mkdir()
+	subprocess.run(["git", "init", "-q", "-b", "main", str(target)], check=True)
+	subprocess.run(["git", "-C", str(target), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+	return support, target
+
+
+TRIAGE_ISSUE = dict(ISSUE, labels=[{"name": "ai:blocked"}, {"name": "ai:check-triage"}])
+
+
+@pytest.mark.parametrize("status,rc,expected,judged", [
+	("resolved", "0", "op=triage_resolution outcome=closed status=resolved", False),
+	("already_resolved", "0", "op=triage_resolution outcome=closed status=already_resolved", False),
+	("write_failed", "3", "op=triage_resolution outcome=skip reason=write_failed", False),
+	("unverified", "0", "op=triage_resolution outcome=judge status=unverified rc=0", True),
+	("", "1", "op=triage_resolution outcome=judge status=error rc=1", True),
+])
+def test_resolved_check_triage_issue_is_closed_without_a_round(tmp_path: Path, status: str, rc: str, expected: str, judged: bool) -> None:
+	support, target = _triage_support(tmp_path)
+	args_file = tmp_path / "triage_args.json"
+	result, state = _judge(tmp_path, TRIAGE_ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file), FAKE_TRIAGE_STATUS=status, FAKE_TRIAGE_RC=rc)
+	assert expected in result.stdout, result.stdout
+	args = json.loads(args_file.read_text(encoding="utf-8"))
+	assert args[0] == "gate" and args[args.index("--issue-number") + 1] == "7" and args[args.index("--default-branch") + 1] == "main"
+	assert ("verdict=retry_budget round=1 outcome=acted" in result.stdout) == judged, result.stdout
+	if not judged:
+		assert state["comments"] == []
+
+
+def test_non_triage_issue_never_runs_the_resolution_gate(tmp_path: Path) -> None:
+	support, target = _triage_support(tmp_path)
+	args_file = tmp_path / "triage_args.json"
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file))
+	assert "op=triage_resolution" not in result.stdout and not args_file.exists()
+	assert "outcome=acted" in result.stdout
+
+
+def test_invalid_max_days_falls_back_to_fourteen_days(tmp_path: Path) -> None:
+	# The fallback warning must not leak into the hours the callers read.
+	result, state = _judge(tmp_path, ISSUE, comments=[_hold_comment("item_closed", "50")], issues={"50": {"state": "open"}},
+		UNBLOCK_JUDGE_WAIT_MAX_DAYS="abc")
+	assert "op=hold hold=item_closed ref=50 outcome=holding" in result.stdout, result.stdout + result.stderr
+	verdict = {"verdict": "wait", "reason": "r", "wait_for": {"kind": "item_closed", "item": 50}}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict, UNBLOCK_JUDGE_WAIT_MAX_DAYS="0")
+	assert "verdict=wait op=hold hold=item_closed ref=50 outcome=held" in result.stdout, result.stdout + result.stderr
+	assert "decides again after 14 days" in state["comments"][0]["body"]
+
+
+def test_an_unreadable_hold_still_expires_after_the_max_days(tmp_path: Path) -> None:
+	old = _hold_comment("item_closed", "50", created_at="2026-09-01T00:00:00Z")
+	result, state = _judge(tmp_path, ISSUE, comments=[old], issues={"50": {}},
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"})
+	assert "outcome=expired reason=max_days" in result.stdout and "outcome=acted" in result.stdout, result.stdout
+
+
+def test_a_later_descope_fixup_does_not_hold_on_an_older_operator_step(tmp_path: Path) -> None:
+	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	comments[0]["created_at"] = "2026-10-04T09:00:00Z"
+	comments.insert(1, _comment("## Unblock judge: `descope` (round 2)\n\n" + ledger.marker(7, "blocked", FP, "descope", 2),
+		BOT, "2026-10-04T09:30:00Z"))
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
+	assert "fixup=50 outcome=followup" in result.stdout and "op=hold" not in result.stdout, result.stdout
+
+
+def test_an_operator_step_hold_is_not_posted_twice(tmp_path: Path) -> None:
+	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	comments.append(_hold_comment("placeholder_retired", "DOC_SYNC_UNSET_OPERATOR_STEP", created_at="2026-10-04T10:00:05Z"))
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
+	assert "fixup=50 op=hold hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=held" in result.stdout, result.stdout
+	assert state["comments"] == []
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+
+
+def test_disabled_triage_gate_is_not_run(tmp_path: Path) -> None:
+	support, target = _triage_support(tmp_path)
+	args_file = tmp_path / "triage_args.json"
+	result, _ = _judge(tmp_path, TRIAGE_ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file), CHECK_TRIAGE_RESOLVED_GATE_ENABLED="false")
+	assert "op=triage_resolution outcome=judge status=disabled" in result.stdout and not args_file.exists()
+	assert "outcome=acted" in result.stdout
+
+
+@pytest.mark.parametrize("issue_state,outcome", [
+	({"state": "open"}, "outcome=holding"),
+	({}, "reason=hold_check_unavailable"),
+])
+def test_a_failed_hold_refresh_is_logged(tmp_path: Path, issue_state: dict, outcome: str) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_hold_comment("item_closed", "50")], issues={"50": issue_state},
+		FAKE_GH_FAIL_HOLD_REFRESH="1")
+	assert "op=hold hold=item_closed ref=50 outcome=skip reason=hold_refresh_failed" in result.stdout, result.stdout
+	assert outcome in result.stdout, result.stdout
+	assert state["comments"] == [] and state["patched"] == []
