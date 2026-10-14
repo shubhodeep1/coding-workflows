@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7328-pr-dependency-release-route.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The fragment says the three AI-memory run-event steps (`Record clarification run start|completed|failed`) skip when `comment_route_trusted` is `false`. The \"Record clarification run failed\" step in `.github/workflows/clarify.yml` (line 1777) also skips when the value is empty and the commenter has no OWNER, MEMBER or COLLABORATOR association.\n  WHY: Nothing fails at runtime, but the contract text is out of date. All three reviewers rated it NIT, so low is the mapped severity. Confidence ranged 3-4 and the highest is kept.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Required engine marker is not on main (scripts/ai_engine.sh:83 defines _AI_ENGINE_EXIT_FALLBACK, but the file contains no _AI_ENGINE_EXIT_REFUSED).\" The fix is to complete the `_AI_ENGINE_EXIT_REFUSED` engine change in PR #6667.\n  expected_change_site: scripts/ai_engine.sh\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: `_AI_ENGINE_EXIT_REFUSED` is absent from scripts/ai_engine.sh. Auto-decision AD-1 explicitly defers it to PR #6667 on orchestrator/project-6664. Severity differs between reviewers: NIT (google_gemini-3_1-flash-lite) and MAJOR, deferred (minimax_minimax-m3). Three other reviewers (anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus, openai_gpt-6-luna) treated it as a deferred requirement, not a gap, or reported nothing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7328-pr-dependency-release-route.md:2 | severity=NIT | confidence=3\n  PROBLEM: The text no longer matches `.github/workflows/clarify.yml` line 1777. When `comment_route_trusted` is empty and the commenter has no trusted association, the failed-run step also skips. The changelog fragment does not mention it either.\n  WHY: It does not fail at runtime. A reader of the contract would not know about the extra fallback.\n- HARDENING_SUGGESTION: `.github/workflows/clarify.yml`, \"Queue failed reclarify for poller\", line 1843 (`case \"${SOURCE_ASSOCIATION}\" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac`). A verified release comment from an account with no trusted association reaches this step and exits 1 silently, so the failed release is not requeued and the log gives no reason. Suggested fix: print a `::notice::` before the `exit 1` (about 2 lines). HARDENING_RISK_SCORE: 1\n- Task completeness: the `_AI_ENGINE_EXIT_REFUSED` gap is not reported, because it is an explicitly deferred requirement (PR #6667, AD-1). The release-marker requirement is covered by the diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"Required engine marker is not on main (scripts/ai_engine.sh:83 defines _AI_ENGINE_EXIT_FALLBACK, but the file contains no _AI_ENGINE_EXIT_REFUSED).\"\n  Expected change site: scripts/ai_engine.sh\n  Evidence of absence: The PR intent context explicitly defers this change to PR #6667 on orchestrator/project-6664, and the auto-decision AD-1 documents this deferral.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTION: `.github/workflows/clarify.yml`, \"Record clarification run failed\" step (line 1843 in patched script block). The release block `case \"${SOURCE_ASSOCIATION}\" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac` exits 1 with no output for a verified release from an untrusted account. Suggested fix: print a `::notice::` or `::error::` naming the association before the `exit 1` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/7328-pr-dependency-release-route.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment says the three AI-memory run-event steps skip when `comment_route_trusted` is `false`. The \"Record clarification run failed\" `if:` (clarify.yml:1775-1777) uses a stricter rule. It also skips when `comment_route_trusted` is empty, the event is `issue_comment`, and the commenter lacks an OWNER, MEMBER or COLLABORATOR association. The other two steps still match the doc.\n  WHY: Nothing fails. A reader relying on the fragment would expect a record at empty `comment_route_trusted`, but the code skips it for an untrusted comment.\n- TASK_GAP: Requirement: \"Required engine marker is not on main ... scripts/ai_engine.sh:83 defines `_AI_ENGINE_EXIT_FALLBACK`, but the file contains no `_AI_ENGINE_EXIT_REFUSED` ... Fix: Complete the intended `_AI_ENGINE_EXIT_REFUSED` engine change in PR #6667 and land that change on main \u2014 not an inert marker added solely to satisfy the check.\"\n  Expected change site: scripts/ai_engine.sh\n  Evidence of absence: `_AI_ENGINE_EXIT_REFUSED` is not present in scripts/ai_engine.sh on the PR head. AD-1 deferred it to PR #6667. Flagged only because it is in scope of the linked issue's Gap 1.\n  SEVERITY: MAJOR (deferred per linked issue + AD-1)\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Poller release is treated as a human reclarification ... recognize the exact release marker only after verifying its author is the GH_PAT login\". Delivered: the three predicate files, the route step and the tests cover it. SEVERITY: BLOCKER (Gap 2). ISSUE_CONFIDENCE: 5 \u2014 satisfied. No other unmet deliverables found.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7328-pr-dependency-release-route.md:2 | severity=NIT | confidence=3\n  PROBLEM: The fragment says the three AI-memory run-event steps skip \"when it is `false`\". The \"Record clarification run failed\" step now also skips when `comment_route_trusted` is empty and the commenter has no trusted association. The fragment and changelog fragment do not mention this.\n  WHY: Nothing fails at runtime. The contract text is slightly out of date.\n- Task completeness: the `_AI_ENGINE_EXIT_REFUSED` gap is explicitly deferred to PR #6667 by AD-1, so it is not a gap.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a4af8bfc27bb48e2f12b923731416164a167ca79e91496b5e679486a82f93517",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7331,
+    "run_id": "38497874162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38497874162",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014022415_61068d724d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7331,
+    "run_id": "38497874162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T02:24:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
