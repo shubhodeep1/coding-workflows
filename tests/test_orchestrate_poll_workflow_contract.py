@@ -366,7 +366,9 @@ def test_engine_and_claude_steps_run_on_idle_ticks_when_needed() -> None:
 	by_name = {step.get("name"): step for step in steps}
 	assert "if" not in by_name["Resolve AI engine"]
 	for name in ("Install Claude Code CLI", "Resolve Claude credential", "Alert on Claude pool accounts at the usage gate"):
-		assert by_name[name]["if"] == "steps.ai_engine.outputs.any_claude == 'true'", name
+		# Issue #7370: with a capacity tracker open the pool is probed only in
+		# the hourly window.
+		assert by_name[name]["if"] == "(steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')", name
 
 
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:

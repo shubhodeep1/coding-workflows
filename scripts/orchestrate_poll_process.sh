@@ -16512,6 +16512,11 @@ STALL_EOF
           STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_merge_train"
           return 1
         fi
+        if _linked_pr_is_capacity_waiting "${_rtr_pr_json}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=claude_capacity_wait pr=${pr_num} phase=${phase} action=retrigger_review"
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_capacity_wait"
+          return 1
+        fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
@@ -18002,6 +18007,28 @@ _linked_pr_is_merge_queued()
         else empty
         end]
     | index("ai:merge-queued") != null
+  ' >/dev/null 2>&1
+}
+
+# Claude capacity wait (issue #7370): a review that waited for Claude capacity
+# labels its PR ai:claude-capacity-wait; the hourly capacity-resume pass in
+# orchestrate_poll.yml re-dispatches it and removes the label. Stall recovery
+# leaves such a PR alone instead of re-dispatching a review that would only
+# pause again and spend recovery budget. Same payload shapes as above.
+_linked_pr_is_capacity_waiting()
+{
+  local linked_json="$1"
+  [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ] || return 1
+  printf '%s' "${linked_json}" | jq -e '
+    select(type == "object")
+    | select(((.state // "") | ascii_downcase) == "open")
+    | select((.merged // false) != true)
+    | [(.labels // [])[]?
+      | if type == "string" then .
+        elif type == "object" then (.name // empty)
+        else empty
+        end]
+    | index("ai:claude-capacity-wait") != null
   ' >/dev/null 2>&1
 }
 
@@ -20030,6 +20057,13 @@ PY
       fi
       continue
     fi
+    if [ "${phase}" = "ai:done" ] && _linked_pr_is_capacity_waiting "${_std_linked_json}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=claude_capacity_wait pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
       _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -21170,6 +21204,10 @@ recover_stalled_issue() {
   if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
     return 1  # Intentional train wait; do not consume stall budget or alert.
+  fi
+  if [ "${phase}" = "ai:done" ] && _linked_pr_is_capacity_waiting "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=claude_capacity_wait pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+    return 1  # Intentional capacity wait (issue #7370); no stall budget or alert.
   fi
   if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"

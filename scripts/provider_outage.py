@@ -396,7 +396,10 @@ class GitHub:
 		return self._run(["workflow", "run", workflow, "--repo", self.repository, "--ref", ref, "-f", f"pr_number={pr_number}", "-f", f"allow_workflow_edits={allow_edits}"]).returncode == 0
 
 	def remove_label(self, number: int, label: str) -> bool:
-		return self._run(["api", "-X", "DELETE", f"repos/{self.repository}/issues/{number}/labels/{label}"]).returncode == 0
+		# HTTP 404 means the label is already gone (issue #7370): the goal is
+		# met, so a missing label never leaves a resume item pending.
+		result = self._run(["api", "-X", "DELETE", f"repos/{self.repository}/issues/{number}/labels/{label}"])
+		return result.returncode == 0 or "HTTP 404" in (result.stderr or "") + (result.stdout or "")
 
 	def _get_or_gone(self, path: str) -> dict[str, Any] | None:
 		"""GET one object; `{"_gone": True}` on HTTP 404, None on other failures."""
@@ -987,11 +990,12 @@ def _resume_wait_pr(gh: Any, item: dict[str, str], *, login: str, workflow: str)
 		return "failed"
 	decision = resume_decision(comments, head=head, login=login, reasons=(CLAUDE_CAPACITY_REASON,))
 	if decision == "resume":
-		if not gh.dispatch(workflow, default_branch, number):
+		# Remove the label before dispatching: a failed removal dispatches
+		# nothing, so a retry never queues a duplicate review, and a failed
+		# dispatch leaves an unlabelled PR the regular review sweep picks up.
+		if not gh.remove_label(number, CAPACITY_WAIT_LABEL):
 			return "failed"
-		# A failed removal stays pending: the next pass sees no new
-		# claude_capacity marker on the head and only removes the label.
-		return "dispatched" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
+		return "dispatched" if gh.dispatch(workflow, default_branch, number) else "failed"
 	# The head moved on or a later run decided it: nothing to replay.
 	return "superseded" if gh.remove_label(number, CAPACITY_WAIT_LABEL) else "failed"
 
@@ -1130,6 +1134,10 @@ def capacity_resume(gh: Any, *, pool_available: bool, items_out: str | None, ale
 		latest = gh.comments(tracker["number"])
 		if latest is None or pending_wait_items(latest, login=login, done=done):
 			complete = False
+	# Refresh the items file so the pool-health alert lists only the work
+	# still waiting after this pass, not the pre-resume count.
+	remaining = [item for item in pending if item["key"] not in done]
+	_write_items(items_out, {"count": len(remaining), "opened_at": tracker.get("opened") or "", "items": [{key: item[key] for key in ("kind", "item", "workflow", "run")} for item in remaining]})
 	if not complete:
 		_log(f"op=capacity_resume tracker={tracker['number']} outcome=partial resumed={resumed}")
 		_write_output(output_path, values)

@@ -3158,7 +3158,9 @@ def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
 	assert '--model "openai/gpt-6-sol"' in content
 	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
-	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
+	# Issue #7370: outside the hourly window an open capacity tracker makes
+	# the poller's Claude roles wait (all_gated) without probing the pool.
+	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}" in poll
 	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    env ${security_pass_engine_env[@]+"${security_pass_engine_env[@]}"} \\\n    bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \\\n      --phase "orchestrate-security-pass"' in process
 

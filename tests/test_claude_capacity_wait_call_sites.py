@@ -404,8 +404,38 @@ def test_a_failed_label_removal_keeps_the_pr_pending(tmp_path: Path) -> None:
 	gh.issue_comments[8] = [_c(f"p\n<!-- review-autofix-failure:v1 head={head} reason=claude_capacity fp={'b' * 64} run=42 -->")]
 	gh.remove_label = lambda number, label: False  # type: ignore[method-assign]
 	_resume(gh, tmp_path)
-	assert gh.dispatched == [8] and gh.closed == []
+	# The label goes first, so a failed removal dispatches nothing and a
+	# retry never queues a duplicate review.
+	assert gh.dispatched == [] and gh.closed == []
 	assert "pr:8:42" not in gh.tracker_body
+
+
+def test_the_items_file_lists_only_what_still_waits(tmp_path: Path) -> None:
+	gh = FakeGitHub()
+	gh.tracker_comments = [_c(_item("run", "none", "51")), _c(_item("run", "none", "52"))]
+	gh.rerun_status = {52: 500}
+	_resume(gh, tmp_path)
+	items = json.loads((tmp_path / "items.json").read_text())
+	assert items["count"] == 1 and [entry["run"] for entry in items["items"]] == ["52"]
+	gh.rerun_status = {}
+	_resume(gh, tmp_path)
+	assert json.loads((tmp_path / "items.json").read_text())["count"] == 0 and gh.closed == [1]
+
+
+def test_remove_label_treats_a_missing_label_as_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+	import subprocess
+
+	gh = po.GitHub("o/r")
+	monkeypatch.setattr(gh, "_run", lambda args: subprocess.CompletedProcess(args, 1, "", "gh: Label does not exist (HTTP 404)"))
+	assert gh.remove_label(5, po.CAPACITY_WAIT_LABEL) is True
+	monkeypatch.setattr(gh, "_run", lambda args: subprocess.CompletedProcess(args, 1, "", "gh: Server Error (HTTP 502)"))
+	assert gh.remove_label(5, po.CAPACITY_WAIT_LABEL) is False
+
+
+def test_stall_recovery_leaves_capacity_waiting_prs_alone() -> None:
+	text = _text(SCRIPTS / "orchestrate_poll_process.sh")
+	assert "_linked_pr_is_capacity_waiting()" in text
+	assert text.count("reason=claude_capacity_wait pr=") == 3
 
 
 def test_a_deleted_pr_or_source_comment_is_superseded(tmp_path: Path) -> None:

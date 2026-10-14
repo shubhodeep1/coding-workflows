@@ -1081,7 +1081,9 @@ jobs:
           if [ -s "${alert_file}" ] && [ -f .codex-workflow-src/scripts/tg_helpers.sh ]; then
             # shellcheck disable=SC1091
             source .codex-workflow-src/scripts/tg_helpers.sh
-            tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null 2>&1 || true
+            # DEBUG: the "capacity back" notice reports work the pass already
+            # resumed; nobody has to act (agents.md "Telegram alert levels").
+            tg_send_msg "$(cat "${alert_file}")" "DEBUG" >/dev/null 2>&1 || true
           fi
           rm -f -- "${alert_file}" "${items_file}"
 

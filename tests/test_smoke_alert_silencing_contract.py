@@ -69,8 +69,11 @@ EXPECTED_STEP_DECLARATIONS = {
 	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 2,
 	# Issue #6633 adds "Record Claude pool capacity", "Mark outage-caused
 	# review-blocked labels (autofix exhaustion)" and "Record model-provider
-	# outage" (first, third and sixth entries).
+	# outage" (first, fourth and eighth entries). Issue #7370 adds "Defer
+	# review on Claude capacity" (second) and "Record Claude capacity wait"
+	# (seventh).
 	"review_autofix.yml": [
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
@@ -78,13 +81,15 @@ EXPECTED_STEP_DECLARATIONS = {
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
+		"${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 1,
-	# 7 = includes "Alert on Claude pool accounts at the usage gate" (#6951),
+	# 8 = includes "Resume Claude capacity waits" (#7370),
+	# "Alert on Claude pool accounts at the usage gate" (#6951),
 	# the unrouted-reply check in "Replay failed trusted reclarify commands" (#6630),
 	# "Run standalone stall recovery without active projects" (#7174) and
 	# "Run standalone PR sweeps without active projects" (#7177).
-	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 7,
+	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 8,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
 	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,
