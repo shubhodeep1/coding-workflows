@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sync_claude_live_copies.py:19-23 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The module docstring says an existing sync branch is recreated from the pushed commit, but refreshes now retain the old tip as a parent.\n  WHY: This can mislead readers about branch history; all three reviewers reported this documentation issue.\n- scripts/sync_claude_live_copies.py:509-520 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Failures in the new git subprocess calls are reported only as the generic `git_stage_failed`, without git stderr or per-step detail.\n  WHY: Operators cannot distinguish failure modes; severity is MAJOR, the highest reported, while the other reviewers rated it NIT.\n- scripts/sync_claude_live_copies.py:532 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_push_failure_detail` preserves spaces in the error detail string.\n  WHY: The reviewer says spaces remain in the detail, causing tests that assert `\" \" not in detail` to fail; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 explicitly rejected this claim after tracing the strict `>` comparison.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/sync_claude_live_copies.py:21-22 | severity=NIT | confidence=3\n  PROBLEM: The docstring says the sync branch is recreated from the pushed commit, although an existing branch is refreshed by a commit whose parents are the old tip and the pushed commit.\n  WHY: A reader could wrongly conclude that a refresh replaces branch history, which the ruleset forbids.\n- scripts/sync_claude_live_copies.py:517-519 | severity=NIT | confidence=2\n  PROBLEM: Failures in the new `rev-parse`, `commit-tree`, or `reset` calls are logged only as the generic `git_stage_failed`, without git stderr.\n  WHY: The function returns False, but the log gives no way to tell a copy failure from a `commit-tree` failure.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/sync_claude_live_copies.py:532 | severity=BLOCKER | confidence=5\n  PROBLEM: `_push_failure_detail` preserves spaces in the error detail string.\n  WHY: The reviewer says spaces remain in the detail, causing tests asserting `\" \" not in detail` to fail.\n- scripts/sync_claude_live_copies.py:517-518 | severity=MAJOR | confidence=4\n  PROBLEM: The broad `except (subprocess.CalledProcessError, OSError)` block in `_commit_and_push` swallows detailed error information for subprocess calls.\n  WHY: When `commit-tree` or other git commands fail, the script logs only `error reason=git_stage_failed`, making persistent failures difficult for operators to debug.\n- scripts/sync_claude_live_copies.py:19-23 | severity=NIT | confidence=3\n  PROBLEM: The docstring misdescribes the branch-history behavior.\n  WHY: It says the branch is recreated from the pushed commit, but refreshes retain the old tip as a parent.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/sync_claude_live_copies.py:19-23 | severity=NIT | confidence=4\n  PROBLEM: The docstring still describes the sync branch as recreated from the pushed commit, although the refresh path gives the new commit two parents and keeps the old branch tip in history.\n  WHY: Readers may expect force-push-style replacement, which is the behavior the ruleset forbids.\n- scripts/sync_claude_live_copies.py:509-520 | severity=NIT | confidence=3\n  PROBLEM: Failures in the new `rev-parse`, `commit-tree`, or `reset --soft` calls are caught by the existing handler and reported only as generic `error reason=git_stage_failed`, without per-step detail.\n  WHY: Permanent regressions and transient git errors look identical in workflow logs, making it difficult for operators to determine why the workflow is stuck.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "5fccaf1dc1de6fd5254c4636c057e7c7d81a9068baf77b0a93f40b5f77874350",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7339,
+    "run_id": "38487109734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38487109734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014001659_c6e4b3958a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7339,
+    "run_id": "38487109734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T00:16:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
