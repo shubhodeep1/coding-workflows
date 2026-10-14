@@ -1,6 +1,6 @@
 <!-- agents: section="Workflow architecture" -->
 CI-triage PR-branch routing (issue #7042): with
-`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true` (default `false`),
+`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` on (the default; `false` turns it off),
 `scripts/resolve_integration_ref.sh` routes a verified `ai:check-triage` issue
 to its failing PR's head branch for clarify, plan, implement, clarify-respond
 and validate. It verifies the label, the canonical marker header, an

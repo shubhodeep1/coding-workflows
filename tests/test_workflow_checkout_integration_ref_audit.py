@@ -180,8 +180,8 @@ def _refctx_step(wf: str) -> str:
 
 def test_required_workflows_fail_closed_on_ci_triage_routing_refusal() -> None:
 	"""Resolver exit 3 (CI-triage routing refused) must never fall back to main."""
-	env_line = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}"
-	forward = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \\'
+	env_line = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}"
+	forward = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \\'
 	capture = '})" || resolver_rc=$?'
 	refused_branch = 'elif [ "${resolver_rc}" -eq 3 ]; then'
 	fallback = 'echo "::warning::Canonical integration resolver failed; falling back to default branch."'

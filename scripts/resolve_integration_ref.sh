@@ -119,7 +119,9 @@ branch_exists() {
 }
 
 # --- CI-triage PR-branch routing (CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED) ------
-# Opt-in (default off). When on, an `ai:check-triage` issue filed by
+# On by default: unset, empty, `true`, `1`, `yes` or `on` route; `false`,
+# `0`, `no` or `off` turn it off; any other value turns it off with a
+# ::warning::. When on, an `ai:check-triage` issue filed by
 # scripts/check_failure_triage.sh resolves to the head branch of the PR whose
 # check failed, after verifying the label, the canonical marker header, a
 # trusted author, the body's PR line, the live PR (open, same repository,
@@ -129,10 +131,14 @@ branch_exists() {
 CI_TRIAGE_REFUSED_RC=3
 
 ci_triage_routing_enabled() {
-	local raw="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}"
+	local raw="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}"
 	case "${raw,,}" in
 		true|1|yes|on) return 0 ;;
-		*) return 1 ;;
+		false|0|no|off) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED has an unrecognised value; CI-triage PR-branch routing is off. Use true or false." >&2
+			return 1
+			;;
 	esac
 }
 
@@ -357,8 +363,14 @@ resolve_ref() {
 		# One full issue read supplies body, labels, author and PR flag. With
 		# routing on, an unreadable issue might be a CI-triage issue, so a
 		# failed read or parse refuses (exit 3) instead of returning a code
-		# that callers map to the default-branch fallback.
-		if ! child_json="$(get_issue_json "${ISSUE}")"; then
+		# that callers map to the default-branch fallback. A rate-limited
+		# read keeps the resolver's retry-later exit 75, as without routing.
+		local read_rc=0
+		child_json="$(get_issue_json "${ISSUE}")" || read_rc=$?
+		if [ "${read_rc}" -eq 75 ]; then
+			_resolver_rate_limited "issue-${ISSUE}"
+		fi
+		if [ "${read_rc}" -ne 0 ]; then
 			ci_triage_refuse "issue_read_failed" "none"
 			return "${CI_TRIAGE_REFUSED_RC}"
 		fi
@@ -427,12 +439,14 @@ run_case() {
 	out_file="$(mktemp)"
 	err_file="$(mktemp)"
 	# Always set the routing flag explicitly so an outer value cannot leak
-	# into a fixture; fixtures opt in through `env`.
+	# into a fixture; fixtures opt in through `env`. A JSON null unsets it, so
+	# a fixture can exercise the resolver's own default.
 	routing_flag="$(python3 -c '
 import json, pathlib, sys
 fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
-print(str(env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")))
+value = env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")
+print("__unset__" if value is None else str(value))
 ' "${fixture_file}")"
 	(
 		export PATH="${bin_dir}:${PATH}"
@@ -441,7 +455,11 @@ print(str(env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")))
 		export REPO="owner/repo"
 		export ISSUE="101"
 		export GH_TOKEN="test-token"
-		export CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${routing_flag}"
+		if [ "${routing_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED
+		else
+			export CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${routing_flag}"
+		fi
 		if resolve_ref >"${out_file}" 2>"${err_file}"; then
 			echo 0 >"${out_file}.rc"
 		else
