@@ -493,7 +493,14 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 
 def test_refresh_pipeline_credential_names_cover_control_plane_secrets() -> None:
 	names = set(refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES)
-	for required in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY"):
+	for required in (
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+		"GH_PAT",
+		"OPENROUTER_API_KEY",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+		"ACTIONS_ID_TOKEN_REQUEST_URL",
+	):
 		assert required in names, required
 
 
