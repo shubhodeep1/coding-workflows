@@ -1322,7 +1322,10 @@ jobs:
       # count. `tests-promote-stall-and-review` was chosen because none of the
       # earlier rebalances moved anything into it (#7250 and #7334 went to
       # static-checks, #7366 to heal, #7382 and #7383 to release) and
-      # budget-watch has never flagged it. The step needs no git history,
+      # budget-watch has never flagged it. No current per-job timing was
+      # available for comparison: this job last measured 8.2 minutes (run
+      # 36523765261, #4707), and the release job's 535-604s predates the two
+      # steps #7382 and #7383 moved into it. The step needs no git history,
       # Node or prepared `.claude/` live copies, and both jobs use the same
       # checkout and the same pip install line.
       - name: Workflow failure heal contract and driver tests
