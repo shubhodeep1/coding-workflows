@@ -1840,7 +1840,9 @@ jobs:
             _rc_is_command="true"
           fi
           [ "${_rc_is_command}" = "true" ] || exit 1
-          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
+          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *)
+            echo "::notice::Failed /reclarify not requeued: poller replay requires an OWNER, MEMBER or COLLABORATOR author (association=${SOURCE_ASSOCIATION:-none})."
+            exit 1 ;; esac
           gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
           # The marker alone is undiscoverable by the poller. Retry transient
