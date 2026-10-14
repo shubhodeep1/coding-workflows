@@ -2355,10 +2355,36 @@ def test_removing_capacity_wait_label_resets_the_stall_window():
 
 def test_standalone_stall_loop_skips_capacity_wait_phase():
 	# The standalone stall loop has its own skip list; it must leave a
-	# waiting item alone like DEDICATED_HANDLER_PHASES does (issue #7251).
+	# waiting item alone like DEDICATED_HANDLER_PHASES does (issue #7251),
+	# but only after recording the wait as last_seen_phase, so removing the
+	# label restarts the stall window.
 	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
-	assert '[ "${phase}" = "ai:claude-capacity-wait" ]' in skip
+	assert "ai:claude-capacity-wait" not in skip
+	update_start = text.index('updated_state="$(python3 - "$state_json" "$phase" <<\'PY\'\n', text.index(skip))
+	wait_check = text.index('if [ "${phase}" = "ai:claude-capacity-wait" ]; then', update_start)
+	status_read = text.index('status_since="$(echo "${updated_state}"', update_start)
+	assert update_start < wait_check < status_read
+	wait_block = text[wait_check:status_read]
+	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"' in wait_block
+	assert "continue" in wait_block
+
+	# Run the embedded state update for stage -> wait -> stage.
+	body_start = update_start + len('updated_state="$(python3 - "$state_json" "$phase" <<\'PY\'\n')
+	script = text[body_start:text.index("\nPY\n", body_start)]
+
+	def step(state: dict, phase: str) -> dict:
+		result = subprocess.run([sys.executable, "-c", script, json.dumps(state), phase], capture_output=True, text=True, check=True)
+		return json.loads(result.stdout)
+
+	stale = {"last_seen_phase": "ai:clarification", "status_since_ts": 1, "stall_recovery_count": 2}
+	waiting = step(stale, "ai:claude-capacity-wait")
+	assert waiting["last_seen_phase"] == "ai:claude-capacity-wait"
+	assert waiting["stall_recovery_count"] == 0
+	resumed = step(dict(waiting, status_since_ts=1), "ai:clarification")
+	assert resumed["last_seen_phase"] == "ai:clarification"
+	assert resumed["status_since_ts"] > 1
+	assert resumed["stall_recovery_count"] == 0
 
 
 def test_label_contract_matches_helper_catalog_and_phase_priority():
