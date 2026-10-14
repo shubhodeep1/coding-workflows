@@ -50,6 +50,9 @@ the network; the shell only executes.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
+  hold-followup --context-file PATH --kind KIND --ref REF
+      The same reset, once the condition of a `wait` hold (or an operator-step
+      hold) is met: KIND and REF are the hold marker's `hold=` and `ref=`.
   followup-handoff --context-file PATH --fixup N --verdict descope|operator_step
       Instead of that reset, when the context carries a `protected_rejection`
       (the item is still held by an automation-path rejection that the
@@ -630,10 +633,26 @@ def followup_handoff_ops(ctx: dict, fixup: int, verdict_name: str) -> list[dict]
 	return ops
 
 
+def hold_description(kind: str, ref: str) -> str:
+	"""Plain words for a hold condition, for comments and resume notes."""
+	if kind == "pr_on_branch":
+		pr, _, branch = ref.partition("@")
+		return f"pull request #{pr} merged and on `{branch}`"
+	if kind == "item_closed":
+		return f"#{ref} closed"
+	if kind == "placeholder_retired":
+		return f"operator step `{ref}` done"
+	raise UsageError(f"unknown hold kind {kind!r}")
+
+
 def plan(verdict: dict, ctx: dict) -> list[dict]:
 	name = verdict.get("verdict")
 	item = ctx["item"]
 	ops: list[dict] = []
+	if name == "wait":
+		# A hold acts later, when its condition is met (hold-followup); the
+		# judge posts the hold itself and never asks for operations here.
+		return []
 	if ctx["kind"] == "pr" and not ctx["pr_trusted"] and name in ("reissue", "descope", "operator_step", "accept_with_followup"):
 		return _untrusted_pr_ops(ctx, name)
 	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
@@ -885,6 +904,10 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	hold_followup_cmd = sub.add_parser("hold-followup")
+	hold_followup_cmd.add_argument("--context-file", required=True)
+	hold_followup_cmd.add_argument("--kind", required=True)
+	hold_followup_cmd.add_argument("--ref", required=True)
 	followup_handoff_cmd = sub.add_parser("followup-handoff")
 	followup_handoff_cmd.add_argument("--context-file", required=True)
 	followup_handoff_cmd.add_argument("--fixup", required=True, type=int)
@@ -917,6 +940,8 @@ def run(argv: list[str] | None = None) -> dict:
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
 		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	if args.command == "hold-followup":
+		return {"ops": reset_ops(ctx, f"waited for {hold_description(args.kind, args.ref)}")}
 	if args.command == "followup-handoff":
 		return {"ops": followup_handoff_ops(ctx, args.fixup, args.verdict)}
 	if args.command == "regrant":
