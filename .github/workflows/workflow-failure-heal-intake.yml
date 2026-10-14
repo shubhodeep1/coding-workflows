@@ -11,6 +11,14 @@ name: Workflow Failure Heal Intake
 #   2. `workflow_run: completed` for the release and promotion workflows of
 #      this repository; only `failure` / `timed_out` conclusions proceed.
 #   3. `workflow_dispatch` with a raw payload JSON, for manual re-runs.
+#   4. `schedule` (hourly): the heal-scope recovery scan (#7333,
+#      scripts/workflow_failure_heal_recovery_scan.sh) rebuilds the report of
+#      an open, pipeline-authored heal issue that has no scope marker and runs
+#      the intake on it, so the issue is replaced without a person. The
+#      `recovery-candidates` job lists candidates without the shared lock;
+#      only `recovery-scan`, which runs when there are any, joins the
+#      `workflow-failure-heal-intake` group. HEAL_SCOPE_RECOVERY_ENABLED=false
+#      turns the scan off.
 #
 # scripts/workflow_failure_heal_intake.sh fetches the failed job logs, runs the
 # diagnosis model (prompts/mode-workflow-failure-heal.txt), de-duplicates by
@@ -38,6 +46,8 @@ name: Workflow Failure Heal Intake
       - "Nightly Validation Self-Test"
     types:
       - completed
+  schedule:
+    - cron: "41 * * * *"
   workflow_dispatch:
     inputs:
       payload_json:
@@ -53,9 +63,13 @@ permissions:
   id-token: write
 
 # Serialise every intake so the fingerprint dedup and the open-issue / per-day
-# budgets are evaluated against a consistent issue list.
+# budgets are evaluated against a consistent issue list. A schedule run gets
+# its own group (a pending scan must not replace a pending report); its
+# recovery-scan job joins the shared group at job level, and runs only when
+# recovery-candidates saw no other active intake run, because a newly queued
+# group member replaces the pending one.
 concurrency:
-  group: workflow-failure-heal-intake
+  group: ${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
   cancel-in-progress: false
 
 env:
@@ -65,6 +79,7 @@ env:
 jobs:
   intake:
     if: >-
+      github.event_name != 'schedule' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       (github.event_name != 'workflow_run' ||
        (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
@@ -284,4 +299,178 @@ jobs:
             gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
           else
             echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
+  recovery-candidates:
+    # Heal-scope recovery scan, step 1 (#7333): count the candidates without
+    # holding the shared intake lock.
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.WORKFLOW_HEAL_ENABLED != 'false' &&
+      vars.HEAL_SCOPE_RECOVERY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      count: ${{ steps.list.outputs.count }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: List markerless heal issues
+        id: list
+        run: |
+          set -euo pipefail
+          echo "count=0" >> "$GITHUB_OUTPUT"
+          RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-recovery-list" bash scripts/workflow_failure_heal_recovery_scan.sh --list-only
+
+  recovery-scan:
+    # Heal-scope recovery scan, step 2 (#7333): replace markerless heal issues
+    # through the unchanged intake, serialised with every other intake run.
+    needs: recovery-candidates
+    if: needs.recovery-candidates.outputs.count != '' && needs.recovery-candidates.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    concurrency:
+      group: workflow-failure-heal-intake
+      cancel-in-progress: false
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_HEAL_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_WORKFLOW_HEAL || 'high' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_WORKFLOW_HEAL || 'low' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_MAX_LINEAGE_DEPTH: ${{ vars.WORKFLOW_HEAL_MAX_LINEAGE_DEPTH || '3' }}
+      WORKFLOW_HEAL_MAX_OPEN_ISSUES: ${{ vars.WORKFLOW_HEAL_MAX_OPEN_ISSUES || '10' }}
+      WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
+      WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
+      WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
+      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}
+      HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
+      HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}
+      HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}
+      WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
+      WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
+      WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Record GH_PAT budget at recovery scan start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_recovery_scan
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=recovery-scan remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/workflow-heal-recovery-scan-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+
+      - name: Install Codex CLI
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          source scripts/codex_helpers.sh
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
+
+      # Same engine selection as the intake job: the scan runs the unchanged
+      # intake, whose WORKFLOW_HEAL diagnosis defaults to Claude.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -uo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ] && [ ! -L scripts/ai_engine.sh ]; then
+            # shellcheck source=/dev/null
+            if source scripts/ai_engine.sh; then
+              engine="$(ai_engine_for_role WORKFLOW_HEAL || echo codex)"
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; the heal diagnosis stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Run heal-scope recovery scan
+        env:
+          # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
+        run: |
+          set -euo pipefail
+          bash scripts/workflow_failure_heal_recovery_scan.sh
+
+      - name: Notify on recovery scan failure
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 || exit 0
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          tg_send_msg "Workflow failure heal recovery scan failed."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+
+      - name: Record GH_PAT budget at recovery scan end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_recovery_scan
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake recovery-scan "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown'
           fi

@@ -2713,6 +2713,170 @@ def heal_scope_recovery_check(*, issue: dict[str, Any], comments: Iterable[Any],
 	return {"eligible": True, "reason": "eligible", "scope_status": scope_status, "ignored_untrusted_markers": ignored}
 
 
+# Heal-scope recovery scan (#7333). The hourly scan in
+# workflow-failure-heal-intake.yml rebuilds an autofix_failure report from the
+# pipeline-written, never-edited body of a markerless heal issue and runs the
+# unchanged intake on it (origin recovery_scan, REPORT_AUTH=reconstructed).
+# The rebuilt payload is only a candidate: the intake still binds the PR,
+# verifies run provenance, recomputes the fingerprint and requires it to equal
+# the issue's ``fp`` before recovery may replace the issue. A failed attempt
+# leaves this marker (pipeline login, last line only) so the scan stops after
+# HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS.
+HEAL_SCOPE_RECOVERY_SCAN_RE = re.compile(r"<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason=([a-z][a-z0-9_]{0,59}) run=([0-9]{1,20}) -->")
+# Skip reasons a later tick cannot change (the scan records an attempt for them).
+HEAL_SCOPE_RECOVERY_SCAN_PERMANENT_REASONS = frozenset(
+	{"issue_edited", "kind_unsupported", "markers_missing", "source_mismatch", "head_sha_missing",
+	"runs_missing", "evidence_missing", "host_only_manual_merge", "reason_invalid", "workflow_missing"}
+)
+_RECOVERY_AUTOFIX_TITLE_RE = re.compile(
+	r"^Workflow heal: (?P<name>.+) failed (?P<streak>[1-9][0-9]{0,5})x for "
+	r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<number>[1-9][0-9]{0,9}) \((?P<reason>[^()\s]{1,80})\)$"
+)
+_RECOVERY_AUTOFIX_KIND_LINE = "- **Consecutive failed review runs on this PR:** "
+_RECOVERY_HEAD_SHA_RE = re.compile(r"^- \*\*Head SHA:\*\* `([0-9a-f]{40})`$", re.MULTILINE)
+_RECOVERY_WORKFLOW_RE = re.compile(r"^- \*\*Failed workflow:\*\* `([^`\n]{1,200})` \(conclusion: `", re.MULTILINE)
+_RECOVERY_WRAPPER_RE = re.compile(r"^- \*\*Consumer wrapper pin \(coding-workflows release SHA\):\*\* `([0-9a-f]{40})`$", re.MULTILINE)
+_RECOVERY_BASE_RE = re.compile(r"^- \*\*Pull request base branch:\*\* `([^`\n]{1,200})`$", re.MULTILINE)
+_RECOVERY_EVIDENCE_START = "<details><summary>Failure evidence from the reporting run"
+
+
+def render_heal_scope_recovery_scan_marker(reason: Any, run_id: Any) -> str:
+	token = str(reason or "")
+	run = str(run_id or "")
+	if not re.fullmatch(r"[a-z][a-z0-9_]{0,59}", token) or not re.fullmatch(r"[0-9]{1,20}", run):
+		raise ValueError("invalid recovery scan marker fields")
+	return f"<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason={token} run={run} -->"
+
+
+def count_heal_scope_recovery_scan_attempts(comments: Iterable[Any], pipeline_login: str) -> int:
+	"""Count failed scan attempts: last-line markers posted by ``pipeline_login`` only."""
+	login = pipeline_login.strip().casefold() if isinstance(pipeline_login, str) else ""
+	if not login:
+		return 0
+	count = 0
+	for comment in comments if isinstance(comments, (list, tuple)) else []:
+		body = comment.get("body") if isinstance(comment, dict) else None
+		if not isinstance(body, str) or _comment_author_login(comment).casefold() != login:
+			continue
+		if HEAL_SCOPE_RECOVERY_SCAN_RE.fullmatch(body.rstrip().rsplit("\n", 1)[-1].strip()):
+			count += 1
+	return count
+
+
+def _recovery_evidence(body: str) -> str | None:
+	"""The evidence block of a pipeline-composed autofix heal issue, or None.
+
+	compose_issue_body writes it before the first ``---`` separator and turns
+	every triple backtick inside it into "` ` `", so the first closing fence
+	after the opening one ends it.
+	"""
+	start = body.find(_RECOVERY_EVIDENCE_START)
+	separator = body.find("\n---\n")
+	if start < 0 or (0 <= separator < start):
+		return None
+	opening = body.find("</summary>\n\n```\n", start)
+	if opening < 0:
+		return None
+	opening += len("</summary>\n\n```\n")
+	closing = body.find("\n```\n\n</details>", opening)
+	if closing < 0:
+		return None
+	return body[opening:closing]
+
+
+def reconstruct_recovery_payload(
+	*,
+	issue: dict[str, Any],
+	heal_comments: Iterable[Any],
+	pull: Any,
+	pull_comments: Iterable[Any],
+	pipeline_login: str,
+	self_repo: str,
+) -> dict[str, Any]:
+	"""Rebuild the autofix_failure report a markerless heal issue was filed from.
+
+	Returns ``{"status": "ok", "payload", "expected_fp", "expected_issue",
+	"expected_repo"}`` or ``{"status": "skip", "reason": <token>}``. Every
+	input is re-checked: the issue must pass heal_scope_recovery_check, be
+	unedited (``last_edited_at`` null) and carry the composed markers, title
+	and context lines. The payload is a candidate only; the intake re-verifies
+	it (binding, provenance, fingerprint equality).
+	"""
+	issue = issue if isinstance(issue, dict) else {}
+	comments = list(heal_comments) if isinstance(heal_comments, (list, tuple)) else []
+	check = heal_scope_recovery_check(issue=issue, comments=comments, pipeline_login=pipeline_login)
+	if not check.get("eligible"):
+		return {"status": "skip", "reason": str(check.get("reason") or "not_eligible")}
+	if issue.get("last_edited_at") not in (None, ""):
+		return {"status": "skip", "reason": "issue_edited"}
+	body = sanitize_text(issue.get("body"))
+	number = _positive_int(issue.get("number"))
+	if number is None or not is_valid_repo_slug(self_repo):
+		return {"status": "skip", "reason": "issue_invalid"}
+	markers = parse_heal_markers(body)
+	fp = markers.get("fp", "")
+	source = re.fullmatch(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)", markers.get("source", ""))
+	if not _FP_HEX_RE.match(fp) or source is None:
+		return {"status": "skip", "reason": "markers_missing"}
+	title = single_line(issue.get("title"), 400)
+	title_match = _RECOVERY_AUTOFIX_TITLE_RE.fullmatch(title)
+	if title_match is None or _RECOVERY_AUTOFIX_KIND_LINE not in body:
+		return {"status": "skip", "reason": "kind_unsupported"}
+	source_repo, source_number = source.group(1), int(source.group(2))
+	if title_match.group("repo") != source_repo or int(title_match.group("number")) != source_number or not is_valid_repo_slug(source_repo):
+		return {"status": "skip", "reason": "source_mismatch"}
+	failure_reason = title_match.group("reason")
+	if failure_reason == HOST_ONLY_CONFLICT_FAILURE_REASON:
+		return {"status": "skip", "reason": "host_only_manual_merge"}
+	if not _FAILURE_REASON_RE.match(failure_reason):
+		return {"status": "skip", "reason": "reason_invalid"}
+	head = _RECOVERY_HEAD_SHA_RE.search(body)
+	if head is None:
+		return {"status": "skip", "reason": "head_sha_missing"}
+	head_sha = head.group(1)
+	run_lines = [line for line in body.splitlines() if line.startswith("- **Failed run:** ")]
+	runs = extract_run_refs(run_lines, repo=source_repo)
+	if not runs:
+		return {"status": "skip", "reason": "runs_missing"}
+	evidence = _recovery_evidence(body)
+	if evidence is None and failure_reason != IDENTICAL_FAILURE_CAP_REASON:
+		return {"status": "skip", "reason": "evidence_missing"}
+	workflow = _RECOVERY_WORKFLOW_RE.search(body)
+	workflow_name = workflow.group(1) if workflow else title_match.group("name")
+	if not workflow_name.strip():
+		return {"status": "skip", "reason": "workflow_missing"}
+	if not isinstance(pull, dict) or pull.get("number") != source_number or not isinstance(pull.get("head"), dict):
+		return {"status": "skip", "reason": "pull_unavailable"}
+	pull_copy = json.loads(json.dumps(pull))
+	pull_copy["head"]["sha"] = head_sha
+	pr_comments = [comment for comment in pull_comments if isinstance(comment, dict)] if isinstance(pull_comments, (list, tuple)) else []
+	trusted_markers = parse_failure_markers(pr_comments, head_sha=head_sha, author_login=pipeline_login)
+	failure_fingerprint = trusted_markers[-1]["fp"] if trusted_markers else None
+	repeated = None
+	if failure_reason == IDENTICAL_FAILURE_CAP_REASON:
+		counted = count_identical_failures(pr_comments, head_sha=head_sha, author_login=pipeline_login)
+		repeated = counted.get("reason") or None
+	wrapper = _RECOVERY_WRAPPER_RE.search(body)
+	base = _RECOVERY_BASE_RE.search(body)
+	payload = build_autofix_failure_payload(
+		repo=source_repo,
+		pr=pull_copy,
+		comments=pr_comments,
+		workflow_name=workflow_name,
+		failure_reason=failure_reason,
+		failure_evidence=evidence or "",
+		failure_streak=int(title_match.group("streak")),
+		run_id=runs[0]["run_id"],
+		run_url=runs[0]["url"],
+		wrapper_sha=wrapper.group(1) if wrapper else None,
+		reporter_run_url=None,
+		failure_fingerprint=failure_fingerprint,
+		base_branch=base.group(1) if base else None,
+		failure_marker_author=pipeline_login,
+		repeated_failure_reason=repeated,
+	)
+	return {"status": "ok", "payload": payload, "expected_fp": fp, "expected_issue": number, "expected_repo": self_repo}
+
 def carry_heal_scope(*, child_body: str, parent_verification: dict[str, Any]) -> str:
 	clean = strip_heal_scope_markers(child_body).rstrip()
 	return clean + ("\n\n" + parent_verification["marker"] if parent_verification.get("status") == "verified" else "") + "\n"
@@ -4760,9 +4924,23 @@ def _cmd_heal_scope_recovery(args: argparse.Namespace) -> int:
 	if args.operation == "marker":
 		sys.stdout.write(render_heal_scope_recovery_marker(args.replaced_by, args.repo) + "\n")
 		return 0
+	if args.operation == "scan-marker":
+		sys.stdout.write(render_heal_scope_recovery_scan_marker(args.reason, args.run_id) + "\n")
+		return 0
 	issue = _load_json_file(args.issue_json)
 	comments = _load_json_file(args.comments_json) if args.comments_json else []
-	_write_json(heal_scope_recovery_check(issue=issue if isinstance(issue, dict) else {}, comments=comments if isinstance(comments, list) else [], pipeline_login=args.pipeline_login))
+	issue = issue if isinstance(issue, dict) else {}
+	comments = comments if isinstance(comments, list) else []
+	if args.operation == "reconstruct":
+		pull = _load_json_file(args.pull_json) if args.pull_json else None
+		pull_comments = _load_json_file(args.pull_comments_json) if args.pull_comments_json else []
+		_write_json(reconstruct_recovery_payload(issue=issue, heal_comments=comments, pull=pull,
+			pull_comments=pull_comments if isinstance(pull_comments, list) else [],
+			pipeline_login=args.pipeline_login, self_repo=args.self_repo))
+		return 0
+	result = heal_scope_recovery_check(issue=issue, comments=comments, pipeline_login=args.pipeline_login)
+	result["scan_attempts"] = count_heal_scope_recovery_scan_attempts(comments, args.pipeline_login)
+	_write_json(result)
 	return 0
 
 
@@ -5256,13 +5434,18 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--pipeline-login", default="")
 	p.set_defaults(func=_cmd_heal_scope)
 
-	p = sub.add_parser("heal-scope-recovery", help="Decide whether a markerless heal issue may be replaced (check) or print the recovery marker (marker)")
-	p.add_argument("operation", choices=("check", "marker"))
+	p = sub.add_parser("heal-scope-recovery", help="Decide whether a markerless heal issue may be replaced (check), print the recovery marker (marker) or scan marker (scan-marker), or rebuild its report for the recovery scan (reconstruct)")
+	p.add_argument("operation", choices=("check", "marker", "reconstruct", "scan-marker"))
 	p.add_argument("--issue-json", default="")
 	p.add_argument("--comments-json", default="")
 	p.add_argument("--pipeline-login", default="")
 	p.add_argument("--replaced-by", default="")
 	p.add_argument("--repo", default="")
+	p.add_argument("--pull-json", default="")
+	p.add_argument("--pull-comments-json", default="")
+	p.add_argument("--self-repo", default="")
+	p.add_argument("--reason", default="")
+	p.add_argument("--run-id", default="")
 	p.set_defaults(func=_cmd_heal_scope_recovery)
 
 	p = sub.add_parser("verify-phase-provenance", help="Verify a phase failure report against GitHub-read run, job and comment evidence")

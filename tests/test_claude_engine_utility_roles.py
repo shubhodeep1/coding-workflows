@@ -360,6 +360,8 @@ def _job_steps(workflow: str, job: str) -> list[dict]:
 	"workflow, job, action_prefix",
 	[
 		("workflow-failure-heal-intake.yml", "intake", "./.github/actions/"),
+		# The hourly heal-scope recovery scan runs the same intake (#7333).
+		("workflow-failure-heal-intake.yml", "recovery-scan", "./.github/actions/"),
 		("check_failure_triage.yml", "triage", "./.codex-workflow-src/.github/actions/"),
 		("issue_pr_status.yml", "activation-verify", "./.codex-workflow-src/.github/actions/"),
 	],

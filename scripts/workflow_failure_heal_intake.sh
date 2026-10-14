@@ -106,8 +106,16 @@
 #                                         are accepted after the binding checks). A report that
 #                                         carries an identity is always verified (issue #6559).
 #   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600)
-#   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch
-#                                         (default GITHUB_EVENT_NAME, else repository_dispatch)
+#   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch |
+#                                         recovery_scan (default GITHUB_EVENT_NAME, else
+#                                         repository_dispatch). recovery_scan is set only by
+#                                         scripts/workflow_failure_heal_recovery_scan.sh and is
+#                                         accepted only on a `schedule` event (#7333)
+#   WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_FP     recovery_scan only: the markerless heal issue's
+#                                         `fp` marker; the recomputed fingerprint must equal it
+#                                         (default empty, which rejects a recovery_scan report)
+#   WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE  recovery_scan only: that heal issue's number in
+#                                         this repository (default empty, which rejects)
 #   WORKFLOW_HEAL_REPORT_IDENTITY_FILE    0600 file holding the report's OIDC token
 #                                         (default ${RUNTIME_DIR}/report_identity.jwt)
 #   WORKFLOW_HEAL_REPORT_IDENTITY_STATE   present | absent | malformed (default absent),
@@ -226,7 +234,7 @@ case "${REQUIRE_REPORT_AUTH,,}" in
 esac
 REPORT_ORIGIN="${WORKFLOW_HEAL_REPORT_ORIGIN:-${GITHUB_EVENT_NAME:-repository_dispatch}}"
 case "${REPORT_ORIGIN}" in
-	repository_dispatch|workflow_run|workflow_dispatch) ;;
+	repository_dispatch|workflow_run|workflow_dispatch|recovery_scan) ;;
 	# Unknown origins take the strictest path.
 	*) REPORT_ORIGIN="repository_dispatch" ;;
 esac
@@ -303,7 +311,25 @@ _report_auth_reject()
 }
 
 REPORT_AUTH=""
+# recovery_scan (#7333): the hourly scan rebuilt this autofix_failure report
+# from a pipeline-authored, never-edited markerless heal issue. It is not a new
+# failure report: REPORT_AUTH=reconstructed is accepted only by
+# _heal_scope_recovery_evaluate, the fingerprint and the duplicate decision
+# must equal the scan's expected values, and nothing is posted on the source.
+# The two expected values come only from the scan's environment, never from
+# the payload; a schedule event cannot be produced by a dispatch.
+RECOVERY_SCAN_EXPECTED_FP="${WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_FP:-}"
+RECOVERY_SCAN_EXPECTED_ISSUE="${WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE:-}"
 case "${REPORT_ORIGIN}" in
+	recovery_scan)
+		if [ "${GITHUB_EVENT_NAME:-}" != "schedule" ] || [ "${SCOPE_RECOVERY_ENABLED}" != "true" ] \
+			|| ! [[ "${RECOVERY_SCAN_EXPECTED_FP}" =~ ^[0-9a-f]{64}$ ]] \
+			|| ! [[ "${RECOVERY_SCAN_EXPECTED_ISSUE}" =~ ^[1-9][0-9]*$ ]] \
+			|| [ "${SOURCE_KIND}" != "autofix_failure" ]; then
+			_report_auth_reject "recovery_scan_invalid"
+		fi
+		REPORT_AUTH="reconstructed"
+		;;
 	workflow_run)
 		REPORT_AUTH="event"
 		;;
@@ -450,6 +476,10 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 		# A verified reporter built the comments excerpt from GitHub; an
 		# unauthenticated one may have made it up, so binding clears it.
 		BIND_ARGS+=(--trusted-excerpts)
+	elif [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		# The recovery scan built the excerpts from GitHub reads; no reporter
+		# run is bound, so every claimed run must be a completed failure.
+		BIND_ARGS+=(--trusted-excerpts)
 	fi
 	BIND_RESULT_FILE="${RUNTIME_DIR}/bind_result.json"
 	if ! python3 "${HEAL_PY}" bind-report "${BIND_ARGS[@]}" > "${BIND_RESULT_FILE}" 2>/dev/null; then
@@ -560,61 +590,103 @@ fi
 # PR read by claim binding lacks ai:needs-human (one label add).
 # Fail open: a helper error falls through to the existing heal path (or, for
 # a deferred host-only report, to the #6745 skip right after this block).
-if [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLED,,}" != "false" ] \
+# _non_retryable_route_apply: the PR-side handling of a routed report (the
+# diagnosis comment, ai:needs-human, the WARNING; pr/head/reason dedup).
+# Returns 0 when the report was handled (the caller stops), 1 when it does not
+# route. Reads the helper result in NON_RETRYABLE_FILE.
+NON_RETRYABLE_RECOVERY_DEFERRED=false
+NON_RETRYABLE_RECOVERY_DONE=false
+_non_retryable_route_apply()
+{
+	[ -s "${NON_RETRYABLE_FILE:-}" ] || return 1
+	[ "$(jq -r '.route' "${NON_RETRYABLE_FILE}" 2>/dev/null || echo false)" = "true" ] || return 1
+	NON_RETRYABLE_REASON="$(jq -r '.reason' "${NON_RETRYABLE_FILE}")"
+	NON_RETRYABLE_SUFFIX="$(jq -r '.suffix' "${NON_RETRYABLE_FILE}")"
+	NON_RETRYABLE_PATH_COUNT="$(jq -r '.paths | length' "${NON_RETRYABLE_FILE}")"
+	NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
+	if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
+		NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
+	elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
+		NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
+	else
+		NON_RETRYABLE_ACTION="the conflicted path(s) need a manual merge"
+	fi
+	if [ "$(jq -r '.already_diagnosed' "${NON_RETRYABLE_FILE}")" = "true" ]; then
+		# The diagnosis is already posted. Re-add ai:needs-human only when
+		# the PR read by claim binding shows it missing (a failed label
+		# write earlier); otherwise this costs no API call.
+		NON_RETRYABLE_DUP_LABEL="present"
+		if [ -f "${BIND_PULL_FILE:-}" ] && jq -e '.labels | type == "array"' "${BIND_PULL_FILE}" >/dev/null 2>&1 \
+			&& ! jq -e '[.labels[]? | if type == "object" then .name else . end] | index("ai:needs-human") != null' "${BIND_PULL_FILE}" >/dev/null 2>&1; then
+			ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
+			if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+				NON_RETRYABLE_DUP_LABEL="reapplied"
+			else
+				NON_RETRYABLE_DUP_LABEL="failed"
+			fi
+		fi
+		log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=duplicate source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} label=${NON_RETRYABLE_DUP_LABEL}"
+		return 0
+	fi
+	NON_RETRYABLE_COMMENT_FILE="${RUNTIME_DIR}/non_retryable_comment.md"
+	jq -r '.comment' "${NON_RETRYABLE_FILE}" > "${NON_RETRYABLE_COMMENT_FILE}"
+	# The comment goes first: its marker is what stops the label event
+	# below from producing another heal report.
+	if ! gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${NON_RETRYABLE_COMMENT_FILE}" >/dev/null 2>&1; then
+		log "error non_retryable_comment_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} reason=${NON_RETRYABLE_REASON}"
+		tg_send_msg "Workflow failure heal could not post the non-retryable diagnosis (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}; no heal issue was opened and the next report retries."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		return 0
+	fi
+	ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
+	NON_RETRYABLE_LABEL_STATUS="ai:needs-human applied"
+	NON_RETRYABLE_LABEL_TOKEN="applied"
+	if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+		log "warn non_retryable_label_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER}"
+		NON_RETRYABLE_LABEL_STATUS="adding ai:needs-human FAILED (the next report for this head retries it)"
+		NON_RETRYABLE_LABEL_TOKEN="failed"
+	fi
+	tg_send_msg "Workflow failure heal: non-retryable review/autofix failure (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}: ${NON_RETRYABLE_ACTION}. Diagnosis posted, ${NON_RETRYABLE_LABEL_STATUS}; no heal issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=diagnosed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} paths=${NON_RETRYABLE_PATH_COUNT} label=${NON_RETRYABLE_LABEL_TOKEN}"
+	return 0
+}
+
+# Q3 (#7333): a verified sandbox report deferred for heal-scope recovery gets
+# the unchanged PR-side handling after recovery, on every exit path (the scope
+# guard's refusal included); the exit code is kept.
+_non_retryable_recovery_deferred_exit()
+{
+	local deferred_rc=$?
+	trap - EXIT
+	if [ "${NON_RETRYABLE_RECOVERY_DONE}" != "true" ]; then
+		NON_RETRYABLE_RECOVERY_DONE=true
+		set +e
+		_non_retryable_route_apply || true
+	fi
+	exit "${deferred_rc}"
+}
+
+if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+	# A recovery-scan replay is not a new failure report: it must not re-add
+	# ai:needs-human to a PR a person has cleared (#7333).
+	log "non_retryable outcome=skip reason=reconstructed source=${SOURCE_LABEL}"
+elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${NON_RETRYABLE_ROUTING_ENABLED,,}" != "false" ] \
 	&& [ -n "${PROVENANCE_COMMENTS:-}" ] && [ -n "${PROVENANCE_LOGIN:-}" ]; then
 	NON_RETRYABLE_FILE="${RUNTIME_DIR}/non_retryable_route.json"
 	NON_RETRYABLE_ERR_FILE="${RUNTIME_DIR}/non_retryable_route.err"
 	if python3 "${HEAL_PY}" non-retryable-route --payload-json "${PAYLOAD_FILE}" --comments-json "${PROVENANCE_COMMENTS}" \
 		--trusted-login "${PROVENANCE_LOGIN}" --intake-run-url "${RUN_URL}" > "${NON_RETRYABLE_FILE}" 2> "${NON_RETRYABLE_ERR_FILE}" \
 		&& jq -e 'type == "object" and (.route | type == "boolean") and (.already_diagnosed | type == "boolean") and (.comment | type == "string")' "${NON_RETRYABLE_FILE}" >/dev/null 2>&1; then
-		if [ "$(jq -r '.route' "${NON_RETRYABLE_FILE}")" = "true" ]; then
-			NON_RETRYABLE_REASON="$(jq -r '.reason' "${NON_RETRYABLE_FILE}")"
-			NON_RETRYABLE_SUFFIX="$(jq -r '.suffix' "${NON_RETRYABLE_FILE}")"
-			NON_RETRYABLE_PATH_COUNT="$(jq -r '.paths | length' "${NON_RETRYABLE_FILE}")"
-			NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
-			if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
-				NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
-			elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
-				NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
-			else
-				NON_RETRYABLE_ACTION="the conflicted path(s) need a manual merge"
-			fi
-			if [ "$(jq -r '.already_diagnosed' "${NON_RETRYABLE_FILE}")" = "true" ]; then
-				# The diagnosis is already posted. Re-add ai:needs-human only when
-				# the PR read by claim binding shows it missing (a failed label
-				# write earlier); otherwise this costs no API call.
-				NON_RETRYABLE_DUP_LABEL="present"
-				if [ -f "${BIND_PULL_FILE:-}" ] && jq -e '.labels | type == "array"' "${BIND_PULL_FILE}" >/dev/null 2>&1 \
-					&& ! jq -e '[.labels[]? | if type == "object" then .name else . end] | index("ai:needs-human") != null' "${BIND_PULL_FILE}" >/dev/null 2>&1; then
-					ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
-					if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
-						NON_RETRYABLE_DUP_LABEL="reapplied"
-					else
-						NON_RETRYABLE_DUP_LABEL="failed"
-					fi
-				fi
-				log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=duplicate source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} label=${NON_RETRYABLE_DUP_LABEL}"
-				exit 0
-			fi
-			NON_RETRYABLE_COMMENT_FILE="${RUNTIME_DIR}/non_retryable_comment.md"
-			jq -r '.comment' "${NON_RETRYABLE_FILE}" > "${NON_RETRYABLE_COMMENT_FILE}"
-			# The comment goes first: its marker is what stops the label event
-			# below from producing another heal report.
-			if ! gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${NON_RETRYABLE_COMMENT_FILE}" >/dev/null 2>&1; then
-				log "error non_retryable_comment_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} reason=${NON_RETRYABLE_REASON}"
-				tg_send_msg "Workflow failure heal could not post the non-retryable diagnosis (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}; no heal issue was opened and the next report retries."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
-				exit 0
-			fi
-			ensure_label_exists "ai:needs-human" "${SOURCE_REPO}" || true
-			NON_RETRYABLE_LABEL_STATUS="ai:needs-human applied"
-			NON_RETRYABLE_LABEL_TOKEN="applied"
-			if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "ai:needs-human" >/dev/null 2>&1; then
-				log "warn non_retryable_label_failed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER}"
-				NON_RETRYABLE_LABEL_STATUS="adding ai:needs-human FAILED (the next report for this head retries it)"
-				NON_RETRYABLE_LABEL_TOKEN="failed"
-			fi
-			tg_send_msg "Workflow failure heal: non-retryable review/autofix failure (${NON_RETRYABLE_REASON}) on ${SOURCE_LABEL}: ${NON_RETRYABLE_ACTION}. Diagnosis posted, ${NON_RETRYABLE_LABEL_STATUS}; no heal issue opened."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
-			log "skip reason=non_retryable_${NON_RETRYABLE_SUFFIX} outcome=diagnosed source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA} paths=${NON_RETRYABLE_PATH_COUNT} label=${NON_RETRYABLE_LABEL_TOKEN}"
+		NON_RETRYABLE_ROUTE_REASON="$(jq -r 'if .route == true then .reason else "" end' "${NON_RETRYABLE_FILE}")"
+		# Gap 2 (#7333): a verified report with one of the two sandbox reasons
+		# first gets the heal-scope recovery check (a matching markerless heal
+		# issue is replaced); the host-only stop keeps its routing.
+		if [ "${REPORT_AUTH}" = "verified" ] && [ "${SCOPE_RECOVERY_ENABLED}" = "true" ] \
+			&& { [ "${NON_RETRYABLE_ROUTE_REASON}" = "conflict_resolver_sandbox_path_unsupported" ] \
+				|| [ "${NON_RETRYABLE_ROUTE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; }; then
+			NON_RETRYABLE_RECOVERY_DEFERRED=true
+			trap '_non_retryable_recovery_deferred_exit' EXIT
+			log "non_retryable outcome=deferred reason=heal_scope_recovery route_reason=${NON_RETRYABLE_ROUTE_REASON} source=${SOURCE_LABEL} pr=${ISSUE_NUMBER} head=${HEAD_SHA}"
+		elif _non_retryable_route_apply; then
 			exit 0
 		fi
 	else
@@ -887,8 +959,22 @@ else
 fi
 FP="$(python3 "${HEAL_PY}" fingerprint --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" --signature "${SIGNATURE}")"
 log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_STEP:-none} runs=${SUMMARY_COUNT}"
+if [ "${REPORT_AUTH}" = "reconstructed" ] && [ "${FP}" != "${RECOVERY_SCAN_EXPECTED_FP}" ]; then
+	log "heal_scope_recovery outcome=skip reason=fingerprint_mismatch issue=${RECOVERY_SCAN_EXPECTED_ISSUE} fp=${FP} expected_fp=${RECOVERY_SCAN_EXPECTED_FP}"
+	exit 0
+fi
 
 # --- Dedup / lineage / budget ----------------------------------------------
+
+# A deferred non-retryable report (#7333) whose heal-issue list cannot be read
+# skips recovery (the hourly recovery scan retries it) and ends with today's
+# PR-side outcome through the EXIT trap, instead of a red run.
+_heal_issue_list_failed_deferred_exit()
+{
+	[ "${NON_RETRYABLE_RECOVERY_DEFERRED}" = "true" ] || return 0
+	log "heal_scope_recovery outcome=skip reason=heal_issue_list_failed source=${SOURCE_LABEL} fp=${FP}"
+	exit 0
+}
 
 SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
@@ -896,6 +982,7 @@ ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
 if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
 	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
+	_heal_issue_list_failed_deferred_exit
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 	exit 1
@@ -907,6 +994,7 @@ if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
 		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
+		_heal_issue_list_failed_deferred_exit
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 		exit 1
@@ -955,6 +1043,12 @@ ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
 [ -n "${ROOT}" ] || ROOT="${FP}"
 LINEAGE_IGNORED_REASON="$(jq -r '.lineage_ignored_reason // "none"' "${DECISION_FILE}")"
 log "lineage source=$(jq -r '.lineage_source // "none"' "${DECISION_FILE}") reason=${LINEAGE_IGNORED_REASON} source_gen=${SOURCE_GEN:-none} gen=${GEN}"
+if [ "${REPORT_AUTH}" = "reconstructed" ] && { [ "${ACTION}" != "duplicate" ] \
+	|| [ "$(jq -r '.existing_issue // ""' "${DECISION_FILE}")" != "${RECOVERY_SCAN_EXPECTED_ISSUE}" ] \
+	|| [ "$(jq -r --arg self "${SELF_REPO}" '(.existing_repo // "") | if . == "" then $self else . end' "${DECISION_FILE}")" != "${SELF_REPO}" ]; }; then
+	log "heal_scope_recovery outcome=skip reason=decision_mismatch issue=${RECOVERY_SCAN_EXPECTED_ISSUE} action=${ACTION} fp=${FP}"
+	exit 0
+fi
 case "${LINEAGE_IGNORED_REASON}" in
 	untrusted_author|not_heal_issue|gen_mismatch|root_mismatch)
 		tg_send_msg "Workflow failure heal ignored an unverified lineage marker from ${SOURCE_LABEL} (${LINEAGE_IGNORED_REASON}). Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
@@ -1000,7 +1094,7 @@ _heal_scope_recovery_evaluate()
 	recovery_repo="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
 	[ -n "${recovery_repo}" ] || recovery_repo="${SELF_REPO}"
 	recovery_url="$(jq -r '.existing_url // ""' "${DECISION_FILE}")"
-	if [ "${REPORT_AUTH}" != "verified" ]; then
+	if [ "${REPORT_AUTH}" != "verified" ] && [ "${REPORT_AUTH}" != "reconstructed" ]; then
 		log "heal_scope_recovery outcome=skip reason=report_unauthenticated report_auth=${REPORT_AUTH:-none} issue=${recovery_issue} repo=${recovery_repo} fp=${FP}"
 		return 0
 	fi
@@ -1120,6 +1214,19 @@ _heal_scope_recovery_evaluate()
 }
 
 _heal_scope_recovery_evaluate
+
+if [ "${NON_RETRYABLE_RECOVERY_DEFERRED}" = "true" ] && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" != "true" ]; then
+	# No eligible markerless heal issue: the EXIT trap applies today's PR-side
+	# outcome; no occurrence, escalation or heal issue (#7333).
+	log "heal_scope_recovery outcome=skip reason=not_eligible_non_retryable source=${SOURCE_LABEL} action=${ACTION} fp=${FP}"
+	exit 0
+fi
+if [ "${REPORT_AUTH}" = "reconstructed" ] && { [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" != "true" ] \
+	|| [ "${HEAL_SCOPE_RECOVERY_ISSUE}" != "${RECOVERY_SCAN_EXPECTED_ISSUE}" ] || [ "${HEAL_SCOPE_RECOVERY_REPO}" != "${SELF_REPO}" ]; }; then
+	# The scan records no occurrence: only a recovery may follow a replay.
+	log "heal_scope_recovery outcome=skip reason=not_recovered issue=${RECOVERY_SCAN_EXPECTED_ISSUE} fp=${FP}"
+	exit 0
+fi
 
 case "${ACTION}" in
 	duplicate)
@@ -1659,6 +1766,11 @@ _comment_on_source()
 {
 	local body_file="$1"
 	[ -n "${ISSUE_NUMBER}" ] || return 0
+	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		# A recovery-scan replay never posts on the source PR (#7333).
+		log "source_comment=skipped_reconstructed source=${SOURCE_LABEL}"
+		return 0
+	fi
 	gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${body_file}" >/dev/null 2>&1 \
 		|| log "warn source_comment_failed source=${SOURCE_LABEL}"
 }
@@ -2086,7 +2198,10 @@ esac
 if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ] && [ -z "${NEW_ISSUE_URL}" ]; then
 	RECOVERY_OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence_recovery.md"
 	RECOVERY_OCCURRENCE_STATE="failed"
-	if python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
+	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		# A scan replay is not a new occurrence (#7333).
+		RECOVERY_OCCURRENCE_STATE="skipped_reconstructed"
+	elif python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
 		&& gh_retry gh api "repos/${HEAL_SCOPE_RECOVERY_REPO}/issues/${HEAL_SCOPE_RECOVERY_ISSUE}/comments" -F body=@"${RECOVERY_OCCURRENCE_FILE}" >/dev/null 2>&1; then
 		RECOVERY_OCCURRENCE_STATE="posted"
 	fi
