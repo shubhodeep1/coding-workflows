@@ -463,6 +463,18 @@ def test_clarify_memory_events_skip_untrusted_comments() -> None:
 	for name in ("Record clarification run start", "Record clarification run completed", "Record clarification run failed"):
 		assert gate in str(steps[name].get("if", "")), name
 	assert 'echo "comment_route_trusted=${COMMENT_ROUTE_TRUSTED}" >> "$GITHUB_OUTPUT"' in _clarify_route_step()["run"]
+	# A failure before the route step leaves the output empty; an untrusted
+	# association must still record nothing.
+	failed_if = " ".join(str(steps["Record clarification run failed"]["if"]).split())
+	assert "steps.clarify_route.outputs.comment_route_trusted == 'true' || github.event_name != 'issue_comment' || contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)" in failed_if
+
+
+def test_clarify_release_replay_format_matches_the_poller() -> None:
+	# The route step recognises the poller's replay body exactly; pin both
+	# sides so a format change in either breaks this test.
+	poller = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert '-f body="/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=${source_id} -->"' in poller
+	assert '_rel_replay_prefix="/reclarify [auto-requeued-by-poller]"$\'\\n\'"<!-- ai:reclarify-replay:v1 source="' in _release_block()
 
 
 def test_clarify_route_untrusted_comment_writes_nothing() -> None:

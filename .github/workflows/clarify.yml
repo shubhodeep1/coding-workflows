@@ -1772,7 +1772,9 @@ jobs:
             --metadata-json "{\"outcome\": \"${OUTCOME}\"}"
 
       - name: Record clarification run failed
-        if: (failure() || cancelled()) && steps.clarify_route.outputs.comment_route_trusted != 'false'
+        # The route output is empty when the job fails before "Decide clarify
+        # route" finishes; then fall back to the comment's association (#7328).
+        if: (failure() || cancelled()) && steps.clarify_route.outputs.comment_route_trusted != 'false' && (steps.clarify_route.outputs.comment_route_trusted == 'true' || github.event_name != 'issue_comment' || contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
