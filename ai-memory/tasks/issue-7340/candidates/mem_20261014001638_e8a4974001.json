@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for #7340: make the sweep test's step extractor robust to new sibling steps\n\nPlanning ref: `main` @ `cb8487b2dd2fc163ffdb52a993373e87152790f4`. The issue has no integration-branch metadata, and the mismatch line reads `unknown`, not `true`.\n\nScope-mode: Hold Scope\nReuse-audit: extends extract_step_script\nScope-mode justification: The failure is in one test helper. It ends the enumerate step's `run: |` body at the next step's name, `- name: Record GH_PAT budget at sweep end`. PR #7335 (`ai/issue-7291`) adds a backfill step and its comment just before that name, so the extractor reads the next step's comment and fails. The fix ends the extraction where the YAML block scalar ends: the first non-blank line indented less than ten spaces. That is how YAML itself bounds the block, so it works whatever step follows. This is the complete fix (a few lines in one function), so no smaller shortcut exists. The workflow and the test assertions stay unchanged, per \u00a76 (correctness without changing behaviour).\n\n## Files likely to change\n- `tests/test_review_autofix_sweep_merge_queued_skip.py`\n\n## Functions or modules to implement\n- `extract_step_script()` in `tests/test_review_autofix_sweep_merge_queued_skip.py` (lines 35-52 on main):\n  1. Keep the start lookup: find `STEP_MARKER` and assert it was found.\n  2. Search for `        run: |\\n` from `start`, without the fixed `NEXT_STEP_MARKER` end bound. Assert it is found. Also assert that no other `- name:` line appears between the step marker and the `run:` line, so the search cannot land on a later step's `run:`.\n  3. Walk the lines after `run: |`:\n     - A line starting with `RUN_INDENT` (10 spaces) has those spaces removed and is kept.\n     - A blank or whitespace-only line becomes `\"\"`.\n     - The first non-blank line indented less than 10 spaces ends the walk with `break`. This is the end of the block scalar, for example the next step's `      # ...` comment or `      - name:` line.\n  4. Strip trailing empty entries. Assert the body is non-empty and contains `gh workflow run`, the dispatch the tests depend on, so a broken bound cannot silently return an empty or truncated script.\n  5. Return `\"\\n\".join(lines) + \"\\n\"` as now.\n- `NEXT_STEP_MARKER` (line 31): delete it, since nothing will reference it. It is a test-local constant, not a public identifier, so \u00a710 does not apply. The docstring wording stays as it is.\n\n## Data structures affected\n- None. The extracted script is the same bytes on `main`, and the step body ends at the same line on PR #7335's head.\n\n## API or interface changes\n- None. Only a test helper changes. The workflow, scripts and log prefixes are unchanged.\n\n## Decisions\n### D1 \u2014 Bound the run body by block-scalar indentation, not by the next step's name\n- Chosen: stop at the first non-blank line indented less than `RUN_INDENT`.\n- Alternatives considered: change `NEXT_STEP_MARKER` to the new backfill step's name; bound by the next `      - name:` line; parse the workflow with PyYAML.\n- Why: Changing the marker breaks again with the next inserted step, and that name does not exist on `main` yet. Bounding by `- name:` still swallows comments placed above the next step, which is exactly this failure. PyYAML would add a dependency the module does not need. The indentation rule matches YAML's own block-scalar semantics.\n\n### D2 \u2014 Land on the default branch as the routed ref\n- Chosen: plan and implement against `main`, the resolved checkout ref.\n- Alternatives considered: target PR #7335's head branch `ai/issue-7291`.\n- Why: The issue has no `Target branch:` or `Integration branch:` line, and routing is decided by the resolver, not by issue prose. The change is a no-op on `main` today. PR #7335 picks it up when it merges `main`, through the merge-base freshness update or the conflict resolver, and its CI then passes with no change to the PR's own code.\n\n## Security considerations\n- Trust boundaries: none touched. The change is test-only, reads a checked-in workflow file, and runs the extracted script against the existing fake `gh` in a temp directory.\n- Authorization and new surfaces: none.\n- External input: none. The new assertions make the helper fail closed (assert) instead of returning a truncated script.\n- Abuse case: a future edit that ended the extraction early could hide a dropped `ai:merge-queued` skip. The non-empty and `gh workflow run` assertions guard against that.\n\n## Risks and edge cases\n- Conflict between the issue and the current ref: the issue cites `.github/workflows/review_autofix_sweep.yml:543-563` with a backfill step. On `main`, line 543 is `- name: Record GH_PAT budget at sweep end` and there is no backfill step yet (it comes from PR #7335). The fix must work on both layouts.\n- Heredoc or continuation lines inside the `run:` body indented less than 10 spaces would now end the walk instead of failing. Today every non-blank body line is indented at least 10 spaces (the test passes on `main`), so the extracted bytes are unchanged. The `gh workflow run` sanity assertion catches an early stop.\n- Blank lines between steps are dropped by the trailing-blank strip, so the final script is byte-identical to today's output on `main`.\n- PR #7335 stays red until it merges `main`. Alternatively, its own review/autofix can apply the same change on its branch.\n\n## Testing considerations\n- Run `python3 -m pytest tests/test_review_autofix_sweep_merge_queued_skip.py`. The whole module must pass on `main`. CI already runs this file in `.github/workflows/ci.yml` (line ~1327), so no CI wiring is needed.\n- Regression check, done locally and not committed: insert a six-space comment plus a new `- name:` step between the enumerate step and `Record GH_PAT budget at sweep end` in a temp copy of the workflow, point `SWEEP_WF` at it (or monkeypatch it), and confirm that `extract_step_script()` returns the same script and that the tests pass. Optionally add one small test that does this with a temp workflow text through a module-level path parameter. Keep it to the same file, and only if the helper is refactored to accept a text argument with the current file as the default.\n- No changelog fragment: this is a test-only fix with no operator-visible behaviour.\n\nPre-execution self-check: one file, no workflow, script or interface change, safe on both `main` and PR #7335's layout, and no conflicting clarification answers (auto-answered as clear).\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "b901bbcebc2c11e9d4b672fcf1212813fcad32e72387dd2597ea76cce9e9f7b0",
+  "lineage": {
+    "issue_number": 7340,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38488161087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38488161087",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7340"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261014001638_e8a4974001",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7340,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38488161087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7340",
+  "timestamps": {
+    "created_at": "2026-10-14T00:16:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
