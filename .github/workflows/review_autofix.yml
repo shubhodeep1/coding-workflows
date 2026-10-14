@@ -5226,6 +5226,13 @@ jobs:
                 # synchronize run re-validates the PR without a person.
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
+              stale_head)
+                # A push landed during the judge call; the push re-runs review.
+                MSG="$(printf 'PR review blocked — PR head moved during the judge call; judge took no action\nThe new push re-runs review automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              head_unverified)
+                MSG="$(printf 'PR review blocked — judge could not read the live PR head; fix refused\nStall recovery will retry automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               sync_merge_failed)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;
               auto_merge_disabled)
