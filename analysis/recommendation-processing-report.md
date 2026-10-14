@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (118)
+## Processed source docs (119)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -123,6 +123,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-08-27.md`
 - `analysis/workflow-optimization-2026-08-29.md`
 - `analysis/workflow-optimization-2026-09-16.md`
+- `analysis/workflow-optimization-2026-09-18.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1140,3 +1141,31 @@ Processed: 2026-10-12
 - EXPR-001 / EXPR-002 — applied in reduced form: implement-expr-limit (`changelog.d/7165-implement-run-expression-limit.md`); interpolations moved to `env:` and an 18,000-character CI guard added, with no script extraction.
 - DEAD-001 (label-repair evidence engine) — rejected: deliberately reserved, as documented in agents.md.
 - SHELL-001 (unused shell assignments) — rejected: low value; removing assigned identifiers conflicts with naming immutability.
+
+### `analysis/workflow-optimization-2026-09-18.md`
+Processed: 2026-10-14
+- BUG-001 (review-blocked actions not bound to the judged head) — applied: rb-judge-head-binding (`changelog.d/wfopt-2026-09-18-rb-judge-head-binding.md`); `scripts/review_rb_judge.sh` logs `RB_JUDGE_STALE_HEAD` and skips with `judge_skip_reason=stale_head` before any comment, label, status or close.
+- SEC-001 (mutable third-party action tag in the privileged review job) — applied: free-disk-space-pin (`changelog.d/wfopt-2026-09-18-free-disk-space-pin.md`); `jlumbroso/free-disk-space` is pinned to a commit SHA in `review_autofix.yml`. The dependabot sub-part is rejected: out of scope, and it would open update PRs for every action.
+- SEC-002 (PAT interpolated into generated shell source) — applied: push-token-env (`changelog.d/unblock-7357-r1-push-token-env.md`); the push steps in `implement.yml` and `review_autofix.yml` read `GH_TOKEN` from the environment, and `tests/test_workflow_untrusted_input_contract.py` forbids the inline secret form.
+- API-003 (authentication failures consume the retry budget) — applied in part: gh-retry-auth-permanent (`changelog.d/wfopt-2026-09-18-gh-retry-auth-permanent.md`); `gh_retry` / `gh_retry_to_file` stop on HTTP 400 and 401. Generic 403 stays retryable because secondary-limit 403 responses would be misclassified. The source tagged this RISKY_SKIP in its cross-references; only this narrow classification change was taken.
+- Reliability 3 (tolerated `gawk` test failures) — applied: sandbox-gawk (`changelog.d/wfopt-2026-09-18-sandbox-gawk.md`); `gawk` is installed in `scripts/review_sandbox/Dockerfile` and the `codex_isolated_exec.sh` image.
+- DEAD-001 (branch-rebuild threshold outputs never consumed) — applied: dead-values-cleanup (`changelog.d/wfopt-2026-09-18-dead-values-cleanup.md`, `agents.d/7355-dead-values-cleanup.md`); `_attempt_branch_rebuild_after_escalation` logs `BRANCH_REBUILD_THRESHOLD_DECISION`.
+- DEAD-002 (discarded summary / smoke-test values) — applied: dead-values-cleanup; the unused variables were removed.
+- Speed 4 (CI sharding) — already-implemented: #4707 split CI into parallel jobs plus the `orchestrate-poll` matrix.
+- Cost 1 (adaptive second review pass) — already-implemented: `REVIEW_REVIEWER_ITERATION_SCOPING`, pass-2 scope/tier filtering and the lite/standard/full tier resolver.
+- EXPR-001 (implement support-staging expression size) — already-implemented: the "Stage workflow support files" step binds its values through `STAGE_*` step `env:` and its `run:` body has no template interpolation.
+- MERGE-001 (clarify fetches issue comments twice) — already-implemented: clarify reads comments once, paginated, and shares the snapshot with the semantic cache (port P3). The source tagged this RISKY_SKIP; the shipped change defined the page-failure semantics explicitly.
+- Reliability 5 (MCP availability probes) — already-implemented in part: the `SERENA_PROBE` / `SEMBLE_BOOTSTRAP` prefixes exist; the remaining probe counters are rejected as telemetry-only.
+- Speed 1 / Reliability 2 (caller preflight to skip synchronize runs) — rejected: it changes review ownership; dispatch now uses default-branch PR-named runs (#4618 / #4701) with pending-aware sweep guards, and skipping synchronize events risks leaving a head unreviewed.
+- Speed 2 (reviewer quorum / straggler cancellation) — rejected: experimental shadow mode with a quality risk; `REVIEWER_MAX_STEPS`, `REVIEWER_TOOL_REPEAT_LIMIT` and the size tiers already bound stragglers.
+- Speed 3 (reuse the poller's memory checkout) — rejected: an unmeasured refactor of memory push semantics.
+- Cost 2 / Reliability 1 (circuit breaker on by default) — rejected: already enabled per repo through `vars.REVIEWER_CIRCUIT_BREAKER_ENABLED`; a default flip affects every consumer, and the evidence came from a reviewer roster that has since been retired.
+- Cost 3 (cache-prefix restructure) — rejected: the root cause is inference only.
+- Cost 4, AI memory timing fields, `GH_API_CALL` / `GH_API_SUMMARY`, `ORCH_ISSUE_DECISION` / `ORCH_STAGE_TIMING`, cache-prefix hashes and the other telemetry asks in the memory, GH API, prompt-cache, orchestrator and pipeline-flow sections — rejected: observability with no consumer; `GH_API_RETRY` and `GH_PAT_BUDGET` cover part of it.
+- Reliability 4 (cleanup noise) — rejected: no concrete defect located; cleanup warnings are nonfatal and `REVIEW_SANDBOX_CLEANUP` already diagnoses them.
+- BUG-002 (stale check-run failure triages a newer head) — rejected: conflicts with the deliberate #6918 design, which diagnoses the failing head's checks after a push; superseded triage issues are closed by the #7095 resolved gate.
+- BATCH-001, BATCH-002, API-001, API-002, MERGE-002, MERGE-003, MERGE-004 — rejected: tagged RISKY_SKIP in the source (pagination, fail-open or poller race semantics).
+- REUSE-001 — rejected: tagged NEEDS_VERIFICATION in the source; it would save one GET on the failure path only, across step boundaries.
+- DUP-001, DUP-002, DUP-003 — rejected: refactors with no behaviour change; DUP-003 is partly superseded by the `stage_workflow_support.sh` / `SUPPORT_REF` work.
+- CONSIST-001 (failure-alert lookup bypasses canonical helpers) — rejected: the failure-alert path deliberately depends only on `tg_helpers.sh`, so it still alerts when support staging failed.
+- Executive summary, per-repo breakdown and metrics appendix tables — INVALID/non-material: evidence, not recommendations.
