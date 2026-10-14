@@ -11651,9 +11651,12 @@ _attempt_branch_rebuild_after_escalation() {
 
   local resolver_retry_escalated_at=""
   resolver_retry_escalated_at="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated_at // ""' 2>/dev/null || echo "")"
+  # Stable log key BRANCH_REBUILD_THRESHOLD_DECISION: one line per threshold check.
   if ! _check_branch_rebuild_threshold "${integration_branch}" "${resolver_retry_escalated_at}"; then
+    echo "BRANCH_REBUILD_THRESHOLD_DECISION tracking_issue=${TRACKING_NUM:-?} skip_reason=${BRANCH_REBUILD_SKIP_REASON:-none} last_rebuild_at=${BRANCH_REBUILD_LAST_REBUILD_AT:-none}"
     return 0
   fi
+  echo "BRANCH_REBUILD_THRESHOLD_DECISION tracking_issue=${TRACKING_NUM:-?} skip_reason=${BRANCH_REBUILD_SKIP_REASON:-none} last_rebuild_at=${BRANCH_REBUILD_LAST_REBUILD_AT:-none}"
 
   local rebuild_started_at=""
   local default_branch_ref_uri=""
