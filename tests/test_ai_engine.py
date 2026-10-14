@@ -312,6 +312,41 @@ def test_missing_instructions_falls_back(sandbox: dict) -> None:
 	assert _rc(result) == 0, result.stderr
 
 
+def test_claude_instructions_say_the_run_has_no_web_tools(sandbox: dict, tmp_path: Path) -> None:
+	# #7357: a Claude planner told "Web search IS available" blocked on a tag
+	# SHA it could not look up, because the relay refuses provider web tools.
+	source = tmp_path / "trusted_instructions.md"
+	source.write_text("Trusted instructions\n", encoding="utf-8")
+	result = _bash(sandbox, "_ai_engine_instructions_file", SUPPORT_INSTRUCTIONS_FILE=str(source))
+	assert result.returncode == 0, result.stderr
+	combined = Path(result.stdout.strip())
+	assert combined != source and combined.parent == sandbox["runner_temp"]
+	text = combined.read_text(encoding="utf-8")
+	assert text.startswith("Trusted instructions\n")
+	assert "## Engine capabilities" in text and "Web search and web fetch are not available" in text
+	assert source.read_text(encoding="utf-8") == "Trusted instructions\n"
+
+
+def test_claude_instructions_fall_back_to_the_original_when_the_copy_fails(sandbox: dict, tmp_path: Path) -> None:
+	source = tmp_path / "trusted_instructions.md"
+	source.write_text("Trusted instructions\n", encoding="utf-8")
+	result = _bash(sandbox, "_ai_engine_instructions_file", SUPPORT_INSTRUCTIONS_FILE=str(source), RUNNER_TEMP=str(tmp_path / "missing"))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == str(source)
+
+
+def test_claude_instructions_fall_back_to_the_original_when_the_read_fails(sandbox: dict, tmp_path: Path) -> None:
+	# A failed read must not yield a copy holding only the note.
+	if os.geteuid() == 0:
+		pytest.skip("root can read a mode-000 file")
+	source = tmp_path / "trusted_instructions.md"
+	source.write_text("Trusted instructions\n", encoding="utf-8")
+	source.chmod(0)
+	result = _bash(sandbox, "_ai_engine_instructions_file", SUPPORT_INSTRUCTIONS_FILE=str(source))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == str(source)
+
+
 def test_usage_limit_and_rejected_token_move_to_the_next_account(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_LIMIT_a", B="TOK_AUTH_b", C="TOK_OK_c")
 	result = _claude_run(sandbox)
