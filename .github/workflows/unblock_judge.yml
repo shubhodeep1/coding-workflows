@@ -161,6 +161,8 @@ jobs:
           UNBLOCK_JUDGE_WAIT_MAX_DAYS: ${{ vars.UNBLOCK_JUDGE_WAIT_MAX_DAYS || '14' }}
           # Q129: the check-triage resolution gate clarify runs (#7095).
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
+          # Q148: close a heal issue whose failure a sibling already fixed.
+          UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}
           UNBLOCK_PROTECTED_HANDOFF_ENABLED: ${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}
           # The automation-path re-check runs the implement guard with the
           # same ALLOW_WORKFLOW_EDITS default implement.yml uses.

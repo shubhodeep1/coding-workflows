@@ -1122,6 +1122,22 @@ if endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
 	done(json.dumps(state.get("operator_trackers", [])))
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
+# Q148 reads; --jq is not applied, so the fixtures hold the projected records.
+if method == "GET" and endpoint == "repos/o/r/issues" and "--paginate" in args:
+	if os.environ.get("FAKE_GH_FAIL_HEAL_LIST"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done("\n".join(json.dumps(item) for item in json.loads(os.environ.get("FAKE_GH_HEAL_ISSUES", "[]"))))
+if method == "GET" and "search/issues" in args:
+	if os.environ.get("FAKE_GH_FAIL_SEARCH"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	state.setdefault("searches", []).append(f.get("q", ""))
+	done(os.environ.get("FAKE_GH_REISSUES", "[]"))
+if method == "GET" and endpoint == "repos/o/r/pulls":
+	state.setdefault("pull_lookups", []).append(f.get("head", ""))
+	merged = json.loads(os.environ.get("FAKE_GH_MERGED_PULLS", "{}"))
+	done(json.dumps(merged[f.get("head", "")]) if f.get("head", "") in merged else "")
 if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_EXPLANATION") and f.get("body", "").startswith("Unblock judge could not act on `"):
 		json.dump(state, open(state_path, "w"))
@@ -3549,3 +3565,100 @@ def test_a_failed_hold_refresh_is_logged(tmp_path: Path, issue_state: dict, outc
 	assert "op=hold hold=item_closed ref=50 outcome=skip reason=hold_refresh_failed" in result.stdout, result.stdout
 	assert outcome in result.stdout, result.stdout
 	assert state["comments"] == [] and state["patched"] == []
+
+
+# Q148: a blocked heal issue whose failure a sibling already fixed is closed
+# with that link and no round (#7082 after re-issue #7059 merged as #7065).
+HEAL_FP = "6" * 64
+HEAL_REASON_LINE = "- **Failure reason:** `conflict_resolver_sandbox_path_unsupported`"
+
+
+def _heal_body(source: str = "o/c#66", reason_line: str = HEAL_REASON_LINE) -> str:
+	return "\n".join([
+		f"<!-- workflow-failure-heal:fp={HEAL_FP} -->",
+		"<!-- workflow-failure-heal:gen=2 -->",
+		f"<!-- workflow-failure-heal:root={HEAL_FP} -->",
+		f"<!-- workflow-failure-heal:source={source} -->",
+		"",
+		"## Automated workflow failure heal (generation 2 of max 3)",
+		"",
+		"- **Source repository:** `o/c`",
+		reason_line,
+		"",
+		"---",
+		"",
+		"## Summary",
+		"failure_reason=other_reason",
+	])
+
+
+HEAL_ITEM = dict(ISSUE, title="Workflow heal: AI Review failed 20x for o/c#66 (conflict_resolver_sandbox_path_unsupported)",
+	body=_heal_body(), user={"login": "pipeline-bot"}, labels=[{"name": "ai:blocked"}, {"name": "ai:workflow-heal"}])
+HEAL_ORIGINAL = {"number": 50, "state": "closed", "state_reason": "not_planned", "body": _heal_body(), "author": "pipeline-bot", "labels": ["ai:workflow-heal"], "pull_request": False}
+HEAL_REISSUE = {"number": 59, "state": "closed", "state_reason": "completed", "body": "Re-issued by the unblock judge from #50.\n\nSpecification: x\n\nWhy: y",
+	"author": "pipeline-bot", "labels": ["ai:merged"], "pull_request": False}
+HEAL_MERGED_PR = {"o:ai/issue-59": {"number": 65, "merged_at": "2026-10-13T00:00:00Z", "base": {"ref": "main"}, "merge_commit_sha": "c" * 40, "head": {"ref": "ai/issue-59"}}}
+
+
+def _heal_env(**overrides) -> dict:
+	env = {
+		"FAKE_GH_HEAL_ISSUES": json.dumps([HEAL_ORIGINAL]),
+		"FAKE_GH_REISSUES": json.dumps([HEAL_REISSUE]),
+		"FAKE_GH_MERGED_PULLS": json.dumps(HEAL_MERGED_PR),
+	}
+	env.update(overrides)
+	return env
+
+
+RETRY_VERDICT = {"verdict": "retry_budget", "reason": "r", "instructions": "i"}
+
+
+def test_heal_issue_fixed_by_a_sibling_is_closed_without_a_round(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, HEAL_ITEM, verdict=RETRY_VERDICT, **_heal_env())
+	assert "op=heal_already_fixed outcome=closed sibling=59 pr=65" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert len(state["comments"]) == 1 and state["comments"][0]["endpoint"] == "repos/o/r/issues/7/comments"
+	body = state["comments"][0]["body"]
+	assert "already fixed through #59, whose pull request #65 merged into `main`" in body
+	assert body.endswith("<!-- ai:unblock-heal-already-fixed:v1 item=7 sibling=59 pr=65 -->")
+	assert state["patched"] == [["repos/o/r/issues/7", {"state": "closed", "state_reason": "completed"}]]
+	assert state["pull_lookups"] == ["o:ai/issue-59"]
+	assert state["searches"] == ['repo:o/r is:issue in:body "Re-issued by the unblock judge from"']
+
+
+@pytest.mark.parametrize("env,expected", [
+	({"FAKE_GH_MERGED_PULLS": "{}"}, "op=heal_already_fixed outcome=judge status=no_merged_pr"),
+	({"FAKE_GH_FAIL_SEARCH": "1"}, "op=heal_already_fixed outcome=judge status=reissue_search_unavailable"),
+	({"FAKE_GH_FAIL_HEAL_LIST": "1"}, "op=heal_already_fixed outcome=judge status=heal_list_unavailable"),
+	({"FAKE_GH_REISSUES": json.dumps([dict(HEAL_REISSUE, labels=[])])}, "op=heal_already_fixed outcome=judge status=no_fixed_sibling"),
+	({"FAKE_GH_REISSUES": json.dumps([dict(HEAL_REISSUE, author="mallory")])}, "op=heal_already_fixed outcome=judge status=no_fixed_sibling"),
+	({"UNBLOCK_HEAL_ALREADY_FIXED_ENABLED": "false"}, "op=heal_already_fixed outcome=judge status=disabled"),
+])
+def test_heal_already_fixed_check_judges_as_usual_otherwise(tmp_path: Path, env: dict, expected: str) -> None:
+	result, state = _judge(tmp_path, HEAL_ITEM, verdict=RETRY_VERDICT, **_heal_env(**env))
+	assert expected in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stdout
+	assert not any(patch[1].get("state") == "closed" for patch in state["patched"])
+
+
+def test_heal_already_fixed_needs_a_trusted_heal_item(tmp_path: Path) -> None:
+	untrusted = dict(HEAL_ITEM, user={"login": "mallory"})
+	result, _ = _judge(tmp_path, untrusted, verdict=RETRY_VERDICT, **_heal_env())
+	assert "op=heal_already_fixed outcome=judge status=untrusted_item_author" in result.stdout
+	other_reason = dict(HEAL_ITEM, body=_heal_body(reason_line="- **Failure reason:** `editor_empty_noop`"))
+	result, _ = _judge(tmp_path, other_reason, verdict=RETRY_VERDICT, **_heal_env())
+	assert "op=heal_already_fixed outcome=judge status=no_fixed_sibling" in result.stdout
+	# Not a heal issue: never checked.
+	result, state = _judge(tmp_path, ISSUE, verdict=RETRY_VERDICT, **_heal_env())
+	assert "op=heal_already_fixed" not in result.stdout and "searches" not in state
+
+
+def test_heal_already_fixed_close_failure_stops_this_run(tmp_path: Path) -> None:
+	result, _ = _judge(tmp_path, HEAL_ITEM, verdict=RETRY_VERDICT, **_heal_env(FAKE_GH_FAIL_CLOSE="1"))
+	assert "op=heal_already_fixed outcome=skip reason=close_failed sibling=59 pr=65" in result.stdout, result.stdout
+	assert "outcome=acted" not in result.stdout
+
+
+def test_heal_already_fixed_switch_is_wired_default_on() -> None:
+	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	assert "UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}" in workflow

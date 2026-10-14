@@ -203,6 +203,18 @@ case "${SCOPE_RECOVERY_SWITCH,,}" in
 		;;
 esac
 unset SCOPE_RECOVERY_SWITCH
+# Re-issue lineage (Q147): on by default; "false" turns it off and any other
+# value also turns it off with a warning. See _heal_reissue_lookup.
+REISSUE_DEDUPE_SWITCH="${HEAL_REISSUE_DEDUPE_ENABLED-}"
+case "${REISSUE_DEDUPE_SWITCH,,}" in
+	''|true) REISSUE_DEDUPE_ENABLED="true" ;;
+	false) REISSUE_DEDUPE_ENABLED="false" ;;
+	*)
+		REISSUE_DEDUPE_ENABLED="false"
+		echo "::warning::WORKFLOW_HEAL reissue_lookup outcome=skip reason=invalid_switch" >&2
+		;;
+esac
+unset REISSUE_DEDUPE_SWITCH
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -1037,6 +1049,59 @@ if { [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "phase_fai
 fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
+
+# --- Re-issue lineage (Q147) -------------------------------------------------
+# The unblock judge re-issues a blocked heal issue as an ordinary, unlabelled
+# issue (no heal markers) and closes the original, so the list above cannot
+# see that the lineage is still being worked on: a later report from the same
+# failure opened a new generation (#7082 next to #7059). When the budget found
+# a closed heal issue of this lineage and no open duplicate, look for an open
+# re-issue of it and record the report there instead.
+# §14 audit: no call above returns issues outside the ai:workflow-heal label,
+# so this adds one search read per repository that can own the heal issue (at
+# most two), and only for a report whose lineage has a closed heal issue. A
+# failed read keeps the first decision (fail open: today's behaviour).
+_heal_reissue_lookup()
+{
+	[ "${REISSUE_DEDUPE_ENABLED}" = "true" ] || return 0
+	# A recovery replay must match its own issue; it never looks elsewhere.
+	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		return 0
+	fi
+	[ "$(jq -r '.action // ""' "${DECISION_FILE}")" != "duplicate" ] || return 0
+	[ "$(jq -r '.lineage_source // "none"' "${DECISION_FILE}")" != "none" ] || return 0
+	local reissues_file="${RUNTIME_DIR}/heal_reissues.json" reissue_decision="${RUNTIME_DIR}/decision_reissue.json"
+	local reissue_repo reissue_part reissue_index=0 reissue_repos=("${SELF_REPO}")
+	[ "${SOURCE_REPO}" = "${SELF_REPO}" ] || reissue_repos+=("${SOURCE_REPO}")
+	local reissue_parts=()
+	for reissue_repo in "${reissue_repos[@]}"; do
+		reissue_part="${RUNTIME_DIR}/heal_reissues_${reissue_index}.json"
+		reissue_index=$((reissue_index + 1))
+		if ! gh_retry gh api --method GET search/issues -f q="repo:${reissue_repo} is:issue in:body \"Re-issued by the unblock judge from\"" \
+			-f sort=created -f order=desc -f per_page=100 \
+			--jq '[.items[]? | {number, state, title, body: (.body // ""), author: (.user.login // ""), html_url, pull_request: (.pull_request != null)}]' 2>/dev/null \
+			| jq --arg repository "${reissue_repo}" 'map(. + {repository: $repository})' > "${reissue_part}" 2>/dev/null \
+			|| ! jq -e 'type == "array"' "${reissue_part}" >/dev/null 2>&1; then
+			log "reissue_lookup outcome=skip reason=search_failed repo=${reissue_repo} fp=${FP}"
+			return 0
+		fi
+		reissue_parts+=("${reissue_part}")
+	done
+	jq -s 'add // []' "${reissue_parts[@]}" > "${reissues_file}"
+	if ! python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" --reissues-json "${reissues_file}" > "${reissue_decision}" 2>/dev/null \
+		|| ! jq -e '.action | type == "string"' "${reissue_decision}" >/dev/null 2>&1; then
+		log "reissue_lookup outcome=skip reason=budget_failed fp=${FP}"
+		return 0
+	fi
+	if [ "$(jq -r '.match // ""' "${reissue_decision}")" != "reissue" ]; then
+		log "reissue_lookup outcome=none candidates=$(jq 'length' "${reissues_file}") fp=${FP}"
+		return 0
+	fi
+	mv "${reissue_decision}" "${DECISION_FILE}"
+	log "reissue_lookup outcome=found existing_issue=$(jq -r '.existing_issue' "${DECISION_FILE}") existing_repo=$(jq -r '.existing_repo // ""' "${DECISION_FILE}") reissue_of=$(jq -r '.reissue_of' "${DECISION_FILE}") fp=${FP}"
+}
+_heal_reissue_lookup
+
 ACTION="$(jq -r '.action' "${DECISION_FILE}")"
 GEN="$(jq -r '.gen // 1' "${DECISION_FILE}")"
 ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
@@ -1083,6 +1148,8 @@ _heal_scope_recovery_evaluate()
 {
 	[ "${SCOPE_RECOVERY_ENABLED,,}" = "true" ] || return 0
 	[ "${ACTION}" = "duplicate" ] || return 0
+	# A re-issue is not a heal issue; it has no scope marker to recover (Q147).
+	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "reissue" ] || return 0
 	local recovery_issue recovery_repo recovery_url recovery_login
 	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
 	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"

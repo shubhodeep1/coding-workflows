@@ -81,10 +81,14 @@
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # A hold check reads at most two items (the pull request and its compare
 # against the branch, or the issue) or runs a local `git grep` in TARGET_DIR.
+# For an ai:workflow-heal issue (Q148, unblock_heal_already_fixed): the
+# repository's heal issues (paginated), one re-issue search, and at most three
+# closed-PR reads for the fix branches of matching siblings.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
+#      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
 # project_state_recheck_unavailable, project_resumed.
 set -uo pipefail
@@ -342,6 +346,78 @@ unblock_check_triage_resolved()
 		return 0
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_resolution outcome=judge status=${status:-error} rc=${rc}"
+	return 1
+}
+
+# Q148: a blocked heal issue whose failure was already fixed through a
+# sibling (another heal issue for the same source and failure reason, or an
+# unblock-judge re-issue of one, closed as completed with ai:merged and a
+# merged ai/issue-<N> pull request) is closed as completed with that link
+# instead of using a round (#7082 after #7059 / #7065). Returns 0 when this
+# run must stop (closed, or a write failed: retried next run); 1 to judge the
+# item as usual. Every read failure judges as usual (fail open).
+unblock_heal_already_fixed()
+{
+	local heal_file="${RUNTIME_DIR}/heal_issues.json" reissues_file="${RUNTIME_DIR}/heal_reissues.json"
+	local result_file="${RUNTIME_DIR}/heal_already_fixed.json" candidate pr_json pr_number pr_base pr_sha owner
+	if [ "$(printf '%s' "${UNBLOCK_HEAL_ALREADY_FIXED_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=disabled"
+		return 1
+	fi
+	if [ ! -f "${SUPPORT_DIR}/scripts/workflow_failure_heal.py" ]; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=support_missing"
+		return 1
+	fi
+	if ! gh api -X GET --paginate "repos/${REPOSITORY}/issues" -F state=all -F labels=ai:workflow-heal -F per_page=100 \
+		--jq '.[] | {number, state, state_reason, body: (.body // ""), author: (.user.login // ""), labels: [.labels[]?.name], pull_request: (.pull_request != null)}' 2>/dev/null \
+		| jq -s --arg repository "${REPOSITORY}" 'map(. + {repository: $repository})' > "${heal_file}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${heal_file}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=heal_list_unavailable"
+		return 1
+	fi
+	if ! gh api -X GET search/issues -f q="repo:${REPOSITORY} is:issue in:body \"Re-issued by the unblock judge from\"" \
+		-f sort=created -f order=desc -f per_page=100 \
+		--jq '[.items[]? | {number, state, state_reason, body: (.body // ""), author: (.user.login // ""), labels: [.labels[]?.name], pull_request: (.pull_request != null)}]' 2>/dev/null \
+		| jq --arg repository "${REPOSITORY}" 'map(. + {repository: $repository})' > "${reissues_file}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${reissues_file}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=reissue_search_unavailable"
+		return 1
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/workflow_failure_heal.py" heal-already-fixed --item-json "${RUNTIME_DIR}/item.json" \
+		--heal-issues-json "${heal_file}" --reissues-json "${reissues_file}" --pipeline-login "${UNBLOCK_LOGIN}" > "${result_file}" 2>/dev/null \
+		|| ! jq -e '.status | type == "string"' "${result_file}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=check_failed"
+		return 1
+	fi
+	if [ "$(jq -r '.status' "${result_file}")" != "candidates" ]; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=$(jq -r '.reason // "none"' "${result_file}" | tr -cd 'a-z_' | cut -c1-40)"
+		return 1
+	fi
+	owner="${REPOSITORY%%/*}"
+	while read -r candidate; do
+		[[ "${candidate}" =~ ^[1-9][0-9]*$ ]] || continue
+		# One read per candidate (at most three): the sibling's own fix branch.
+		pr_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" -f state=closed -f head="${owner}:ai/issue-${candidate}" -f per_page=10 \
+			--jq '[.[] | select(.merged_at != null and .head.ref == "ai/issue-'"${candidate}"'")] | sort_by(.merged_at) | last // empty' 2>/dev/null || true)"
+		[ -n "${pr_json}" ] || continue
+		pr_number="$(jq -r '.number // ""' <<< "${pr_json}" 2>/dev/null || true)"
+		[[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || continue
+		pr_base="$(jq -r '.base.ref // ""' <<< "${pr_json}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)"
+		pr_sha="$(jq -r '.merge_commit_sha // ""' <<< "${pr_json}" | tr -cd '0-9a-f' | cut -c1-40)"
+		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: the same failure was already fixed through #${candidate}, whose pull request #${pr_number} merged into \`${pr_base}\`${pr_sha:+ (\`${pr_sha}\`)}. The unblock judge used no round on this item.
+
+<!-- ai:unblock-heal-already-fixed:v1 item=${ITEM} sibling=${candidate} pr=${pr_number} -->" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=heal_already_fixed outcome=skip reason=comment_failed sibling=${candidate} pr=${pr_number}"
+			return 0
+		fi
+		if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=heal_already_fixed outcome=skip reason=close_failed sibling=${candidate} pr=${pr_number}"
+			return 0
+		fi
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=heal_already_fixed outcome=closed sibling=${candidate} pr=${pr_number}"
+		return 0
+	done < <(jq -r '.candidates[]?' "${result_file}")
+	unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=no_merged_pr"
 	return 1
 }
 
@@ -1234,6 +1310,13 @@ unblock_main()
 	if [ "${ITEM_KIND}" = "issue" ] && [ -f "${SUPPORT_DIR}/scripts/check_triage_resolution.py" ] \
 		&& jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
 		&& unblock_check_triage_resolved; then
+		return 0
+	fi
+
+	# Q148: a heal issue whose failure a sibling already fixed is closed, no round used.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
+		&& jq -e 'index("ai:workflow-heal") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
+		&& unblock_heal_already_fixed; then
 		return 0
 	fi
 
