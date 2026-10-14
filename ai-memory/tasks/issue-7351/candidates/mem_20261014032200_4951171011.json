@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7351,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7351\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7353\",\"pr_number\":7353,\"branch\":\"ai/issue-7351\",\"run_id\":\"38503761907\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38503761907\",\"changed_files\":[\"agents.d/7351-validation-refresh-credential-blanking.md\",\"changelog.d/7351-validation-refresh-credential-blanking.md\",\"scripts/validation_refresh_runner.py\",\"tests/test_validation_refresh_runner.py\"]}",
+  "fingerprint": "39dd5b91ab8e746e85bae35dde0c793f5c5039d5975342b2c5464de16a18e62c",
+  "lineage": {
+    "issue_number": 7351,
+    "parent_ids": [],
+    "pr_number": 7353,
+    "run_id": "38503761907",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38503761907",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7353"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261014032200_4951171011",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7351,
+    "level": "run",
+    "pr_number": 7353,
+    "run_id": "38503761907"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7351: https://github.com/shubhodeep1/coding-workflows/pull/7353",
+  "timestamps": {
+    "created_at": "2026-10-14T03:22:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
