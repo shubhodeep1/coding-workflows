@@ -321,6 +321,28 @@ def test_driver_report_failure_posts_no_marker() -> None:
 		assert json.loads(state_file.read_text())["comments_posted"] == []
 
 
+def test_driver_skips_when_head_moved_since_listing() -> None:
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, _old_nodes(1), head=OTHER_HEAD)
+		result = _run_driver(tmp, env)
+		assert result.returncode == 0
+		assert "outcome=skip reason=head_moved" in result.stdout
+		state = json.loads(state_file.read_text())
+		assert state["dispatches"] == [] and state["comments_posted"] == []
+
+
+def test_driver_lists_least_recently_updated_with_string_repo_vars() -> None:
+	with tempfile.TemporaryDirectory() as name:
+		tmp = Path(name)
+		env, state_file = _stage(tmp, _old_nodes(1))
+		_run_driver(tmp, env)
+		call = next(c for c in json.loads(state_file.read_text())["calls"] if c[:2] == ["api", "graphql"])
+		assert call[call.index("owner=acme") - 1] == "-f"
+		assert call[call.index("name=widgets") - 1] == "-f"
+		assert "direction: ASC" in " ".join(call)
+
+
 def test_driver_dry_run_sends_nothing() -> None:
 	with tempfile.TemporaryDirectory() as name:
 		tmp = Path(name)

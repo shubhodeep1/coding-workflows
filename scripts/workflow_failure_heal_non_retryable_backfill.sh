@@ -38,13 +38,16 @@
 #
 # PR listing (CLAUDE.md §15 / unattended §14): the sweep keeps no PR comment
 # snapshot to reuse, so this pass makes one GraphQL query per page of 10 open
-# PRs (newest updated first), at most ceil(MAX_PRS / 10) calls (5 by default).
+# PRs (least recently updated first, so a PR the pass or the intake just
+# commented on moves to the back of the window), at most ceil(MAX_PRS / 10)
+# calls (5 by default). A listing cut off at MAX_PRS logs reason=listing_truncated.
 # Input: the repository. Output: a JSON array of PR nodes (number,
 # isCrossRepository, headRefOid, comments.nodes{databaseId, body, createdAt,
 # author.login}). Any failure skips the tick (fail open). A marker older than
 # the last 100 comments is not seen, so nothing is sent for it.
 # Other calls per tick: `gh api user` (1); per dispatched candidate at most 3
-# (the reporter's PR read and dispatch, the marker comment).
+# (the PR read that binds the report to the selected head, the reporter's
+# dispatch, the marker comment).
 #
 # Required env:
 #   REPOSITORY                     owner/repo whose open PRs are scanned
@@ -149,7 +152,7 @@ fi
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
 # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
-QUERY='query($owner: String!, $name: String!, $first: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: $first, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { number isCrossRepository headRefOid comments(last: 100) { nodes { databaseId body createdAt author { login } } } } } } }'
+QUERY='query($owner: String!, $name: String!, $first: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: $first, after: $cursor, orderBy: {field: UPDATED_AT, direction: ASC}) { pageInfo { hasNextPage endCursor } nodes { number isCrossRepository headRefOid comments(last: 100) { nodes { databaseId body createdAt author { login } } } } } } }'
 NODES_FILE="${WORK_ROOT}/pr_nodes.jsonl"
 : > "${NODES_FILE}"
 cursor=""
@@ -159,7 +162,7 @@ while [ "${fetched}" -lt "${MAX_PRS}" ]; do
 	page_size=$((MAX_PRS - fetched))
 	[ "${page_size}" -gt 10 ] && page_size=10
 	page_file="${WORK_ROOT}/page.json"
-	page_args=(api graphql -f "query=${QUERY}" -F "owner=${OWNER}" -F "name=${NAME}" -F "first=${page_size}")
+	page_args=(api graphql -f "query=${QUERY}" -f "owner=${OWNER}" -f "name=${NAME}" -F "first=${page_size}")
 	[ -n "${cursor}" ] && page_args+=(-f "cursor=${cursor}")
 	if ! gh_retry gh "${page_args[@]}" > "${page_file}" 2>/dev/null; then
 		listing_ok=false
@@ -193,6 +196,9 @@ done
 if [ "${listing_ok}" != "true" ]; then
 	log "outcome=skip reason=pr_listing_unavailable"
 	exit 0
+fi
+if [ "${has_next:-false}" = "true" ] && [ "${fetched}" -ge "${MAX_PRS}" ]; then
+	log "outcome=warn reason=listing_truncated fetched=${fetched} max=${MAX_PRS}"
 fi
 PRS_FILE="${WORK_ROOT}/prs.json"
 if ! python3 -I -B -c '
@@ -285,13 +291,32 @@ while IFS=$'\t' read -r kind pr head failure fp run support; do
 		continue
 	fi
 	report_out="${cand_dir}/report.txt"
+	# Bind the report to the selected head: read the live PR once and hand
+	# that snapshot to the reporter, so a push after the listing cannot get
+	# the old head's failure reported against the new head.
+	pr_json="${cand_dir}/pr.json"
+	if ! gh_retry gh api --method GET "repos/${REPO}/pulls/${pr}" > "${pr_json}" 2>/dev/null; then
+		log "${fields} outcome=skip reason=pr_read_failed"
+		continue
+	fi
+	live_head="$(python3 -I -B -c '
+import json, sys
+pr = json.load(open(sys.argv[1], encoding="utf-8"))
+head = (pr.get("head") or {}).get("sha") if isinstance(pr, dict) else ""
+print(head.lower() if isinstance(head, str) else "")
+' "${pr_json}" 2>/dev/null || true)"
+	if [ "${live_head}" != "${head}" ]; then
+		log "${fields} outcome=skip reason=head_moved"
+		continue
+	fi
 	# The unchanged reporter, with the historical run as GITHUB_RUN_ID so the
-	# report's run_refs name it. No PR payload file (the reporter reads the
-	# live PR), no run flags, and no OIDC request variables.
-	env -u PR_PAYLOAD_FILE -u PR_CHANGED_FILES_FILE -u FINGERPRINT_CAP_REASON -u REPORT_SUMMARY_LINE_FILE \
+	# report's run_refs name it, the head-checked PR snapshot as its PR
+	# payload, no run flags, and no OIDC request variables.
+	env -u PR_CHANGED_FILES_FILE -u FINGERPRINT_CAP_REASON -u REPORT_SUMMARY_LINE_FILE \
 		-u AUTOFIX_FAILURE_FIRST_ERROR -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
 		GITHUB_REPOSITORY="${REPO}" \
 		PR_NUMBER="${pr}" \
+		PR_PAYLOAD_FILE="${pr_json}" \
 		GITHUB_RUN_ID="${run}" \
 		REPORT_RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${run}" \
 		REPORT_WORKFLOW_NAME="review_autofix" \
