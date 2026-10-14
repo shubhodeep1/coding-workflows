@@ -480,7 +480,11 @@ def test_workflows_do_not_interpolate_secrets_into_remote_urls() -> None:
 			if SECRET_IN_REMOTE_URL.search(line):
 				offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
 	assert not offenders, f"secrets interpolated into remote URLs: {offenders}"
-	assert ENV_BOUND_PUSH_URL in str(_step("implement.yml", "implement", "Push branch").get("run"))
+	implement_push = _step("implement.yml", "implement", "Push branch")
+	assert ENV_BOUND_PUSH_URL in str(implement_push.get("run"))
+	implement_push_env = implement_push.get("env")
+	assert isinstance(implement_push_env, dict)
+	assert implement_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
 	review = (WORKFLOW_DIR / "review_autofix.yml").read_text(encoding="utf-8")
 	push_step = review.split("- name: Push all pending commits", 1)[1].split("\n      - name:", 1)[0]
 	assert ENV_BOUND_PUSH_URL in push_step
