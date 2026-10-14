@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_isolated_exec.py:655-668 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: test_image_context_installs_gawk (lines 661 and 655-668) also asserts unrelated packages (`ripgrep`, `build-essential`) in the apt-get install line, so the test is overly prescriptive.\n  WHY: The test would fail if unrelated packages are reordered, removed or moved even though `gawk` is still installed correctly (reported as NIT; confidence 3 to 4).\n- tests/test_sandbox_image.py:315-322 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: test_review_sandbox_dockerfile_installs_gawk (lines 315 and 315-322) also asserts unrelated packages (`python3`, `ca-certificates`), so the test is overly prescriptive.\n  WHY: The test would fail if the base package list is reordered or changed even though `gawk` is still present (reported as NIT; confidence 3 to 4).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_codex_isolated_exec.py:661 | severity=NIT | confidence=4\n  PROBLEM: The test verifies `gawk`, `ripgrep`, and `build-essential` are present in the apt-get install line, but this is overly prescriptive.\n  WHY: The test will fail if the apt-get line is reordered or if unrelated packages are removed or added, even if `gawk` is installed correctly.\n- tests/test_sandbox_image.py:315 | severity=NIT | confidence=4\n  PROBLEM: The test verifies `gawk`, `python3`, and `ca-certificates` are present, but is overly prescriptive.\n  WHY: The test will fail if the apt-get line is reordered, even if `gawk` is installed correctly.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_codex_isolated_exec.py:655-668 | severity=NIT | confidence=3\n  PROBLEM: The test asserts all of `(\"gawk\", \"ripgrep\", \"build-essential\")` are in the apt-line tokens, not just `gawk`, which couples it to unrelated packages.\n  WHY: The test fails if `ripgrep` or `build-essential` is dropped or moved to a separate RUN step even though `gawk` is still added.\n- tests/test_sandbox_image.py:315-322 | severity=NIT | confidence=3\n  PROBLEM: Same over-assertion pattern: the test iterates `(\"gawk\", \"python3\", \"ca-certificates\")`, coupling the `gawk` check to two unrelated base packages.\n  WHY: The test fails if `python3` or `ca-certificates` is moved to a different RUN layer or replaced, even though `gawk` is still present.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c9b3f63fa6d55f4f5e0e0fabb5ecefd36f2e2ad1dd239e219f2614fada803168",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7362,
+    "run_id": "38508783360",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38508783360",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014042650_eac79d1bd0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7362,
+    "run_id": "38508783360"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T04:26:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
