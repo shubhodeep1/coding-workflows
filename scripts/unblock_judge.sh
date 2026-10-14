@@ -1268,7 +1268,8 @@ unblock_main()
 					fi
 					unblock_patch_comment "${hold_id}" "Waited for ${hold_desc}; the unblock judge posted this item's resume command.
 
-<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} done -->" || true
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} done -->" \
+						|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
 					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=met"
 					return 0
 					;;
@@ -1302,7 +1303,8 @@ unblock_main()
 			esac
 			unblock_patch_comment "${hold_id}" "Stopped waiting for ${hold_desc} (${hold_reason}); the unblock judge decides again.
 
-<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} expired -->" || true
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} expired -->" \
+				|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=expired reason=${hold_reason}"
 			last_activity="${now}"
 		fi
