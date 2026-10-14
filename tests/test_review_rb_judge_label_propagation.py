@@ -2152,7 +2152,9 @@ def _run_merge_with_followup(
 	enable_xpg_echo: bool = False,
 	first_issue_body: str = "",
 	first_issue_lineage_body: str | None = None,
-	pr_base_ref: str = "",
+	# A real PR always has a base ref, and the merge-base freshness gate
+	# defers a merge whose base it cannot resolve (#6988).
+	pr_base_ref: str = "main",
 	orch_integration_branch_pattern: str = "^orchestrator/project-",
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
@@ -2221,6 +2223,10 @@ def _run_merge_with_followup(
 			"api_responses": {
 				"pulls/42": pr_response,
 				f"commits/{pr_head_sha}/check-runs": check_runs_response,
+				# Merge-base freshness gate (pr_checks_lib): the base has not
+				# moved past this head. An unverifiable base now defers the
+				# merge (#6988), so the gate needs a real answer here.
+				f"compare/{pr_head_sha}...": {"ahead_by": 0, "files": []},
 			},
 		}
 		if issue_create_should_fail:

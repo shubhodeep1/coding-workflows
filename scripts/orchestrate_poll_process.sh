@@ -281,13 +281,15 @@ unset _OPP_LIB_DIR
 # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
 # Q35: A): before a direct merge, a PR whose base moved under files it
 # touches is updated from the base instead and re-validated by its
-# synchronize run. Fail-open stub when the library is missing: the
-# check-runs gate is already undefined then and refuses the merge.
+# synchronize run. Fail-closed stub when the library is missing: freshness
+# cannot be verified, so the merge defers (outcome=unknown, no branch update).
 if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
   _pr_base_fresh_for_merge()
   {
-    echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
-    return 0
+    PR_BASE_FRESHNESS_OUTCOME="unknown"
+    PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+    echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+    return 1
   }
 fi
 # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
@@ -378,6 +380,11 @@ _poller_rb_judge_sandbox_attempt()
     WORKSPACE_PATH="" GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
         "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" "${rb_effort}" "${rb_config}" "${rb_engine}" "${judge_role}" "${rb_access}" 2>>"${log_file}" || judge_rc=$?
+    # Raw sandbox exit 76 is a refused (non-capacity) Claude fallback (plan
+    # item 3e, D1); the rejected-transfer branch below reuses 76 internally,
+    # so keep the raw outcome apart and map it to the isolation deferral (77).
+    local rb_engine_refused=false rb_transfer_rejected=false
+    [ "${judge_rc}" -ne 76 ] || rb_engine_refused=true
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}" || rb_cleanup_rc=$?
     if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ] || [ "${rb_cleanup_rc}" -ne 0 ]; then
@@ -406,6 +413,7 @@ _poller_rb_judge_sandbox_attempt()
         fi
       fi
       judge_rc=76
+      rb_transfer_rejected=true
     fi
     if [ "${rb_cleanup_rc}" -ne 0 ]; then
       echo '::error::Review-blocked sandbox cleanup failed; stopping the poller before another issue uses this workspace.' >&2
@@ -419,6 +427,10 @@ _poller_rb_judge_sandbox_attempt()
     [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
     if [ "${judge_rc}" -eq 2 ]; then
       printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
+      return 77
+    fi
+    if [ "${rb_engine_refused}" = true ] && [ "${rb_transfer_rejected}" = false ]; then
+      printf '%s\n' engine_fallback_refused > "${judge_reason_file}"
       return 77
     fi
     return "${judge_rc}"
@@ -2187,6 +2199,51 @@ _jq_field()
 	else
 		echo "${val}"
 	fi
+}
+
+# Head-bound squash merge (security-pass finding
+# poller-merge-unbound-to-checked-head). Every direct or auto merge the
+# poller performs goes through here with the head SHA its check-runs and
+# freshness gates evaluated, so GitHub (expectedHeadOid) refuses the merge
+# when the PR author pushed after those gates ran; the next poll tick then
+# re-checks the new head. The final integration merge binds inline because
+# it keeps its own --delete-branch / error-capture handling.
+#
+#   _orch_squash_merge_bound <pr> <head_sha> [auto|sync]
+#     auto (default): enable auto-merge, falling back to a direct merge.
+#     sync:           direct merge only.
+# The noop-suspicious force-merge (auto-merge only) binds inline.
+#   Returns 0 when GitHub accepted the merge or the auto-merge request,
+#   1 when it refused, 2 (no gh call) when the SHA is not 40-hex.
+#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused.
+_orch_squash_merge_bound()
+{
+	local pr="$1"
+	local head_sha="${2:-}"
+	local mode="${3:-auto}"
+	ORCH_MERGE_BOUND_OUTCOME="refused"
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "::warning::ORCH_MERGE_HEAD_BOUND pr=${pr} outcome=refused reason=unresolved_head_sha"
+		return 2
+	fi
+	case "${mode}" in
+		auto|sync) ;;
+		*) mode="auto" ;;
+	esac
+	if [ "${mode}" != "sync" ] \
+		&& gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${head_sha}" >/dev/null; then
+		ORCH_MERGE_BOUND_OUTCOME="enabled"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=enabled"
+		return 0
+	fi
+	if gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${head_sha}" >/dev/null; then
+		ORCH_MERGE_BOUND_OUTCOME="merged"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=merged"
+		return 0
+	fi
+	ORCH_MERGE_BOUND_OUTCOME="failed"
+	echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=failed"
+	return 1
 }
 
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
@@ -5994,7 +6051,13 @@ ensure_security_pass_state_fields() {
       if (.security_pass_waived_findings | type) == "array" then
         .security_pass_waived_findings
         | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
-        | .[-100:]
+        # Cap settled rows at 100 but never drop a row still awaiting its
+        # advisory follow-up (followup_pending): the deferred filer reads only
+        # persisted rows, so a dropped pending row would never be filed.
+        | . as $rows
+        | ([range(0; length) | select(($rows[.].followup_pending // false) != true)]) as $settled
+        | ($settled[:((($settled | length) - 100) | if . < 0 then 0 else . end)]) as $dropped
+        | [range(0; length) | select((IN($dropped[])) | not) | $rows[.]]
       else [] end
     )
     | .security_pass_followup_issues = (
@@ -6223,6 +6286,7 @@ security_pass_terminal_failure() {
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
+  needs_human_park_project "security_pass_failed"
   post_tracking_comment "## ❌ Project security pass exhausted
 
 The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
@@ -6364,6 +6428,7 @@ security_pass_closed_fix_failure() {
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
+  needs_human_park_project "security_pass_failed"
   post_tracking_comment "## ❌ Project security-pass fix did not merge
 
 Security-pass fix issue #${issue_number} closed without merged-PR evidence. Completion remains gated; use \`/re-security-pass\` after correcting or replacing the fix."
@@ -6408,6 +6473,7 @@ security_pass_fix_reissue_exhausted() {
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
+  needs_human_park_project "security_pass_failed"
   post_tracking_comment "## ❌ Project security-pass fix could not be implemented
 
 Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` again after ${reissue_count} re-issue(s) (cap ${MAX_SECURITY_PASS_FIX_REISSUES}). Completion remains gated; address the findings manually, then comment \`/re-security-pass\` to reset the bounded fix loop."
@@ -7016,7 +7082,14 @@ security_pass_record_waivers() {
     (.security_pass_waived_findings // []) as $existing
     | ($waivers | map(.finding_id)) as $ids
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers)
+        # Same bound as ensure_security_pass_state_fields: cap settled rows at
+        # 100, never drop a followup_pending row (line-ownership advisories can
+        # exceed 100 in one audit and would otherwise never be filed).
+        | . as $rows
+        | ([range(0; length) | select(($rows[.].followup_pending // false) != true)]) as $settled
+        | ($settled[:((($settled | length) - 100) | if . < 0 then 0 else . end)]) as $dropped
+        | [range(0; length) | select((IN($dropped[])) | not) | $rows[.]]
       )
     | .security_pass_reported_findings = (
         [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
@@ -7025,6 +7098,93 @@ security_pass_record_waivers() {
     rm -f "${STATE_FILE}.tmp"
     return 1
   fi
+  return 0
+}
+
+# security_pass_record_line_ownership_advisories <advisory_file> <head_sha> <merge_base_sha> <integration_branch>
+#
+# Plan item 4b (decision D4).  Record the findings the engine tagged
+# `advisory: true` (every cited line predates the project) as non-blocking
+# waiver rows with `source: "line_ownership"`, so they:
+#   - never gate the pass or count toward MAX_SECURITY_PASS_CYCLES (the caller
+#     already removed them from the findings file);
+#   - travel to the next audit as SECURITY_AUDIT_WAIVED_FINDINGS, so the same
+#     finding is not re-reported every cycle;
+#   - are filed once as `ai:security` follow-ups through the existing
+#     create_security_pass_advisory_followup dedupe (state + markers), deferred
+#     until the final merge when SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=true.
+# Posts one tracking comment listing the advisories.  GitHub API cost: that
+# comment, plus (deferral off only) create_security_pass_advisory_followup's
+# own calls.  Returns 1 when the waiver rows could not be built or written to
+# state: the caller then restores the unsplit findings so the advisories stay
+# blocking for this audit (otherwise an advisory-only result would record
+# `passed` at the head with no waiver row, and the advisory would be lost).
+security_pass_record_line_ownership_advisories() {
+  local advisory_file="$1"
+  local head_sha="$2"
+  local merge_base_sha="$3"
+  local integration_branch="$4"
+  local cycle defer waivers_json ids finding_json finding_id justification status_lines filed_issue
+  cycle="$(jq -r '(.security_pass_cycle // 0) + 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+  [[ "${cycle}" =~ ^[0-9]+$ ]] || cycle=1
+  defer=false
+  [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED:-true}" = "true" ] && defer=true
+  # Every row carries `followup_pending` + the finding payload from the start,
+  # written in the same state update as the waiver itself.  With deferral off
+  # a successful create clears them; a failed create leaves the row pending,
+  # so security_pass_file_deferred_advisory_followups retries it at the final
+  # merge without needing a second state write that could also fail.
+  if ! waivers_json="$(jq -c --argjson cycle "${cycle}" --arg head_sha "${head_sha}" \
+    --arg base12 "${merge_base_sha:0:12}" --arg head12 "${head_sha:0:12}" '
+    [.[] | {
+      finding_id: .finding_id,
+      file: .file,
+      line: .line,
+      owasp_or_stride_category: .owasp_or_stride_category,
+      severity: .severity,
+      exploit_scenario: .exploit_scenario,
+      justification: ("Cited line \(.file):\(.line) predates the project (git blame attributes it outside \($base12)..\($head12))."),
+      source: "line_ownership",
+      waived_by: "security-pass-line-ownership",
+      waived_at_cycle: $cycle,
+      issue: null
+    } + {followup_pending: true, audited_head_sha: $head_sha, finding: (. | del(.advisory))}]
+  ' "${advisory_file}" 2>/dev/null)" || [ -z "${waivers_json}" ]; then
+    echo "::warning::Could not build line-ownership advisory rows for tracking issue #${TRACKING_NUM}; the advisories stay blocking for this audit."
+    return 1
+  fi
+  ids="$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")' 2>/dev/null || true)"
+  if ! security_pass_record_waivers "${waivers_json}"; then
+    echo "::warning::Could not record line-ownership advisories (${ids}) for tracking issue #${TRACKING_NUM}; they stay blocking for this audit."
+    return 1
+  fi
+  echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=line_ownership ids=${ids}"
+  status_lines=""
+  while IFS= read -r finding_json; do
+    [ -n "${finding_json}" ] || continue
+    finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id')"
+    if [ "${defer}" = "true" ]; then
+      echo "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=${TRACKING_NUM} finding=${finding_id} source=line_ownership reason=integration_branch_not_merged"
+      filed_issue="follow-up filed after \`${integration_branch}\` merges into the default branch"
+    else
+      justification="$(printf '%s' "${finding_json}" | jq -r '.justification // ""')"
+      create_security_pass_advisory_followup "$(printf '%s' "${finding_json}" | jq -c '.finding // {finding_id, file, line, owasp_or_stride_category, severity, exploit_scenario}')" "${integration_branch}" "${head_sha}" "${justification}" "line_ownership"
+      if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+        filed_issue="follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      else
+        # Immediate create failed: the row was recorded with
+        # `followup_pending`, so the deferred filer retries it at the final merge.
+        filed_issue="follow-up not filed yet (retried after \`${integration_branch}\` merges)"
+      fi
+    fi
+    status_lines="${status_lines}"$'\n'"- \`$(security_pass_prose "${finding_id}")\` at \`$(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '"\(.file):\(.line)"')")\` ($(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '.severity')")): ${filed_issue}"
+  done < <(printf '%s' "${waivers_json}" | jq -c --slurpfile src "${advisory_file}" '
+    .[] | . as $row | . + {finding: ($row.finding // ([$src[0][] | select(.finding_id == $row.finding_id)] | first | del(.advisory)))}
+  ')
+  post_tracking_comment "## 🔐 Security-pass advisory findings (pre-existing code)
+
+The security pass at integration head \`${head_sha}\` reported finding(s) whose cited lines predate the project (\`git blame\` attributes them outside \`${merge_base_sha:0:12}..${head_sha:0:12}\`). They do not gate the project and do not count toward the fix-cycle budget; each is filed as a non-blocking \`ai:security\` follow-up.
+${status_lines}" || true
   return 0
 }
 
@@ -7119,6 +7279,7 @@ location = f"{finding.get('file')}:{finding.get('line')}"
 accepted_by = {
 	"judge": "the orchestrator's security-pass exhaustion judge",
 	"operator": "an operator (`/security-pass-waive`)",
+	"line_ownership": "the project security pass's line-ownership check",
 }.get(source, source)
 lines = [
 	f"<!-- ai:security-finding:{finding_id} -->",
@@ -7128,6 +7289,12 @@ lines = [
 	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
 	"",
 ]
+if source == "line_ownership":
+	lines[4] = (
+		f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}`. "
+		"Its cited line predates the project (it was written before the integration base), so it does not gate the project. "
+		"The project completes without this fix; address it through the normal issue pipeline."
+	)
 if merged_pr.isdigit():
 	lines.extend(
 		[
@@ -7529,7 +7696,29 @@ security_pass_exhaustion_judge() {
         SECURITY_PASS_JUDGE_OUTCOME=deferred
         return 0
       fi
-      poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      # The judge's read-only sandbox snapshots its working directory
+      # (_poller_rb_judge_sandbox_attempt: prepare-ephemeral requires PWD to be
+      # the snapshot workspace), so run it in the audit worktree to read the
+      # same tree the audit read.  Its trusted support still resolves from
+      # GITHUB_WORKSPACE, kept at the poller root.  One call site: a prepared
+      # worktree that cannot be entered defers the judge rather than letting
+      # it read the poller checkout the audit did not read.
+      local security_judge_dir="${PWD}"
+      local security_judge_support_root="${GITHUB_WORKSPACE:-${SECURITY_PASS_AUDIT_SUPPORT_ROOT:-${PWD}}}"
+      if [ -n "${SECURITY_PASS_AUDIT_WORKTREE:-}" ]; then
+        security_judge_dir="${SECURITY_PASS_AUDIT_WORKTREE}"
+        echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${head_sha} judge_workspace=audit_worktree"
+      fi
+      if ! pushd "${security_judge_dir}" >/dev/null 2>&1; then
+        echo '::warning::Security-pass judge workspace is unavailable; deferring to the next poll.' >&2
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        return 0
+      fi
+      GITHUB_WORKSPACE="${security_judge_support_root}" \
+        poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      if ! popd >/dev/null 2>&1; then
+        cd "${security_judge_support_root}" || { echo '::error::Cannot return to the poller root after the security-pass judge.' >&2; exit 1; }
+      fi
       if [ "${security_judge_rc}" -eq 77 ]; then
         _record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
         SECURITY_PASS_JUDGE_OUTCOME=deferred
@@ -7758,7 +7947,7 @@ The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLE
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
 ${decisions_table}}"
-  echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count}"
+  echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count} advisory=${advisory_count:-0}"
   tg_notify "Project #${TRACKING_NUM} security pass: the exhaustion judge accepted ${accepted_count} remaining finding(s) as known risks after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles${followup_tg_suffix}; completion continues." "DEBUG"
   SECURITY_PASS_JUDGE_OUTCOME="passed"
   return 0
@@ -7815,6 +8004,102 @@ sys.stdout.write("\n".join(lines) + "\n")
 PY
 }
 
+# Audit worktree for the project security pass.  prepare_tracking_judge_checkout
+# moves the poller's own checkout to the integration head, but when the staged
+# trusted support copies block a plain checkout it forces the checkout and then
+# restores the poller's support copies of scripts/ and prompts/ over the tree.
+# In this repository those copies are the default branch's, so the audit read
+# the default branch's helpers while its diff and fix-cycle hunks came from the
+# integration branch: project #6664 re-reported two findings that its branch
+# had already fixed (review_head_gate.sh, pr_checks_lib.sh), citing the
+# default branch's line numbers.  The audit now reads a clean detached worktree
+# of the audited head.  Every script it executes still comes from the trusted
+# support root (the poller's working directory); the worktree is only read, by
+# the model inside the read-only isolated snapshot.  No GitHub API calls.
+# SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED (default true): unset, empty or
+# true keeps it on, false turns it off, any other value turns it off with a
+# warning.  Logs SECURITY_PASS_AUDIT_TREE.
+SECURITY_PASS_AUDIT_WORKTREE=""
+SECURITY_PASS_AUDIT_SUPPORT_ROOT=""
+
+security_pass_audit_clean_worktree_enabled() {
+  case "$(printf '%s' "${SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    ''|true) return 0 ;;
+    false) return 1 ;;
+    *)
+      echo "::warning::SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED has an unrecognised value; the security pass audits the poller checkout in place. Use true or false." >&2
+      return 1
+      ;;
+  esac
+}
+
+# _security_pass_discard_audit_worktree_path <path> — fail-open removal of a
+# (possibly stale) audit worktree.  Run from the poller root.
+_security_pass_discard_audit_worktree_path() {
+  local audit_wt_path="${1:-}"
+  [ -n "${audit_wt_path}" ] || return 0
+  worktree_registry_deregister "$(basename -- "${audit_wt_path}")"
+  git worktree remove --force "${audit_wt_path}" >/dev/null 2>&1 || true
+  rm -rf -- "${audit_wt_path}" 2>/dev/null || true
+  git worktree prune >/dev/null 2>&1 || true
+  return 0
+}
+
+# security_pass_prepare_audit_worktree <head_sha> — check the audited head out
+# into ${RUNTIME_DIR}/security-pass-audit-wt-<tracking issue>, verify that its
+# HEAD is <head_sha> and that no tracked file differs, and export
+# SECURITY_PASS_AUDIT_WORKTREE / SECURITY_PASS_AUDIT_SUPPORT_ROOT.  Returns 1
+# (fail closed) on any failure, leaving both variables empty.
+security_pass_prepare_audit_worktree() {
+  local audit_head_sha="${1:-}" audit_wt_path audit_wt_head audit_wt_status audit_support_root
+  SECURITY_PASS_AUDIT_WORKTREE=""
+  SECURITY_PASS_AUDIT_SUPPORT_ROOT=""
+  if ! [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || ! [[ "${audit_head_sha}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || [[ "${RUNTIME_DIR:-}" != /* ]]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM:-unknown} head_sha=${audit_head_sha:-none} outcome=failed reason=invalid_input"
+    return 1
+  fi
+  audit_support_root="$(pwd -P)"
+  audit_wt_path="${RUNTIME_DIR}/security-pass-audit-wt-${TRACKING_NUM}"
+  _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+  if [ -e "${audit_wt_path}" ] || [ -L "${audit_wt_path}" ]; then
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=stale_path"
+    return 1
+  fi
+  if ! git worktree add --quiet --force --detach "${audit_wt_path}" "${audit_head_sha}" >/dev/null 2>&1; then
+    _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=worktree_add_failed"
+    return 1
+  fi
+  audit_wt_head="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${audit_wt_path}" rev-parse HEAD 2>/dev/null || true)"
+  if [ "${audit_wt_head}" != "${audit_head_sha}" ]; then
+    _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=head_mismatch"
+    return 1
+  fi
+  if ! audit_wt_status="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${audit_wt_path}" status --porcelain --untracked-files=no 2>/dev/null)" \
+    || [ -n "${audit_wt_status}" ]; then
+    _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=failed reason=worktree_not_clean"
+    return 1
+  fi
+  worktree_registry_register "$(basename -- "${audit_wt_path}")" "${audit_wt_path}" "${audit_head_sha}" "tracking-${TRACKING_NUM}" "orchestrate-poll"
+  SECURITY_PASS_AUDIT_WORKTREE="$(cd "${audit_wt_path}" && pwd -P)"
+  SECURITY_PASS_AUDIT_SUPPORT_ROOT="${audit_support_root}"
+  echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${audit_head_sha} outcome=prepared"
+  return 0
+}
+
+# security_pass_remove_audit_worktree — fail-open, idempotent cleanup of the
+# audit worktree; clears SECURITY_PASS_AUDIT_WORKTREE.
+security_pass_remove_audit_worktree() {
+  local audit_wt_path="${SECURITY_PASS_AUDIT_WORKTREE:-}"
+  SECURITY_PASS_AUDIT_WORKTREE=""
+  SECURITY_PASS_AUDIT_SUPPORT_ROOT=""
+  [ -n "${audit_wt_path}" ] || return 0
+  _security_pass_discard_audit_worktree_path "${audit_wt_path}"
+  return 0
+}
+
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -7823,7 +8108,7 @@ run_security_pass_inline() {
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
   local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
-  local required_security_asset
+  local required_security_asset advisory_findings_file advisory_count
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
   if [ -z "${integration_branch}" ]; then
@@ -7923,6 +8208,17 @@ run_security_pass_inline() {
   if [ -z "${merge_base_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
     return 1
+  fi
+  # Audit a clean worktree of the audited head, not the poller checkout whose
+  # scripts/ and prompts/ may carry the restored support copies (see
+  # security_pass_prepare_audit_worktree).  The caller removes it.
+  if security_pass_audit_clean_worktree_enabled; then
+    if ! security_pass_prepare_audit_worktree "${current_head_sha}"; then
+      security_pass_fail_closed "engine_unavailable" "The audited integration head could not be checked out into a clean worktree." "${prior_security_status}"
+      return 1
+    fi
+  else
+    echo "SECURITY_PASS_AUDIT_TREE tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} outcome=skipped reason=disabled"
   fi
 
   # Delta re-audit.  Every earlier audit of this project already covered the
@@ -8101,7 +8397,24 @@ run_security_pass_inline() {
     return 1
   fi
 
-  if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+  # The engine always runs from the trusted support root; with the audit
+  # worktree it runs in that worktree, so its REPO_ROOT and read-only snapshot
+  # are the audited head's files, and SECURITY_AUDIT_SUPPORT_DIR points its
+  # prompt, renderer, isolation helper and exclusions back at the support root.
+  local security_pass_engine_dir="${PWD}" security_pass_support_root="${PWD}"
+  local -a security_pass_engine_env=()
+  if [ -n "${SECURITY_PASS_AUDIT_WORKTREE:-}" ]; then
+    security_pass_engine_dir="${SECURITY_PASS_AUDIT_WORKTREE}"
+    security_pass_support_root="${SECURITY_PASS_AUDIT_SUPPORT_ROOT}"
+    # Pin the false-positive exclusion catalog to the trusted copy: from the
+    # worktree, security_audit.sh would otherwise prefer the audited branch's
+    # own scripts/security_audit_fp_exclusions.json.
+    security_pass_engine_env=(-u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
+      SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"
+      SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json")
+  fi
+  if ! ( cd "${security_pass_engine_dir}" && \
+    SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
@@ -8110,15 +8423,17 @@ run_security_pass_inline() {
     SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
     SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
+    SECURITY_AUDIT_LINE_OWNERSHIP="${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
     SECURITY_AUDIT_CLAUDE_REJECTED_OUT="${RUNTIME_DIR}/security_pass_claude_rejected_${TRACKING_NUM}.txt" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
     AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
-    bash scripts/codex_heartbeat.sh \
+    env ${security_pass_engine_env[@]+"${security_pass_engine_env[@]}"} \
+    bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+      -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}" ); then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -8147,7 +8462,8 @@ run_security_pass_inline() {
       and (.file | type) == "string" and (.file | length) > 0
       and (.line | type) == "number" and (.line | floor) == .line and .line > 0
       and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
-      and (.recommendation | type) == "string" and (.recommendation | length) > 0)
+      and (.recommendation | type) == "string" and (.recommendation | length) > 0
+      and (.advisory == null or (.advisory | type) == "boolean"))
   ' "${findings_file}" >/dev/null 2>&1; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit output was missing or invalid." "${prior_security_status}"
     return 1
@@ -8180,6 +8496,46 @@ run_security_pass_inline() {
   fi
 
   security_pass_apply_waivers_to_findings "${findings_file}"
+  # Line ownership (plan item 4b, decision D4): findings the engine tagged
+  # `advisory: true` cite only lines written before the project's merge-base.
+  # They never gate the pass: split them out here so every downstream consumer
+  # (state write, reported findings, fix issue, cycle budget, exhaustion judge,
+  # terminal failure, lesson events) sees blocking findings only, and record
+  # them as non-blocking advisory follow-ups.  A findings file without the
+  # field (SECURITY_AUDIT_LINE_OWNERSHIP=off, older engine) is all blocking.
+  # A failed split keeps the original file, so every finding stays blocking.
+  advisory_findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.advisory.json"
+  advisory_count=0
+  if jq -c '[.findings[] | select(.advisory == true)]' "${findings_file}" > "${advisory_findings_file}" 2>/dev/null; then
+    advisory_count="$(jq -r 'length' "${advisory_findings_file}" 2>/dev/null || echo 0)"
+    [[ "${advisory_count}" =~ ^[0-9]+$ ]] || advisory_count=0
+    if [ "${advisory_count}" -gt 0 ]; then
+      if cp "${findings_file}" "${findings_file}.with_advisory" 2>/dev/null \
+        && jq '.findings = [.findings[] | select(.advisory != true)] | .counts.kept = (.findings | length)' \
+        "${findings_file}" > "${findings_file}.blocking" 2>/dev/null \
+        && mv "${findings_file}.blocking" "${findings_file}"; then
+        if ! security_pass_record_line_ownership_advisories "${advisory_findings_file}" "${current_head_sha}" "${merge_base_sha}" "${integration_branch}"; then
+          # Recording failed: restore the unsplit result so the advisories
+          # stay blocking rather than vanishing behind a `passed` head.
+          if ! cp "${findings_file}.with_advisory" "${findings_file}" 2>/dev/null; then
+            rm -f "${findings_file}.with_advisory" "${advisory_findings_file}"
+            security_pass_fail_closed "engine_unavailable" "Could not restore the security-pass result after line-ownership advisories failed to record." "${prior_security_status}"
+            return 1
+          fi
+          advisory_count=0
+          echo "::warning::Line-ownership advisories were not recorded for tracking issue #${TRACKING_NUM}; every finding stays blocking for this audit."
+        fi
+        rm -f "${findings_file}.with_advisory"
+      else
+        rm -f "${findings_file}.blocking" "${findings_file}.with_advisory" "${advisory_findings_file}"
+        advisory_count=0
+        echo "::warning::Could not split line-ownership advisories from the security-pass result for tracking issue #${TRACKING_NUM}; every finding stays blocking."
+      fi
+    fi
+  else
+    advisory_count=0
+    echo "::warning::Could not read line-ownership advisories from the security-pass result for tracking issue #${TRACKING_NUM}; every finding stays blocking."
+  fi
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
   # Record the audited head as the base of the next delta re-audit and
@@ -8235,11 +8591,11 @@ run_security_pass_inline() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
-    echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
+    echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} advisory=${advisory_count}"
     return 0
   fi
 
-  echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
+  echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles} advisory=${advisory_count}"
   record_orchestrator_lesson_event "$(lesson_event_json_for_security_findings "${findings_file}" "$((completed_cycles + 1))")"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
     # Budget spent: let the exhaustion judge decide before terminalizing.  It
@@ -8325,12 +8681,17 @@ ensure_security_pass_before_completion() {
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
   fi
+  # Every caller runs this function in a conditional context, so capturing
+  # the status here does not change errexit behaviour inside the runner.
+  local security_pass_inline_rc=0
   run_security_pass_inline \
     "${integration_branch}" \
     "${default_branch}" \
     "${SECURITY_PASS_VERIFIED_PR_REF:-}" \
     "${SECURITY_PASS_VERIFIED_PR_SHA:-}" \
-    "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}"
+    "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}" || security_pass_inline_rc=$?
+  security_pass_remove_audit_worktree
+  return "${security_pass_inline_rc}"
 }
 
 merge_tree_conflict_paths_json() {
@@ -11900,6 +12261,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
     set_failed_completion_status_comment \
       "Integration self-healing hit the lifetime dispatch cap of ${INTEGRATION_CONFLICT_LIFETIME_MAX} resolver+judge attempt(s) for final PR #${final_pr}. Manual intervention required. See the \"❌ Integration self-healing capped\" comment for the diagnostic detail."
     tg_notify "❌ Integration self-healing capped at ${INTEGRATION_CONFLICT_LIFETIME_MAX} dispatches for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
+    needs_human_park_project "integration_conflict_capped"
     return 1
   fi
 
@@ -12593,7 +12955,20 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "" "${default_branch}"; then
+  # Head binding (security-pass finding poller-merge-unbound-to-checked-head):
+  # the head SHA observed here feeds the check-runs gate AND the merge's
+  # --match-head-commit, so a push between the check and the merge is
+  # rejected by GitHub instead of merging an unchecked commit.
+  local pr_head_sha=""
+  pr_head_sha="$(_jq_field "${pr_json}" '.head.sha' '[0-9a-f]{40}')"
+  if [ "${pr_state}" = "open" ] && [ -z "${pr_head_sha}" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "::warning::ORCH_MERGE_HEAD_BOUND pr=${final_pr} outcome=refused reason=unresolved_head_sha"
+    echo "  [final-merge] Could not resolve the head SHA of PR #${final_pr}. Will retry next poll."
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "${pr_head_sha}" "${default_branch}"; then
     FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
@@ -12608,7 +12983,8 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   fi
 
   local merge_err=""
-  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
+  echo "ORCH_MERGE_HEAD_BOUND pr=${final_pr} head_sha=${pr_head_sha} mode=sync outcome=attempt"
+  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch --match-head-commit "${pr_head_sha}" 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
@@ -12672,6 +13048,18 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
     jq --arg err "${merge_err}" '.final_merge_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+
+  # The head moved after the checks ran: GitHub refused the bound merge.
+  # Not a merge failure; the next poll re-checks the new head without
+  # spending the final-merge budget.
+  local post_merge_head_sha=""
+  post_merge_head_sha="$(_jq_field "${pr_json}" '.head.sha' '[0-9a-f]{40}')"
+  if [ "${pr_state}" = "open" ] && [ -n "${post_merge_head_sha}" ] && [ "${post_merge_head_sha}" != "${pr_head_sha}" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "ORCH_MERGE_HEAD_BOUND pr=${final_pr} head_sha=${pr_head_sha} mode=sync outcome=failed reason=head_moved current_head=${post_merge_head_sha}"
+    echo "  [final-merge] PR #${final_pr} head moved during the merge attempt. Will retry next poll."
+    return 1
   fi
 
   # Post-merge-attempt conflict path: squash merge was rejected by
@@ -13847,6 +14235,7 @@ mark_validation_failed() {
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:validation-failed"
+    needs_human_park_project "validation_failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     ensure_label_exists "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## ❌ Runtime validation harness error
@@ -13893,6 +14282,7 @@ The latest validation run reported \`raw_status=harness_error\`, so the orchestr
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:validation-failed"
+    needs_human_park_project "validation_failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## ❌ Runtime validation failed (deterministic)
@@ -13953,6 +14343,7 @@ Transitioning back to judge for re-evaluation."
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validation-failed"
+  needs_human_park_project "validation_failed"
   gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
   gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
   post_tracking_comment "## ❌ Runtime validation failed
@@ -14067,6 +14458,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
       "Runtime validation passed, but the final squash merge of \`${integration_branch}\` into \`${default_branch}\` did not land after ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} attempt(s). Manual intervention required. See the \"❌ Final integration merge could not complete\" comment for the diagnostic detail."
     tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
+    needs_human_park_project "final_merge_exhausted"
     return 0
   fi
 
@@ -18374,6 +18766,89 @@ unblock_handover_merge_deferral() {
   fi
 }
 
+# Needs-human digest (docs/plans/unattended-claude-pipeline-completion-plan.md
+# item 4a, decision D6). When a project's automated budgets are spent it is
+# parked in the repository's single needs-human digest issue
+# (scripts/operator_step_issue.py needs-human park) with one CRITICAL alert per
+# newly parked project; nothing is closed by an exhausted budget. While the
+# unblock judge is enabled it still has rounds for a failed project, so the
+# poller defers to it and the judge parks the project when its own rounds run
+# out. Kill switch NEEDS_HUMAN_DIGEST_ENABLED (default true). Labels and state
+# transitions at the call sites are unchanged. Never fails the tick.
+# API budget (§15): see the module docstring of scripts/operator_step_issue.py;
+# the pipeline login is the tick's cached unblock_trusted_login.
+NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
+
+needs_human_park_project() {
+  local reason park_json digest
+  reason="$(printf '%s' "${1:-exhausted}" | tr -cd 'a-z0-9_' | cut -c1-40)"
+  [ -n "${reason}" ] || reason="exhausted"
+  if [ "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" = "false" ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM:-none} kind=project reason=${reason} outcome=skip detail=disabled"
+    return 0
+  fi
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" != "false" ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM:-none} kind=project reason=${reason} outcome=skip detail=unblock_judge_pending"
+    return 0
+  fi
+  if ! [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "NEEDS_HUMAN item=none kind=project reason=${reason} outcome=skip detail=no_tracking_issue"
+    return 0
+  fi
+  if [ ! -f scripts/operator_step_issue.py ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=support_missing"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=login_unavailable"
+    return 0
+  fi
+  if ! park_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human park \
+    --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --kind project --stop project-failed \
+    --reason "${reason}" --link "https://github.com/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=park_failed"
+    return 0
+  fi
+  if jq -e '.newly_parked == true' <<< "${park_json}" >/dev/null 2>&1; then
+    digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
+    tg_notify "Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide." "CRITICAL" || true
+  fi
+  return 0
+}
+
+# Once per tick, after the unblock scan: drop digest entries whose item is no
+# longer open with ai:needs-human (merged, closed, or cleared by a person).
+NEEDS_HUMAN_PARKED_ITEMS_FILE="${RUNNER_TEMP:-/tmp}/needs_human_parked_items.json"
+needs_human_digest_prune() {
+  # A stale list from an earlier tick must never decide this tick's scan.
+  rm -f "${NEEDS_HUMAN_PARKED_ITEMS_FILE}" 2>/dev/null || true
+  if [ "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" = "false" ]; then
+    echo "NEEDS_HUMAN item=none kind=digest reason=disabled outcome=skip"
+    return 0
+  fi
+  if [ ! -f scripts/operator_step_issue.py ]; then
+    echo "NEEDS_HUMAN item=none kind=digest reason=support_missing outcome=skip"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "NEEDS_HUMAN item=none kind=digest reason=login_unavailable outcome=skip"
+    return 0
+  fi
+  local prune_json
+  if prune_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human prune \
+    --repo "${GITHUB_REPOSITORY}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    # The scan counts an item as parked only while the digest lists it.
+    jq -ce '.items | select(type == "array")' <<< "${prune_json}" > "${NEEDS_HUMAN_PARKED_ITEMS_FILE}" 2>/dev/null \
+      || rm -f "${NEEDS_HUMAN_PARKED_ITEMS_FILE}"
+  else
+    echo "NEEDS_HUMAN item=none kind=digest reason=prune_failed outcome=skip"
+  fi
+  return 0
+}
+
 # Hand-over (plan Phase 7, Q13): counts consecutive project-judge runs with
 # no usable output in the state (judge_output_failures, reset on the next
 # parsed verdict). At JUDGE_OUTPUT_FAILURE_MAX the project fails with
@@ -18408,6 +18883,7 @@ unblock_handover_judge_output() {
 The project judge produced no usable output (${why}) ${failures} time(s) in a row (JUDGE_OUTPUT_FAILURE_MAX=${JUDGE_OUTPUT_FAILURE_MAX}). The project is marked failed for the unblock judge; \`/judge_resume\` resumes it." || true
     echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
     echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=failed"
+    needs_human_park_project "judge_output_exhausted"
   else
     jq --argjson n "${failures}" '.judge_output_failures = $n' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
@@ -18429,6 +18905,9 @@ The project judge produced no usable output (${why}) ${failures} time(s) in a ro
 run_unblock_scan() {
   local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection verify_item verified_details
   local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
+  # Needs-human digest upkeep (plan item 4a) rides the scan's once-per-tick
+  # slot in both poller modes, also while the unblock judge is off.
+  needs_human_digest_prune || true
   # Issue #7251 dependency wait: refresh the hold before #7251 can be judged.
   if declare -F _issue_7251_dependency_wait_once >/dev/null 2>&1; then _issue_7251_dependency_wait_once; fi
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
@@ -18573,9 +19052,14 @@ run_unblock_scan() {
     fi
   fi
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local -a parked_args=()
+  if [ -s "${NEEDS_HUMAN_PARKED_ITEMS_FILE}" ]; then
+    parked_args=(--parked-items-file "${NEEDS_HUMAN_PARKED_ITEMS_FILE}")
+  fi
   if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
     --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
     --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+    ${parked_args[@]+"${parked_args[@]}"} \
     --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
     --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
     --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
@@ -18603,6 +19087,7 @@ run_unblock_scan() {
         selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
           --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
           --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+          ${parked_args[@]+"${parked_args[@]}"} \
           --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
           --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
           --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
@@ -20118,13 +20603,17 @@ STALL_EOF
           [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}" \
-            && _pr_base_fresh_for_merge "${merge_pr}" \
-              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)" \
-              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"; then
-            gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
-              || gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
-              || true
+          local merge_head_sha merge_base_ref
+          merge_head_sha="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+          merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+          # One observed head feeds the checks, the freshness gate and the
+          # bound merge (two-argument checks call keeps the legacy
+          # block-on-any filter).
+          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
+            && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
+            && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
+            && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
+            _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true
           fi
         fi
         if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
@@ -23406,8 +23895,7 @@ The poller will resume processing on the next cycle."
                 echo "  [backward-scan] Backpressure active (ahead_by=${CWS_BACKPRESSURE_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
-              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+              if _orch_squash_merge_bound "${PW_PR}" "${_pw_head_sha}" auto; then
                 refresh_integration_backpressure_gate_after_merge || true
               fi
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
@@ -24104,11 +24592,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		    esac
 		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
-		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
-		    echo "  PR #${RTM_PR} merge initiated."
-		    refresh_integration_backpressure_gate_after_merge || true
-		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-		    echo "  PR #${RTM_PR} merged directly."
+		  # Bound to the head the check-runs gate evaluated above
+		  # (_sync_integration_and_rebase_subissue rc 0 left it unchanged).
+		  if _orch_squash_merge_bound "${RTM_PR}" "${_rtm_head_sha}" auto; then
+		    if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
+		      echo "  PR #${RTM_PR} merged directly."
+		    else
+		      echo "  PR #${RTM_PR} merge initiated."
+		    fi
 		    refresh_integration_backpressure_gate_after_merge || true
 		  else
 		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
@@ -25278,11 +25769,12 @@ sys.exit(1)
           _rb_merge_base="$(_jq_field "${_rb_merge_json}" '.base.ref')"
 		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
 		    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
-		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
-		      echo "  PR #${RB_PR} merge initiated (auto)."
-		      RB_MERGED="true"
-		    elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-		      echo "  PR #${RB_PR} merged directly."
+		    if _orch_squash_merge_bound "${RB_PR}" "${_rb_merge_sha}" auto; then
+		      if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
+		        echo "  PR #${RB_PR} merged directly."
+		      else
+		        echo "  PR #${RB_PR} merge initiated (auto)."
+		      fi
 		      RB_MERGED="true"
 		    else
 		      echo "::warning::Could not merge PR #${RB_PR}."
@@ -25336,8 +25828,7 @@ sys.exit(1)
             _rb_fm_base="$(_jq_field "${_rb_fm_json}" '.base.ref')"
 				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
 				  && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
-				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+				  if _orch_squash_merge_bound "${RB_PR}" "${_rb_fm_sha}" auto; then
 				    RB_FORCE_MERGED="true"
 				  else
 				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
@@ -25652,8 +26143,7 @@ ${RB_FIX_DESC}
                   _rb_nofix_base="$(_jq_field "${_rb_nofix_json}" '.base.ref')"
                   if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
                     && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
-                    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-                      || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                    if _orch_squash_merge_bound "${RB_PR}" "${_rb_nofix_sha}" auto; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
@@ -26789,6 +27279,7 @@ Manual intervention required." >/dev/null
     set_failed_completion_status_comment \
       "Judge stall cycle limit exceeded (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}). Manual intervention required. See the \"Project Failed — Judge stall cycle limit exceeded\" comment for the diagnostic detail."
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
+    needs_human_park_project "judge_cycles_exhausted"
     tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
@@ -27359,6 +27850,7 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
           "The judge repeated the same normalized failure fingerprint ${JUDGE_FINGERPRINT_REPEAT_COUNT} time(s), exceeding JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required. See the \"❌ Judge repeat-fingerprint breaker triggered\" comment for the diagnostic detail."
         tg_cleanup_msgs "${TRACKING_NUM}"
         tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
+        needs_human_park_project "judge_repeat_fingerprint"
         continue
       fi
 
@@ -27408,6 +27900,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         set_failed_completion_status_comment \
           "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. Fix-up issues tracked for the final verdict: ${EXHAUSTED_FIXUP_REFS}. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
         tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Fix-up issues tracked: ${EXHAUSTED_FIXUP_REFS}. Manual intervention needed (/judge_resume)." "CRITICAL"
+        needs_human_park_project "recovery_exhausted"
         tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
@@ -28712,7 +29205,12 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 
 	# All gates passed → force-merge.
 	echo "  PR #${N_PR}: all force-merge gates passed. Enabling auto-merge via 'gh pr merge --auto'..."
-	if gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1; then
+	# Auto-only (no direct-merge fallback), bound to the head the gates above
+	# evaluated so a later push cannot ride this auto-merge; an unresolved
+	# head never reaches gh (security-pass finding
+	# poller-merge-unbound-to-checked-head).
+	if [[ "${N_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+		&& gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${N_HEAD_SHA}" >/dev/null 2>&1; then
 		NOOP_FORCE_MERGED=$((NOOP_FORCE_MERGED + 1))
 		tg_send_msg "Force-merging PR #${N_PR} after ${NOOP_MAX_RETRIES} noop-suspicious retries; reviewer audit was healthy."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "DEBUG" >/dev/null 2>&1 || true
 

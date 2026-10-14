@@ -15,6 +15,12 @@ runtime fallback (`validate_process.sh`) which performs the same task
 inside each consumer's own CI. The shell path remains the last-resort
 fallback when a consumer has no committed `.ai/validate.yml` and the
 daily refresh runner has not yet opened a discovery PR.
+
+The agent runs on the engine of role `VALIDATION_REFRESH` (Claude by default,
+codex on `AI_ENGINE_VALIDATION_REFRESH=codex` or when Claude is unavailable):
+the Claude path goes through `claude_run_selected` from the trusted engine
+root (`CLAUDE_ENGINE_SUPPORT_DIR`); the codex path is the unchanged
+`codex exec` command line. Both run in the credential-free isolated container.
 """
 
 from __future__ import annotations
@@ -22,7 +28,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -261,6 +270,45 @@ def validate_discovered_manifest_yaml(
 # Trusted helper next to this module; never resolved from the clone.
 CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"
 
+# Engine role of the discovery agent (.github/ai/claude_engine.json).
+DISCOVERY_ENGINE_ROLE = "VALIDATION_REFRESH"
+
+
+def _claude_engine_support_root() -> Path:
+	"""Trusted engine root staged by validation-refresh.yml (never the clone)."""
+	configured = os.environ.get("CLAUDE_ENGINE_SUPPORT_DIR", "")
+	if configured:
+		return Path(configured)
+	return Path(os.environ.get("RUNNER_TEMP", "") or "/tmp") / "claude-engine-support"
+
+
+def _claude_engine_script() -> Path | None:
+	script = _claude_engine_support_root() / "scripts" / "ai_engine.sh"
+	if script.is_symlink() or not script.is_file():
+		return None
+	return script
+
+
+def resolve_discovery_engine() -> str:
+	"""`claude` or `codex` for the discovery role; any problem means codex."""
+	script = _claude_engine_script()
+	if script is None:
+		print(f"AI_ENGINE_FALLBACK role={DISCOVERY_ENGINE_ROLE} reason=engine_support_missing", file=sys.stderr)
+		return "codex"
+	try:
+		proc = subprocess.run(
+			["bash", "-c", f'source "$0"; ai_engine_for_role {DISCOVERY_ENGINE_ROLE}', str(script)],
+			text=True,
+			capture_output=True,
+			check=False,
+			timeout=60,
+		)
+	except (OSError, subprocess.SubprocessError):
+		return "codex"
+	if proc.stderr:
+		sys.stderr.write(proc.stderr)
+	return "claude" if proc.returncode == 0 and proc.stdout.strip() == "claude" else "codex"
+
 
 def discover_manifest_via_codex(
 	*,
@@ -274,6 +322,7 @@ def discover_manifest_via_codex(
 	per_call_timeout_secs: int | None = None,
 	retry_backoff_base_secs: float = 5.0,
 	sleep_fn: Callable[[float], None] = time.sleep,
+	engine_resolver: Callable[[], str] | None = None,
 ) -> DiscoveryResult:
 	"""Invoke `codex exec` against a consumer clone and validate output.
 
@@ -300,6 +349,13 @@ def discover_manifest_via_codex(
 
 	executor = executor or CommandExecutor()
 	prompt_text = prompt_path.read_text(encoding="utf-8")
+	# Engine of role VALIDATION_REFRESH. On codex the executor command is the
+	# unchanged `codex exec` line; on Claude the same command is the fallback
+	# claude_run_selected runs when Claude is unavailable (exit 75).
+	engine = (engine_resolver or resolve_discovery_engine)()
+	engine_script = _claude_engine_script() if engine == "claude" else None
+	if engine_script is None:
+		engine = "codex"
 
 	last_failure: str | None = None
 	for attempt in range(1, attempts + 1):
@@ -331,6 +387,8 @@ def discover_manifest_via_codex(
 			"--sandbox",
 			"danger-full-access",
 		]
+		claude_io_dir: Path | None = None
+		claude_out_path: Path | None = None
 		try:
 			run_kwargs: dict[str, Any] = {
 				"cwd": clone_dir,
@@ -338,11 +396,48 @@ def discover_manifest_via_codex(
 				"input_text": prompt_text,
 				"env_overrides": {"CODEX_DISABLE_TELEMETRY": "1"},
 			}
+			if engine == "claude" and engine_script is not None:
+				# Prompt and output live in a private directory outside the
+				# clone; the Claude run is read-only (AI_ENGINE_READ_ONLY).
+				claude_io_dir = Path(tempfile.mkdtemp(prefix="validation-discovery-engine-"))
+				claude_prompt_path = claude_io_dir / "prompt.txt"
+				claude_out_path = claude_io_dir / "output.txt"
+				claude_prompt_path.write_text(prompt_text, encoding="utf-8")
+				command = [
+					"bash",
+					"-c",
+					'source "$0"; claude_run_selected "$@"',
+					str(engine_script),
+					DISCOVERY_ENGINE_ROLE,
+					str(claude_prompt_path),
+					str(claude_out_path),
+					str(clone_dir),
+					"--codex-stdio",
+					"--",
+					*command,
+				]
+				run_kwargs["input_text"] = None
+				run_kwargs["env_overrides"] = {
+					"CODEX_DISABLE_TELEMETRY": "1",
+					"AI_ENGINE_MODEL_HINT": model,
+					"AI_ENGINE_EFFORT_HINT": reasoning_effort,
+					"AI_ENGINE_READ_ONLY": "true",
+				}
 			# Cap each codex attempt when the caller supplies a per-call
 			# budget; when None, defer to the executor's own default timeout.
 			if per_call_timeout_secs is not None:
 				run_kwargs["timeout"] = per_call_timeout_secs
-			proc = executor.run(command, **run_kwargs)
+			try:
+				proc = executor.run(command, **run_kwargs)
+				if claude_out_path is not None:
+					# Claude (or its codex fallback) writes the output file.
+					try:
+						proc.stdout = claude_out_path.read_text(encoding="utf-8", errors="replace")
+					except OSError:
+						proc.stdout = ""
+			finally:
+				if claude_io_dir is not None:
+					shutil.rmtree(claude_io_dir, ignore_errors=True)
 		except Exception as exc:
 			if isinstance(exc, subprocess.TimeoutExpired) or (
 				_wrapped_command_failure(exc) and _command_exception_returncode(exc) == 124

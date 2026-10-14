@@ -40,11 +40,12 @@ def test_poll_process_python_script_invocations_are_staged() -> None:
 	# workspaces (which only contain staged support files) fail the call
 	# at runtime. Invocations wrapped in their own `[ -f scripts/<f> ]`
 	# existence check (e.g. verify_integration_fingerprints.py) are
-	# deliberately optional and exempt.
+	# deliberately optional and exempt, whichever polarity the check uses
+	# (`[ -f ... ]` or `[ ! -f ... ]`).
 	staged = set(_stage_list())
 	source = POLL_PROCESS.read_text(encoding="utf-8")
 	invoked = set(re.findall(r"python3\s+(?:\"?\$\{?SCRIPT_DIR\}?\"?/|scripts/)([A-Za-z0-9_]+\.py)", source))
-	existence_guarded = set(re.findall(r"\[ -f \"?scripts/([A-Za-z0-9_]+\.py)\"? \]", source))
+	existence_guarded = set(re.findall(r"\[ (?:! )?-f \"?scripts/([A-Za-z0-9_]+\.py)\"? \]", source))
 	missing = sorted(f for f in invoked if f not in staged and f not in existence_guarded)
 	assert not missing, f"invoked by orchestrate_poll_process.sh but not staged: {missing}"
 

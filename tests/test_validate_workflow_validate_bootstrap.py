@@ -403,7 +403,13 @@ def test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_
 		for name in ("yaml", "jsonschema", "jinja2"):
 			package = purelib / name
 			package.mkdir()
-			(package / "__init__.py").write_text("# installed package fixture\n", encoding="utf-8")
+			fixture_source = "# installed package fixture\n"
+			if name == "yaml":
+				# The manifest shell-safety gate parses .ai/validate.yml with the
+				# isolated yaml before the renderer runs; an empty manifest loads
+				# as None and is left to the renderer.
+				fixture_source += "class YAMLError(Exception):\n\tpass\ndef safe_load(text):\n\treturn None\n"
+			(package / "__init__.py").write_text(fixture_source, encoding="utf-8")
 		for asset in (
 			".ai/validate.yml", "scripts/templates/slot_manifest.schema.json",
 			"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
