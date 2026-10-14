@@ -168,6 +168,9 @@ jobs:
           PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
           PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
           PROVIDER_OUTAGE_REVIEW_WORKFLOW: internal-review.yml
+          # Claude capacity wait (issue #7370): the same switch the review
+          # workflows read, so the capacity tracker text matches them.
+          CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
           # dry_run: report the tracker state only (no probe, dispatch,
           # label, tracker or alert writes).
           DRY_RUN: ${{ inputs.dry_run }}
@@ -476,6 +479,14 @@ jobs:
               && printf '%s' "${row}" | jq -e '(.labels // []) | index("ai:merge-queued") != null' >/dev/null 2>&1; then
               echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=merge_train_queued head_ref=${head_ref}"
               skipped_merge_queued=$((skipped_merge_queued + 1))
+              continue
+            fi
+
+            # A PR waiting for Claude capacity (issue #7370) is re-dispatched
+            # by the hourly capacity-resume pass in orchestrate_poll.yml, which
+            # removes the label; a sweep dispatch would only pause it again.
+            if printf '%s' "${row}" | jq -e '(.labels // []) | index("ai:claude-capacity-wait") != null' >/dev/null 2>&1; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=claude_capacity_wait head_ref=${head_ref}"
               continue
             fi
 

@@ -218,7 +218,7 @@ PY
 
 activation_main()
 {
-	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file
+	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
 	local activation_symlinks_context activation_context_tmp
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
@@ -373,6 +373,7 @@ activation_main()
 		local activation_engine_helper="${SUPPORT_DIR}/scripts/ai_engine.sh"
 		if [ -f "${activation_engine_helper}" ] && [ ! -L "${activation_engine_helper}" ] \
 			&& bash -c 'source "$0" >/dev/null 2>&1 && declare -F claude_run_selected >/dev/null' "${activation_engine_helper}" 2>/dev/null; then
+			activation_model_rc=0
 			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET \
 				AI_ENGINE_MODEL_HINT="${model}" AI_ENGINE_EFFORT_HINT="${reasoning}" \
 				AI_ENGINE_LABELS="${activation_engine_labels:-${AI_ENGINE_LABELS:-}}" \
@@ -381,7 +382,12 @@ activation_main()
 				ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio -- \
 				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
 				--ask-for-approval never -c model_verbosity=low exec \
-				--skip-git-repo-check --model "${model}" --sandbox read-only 2>"${RUNTIME_DIR}/activation_codex.err") || true
+				--skip-git-repo-check --model "${model}" --sandbox read-only 2>"${RUNTIME_DIR}/activation_codex.err") || activation_model_rc=$?
+			if [ "${activation_model_rc}" -eq 80 ]; then
+				# Claude capacity wait (issue #7370): no codex, no verdict.
+				activation_log "mode=${mode} item=${item} outcome=skip reason=claude_capacity_wait"
+				return 0
+			fi
 		else
 			echo "AI_ENGINE_FALLBACK role=ACTIVATION_VERIFY reason=engine_support_missing" >&2
 			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \

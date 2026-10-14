@@ -62,6 +62,11 @@ name: AI Validate (Reusable)
         value: ${{ jobs.validate.outputs.metadata_file }}
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
   UNATTENDED_PHASE: validate
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -102,6 +107,11 @@ jobs:
 
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # Claude capacity wait (issue #7370): the tracking issue is labelled;
+      # the resume pass removes the label and the poller re-dispatches.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: ${{ inputs.tracking_issue && inputs.tracking_issue != '0' && 'issue' || 'run' }}
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ inputs.tracking_issue || '' }}
+      CLAUDE_CAPACITY_WAIT_STAGE: validate
     steps:
       - name: Bootstrap GitHub API retry helper
         continue-on-error: true
@@ -1232,7 +1242,17 @@ jobs:
           ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
-          bash scripts/validate_process.sh
+          validate_process_rc=0
+          bash scripts/validate_process.sh || validate_process_rc=$?
+          if [ "${validate_process_rc}" -eq 80 ]; then
+            # Claude capacity wait (issue #7370): no verdict label. The report
+            # step labels the tracking issue; the capacity-resume pass removes
+            # the label and the poller re-dispatches validation.
+            echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE outcome=deferred stage=validate"
+            echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          exit "${validate_process_rc}"
 
       - name: Run workspace after_run hook
         if: always() && steps.validate_run.outcome != 'skipped'
@@ -1268,7 +1288,7 @@ jobs:
 
       - name: Collect validation status
         id: collect_status
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
@@ -1321,7 +1341,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Emit Serena stats
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
@@ -1350,7 +1370,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
 
       - name: Record validation candidate
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1429,7 +1449,7 @@ jobs:
             --issue-number "${issue_number}"
 
       - name: Upload validation artifacts
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         uses: actions/upload-artifact@v6
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1440,7 +1460,7 @@ jobs:
             ${{ steps.workspace_state.outputs.workspace_path }}/validation/
 
       - name: Write run summary
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           SUMMARY_TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           SUMMARY_COMPOSE_FILE: ${{ inputs.compose_file }}
@@ -1471,7 +1491,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record validation run end
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1532,7 +1552,7 @@ jobs:
             --metadata-json "${metadata_json}"
 
       - name: Force orchestrate poll after validation finalization
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1561,7 +1581,7 @@ jobs:
           bash "${VALIDATE_HOOK_HELPER}" validate before_remove
 
       - name: Enforce validation outcome
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           VALIDATION_STATUS: ${{ steps.collect_status.outputs.status }}
           VALIDATION_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}

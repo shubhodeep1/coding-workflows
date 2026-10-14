@@ -499,6 +499,14 @@ poller_judge_isolated()
     return 77
   fi
   POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt "${rb_engine}" "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
+  if [ "${rb_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no OpenCode retry. Callers defer as
+    # for 77, but the reason keeps the wait out of the isolation counters.
+    printf '%s\n' claude_capacity_wait > "${judge_reason_file}"
+    echo "${judge_role}_ISOLATION outcome=deferred reason=claude_capacity_wait" >&2
+    : > "${output_file}"
+    return 77
+  fi
   if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then
     # Claude unavailable inside isolation: retry OpenCode in a NEW root.
     rb_rc=0
@@ -582,6 +590,12 @@ _record_judge_isolation_failure()
   local role="$1" state_file="$2" issue="$3" labels="$4" reason count comment comment_id owned_label=false tracking_ref="-"
   [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
   reason="$(cat "${RUNTIME_DIR}/judge_isolation_reason" 2>/dev/null || true)"
+  if [ "${reason}" = claude_capacity_wait ]; then
+    # A Claude capacity wait is not an isolation failure (issue #7370): it never
+    # counts toward JUDGE_ISOLATION_MAX_FAILURES or adds ai:needs-human.
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=deferred reason=claude_capacity_wait counted=false"
+    return 0
+  fi
   case "${reason}" in support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;; *) reason=unknown ;; esac
   count="$(jq -r --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role].count // 0 else 0 end' "${state_file}" 2>/dev/null || echo 0)"
   [[ "${count}" =~ ^[0-9]{1,9}$ ]] || count=0
@@ -8642,7 +8656,8 @@ run_security_pass_inline() {
       SECURITY_AUDIT_SUPPORT_DIR="${security_pass_support_root}"
       SECURITY_AUDIT_FP_EXCLUSIONS="${security_pass_support_root}/scripts/security_audit_fp_exclusions.json")
   fi
-  if ! ( cd "${security_pass_engine_dir}" && \
+  local security_pass_audit_rc=0
+  ( cd "${security_pass_engine_dir}" && \
     SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
@@ -8662,7 +8677,14 @@ run_security_pass_inline() {
     bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}" ); then
+      -- bash "${security_pass_support_root}/scripts/security_audit.sh" "${context_file}" ) || security_pass_audit_rc=$?
+  if [ "${security_pass_audit_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): never engine_unavailable. The pass
+    # stays pending and is retried on a later tick.
+    echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} outcome=deferred reason=claude_capacity_wait"
+    return 1
+  fi
+  if [ "${security_pass_audit_rc}" -ne 0 ]; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
@@ -14265,6 +14287,16 @@ dispatch_validation_if_needed() {
   local validation_cap_run_url
   local validation_cap_redispatch_fields=""
 
+  # Claude capacity wait (issue #7370, plan D7): a validate run that waited
+  # for Claude capacity ends without a verdict and labels the tracking issue
+  # ai:claude-capacity-wait. Hold dispatch, without counting toward
+  # MAX_VALIDATION_DISPATCHES_PER_CYCLE, until the hourly capacity-resume pass
+  # removes the label. Reads the cycle's existing label snapshot (no API call).
+  if printf '%s' "${TRACKING_LABELS:-[]}" | jq -e 'type == "array" and any(.[]; (if type == "object" then .name else . end) == "ai:claude-capacity-wait")' >/dev/null 2>&1; then
+    echo "VALIDATION_DISPATCH_CAP outcome=capacity_wait issue=${TRACKING_NUM:-} cycle=${validation_cycle}"
+    return 0
+  fi
+
   # Defensive preflight: refuse to dispatch validate while the current
   # wave's PRs are not all merged into the integration branch
   # (WAVE_COMPLETE != true). This is belt-and-suspenders against the rare
@@ -16690,6 +16722,11 @@ STALL_EOF
           STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_merge_train"
           return 1
         fi
+        if _linked_pr_is_capacity_waiting "${_rtr_pr_json}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=claude_capacity_wait pr=${pr_num} phase=${phase} action=retrigger_review"
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_capacity_wait"
+          return 1
+        fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
@@ -18180,6 +18217,28 @@ _linked_pr_is_merge_queued()
         else empty
         end]
     | index("ai:merge-queued") != null
+  ' >/dev/null 2>&1
+}
+
+# Claude capacity wait (issue #7370): a review that waited for Claude capacity
+# labels its PR ai:claude-capacity-wait; the hourly capacity-resume pass in
+# orchestrate_poll.yml re-dispatches it and removes the label. Stall recovery
+# leaves such a PR alone instead of re-dispatching a review that would only
+# pause again and spend recovery budget. Same payload shapes as above.
+_linked_pr_is_capacity_waiting()
+{
+  local linked_json="$1"
+  [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ] || return 1
+  printf '%s' "${linked_json}" | jq -e '
+    select(type == "object")
+    | select(((.state // "") | ascii_downcase) == "open")
+    | select((.merged // false) != true)
+    | [(.labels // [])[]?
+      | if type == "string" then .
+        elif type == "object" then (.name // empty)
+        else empty
+        end]
+    | index("ai:claude-capacity-wait") != null
   ' >/dev/null 2>&1
 }
 
@@ -20278,6 +20337,13 @@ PY
       fi
       continue
     fi
+    if [ "${phase}" = "ai:done" ] && _linked_pr_is_capacity_waiting "${_std_linked_json}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=claude_capacity_wait pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
       _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -21418,6 +21484,10 @@ recover_stalled_issue() {
   if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
     return 1  # Intentional train wait; do not consume stall budget or alert.
+  fi
+  if [ "${phase}" = "ai:done" ] && _linked_pr_is_capacity_waiting "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=claude_capacity_wait pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+    return 1  # Intentional capacity wait (issue #7370); no stall budget or alert.
   fi
   if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
@@ -25950,11 +26020,16 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         RB_ISOLATION_REASON="$(cat "${RUNTIME_DIR}/rb_judge_isolation_reason" 2>/dev/null || true)"
+        RB_ISOLATION_CAPACITY_WAIT=false
+        [ "${RB_ISOLATION_REASON}" != claude_capacity_wait ] || RB_ISOLATION_CAPACITY_WAIT=true
         case "${RB_ISOLATION_REASON}" in
           support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;;
           *) RB_ISOLATION_REASON=unknown ;;
         esac
-        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
+        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ] && [ "${RB_ISOLATION_CAPACITY_WAIT}" = true ]; then
+          # Claude capacity wait (issue #7370): defer without counting.
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=deferred reason=claude_capacity_wait counted=false"
+        elif [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
           RB_ISOLATION_PREV_COUNT="$(jq -r --arg key "${rb_issue}" --arg head "${RB_ISOLATION_HEAD}" 'if .review_blocked_isolation_state[$key].head_sha == $head then .review_blocked_isolation_state[$key].count // 0 else 0 end' "${STATE_FILE}")"
           [[ "${RB_ISOLATION_PREV_COUNT}" =~ ^[0-9]+$ ]] || RB_ISOLATION_PREV_COUNT=0
           RB_ISOLATION_COUNT=$((RB_ISOLATION_PREV_COUNT + 1))

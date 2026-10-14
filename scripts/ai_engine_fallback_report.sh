@@ -58,12 +58,18 @@
 #   REPORT_WORKFLOW_NAME             caller workflow name (default GITHUB_WORKFLOW)
 #   REPORT_WRAPPER_SHA               coding-workflows commit of the support scripts
 #   RUNTIME_DIR                      scratch dir (default RUNNER_TEMP)
-#   CLAUDE_CAPACITY_WAIT_ITEM_KIND   issue | pr | run (default run: no item label)
+#   CLAUDE_CAPACITY_WAIT_ITEM_KIND   issue | pr | run | none (default run: no item
+#                                    label; none: tracker and alert only, no
+#                                    tracker item marker, for jobs that resume
+#                                    themselves)
 #   CLAUDE_CAPACITY_WAIT_ITEM_NUMBER digits; anything else means kind run
 #   CLAUDE_CAPACITY_WAIT_STAGE       stage token [a-z_-]{1,30} (default none)
 #   CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT  digits (default none)
 #   CLAUDE_CAPACITY_WAIT_TRACKER_PY  provider_outage.py (default: beside this script)
 #   GITHUB_WORKFLOW_REF              names the waiting workflow file
+#   AI_ENGINE_FALLBACK_REPORT_WAITS_ONLY  "true" ignores refused fallbacks (implement
+#                                    and review report those through their own
+#                                    heal reporters; issue #7370)
 
 set -uo pipefail
 
@@ -130,7 +136,7 @@ while IFS=$'\t' read -r version epoch role reason class action policy extra || [
 	case "${policy:-}" in capacity|always) ;; *) continue ;; esac
 	total=$((total + 1))
 	case "${action:-}" in
-		refused) ;;
+		refused) [ "${AI_ENGINE_FALLBACK_REPORT_WAITS_ONLY:-false}" != "true" ] || continue ;;
 		codex) capacity=$((capacity + 1)); continue ;;
 		wait)
 			# A wait is only ever a capacity fallback (scripts/ai_engine.sh).
@@ -198,11 +204,11 @@ report_capacity_wait()
 	local kind number stage source_comment run_token roles workflow login comments_file
 	local label_state="skipped" marker_state="skipped" tracker="none" tracker_marker="skipped" alert_state="none"
 	kind="$(printf '%s' "${CLAUDE_CAPACITY_WAIT_ITEM_KIND:-run}" | tr '[:upper:]' '[:lower:]')"
-	case "${kind}" in issue|pr|run) ;; *) kind="run" ;; esac
+	case "${kind}" in issue|pr|run|none) ;; *) kind="run" ;; esac
 	number="${CLAUDE_CAPACITY_WAIT_ITEM_NUMBER:-}"
 	[[ "${number}" =~ ^[1-9][0-9]{0,9}$ ]] || number="none"
-	[ "${number}" != "none" ] || kind="run"
-	[ "${kind}" != "run" ] || number="none"
+	[ "${number}" != "none" ] || [ "${kind}" = "none" ] || kind="run"
+	case "${kind}" in run|none) number="none" ;; esac
 	stage="${CLAUDE_CAPACITY_WAIT_STAGE:-}"
 	[[ "${stage}" =~ ^[a-z_-]{1,30}$ ]] || stage="none"
 	source_comment="${CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT:-}"
@@ -239,7 +245,11 @@ report_capacity_wait()
 		tracker="${open_line##*tracker=}"
 		[[ "${tracker}" =~ ^[1-9][0-9]{0,9}$ ]] || tracker="none"
 		tracker_marker="failed"
-		if [ "${tracker}" != "none" ] && gh_retry gh api --paginate --slurp "repos/${REPO}/issues/${tracker}/comments?per_page=100" > "${comments_file}" 2>/dev/null; then
+		if [ "${kind}" = "none" ]; then
+			# Kind none (issue #7370): the job resumes itself (poller judges,
+			# the unblock judge), so it records no item for the resume pass.
+			tracker_marker="skipped"
+		elif [ "${tracker}" != "none" ] && gh_retry gh api --paginate --slurp "repos/${REPO}/issues/${tracker}/comments?per_page=100" > "${comments_file}" 2>/dev/null; then
 			local tracker_rc=0
 			wait_marker_present "${comments_file}" "${login}" "<!-- ai:claude-capacity-wait-item:v1 kind=[a-z]+ item=${number} [^>]*\brun=${run_token} " || tracker_rc=$?
 			if [ "${tracker_rc}" -eq 0 ]; then
@@ -264,7 +274,7 @@ report_capacity_wait()
 			fi
 		fi
 	fi
-	if [ "${kind}" != "run" ]; then
+	if [ "${kind}" = "issue" ] || [ "${kind}" = "pr" ]; then
 		# Label only once the tracker lists this run: the label makes stall
 		# recovery leave the item alone, and the resume pass finds waiting work
 		# through the tracker markers, so a label without one would strand it.

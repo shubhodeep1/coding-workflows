@@ -219,6 +219,11 @@ run_consumer_retro() {
 		retro_fanout_model_call "${prompt_file}" "${body_file}"
 		codex_exit=$?
 		set -e
+		if [ "${codex_exit}" -eq 80 ]; then
+			# Claude capacity wait (issue #7370): no codex and no retries.
+			echo "AI_ENGINE_CAPACITY_WAIT role=RETRO outcome=deferred repo=${target_repo}"
+			return 1
+		fi
 		if [ "${codex_exit}" -eq 0 ] && grep -q '[^[:space:]]' "${body_file}"; then
 			break
 		fi

@@ -2822,15 +2822,25 @@ def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
 	# The pool step drops every account at or above gate_utilization (0.95)
 	# and reports all_gated; the audit must not start Claude at all.
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-gated-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated", "CLAUDE_POOL_CAPACITY_WAIT_ENABLED": "false"})
 		_assert_codex_fallback(proc, state, payload, "all_gated", claude_called=False)
+
+
+def test_security_audit_capacity_wait_exits_80_without_codex() -> None:
+	# Issue #7370: with the Claude capacity wait on (the default), an
+	# all-gated pool never runs codex; the audit exits 80 for a later retry.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-wait-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})
+		assert proc.returncode == 80, proc.stdout + proc.stderr
+		assert "outcome=deferred reason=claude_capacity_wait" in proc.stdout
+		assert "security-audit: engine=codex" not in proc.stdout
 
 
 def test_security_audit_claude_fallback_every_account_usage_limited() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-limit-") as td:
 		# Every account at its usage limit is a capacity reason (plan item 3e,
 		# D1): codex runs under the default policy.
-		proc, state, payload = _claude_engine_audit(Path(td), accounts=("ACCT1", "ACCT2"), claude_env={"MOCK_CLAUDE_MODE": "limit"})
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=("ACCT1", "ACCT2"), claude_env={"MOCK_CLAUDE_MODE": "limit", "CLAUDE_POOL_CAPACITY_WAIT_ENABLED": "false"})
 		_assert_codex_fallback(proc, state, payload, "all_usage_limit", claude_called=True)
 		assert len(state["claude_calls"]) == 2
 
@@ -3148,7 +3158,9 @@ def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
 	assert '--model "openai/gpt-6-sol"' in content
 	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
-	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
+	# Issue #7370: outside the hourly window an open capacity tracker makes
+	# the poller's Claude roles wait (all_gated) without probing the pool.
+	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}" in poll
 	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    env ${security_pass_engine_env[@]+"${security_pass_engine_env[@]}"} \\\n    bash "${security_pass_support_root}/scripts/codex_heartbeat.sh" \\\n      --phase "orchestrate-security-pass"' in process
 

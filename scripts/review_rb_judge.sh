@@ -1648,6 +1648,14 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   : > "${JUDGE_STDERR_FILE}"
   rb_judge_claude_rc=0
   review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?
+  if [ "${rb_judge_claude_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no OpenCode fallback; the run fails
+    # as claude_capacity, a pause the identical-failure cap skips.
+    echo "AI_ENGINE_CAPACITY_WAIT role=RB_JUDGE outcome=deferred" >&2
+    if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+    rm -f "${judge_stall_status_file}"
+    exit 1
+  fi
   if [ "${rb_judge_claude_rc}" -ne 75 ]; then
     rc="${rb_judge_claude_rc}"
   else
@@ -2292,6 +2300,12 @@ __EDIT_DISCIPLINE__
       : > "${RB_FIX_OUTPUT}"
       rb_fix_claude_rc=0
       review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?
+      if [ "${rb_fix_claude_rc}" -eq 80 ]; then
+        # Claude capacity wait (issue #7370): no OpenCode fallback, no commit.
+        echo "AI_ENGINE_CAPACITY_WAIT role=RB_JUDGE outcome=deferred" >&2
+        if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+        exit 1
+      fi
       if [ "${rb_fix_claude_rc}" -ne 75 ]; then
         rb_fix_rc="${rb_fix_claude_rc}"
       elif ! WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then
