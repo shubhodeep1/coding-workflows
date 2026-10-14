@@ -950,7 +950,8 @@ def test_audit_wiring() -> None:
 	steps = _steps(AUDIT, "security-audit")
 	resolve = steps["Resolve audit target"]
 	report = steps["Report single-issue security pass"]
-	assert report["if"] == "always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != ''"
+	# Issue #7370: a Claude capacity wait skips the report, so the pass stays pending.
+	assert report["if"] == "always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != '' && env.CLAUDE_CAPACITY_WAIT != 'true'"
 	assert "review_single_issue_security_pass.sh\" report" in report["run"]
 	assert "^security-audit: .*skipping" not in report["run"]
 	assert 'echo "AUDIT_DEFAULT_BRANCH=${AUDIT_DEFAULT_BRANCH}"' in resolve["run"]
