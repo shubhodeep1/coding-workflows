@@ -32,6 +32,7 @@ SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 
 START_ANCHOR = '_guard_pr_meta="$(gh_retry _safe_gh_jq'
 END_ANCHOR = 'RB_SECURITY_ORIGINAL_ACTION=""'
+SEVERITY_END_ANCHOR = "# Post judge assessment to PR"
 
 JUDGED = "a" * 40
 OTHER = "b" * 40
@@ -43,12 +44,12 @@ def _script_text() -> str:
 	return SCRIPT.read_text(encoding="utf-8")
 
 
-def _extract_guard_block() -> str:
+def _extract_guard_block(end_anchor: str = END_ANCHOR) -> str:
 	text = _script_text()
 	start = text.find(START_ANCHOR)
 	assert start != -1, f"anchor not found in {SCRIPT}: {START_ANCHOR}"
-	end = text.find(END_ANCHOR, start)
-	assert end != -1, f"anchor not found after guard in {SCRIPT}: {END_ANCHOR}"
+	end = text.find(end_anchor, start)
+	assert end != -1, f"anchor not found after guard in {SCRIPT}: {end_anchor}"
 	return text[start:end]
 
 
@@ -58,8 +59,13 @@ def _run_guard(
 	*,
 	judged_head: str = JUDGED,
 	fetch_fails: bool = False,
+	severity_decision: str | None = None,
+	cwd: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]]]:
-	block = _extract_guard_block()
+	"""Run the extracted guard. ``severity_decision`` also runs the security
+	severity block with ``rb_security_severity_block`` stubbed to print it;
+	``cwd`` runs the harness inside a git repository (ancestry checks)."""
+	block = _extract_guard_block(SEVERITY_END_ANCHOR if severity_decision is not None else END_ANCHOR)
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_head_binding_") as td:
 		tmp = Path(td)
 		bin_dir = tmp / "bin"
@@ -88,6 +94,8 @@ def _run_guard(
 			'gh_retry() { "$@"; }\n'
 			'_safe_gh_jq() { if [ "${FIXTURE_FAIL:-0}" = "1" ]; then return 1; fi; cat "${PR_FIXTURE}"; }\n'
 			'PR_ALREADY_MERGED="${PR_ALREADY_MERGED:-false}"\n'
+			'rb_security_severity_block() { printf \'%s\\n\' "${SEVERITY_STUB:-allow}"; }\n'
+			'rb_security_block_hold() { echo HOLD; }\n'
 			+ block
 			+ "\necho PROCEEDED\n",
 			encoding="utf-8",
@@ -102,10 +110,15 @@ def _run_guard(
 			"REPOSITORY": "owner/repo",
 			"RB_ACTION": action,
 			"RB_JUDGED_HEAD_SHA": judged_head,
+			"IS_FINAL": "false",
+			"SEVERITY_STUB": severity_decision or "allow",
+			"RB_SECURITY_BLOCKING_ISSUES": "#1",
+			"ISSUE_NUMBERS": "7",
 		}
 		proc = subprocess.run(
 			["bash", str(harness)],
 			env=env,
+			cwd=str(cwd) if cwd is not None else None,
 			text=True,
 			capture_output=True,
 			timeout=60,
@@ -216,7 +229,66 @@ def test_reissue_branch_uses_judged_head_not_live_lookup() -> None:
 def test_new_skip_reasons_are_written_once() -> None:
 	text = _script_text()
 	assert text.count("judge_skip_reason=stale_head") == 1
-	assert text.count('echo "judge_skip_reason=head_unverified"') == 1
+	# Once in the guard, once in the security convert_fix arm.
+	assert text.count('echo "judge_skip_reason=head_unverified"') == 2
+
+
+@needs_jq
+@pytest.mark.parametrize("action", ["merge", "merge_with_followup"])
+@pytest.mark.parametrize("payload,fetch_fails", UNREADABLE_PAYLOADS)
+def test_security_converted_fix_refused_when_head_unreadable(action: str, payload: object, fetch_fails: bool) -> None:
+	proc, output, calls = _run_guard(action, payload, fetch_fails=fetch_fails, severity_decision="convert_fix")
+	assert proc.returncode == 0, proc.stderr
+	assert "PROCEEDED" not in proc.stdout
+	assert "judge_action=skip" in output.splitlines()
+	assert "judge_skip_reason=head_unverified" in output.splitlines()
+	assert calls == []
+
+
+@needs_jq
+@pytest.mark.parametrize("action", ["merge", "merge_with_followup"])
+def test_security_converted_fix_proceeds_on_matching_head(action: str) -> None:
+	proc, output, _calls = _run_guard(action, _open_pr(JUDGED), severity_decision="convert_fix")
+	assert proc.returncode == 0, proc.stderr
+	assert "PROCEEDED" in proc.stdout
+	assert "judge_skip_reason" not in output
+
+
+def _git(args: list[str], cwd: Path) -> str:
+	env = {
+		"PATH": os.environ.get("PATH", ""),
+		"HOME": str(cwd),
+		"GIT_AUTHOR_NAME": "t",
+		"GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t",
+		"GIT_COMMITTER_EMAIL": "t@example.invalid",
+	}
+	return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, text=True, capture_output=True).stdout.strip()
+
+
+@needs_jq
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+@pytest.mark.parametrize("action", ["fix", "close_and_reissue", "merge"])
+def test_live_head_ancestor_of_judged_head_proceeds_and_descendant_is_stale(action: str) -> None:
+	# The judged head is the local checkout HEAD; an unpushed local commit
+	# (editor or [ai-merge-resolve]) puts it ahead of the live head. That is
+	# not a concurrent push, so the judge proceeds. A live head outside the
+	# judged history (here: the judged head's descendant) is stale.
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_head_ancestry_") as td:
+		repo = Path(td)
+		_git(["init", "-q"], repo)
+		_git(["commit", "-q", "--allow-empty", "-m", "live"], repo)
+		live = _git(["rev-parse", "HEAD"], repo)
+		_git(["commit", "-q", "--allow-empty", "-m", "local"], repo)
+		judged = _git(["rev-parse", "HEAD"], repo)
+		proc, output, calls = _run_guard(action, _open_pr(live), judged_head=judged, cwd=repo)
+		assert "PROCEEDED" in proc.stdout, proc.stdout + proc.stderr
+		assert "judge_skip_reason" not in output
+		assert calls == []
+		proc, output, calls = _run_guard(action, _open_pr(judged), judged_head=live, cwd=repo)
+		assert "PROCEEDED" not in proc.stdout
+		assert "judge_skip_reason=stale_head" in output.splitlines()
+		assert calls == []
 
 
 def _load_label_propagation_module():

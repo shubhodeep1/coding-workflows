@@ -1920,10 +1920,17 @@ fi
 # (head_unverified); merge actions keep their behaviour because their
 # `gh pr merge --match-head-commit "${RB_JUDGED_HEAD_SHA}"` already binds
 # them. judge_handled stays false so the review-blocked fallback fires.
+# RB_JUDGED_HEAD_SHA is the local checkout HEAD, which can sit ahead of the
+# live head when this run committed locally (editor or [ai-merge-resolve])
+# and the push is deferred to "Push all pending commits" after the judge.
+# A live head that is an ancestor of the judged head is that case, not a
+# concurrent push, so only a live head outside the judged history is stale.
 if [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
   RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA:-}"
   RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA_LC,,}"
-  if [ -n "${RB_LIVE_HEAD_SHA}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA_LC}" ]; then
+  if [ -n "${RB_LIVE_HEAD_SHA}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA_LC}" ] \
+    && ! { [[ "${RB_JUDGED_HEAD_SHA_LC}" =~ ^[0-9a-f]{40}$ ]] \
+      && git merge-base --is-ancestor "${RB_LIVE_HEAD_SHA}" "${RB_JUDGED_HEAD_SHA_LC}" >/dev/null 2>&1; }; then
     echo "RB_JUDGE_STALE_HEAD pr=${PR_NUMBER} judged_head=${RB_JUDGED_HEAD_SHA:-unknown} live_head=${RB_LIVE_HEAD_SHA} action=${RB_ACTION}"
     echo "judge_action=skip" >> "$GITHUB_OUTPUT"
     echo "judge_skip_reason=stale_head" >> "$GITHUB_OUTPUT"
@@ -1943,6 +1950,14 @@ RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block "${RB_ACTION}" "${IS
 case "${RB_SECURITY_SEVERITY_DECISION}" in
   allow) ;;
   convert_fix)
+    # BUG-001: a merge converted to fix loses its --match-head-commit
+    # binding, so it needs the same unreadable-head refusal as a judge fix.
+    if [ -z "${RB_LIVE_HEAD_SHA}" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+      echo "::warning::Review-blocked judge: could not read the live head of PR #${PR_NUMBER}; refusing security-converted fix of ${RB_ACTION} (judge_skip_reason=head_unverified)."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=head_unverified" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
     RB_SECURITY_ORIGINAL_ACTION="${RB_ACTION}"
     RB_ACTION="fix"
     RB_SECURITY_FORCED_FIX="true"
