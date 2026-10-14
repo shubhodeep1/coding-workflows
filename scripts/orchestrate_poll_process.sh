@@ -19907,6 +19907,18 @@ print(json.dumps(state, separators=(",", ":")))
 PY
 )"
 
+    # ai:claude-capacity-wait (issue #7251) is owned by the capacity-wait
+    # resume pass, like DEDICATED_HANDLER_PHASES in orchestrate_lib.py, so no
+    # recovery runs here. The phase is still recorded as last_seen_phase
+    # first: when the label is removed the phase changes again, which resets
+    # status_since_ts and stall_recovery_count and restarts the stall window.
+    if [ "${phase}" = "ai:claude-capacity-wait" ]; then
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
+
     status_since="$(echo "${updated_state}" | jq -r '.status_since_ts // 0')"
     recovery_count="$(echo "${updated_state}" | jq -r '.stall_recovery_count | tonumber? // 0')"
     phase_attempts_count="$(printf '%s' "${updated_state}" | jq -r --arg phase "${phase}" '.phase_attempts[$phase] | tonumber? // 0' 2>/dev/null || echo "0")"

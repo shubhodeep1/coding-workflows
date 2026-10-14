@@ -108,6 +108,10 @@ def _run_bash_resolver(fixture_path: Path, bin_dir: Path) -> tuple[int, str, str
 			"GH_FIXTURE_FILE": str(fixture_path),
 			"REPO": "owner/repo",
 			"ISSUE": "101",
+			# The Python resolver has no CI-triage PR-branch routing (it has no
+			# workflow callers), so the parity check runs bash with it off;
+			# tests/test_resolve_integration_ref_ci_triage.py covers routing.
+			"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "false",
 		}
 	)
 	proc = subprocess.run(
@@ -2306,6 +2310,85 @@ def test_detect_stalls_skips_needs_human_phase():
 	)
 
 	assert stalls == []
+
+
+# --- Claude capacity wait label (issue #7251, capacity-wait Phase 1) --------------
+
+
+def test_capacity_wait_label_outranks_the_stage_label():
+	assert orchestrate_lib.determine_phase(["ai:clarification", "ai:claude-capacity-wait"]) == "ai:claude-capacity-wait"
+	assert orchestrate_lib.determine_phase(["ai:implementing", "ai:claude-capacity-wait"]) == "ai:claude-capacity-wait"
+	# A human escalation still wins over the wait.
+	assert orchestrate_lib.determine_phase(["ai:claude-capacity-wait", "ai:needs-human"]) == "ai:needs-human"
+	priority = orchestrate_lib.PHASE_LABELS_PRIORITY
+	assert priority.index("ai:claude-capacity-wait") == priority.index("ai:needs-human") + 1
+	assert "ai:claude-capacity-wait" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:claude-capacity-wait" not in orchestrate_lib.TERMINAL_PHASES
+
+
+def test_detect_stalls_skips_capacity_wait_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:claude-capacity-wait"
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:clarification", "ai:claude-capacity-wait"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
+def test_removing_capacity_wait_label_resets_the_stall_window():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status_since_ts"] = 100
+	issue["last_seen_phase"] = "ai:claude-capacity-wait"
+	issue["stall_recovery_count"] = 1
+
+	orchestrate_lib.update_issue_timestamps(state, {"10": ["ai:clarification"]}, now_ts=5_000)
+
+	assert issue["last_seen_phase"] == "ai:clarification"
+	assert issue["status_since_ts"] == 5_000
+	assert issue["stall_recovery_count"] == 0
+
+
+def test_standalone_stall_loop_skips_capacity_wait_phase():
+	# The standalone stall loop has its own skip list; it must leave a
+	# waiting item alone like DEDICATED_HANDLER_PHASES does (issue #7251),
+	# but only after recording the wait as last_seen_phase, so removing the
+	# label restarts the stall window.
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert "ai:claude-capacity-wait" not in skip
+	update_start = text.index('updated_state="$(python3 - "$state_json" "$phase" <<\'PY\'\n', text.index(skip))
+	wait_check = text.index('if [ "${phase}" = "ai:claude-capacity-wait" ]; then', update_start)
+	status_read = text.index('status_since="$(echo "${updated_state}"', update_start)
+	assert update_start < wait_check < status_read
+	wait_block = text[wait_check:status_read]
+	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"' in wait_block
+	assert "continue" in wait_block
+
+	# Run the embedded state update for stage -> wait -> stage.
+	body_start = update_start + len('updated_state="$(python3 - "$state_json" "$phase" <<\'PY\'\n')
+	script = text[body_start:text.index("\nPY\n", body_start)]
+
+	def step(state: dict, phase: str) -> dict:
+		result = subprocess.run([sys.executable, "-c", script, json.dumps(state), phase], capture_output=True, text=True, check=True)
+		return json.loads(result.stdout)
+
+	stale = {"last_seen_phase": "ai:clarification", "status_since_ts": 1, "stall_recovery_count": 2}
+	waiting = step(stale, "ai:claude-capacity-wait")
+	assert waiting["last_seen_phase"] == "ai:claude-capacity-wait"
+	assert waiting["stall_recovery_count"] == 0
+	resumed = step(dict(waiting, status_since_ts=1), "ai:clarification")
+	assert resumed["last_seen_phase"] == "ai:clarification"
+	assert resumed["status_since_ts"] > 1
+	assert resumed["stall_recovery_count"] == 0
 
 
 def test_label_contract_matches_helper_catalog_and_phase_priority():

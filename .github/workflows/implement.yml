@@ -508,7 +508,7 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
           RETARGET_MERGED_BASE_ENABLED: ${{ vars.RETARGET_MERGED_BASE_ENABLED || 'true' }}
           RETARGET_MERGED_BASE_MAX_HOPS: ${{ vars.RETARGET_MERGED_BASE_MAX_HOPS || '3' }}
           RETARGET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -549,7 +549,7 @@ jobs:
           # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
           # are unchanged.
           resolver_ci_triage_routing_on=false
-          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" in
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
@@ -599,7 +599,7 @@ jobs:
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
-            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}"
           })" || resolver_rc=$?
           if [ "${resolver_rc}" -eq 0 ]; then

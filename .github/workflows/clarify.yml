@@ -79,7 +79,7 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -117,7 +117,7 @@ jobs:
           # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
           # are unchanged.
           resolver_ci_triage_routing_on=false
-          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" in
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
@@ -163,17 +163,39 @@ jobs:
           # Exit 3 means CI-triage PR-branch routing was required but could
           # not be verified; never fall back to the default branch then.
           resolver_rc=0
+          resolver_err_file="${resolver_stage_root}/resolver.err"
           integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
-            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" \
-            bash "${resolver_script}"
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
+          # A triage issue whose PR is merged or closed (reason=pr_not_open)
+          # keeps the default branch in clarify only, so the check-triage
+          # resolution gate (#7095) below can close it with evidence. Plan,
+          # implement, clarify-respond and validate still refuse it.
+          resolver_pr_not_open=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
+            resolver_pr_not_open=true
+          fi
+          if [ -s "${resolver_err_file}" ]; then
+            if [ "${resolver_pr_not_open}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            else
+              cat "${resolver_err_file}" >&2
+            fi
+          fi
           if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_pr_not_open}" = "true" ]; then
+            echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; clarifying on the default branch so the resolution gate can run."
+            echo "ref=" >> "$GITHUB_OUTPUT"
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
+          elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
             exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
