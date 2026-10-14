@@ -455,6 +455,11 @@ def test_sweep_step_wiring() -> None:
 	assert names[index + 1] == "Record GH_PAT budget at sweep end"
 	step = job["steps"][index]
 	assert step["continue-on-error"] is True
+	# !cancelled() drops the implicit success() check, so a failed enumerate
+	# step does not also skip the backfill; both kill switches stay in place.
+	assert "!cancelled()" in step["if"]
+	assert "vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false'" in step["if"]
+	assert "vars.WORKFLOW_HEAL_ENABLED != 'false'" in step["if"]
 	assert step["run"].strip() == "bash .ci-rerun-support/scripts/workflow_failure_heal_non_retryable_backfill.sh"
 	for key, value in _expected_env().items():
 		assert step["env"][key] == value
