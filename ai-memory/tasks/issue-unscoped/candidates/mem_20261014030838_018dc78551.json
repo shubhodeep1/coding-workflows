@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI jobs tests-hooks-and-orchestrator and tests-release-and-log-analysis fail due to parity drift between live .claude/ assets and workflow-templates/.claude/ assets (tests/test_pr_merge_status_guard.py::test_template_copies_are_identical and tests/test_session_start_extract_repo_slug.py fail).\n  WHY: CI builds are red, preventing the PR from being merged. The reviewer rated this BLOCKER, mapped here to critical.\n- tests/test_orchestrate_poll_process.py:382-390 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The bounded reap loop after os.killpg(SIGKILL) closes the tempdir-cleanup race; the reviewer reported it as correct and non-failing, so this is an informational note, not a defect.\n  WHY: The reviewer rated it NIT. Together with the gc.auto/maintenance.auto hardening it covers both foreground and background writer paths.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR must resolve the CI failures (lint, tests-hooks-and-orchestrator, tests-release-and-log-analysis) caused by parity drift between live .claude/ assets and workflow-templates/.claude/ assets.\n  expected_change_site: .claude/settings.json and .claude/hooks/prepush_affected_tests.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR diff does not contain .claude/hooks/prepush_affected_tests.py or .claude/settings.json, and the previous autofix editor summaries confirm they remain missing in the sandbox-excluded paths, tests/test_pr_merge_status_guard.py:2451 enforces byte equality between the live and template copies\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: CI jobs tests-hooks-and-orchestrator and tests-release-and-log-analysis fail due to parity drift between live .claude/ assets and workflow-templates/.claude/ assets. Specifically, tests/test_pr_merge_status_guard.py::test_template_copies_are_identical and tests/test_session_start_extract_repo_slug.py fail.\n  WHY: CI builds are failing (red status), preventing the PR from being merged.\n- TASK_GAP:\n  Requirement: The changes introduced in this PR must resolve the CI failures (lint, tests-hooks-and-orchestrator, tests-release-and-log-analysis) described in the PR comments and discussion context, caused by parity drift between live .claude/ assets and workflow-templates/.\n  Expected change site: .claude/hooks/prepush_affected_tests.py and .claude/settings.json\n  Evidence of absence: The PR diff does not contain these files, and the previous autofix editor summaries confirm they remain missing in the sandbox-excluded paths, causing persistent CI failures.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:382-390 | severity=NIT | confidence=4\n  PROBLEM: The last run adds a bounded reap loop after os.killpg(SIGKILL). It addresses the documented race in CI run 38343038127 where tempdir cleanup raced a dying git gc/maintenance writer. It is combined with the _make_poller_sandbox git config changes (PR DIFF, lines 182-199).\n  WHY: It does not fail; the change closes a real race. The 1s bound is appropriate, and disabling gc.auto and maintenance.auto plus the reap loop covers both the foreground and background writer paths.\n- TASK_GAP:\n  Requirement: The PR must resolve the CI failures (lint, tests-hooks-and-orchestrator, tests-release-and-log-analysis) caused by parity drift between the live .claude/settings.json and the template workflow-templates/.claude/settings.json, and by the missing live hook file .claude/hooks/prepush_affected_tests.py. The drift was introduced by the merge of main into orchestrator/project-7126 (commits 9cb0f32 and b1f0eb0) and persists in CI run 38408569258.\n  Expected change site: .claude/settings.json and .claude/hooks/prepush_affected_tests.py (live copies must be byte-identical to their workflow-templates/ twins, with the hook file created and registered in the live settings.json).\n  Evidence of absence: The PR diff does not contain any change to .claude/settings.json or to .claude/hooks/prepush_affected_tests.py. The PR's own test orchestrator file changes cannot fix parity tests that compare excluded paths. The test_template_copies_are_identical contract at tests/test_pr_merge_status_guard.py:2451 enforces byte equality between the live and template copies. The editor sandbox excludes both live files, so manual copy by a trusted operator is the documented remediation.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e7a1bf02c1a0e478f79371283d62022d2aac8b802718a2ca3f8f032ba5f6cf1a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38502655425",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38502655425",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014030838_018dc78551",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38502655425"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T03:08:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
