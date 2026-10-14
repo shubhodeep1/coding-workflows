@@ -1179,6 +1179,17 @@ echo "rc=${rc}"
 	assert "rc=1" in result.stdout
 
 
+def test_a_denied_test_command_fails_the_route_check_closed(tmp_path: Path) -> None:
+	# sudo denying `test` exits 1, like "no such socket"; it must not read as closed.
+	result = _sourced(tmp_path, '''
+sandbox_uid() { echo 4242; }
+sudo() { shift; case "$1" in pgrep) return 1 ;; test) return 1 ;; esac; return 0; }
+rc=0; user_manager_route_open || rc=$?
+echo "rc=${rc}"
+''')
+	assert "rc=1" in result.stdout
+
+
 @pytest.mark.parametrize("failing", ("pgrep", "find"))
 def test_a_failed_inspection_fails_the_route_check_closed(tmp_path: Path, failing: str) -> None:
 	# An inspection error must not read as "no user manager" (#7380 review).

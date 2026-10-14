@@ -407,6 +407,11 @@ user_manager_route_open()
 	uid="$(sandbox_uid || true)"
 	[[ "${uid}" =~ ^[0-9]+$ ]] || return 1
 	rt="/run/user/${uid}"
+	# The runtime dir holds the daemon's docker.sock, so it exists here; a
+	# failed check means sudo denies `test`, and a denied `test -S`/`test -e`
+	# below would read as "no socket". A denied pgrep is already caught by
+	# docker_pidns_isolated, which needs a pgrep match.
+	sudo -n test -d "${rt}" >/dev/null 2>&1 || return 1
 	for name in systemd dbus-daemon dbus-broker; do
 		rc=0
 		out="$(sudo -n pgrep -u "${uid}" -x "${name}" 2>/dev/null)" || rc=$?
