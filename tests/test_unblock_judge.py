@@ -3593,7 +3593,7 @@ def _heal_body(source: str = "o/c#66", reason_line: str = HEAL_REASON_LINE) -> s
 
 
 HEAL_ITEM = dict(ISSUE, title="Workflow heal: AI Review failed 20x for o/c#66 (conflict_resolver_sandbox_path_unsupported)",
-	body=_heal_body(), user={"login": "pipeline-bot"}, labels=[{"name": "ai:blocked"}, {"name": "ai:workflow-heal"}])
+	body=_heal_body(), user={"login": "pipeline-bot"}, created_at="2026-10-12T00:00:00Z", labels=[{"name": "ai:blocked"}, {"name": "ai:workflow-heal"}])
 HEAL_ORIGINAL = {"number": 50, "state": "closed", "state_reason": "not_planned", "body": _heal_body(), "author": "pipeline-bot", "labels": ["ai:workflow-heal"], "pull_request": False}
 HEAL_REISSUE = {"number": 59, "state": "closed", "state_reason": "completed", "body": "Re-issued by the unblock judge from #50.\n\nSpecification: x\n\nWhy: y",
 	"author": "pipeline-bot", "labels": ["ai:merged"], "pull_request": False}
@@ -3633,6 +3633,8 @@ def test_heal_issue_fixed_by_a_sibling_is_closed_without_a_round(tmp_path: Path)
 	({"FAKE_GH_REISSUES": json.dumps([dict(HEAL_REISSUE, labels=[])])}, "op=heal_already_fixed outcome=judge status=no_fixed_sibling"),
 	({"FAKE_GH_REISSUES": json.dumps([dict(HEAL_REISSUE, author="mallory")])}, "op=heal_already_fixed outcome=judge status=no_fixed_sibling"),
 	({"UNBLOCK_HEAL_ALREADY_FIXED_ENABLED": "false"}, "op=heal_already_fixed outcome=judge status=disabled"),
+	# A fix that merged before the item was filed did not hold.
+	({"FAKE_GH_MERGED_PULLS": json.dumps({"o:ai/issue-59": dict(HEAL_MERGED_PR["o:ai/issue-59"], merged_at="2026-10-11T00:00:00Z")})}, "op=heal_already_fixed outcome=judge status=no_merged_pr"),
 ])
 def test_heal_already_fixed_check_judges_as_usual_otherwise(tmp_path: Path, env: dict, expected: str) -> None:
 	result, state = _judge(tmp_path, HEAL_ITEM, verdict=RETRY_VERDICT, **_heal_env(**env))
@@ -3662,3 +3664,18 @@ def test_heal_already_fixed_close_failure_stops_this_run(tmp_path: Path) -> None
 def test_heal_already_fixed_switch_is_wired_default_on() -> None:
 	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
 	assert "UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}" in workflow
+
+
+def test_heal_already_fixed_needs_the_item_creation_time(tmp_path: Path) -> None:
+	undated = {k: v for k, v in HEAL_ITEM.items() if k != "created_at"}
+	result, state = _judge(tmp_path, undated, verdict=RETRY_VERDICT, **_heal_env())
+	assert "op=heal_already_fixed outcome=judge status=item_created_unknown" in result.stdout, result.stdout
+	assert not any(patch[1].get("state") == "closed" for patch in state["patched"])
+
+
+def test_heal_already_fixed_does_not_repeat_its_comment(tmp_path: Path) -> None:
+	earlier = _comment("Closing as completed: ...\n\n<!-- ai:unblock-heal-already-fixed:v1 item=7 sibling=59 pr=65 -->", "pipeline-bot")
+	result, state = _judge(tmp_path, HEAL_ITEM, comments=[earlier], verdict=RETRY_VERDICT, **_heal_env())
+	assert "op=heal_already_fixed outcome=closed sibling=59 pr=65" in result.stdout, result.stdout + result.stderr
+	assert state["comments"] == []
+	assert state["patched"] == [["repos/o/r/issues/7", {"state": "closed", "state_reason": "completed"}]]

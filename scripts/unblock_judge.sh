@@ -359,7 +359,7 @@ unblock_check_triage_resolved()
 unblock_heal_already_fixed()
 {
 	local heal_file="${RUNTIME_DIR}/heal_issues.json" reissues_file="${RUNTIME_DIR}/heal_reissues.json"
-	local result_file="${RUNTIME_DIR}/heal_already_fixed.json" candidate pr_json pr_number pr_base pr_sha owner
+	local result_file="${RUNTIME_DIR}/heal_already_fixed.json" candidate pr_json pr_number pr_base pr_sha owner item_created
 	if [ "$(printf '%s' "${UNBLOCK_HEAL_ALREADY_FIXED_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=disabled"
 		return 1
@@ -393,6 +393,13 @@ unblock_heal_already_fixed()
 		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=$(jq -r '.reason // "none"' "${result_file}" | tr -cd 'a-z_' | cut -c1-40)"
 		return 1
 	fi
+	# A fix that merged before this item was filed did not hold (a later
+	# generation of the same failure): only a fix merged after it counts.
+	item_created="$(jq -r '.created_at // ""' "${RUNTIME_DIR}/item.json" 2>/dev/null | tr -cd '0-9TZ:.+-' | cut -c1-40)"
+	if [ -z "${item_created}" ]; then
+		unblock_log "item=${ITEM} op=heal_already_fixed outcome=judge status=item_created_unknown"
+		return 1
+	fi
 	owner="${REPOSITORY%%/*}"
 	while read -r candidate; do
 		[[ "${candidate}" =~ ^[1-9][0-9]*$ ]] || continue
@@ -402,9 +409,14 @@ unblock_heal_already_fixed()
 		[ -n "${pr_json}" ] || continue
 		pr_number="$(jq -r '.number // ""' <<< "${pr_json}" 2>/dev/null || true)"
 		[[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || continue
+		jq -e --arg created "${item_created}" '(.merged_at // "") > $created' <<< "${pr_json}" >/dev/null 2>&1 || continue
 		pr_base="$(jq -r '.base.ref // ""' <<< "${pr_json}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)"
 		pr_sha="$(jq -r '.merge_commit_sha // ""' <<< "${pr_json}" | tr -cd '0-9a-f' | cut -c1-40)"
-		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: the same failure was already fixed through #${candidate}, whose pull request #${pr_number} merged into \`${pr_base}\`${pr_sha:+ (\`${pr_sha}\`)}. The unblock judge used no round on this item.
+		# A trusted marker from an earlier run whose close failed: post it once only.
+		if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "<!-- ai:unblock-heal-already-fixed:v1 item=${ITEM} sibling=${candidate} pr=${pr_number} -->" \
+			'any(.[]; (.user.login // "") == $login and ((.body // "") | rtrimstr("\n") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+			:
+		elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: the same failure was already fixed through #${candidate}, whose pull request #${pr_number} merged into \`${pr_base}\`${pr_sha:+ (\`${pr_sha}\`)}. The unblock judge used no round on this item.
 
 <!-- ai:unblock-heal-already-fixed:v1 item=${ITEM} sibling=${candidate} pr=${pr_number} -->" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=heal_already_fixed outcome=skip reason=comment_failed sibling=${candidate} pr=${pr_number}"
