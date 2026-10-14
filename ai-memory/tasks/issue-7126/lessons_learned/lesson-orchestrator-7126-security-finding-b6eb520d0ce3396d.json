@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-14T03:13:51Z",
+  "issue_number": 7126,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Apply workflow-optimization-2026-09-16 recommendations (verified subset)\" (#7126): the security pass reported findings that needed fixes (2 time(s)). Causes: A01:2021-Broken Access Control / STRIDE Spoofing+Elevation of Privilege in scripts/orchestrate_poll_process.sh:28065: Count only noop-warning and editor-summary comments whose `user.login` equals the pipeline login (`unblock_trusted_login; A04:2021-Insecure Design / STRIDE Tampering in scripts/orchestrate_poll_process.sh:28119: Replace the inline query with `_pr_checks_completed \"${N_PR}\" \"${N_HEA; A01:2021-Broken Access Control / STRIDE Spoofing+Elevation of Privilege in scripts/orchestrate_poll_process.sh:28294: Count noop warnings and editor summaries only when user.login equals unblock_trusted_login (the filter _noop_gate_failur; A04:2021-Insecure Design / STRIDE Tampering in scripts/orchestrate_poll_process.sh:28347: Replace the inline query with the shared gate (_pr_checks_completed or. Build these protections into plans that touch the same files.",
+  "phase": "orchestrator_completion",
+  "pr_number": 7131,
+  "record_id": "lesson-orchestrator-7126-security-finding-b6eb520d0ce3396d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security_finding",
+    "project:7126",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

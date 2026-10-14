@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-10-14T03:13:51Z",
+  "issue_number": 7126,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Apply workflow-optimization-2026-09-16 recommendations (verified subset)\" (#7126) completed only after 4 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 7131,
+  "record_id": "lesson-orchestrator-7126-summary-43d4c0fdc633021f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:7126"
+  ]
+}
