@@ -5,13 +5,32 @@
   "entry_id": "processed_command_7333_6157410923_approved",
   "issue_number": 7333,
   "metadata": {
+    "branch": "ai/issue-7333",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/workflow-failure-heal-intake.yml",
+      "agents.d/7333-heal-scope-recovery-scan.md",
+      "changelog.d/7333-heal-scope-recovery-scan.md",
+      "docs/INVENTORY.md",
+      "docs/scripts-pending-removal.md",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_intake.sh",
+      "scripts/workflow_failure_heal_recovery_scan.sh",
+      "tests/test_workflow_failure_heal.py",
+      "tests/test_workflow_failure_heal_recovery_scan.py"
+    ],
+    "issue_number": 7333,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7333",
+    "pr_number": 7341,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7341",
+    "run_attempt": "1",
+    "run_id": "38484770063",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38484770063"
   },
   "run_attempt": 1,
   "run_id": "38484770063",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-13T23:34:05Z",
+  "status": "completed",
+  "timestamp": "2026-10-14T00:07:43Z",
   "workflow": "implement"
 }
