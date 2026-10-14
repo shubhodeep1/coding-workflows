@@ -3446,6 +3446,7 @@ prune_state_comment_chains() {
       printf '%s\n' "${id}" >> "${deleted_file}"
     else
       failed=$((failed + 1))
+      echo "::warning::STATE_PRUNE could not delete comment ${id} on issue #${TRACKING_NUM}" >&2
     fi
   done <<< "${ids}"
   remaining="$(grep -vxF -f "${done_file}" -f "${tried_file}" "${plan_file}" | grep -cE '^[1-9][0-9]*$' || true)"
