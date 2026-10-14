@@ -444,6 +444,47 @@ def test_run_from_another_repository_or_pr_is_not_evidence(tmp_path, monkeypatch
 	assert result["writes"] == []
 
 
+MOVED_PR_HEAD_SHA = "9" * 40
+PR_HEAD_BRANCH = "ai/issue-6937"
+
+
+def _merged_pr_with_moved_head(ref=PR_HEAD_BRANCH):
+	pr = _pr()
+	pr["head"] = {"sha": MOVED_PR_HEAD_SHA, "ref": ref, "repo": {"full_name": REPO}}
+	return pr
+
+
+def test_run_on_trusted_header_head_binds_after_merge_moved_the_pr_head(tmp_path, monkeypatch):
+	# Incident #7332: once PR #7259 merged GitHub listed no pull_requests on the
+	# failed run, and the PR head had moved past the failed commit.
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _merged_pr_with_moved_head(),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": _run(pull_requests=[], head_branch=PR_HEAD_BRANCH),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved"
+	assert result["evidence_sha"] == EVIDENCE_SHA
+
+
+@pytest.mark.parametrize("pr, run, body", [
+	# The run is on another branch than the PR's head branch.
+	(_merged_pr_with_moved_head(), _run(pull_requests=[], head_branch="other-branch"), None),
+	# The run is on another commit than the trusted header's Head SHA.
+	(_merged_pr_with_moved_head(), _run(pull_requests=[], head_branch=PR_HEAD_BRANCH, head_sha="8" * 40), None),
+	# The PR reports no head branch.
+	(_merged_pr_with_moved_head(ref=""), _run(pull_requests=[], head_branch=""), None),
+	# The header has no Head SHA, so nothing trusted names the failed commit.
+	(_merged_pr_with_moved_head(), _run(pull_requests=[], head_branch=PR_HEAD_BRANCH),
+		"\n".join(line for line in _body().splitlines() if not line.startswith("- **Head SHA:**"))),
+])
+def test_trusted_head_binding_needs_header_sha_and_pr_head_branch(tmp_path, monkeypatch, pr, run, body):
+	routes = _routes(**{rf"repos/{REPO}/pulls/{PR}": pr, rf"repos/{REPO}/actions/runs/{RUN_ID}": run})
+	issue = None if body is None else _issue(body=body)
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "run_identity_mismatch"
+	assert result["writes"] == []
+
+
 def test_unreadable_pr_is_unverified_and_still_posts_traceback(tmp_path, monkeypatch):
 	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/pulls/{PR}": mod.GhApiError("rc=1")}))
 	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "pr_unreadable"

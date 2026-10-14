@@ -10,7 +10,7 @@ On 13 October the judge closed #6831 and #6887 on its two-round cap even though 
 | Re-check interval | every `UNBLOCK_JUDGE_RETRY_HOURS` (6) from the hold's last check |
 | Off switch | `UNBLOCK_JUDGE_WAIT_ENABLED=false` |
 
-The judge also runs the check-triage resolution gate that clarify runs (#7095) on an `ai:check-triage` issue before judging it: once the pull request merged and the failure is verified fixed on the default branch, the issue is closed with evidence and no round is used. #7332 sat blocked after PR #7259 merged because only clarify ran that gate.
+The judge also runs the check-triage resolution gate that clarify runs (#7095) on an `ai:check-triage` issue before judging it: once the pull request merged and the failure is verified fixed on the default branch, the issue is closed with evidence and no round is used. #7332 sat blocked after PR #7259 merged because only clarify ran that gate. The gate itself also failed to verify #7332: GitHub empties a run's pull-request list once the PR merges, and #7259's head had moved past the failed commit, so the gate could not tie the failed run to the PR (`run_identity_mismatch`). It now also accepts a run on the triage issue's trusted Head SHA when the run is on the PR's head branch.
 
 What this means for operators: items waiting on a promotion, another pull request or an operator step stay blocked quietly instead of being closed by the round cap, and resume on their own once the condition holds. The comment `Waiting for …` on the item says what it waits for.
 
