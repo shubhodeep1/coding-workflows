@@ -27,6 +27,8 @@
 #   CLAUDE_ENGINE_POOL_DIR   pool directory (default $RUNNER_TEMP/claude-pool)
 #   CLAUDE_POOL_PROBE        `false` skips the probes (order = broker order)
 #   CLAUDE_POOL_PROBE_TIMEOUT_SECS   per-probe limit (default 120)
+#   CLAUDE_POOL_REASON_FILE  the outcome token for ai_engine.sh
+#                            (default $RUNNER_TEMP/claude-pool-reason)
 #   ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN (runner)
 set -uo pipefail
 
@@ -81,6 +83,16 @@ finish()
 	if [ "${available}" != "true" ] && [ ! -L "${pool_dir}" ]; then
 		rm -rf -- "${pool_dir}"
 	fi
+	# The pool step's outcome for scripts/ai_engine.sh
+	# (ai_engine_no_account_reason): `all_gated` is the capacity reason that
+	# lets a role fall back to codex (plan item 3e, D1). Written on every
+	# outcome so a stale value never survives; a failed write is ignored.
+	local reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}"
+	(
+		umask 077
+		[ ! -L "${reason_file}" ] || rm -f -- "${reason_file}"
+		printf '%s\n' "${reason}" > "${reason_file}"
+	) 2>/dev/null || true
 	exit 0
 }
 

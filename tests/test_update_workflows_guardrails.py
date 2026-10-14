@@ -345,13 +345,15 @@ def test_ai_review_template_pins_only_the_sweep_support_checkout() -> None:
 	template_path = WORKFLOW_TEMPLATES_DIR / "ai-review.yml"
 	template_text = template_path.read_text(encoding="utf-8")
 	rendered_text = pin_reusable_workflow_refs(template_text, VALID_RELEASE_SHA)
-	assert rendered_text.count(f"ref: {VALID_RELEASE_SHA} # stable") == 1
+	assert rendered_text.count(f"ref: {VALID_RELEASE_SHA} # stable") == 2
 	try:
 		import yaml
 	except ImportError:
 		return
 	jobs = yaml.safe_load(rendered_text)["jobs"]
 	assert jobs["security-hold-sweep"]["steps"][0]["with"]["ref"] == VALID_RELEASE_SHA
+	# Issue #7291: the non-retryable backfill runs the pinned release too.
+	assert jobs["non-retryable-backfill"]["steps"][0]["with"]["ref"] == VALID_RELEASE_SHA
 	assert jobs["provider-outage-resume"]["steps"][0]["with"]["ref"] == "stable"
 
 

@@ -65,6 +65,17 @@ Copy this block when adding a new entry:
   - The removal PR also drops the `recovery_scan` origin and `REPORT_AUTH=reconstructed` from `scripts/workflow_failure_heal_intake.sh`, `heal-scope-recovery reconstruct` / `scan-marker` from `scripts/workflow_failure_heal.py`, `tests/test_workflow_failure_heal_recovery_scan.py` (and its `ci.yml` entry) and the `docs/INVENTORY.md` line.
 - **Owner:** @shubhodeep1
 
+### `run_issue_7251_dependency_wait` in `scripts/orchestrate_poll_process.sh` + `issue_7251_*` helpers in `scripts/gh_helpers.sh` + the `issue_7251_dependency_wait` gates in `.github/workflows/clarify.yml` and `.github/workflows/plan.yml`
+
+- **Introduced in:** unblock fix-up #7257 for #7251 (2026-10-12)
+- **Type:** single-use
+- **Removal trigger:** #7251 carries a trusted `ai:issue-7251-dependency-released:6667`, `ai:issue-7251-preflight-failed:6667` or `ai:issue-7251-dependency-closed:6667` marker comment, or #7251 is closed. Until removal the poller spends one GraphQL call per tick on it.
+- **Removal preflight checks:**
+  - `gh api repos/shubhodeep1/coding-workflows/issues/7251/comments --paginate --jq '.[].body' | grep -c 'ai:issue-7251-dependency-\(released\|closed\):6667\|ai:issue-7251-preflight-failed:6667'` returns at least 1, or `gh issue view 7251 --repo shubhodeep1/coding-workflows --json state --jq .state` prints `CLOSED`.
+  - The last 24 hours of `orchestrate_poll` run logs contain no `STALL_SKIP issue=7251 reason=dependency_wait detail=open` line.
+  - `rg -n 'issue_7251|ISSUE_7251' .github scripts tests` lists only the files this entry names (the handler, the helpers, the two gates, the `orchestrate_poll.yml` env lines, `tests/test_issue_7251_dependency_wait.py` and its `ci.yml` wiring), so they are all removed together.
+- **Owner:** @shubhodeep1
+
 ### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
 
 - **Introduced in:** #6118 (2026-10-05)
@@ -89,6 +100,18 @@ Copy this block when adding a new entry:
   - `rg -n 'ai-workflow-failure-heal.yml' workflow-templates/profiles/full.txt agents.md` shows the consumer wrapper is no longer delivered, i.e. consumers have been moved off the report path first.
   - `rg -n 'workflow_failure_heal_autofix_report.sh' .github/workflows/review_autofix.yml scripts/stage_workflow_support.sh` shows the review/autofix failure reporter step and its staging entry have been removed first.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
+### `scripts/workflow_failure_heal_non_retryable_backfill.sh` + the "Backfill non-retryable autofix failure reports" step of `.github/workflows/review_autofix_sweep.yml` + the `non-retryable-backfill` job of `workflow-templates/ai-review.yml`
+
+- **Introduced in:** the PR for #7291 (2026-10-14)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually (or together with the review/autofix reporter and heal intake in the entry above)
+- **Removal preflight checks:**
+  - The last 10 runs of `review_autofix_sweep.yml` log `WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL outcome=complete ... dispatched=0` and no `pr=<n> outcome=skip reason=tick_cap` line (`gh run view <id> --log | grep WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL`), so no undiagnosed non-retryable failure is still waiting on the backfill.
+  - The same runs log no `outcome=warn reason=listing_truncated` line, or every rotated window has been covered with `dispatched=0`.
+  - `rg -n 'workflow_failure_heal_non_retryable_backfill\.sh' .github/workflows workflow-templates` shows the sweep step and the consumer job removed first, and consumers have synced an `ai-review.yml` without the job.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py` passes after the backfill selector and `tests/test_workflow_failure_heal_non_retryable_backfill.py` are removed.
 - **Owner:** @shubhodeep1
 
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
@@ -271,6 +294,17 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
+
+### `scripts/ai_engine_fallback_report.sh`
+
+- **Introduced in:** #6705 (2026-10-07), plan item 3e of `docs/plans/unattended-claude-pipeline-completion-plan.md` (Refs #6664)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `git grep -n ai_engine_fallback_report.sh .github/workflows` returns no callers.
+  - `git grep -n AI_ENGINE_FALLBACK_POLICY scripts/ai_engine.sh` returns no matches (the fallback policy was removed).
+  - `gh issue list --repo shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search engine_fallback_refused` returns no issues.
 - **Owner:** @shubhodeep1
 
 ### `workflow-templates/.claude/hooks/prepush_affected_tests.py`

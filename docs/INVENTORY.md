@@ -107,6 +107,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` in the isolated container (`claude_run` via `codex_isolated_exec.sh --engine claude`), and fall back to codex (D1).
+- `scripts/ai_engine_fallback_report.sh` — Report the Claude engine's codex fallbacks and refusals from a phase job's last step (plan item 3e).
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
@@ -343,6 +344,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal_autofix_report.sh` — Report a repeated review/autofix failure on a pull request to coding-workflows' heal intake from the review workflow's failure path, with the run's own evidence.
 - `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
 - `scripts/workflow_failure_heal_evidence.sh` — Collect bounded, redacted, verified failure logs for heal prompts.
+- `scripts/workflow_failure_heal_non_retryable_backfill.sh` — Scheduled pass (review sweep, consumer `ai-review.yml` schedule) that re-sends a non-retryable review/autofix failure the heal intake never diagnosed, from trusted current-head markers (issue #7291).
 - `scripts/workflow_failure_heal_phase_report.sh` — Report a failed clarify / plan / implement run on an issue to coding-workflows' heal intake from the workflow's `heal-report` job, with the phase's failure streak on that issue.
 - `scripts/workflow_failure_heal_recovery_scan.sh` — Hourly heal-scope recovery scan: rebuild the report of an open, pipeline-authored heal issue without a scope marker and run the intake on it (issue #7333).
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).

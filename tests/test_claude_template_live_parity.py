@@ -591,6 +591,57 @@ def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeyp
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/second.py") == "v3"
 
 
+def test_sync_refresh_fast_forwards_when_the_remote_refuses_force_pushes(tmp_path: Path, monkeypatch, capsys) -> None:
+	# The repository ruleset refuses non-fast-forward pushes and deletion on
+	# every branch, so the refresh must descend from the existing sync branch.
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	_git(remote, "config", "receive.denyNonFastForwards", "true")
+	monkeypatch.setattr(sync_mod, "_gh_json", _authorized_api)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	first_tip = _git(remote, "rev-parse", "ai/sync-claude-live-copies")
+	_git(root, "checkout", "-q", "main")
+	_commit(root, "unrelated.txt", "main moved on\n")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v3\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	tip = _git(remote, "rev-parse", "ai/sync-claude-live-copies")
+	assert _git(remote, "rev-list", "--parents", "-n", "1", tip).split()[1:] == [first_tip, after]
+	assert _git(remote, "show", f"{tip}:.claude/hooks/guard.py") == "v3"
+	assert _git(remote, "diff", "--name-only", after, tip) == ".claude/hooks/guard.py"
+	assert f"fast_forward branch=ai/sync-claude-live-copies previous={first_tip[:12]} after={after[:12]}" in capsys.readouterr().err
+
+
+def test_sync_first_push_keeps_a_single_parent(tmp_path: Path, monkeypatch) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	monkeypatch.setattr(sync_mod, "_gh_json", _authorized_api)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "rev-list", "--parents", "-n", "1", "ai/sync-claude-live-copies").split()[1:] == [after]
+
+
+def test_push_failure_logs_git_reason(tmp_path: Path, monkeypatch, capsys) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	hook = remote / "hooks" / "pre-receive"
+	hook.write_text("#!/bin/sh\necho 'refusing: protected by ruleset' >&2\nexit 1\n", encoding="utf-8")
+	hook.chmod(0o755)
+	monkeypatch.setattr(sync_mod, "_gh_json", _authorized_api)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 1
+	output = capsys.readouterr().err
+	assert "CLAUDE_LIVE_SYNC error reason=push_failed branch=ai/sync-claude-live-copies detail=" in output
+	assert "refusing:_protected_by_ruleset" in output
+
+
+def test_push_failure_detail_is_one_bounded_line_without_credentials() -> None:
+	stderr = "To https://x-access-token:secret@github.com/o/r\n ! [remote rejected] HEAD -> b (push declined)\nerror: failed to push some refs to 'https://user:pw@github.com/o/r'\n"
+	detail = sync_mod._push_failure_detail(stderr)
+	assert "secret" not in detail and "pw@" not in detail and "user:" not in detail
+	assert " " not in detail and "\n" not in detail
+	assert "push_declined" in detail
+	assert sync_mod._push_failure_detail("x" * 1000) == "x" * sync_mod.PUSH_DETAIL_MAX
+	assert sync_mod._push_failure_detail(None) == "none"
+
+
 def test_carry_forward_reports_template_read_failure(tmp_path: Path, monkeypatch, capsys) -> None:
 	root, _remote = _sync_repo(tmp_path, monkeypatch)
 	after = _git(root, "rev-parse", "HEAD")
@@ -952,7 +1003,9 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert steps[0]["with"]["fetch-depth"] == 0
 	prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
 	prepare_if = " ".join(prepare["if"].split())
-	assert "github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'orchestrator/project-'))" in prepare_if
+	# Issue #7283: pull-request CI runs for every base, so every PR except one
+	# into stable (which checks the committed tree) is prepared.
+	assert "github.event_name == 'pull_request' && github.base_ref != 'stable'" in prepare_if
 	assert "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')" in prepare_if
 	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
 	assert prepare["env"]["PUSH_BEFORE_SHA"] == "${{ github.event.before }}"

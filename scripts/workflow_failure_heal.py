@@ -81,7 +81,18 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback")
+
+# A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
+# non-capacity reason and the role failed instead of running codex. The report
+# comes from scripts/ai_engine_fallback_report.sh; it carries no run reference
+# (no log is read) and is keyed on the role and reason only, so every repo and
+# run that hits the same refusal joins one heal issue.
+ENGINE_FALLBACK_FAILURE_REASON = "engine_fallback_refused"
+ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_limit")
+_ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
+_ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
+ENGINE_FALLBACK_MAX_RECORDS = 20
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -295,8 +306,6 @@ _HEAL_COMMIT_REF_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
-_FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
-_FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 # Issue #6625: a cap marker counts only on its own line, like the workflow and
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
@@ -304,6 +313,15 @@ _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MAR
 # a marker quoted inline in PR-influenced text (the "First error" code span) is not one.
 _FAILURE_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
+# Security-pass finding support-version-failure-marker-shadowing: the
+# pipeline appends the failure marker as the comment's last line (render_failure_marker
+# behind AUTOFIX_FAILURE_MARKER_SUFFIX in review_autofix.yml). Only that
+# trailing standalone line is metadata; a marker quoted earlier in the body
+# (an echoed "First error" line, a log tail) is untrusted text and must never
+# shadow the genuine marker or link a run.
+_FAILURE_MARKER_TRAILING_RE = re.compile(
+	r"(?:\A|\n)<!--[ \t]*" + re.escape(FAILURE_MARKER_TAG) + r"[ \t]+(?P<fields>[^>\n]*?)[ \t]*-->\s*\Z"
+)
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 # Authorship facts on ai:scope-blocked reports (Q81): the automation-path
 # guard grants by author, so the diagnosis needs the issue author, its
@@ -824,7 +842,12 @@ def build_workflow_run_payload(*, repo: str, workflow_run: dict[str, Any], now: 
 	}
 
 
-def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
+# Feature probe for the reporter (scripts/workflow_failure_heal_autofix_report.sh):
+# a staged copy carrying this string accepts `autofix-failure-streak --author-login`.
+AUTOFIX_STREAK_AUTHOR_FILTER = "autofix-failure-streak-author-login:v1"
+
+
+def count_autofix_failure_streak(comments: Iterable[dict[str, Any]], *, author_login: str | None = None) -> int:
 	"""Count the trailing review/autofix failure comments on a pull request.
 
 	``comments`` is the PR's issue-comment list, oldest first (the order the
@@ -832,14 +855,23 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 	adds one. An editor summary stops the count unless it belongs to the
 	post-editor failure immediately newer than it. The current run's own failure
 	comment is normally not in the list yet, so the reporter adds one for it.
+
+	With a non-empty ``author_login`` (the pipeline identity), comments by any
+	other author are skipped entirely: their failure or summary text neither
+	counts nor ends the streak (security-pass finding
+	untrusted-comment-resets-identical-failure-cap, sibling path). Without it
+	the legacy rules apply unchanged.
 	"""
+	author = str(author_login or "").strip().lower()
 	streak = 0
 	skip_paired_summary = False
 	for comment in reversed(list(comments)):
 		if not isinstance(comment, dict):
 			continue
+		if author and _comment_author(comment) != author:
+			continue
 		body = sanitize_text(comment.get("body"))
-		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_FAILURE_MARKER_RE.search(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _marker_fields(_canonical_failure_marker(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
 			# A provider outage neither adds to nor ends the streak.
 			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
@@ -1095,6 +1127,77 @@ def build_phase_failure_payload(
 	}
 
 
+def engine_fallback_fingerprint(role: str, reason: str) -> str:
+	"""One fingerprint per refused (role, reason), across runs, workflows and repos."""
+	return fingerprint("ai-engine-fallback", role, reason)
+
+
+def build_engine_fallback_payload(
+	*,
+	repo: str,
+	role: str,
+	reason: str,
+	workflow_name: str,
+	run_id: str,
+	wrapper_sha: str | None,
+	reporter_run_url: str | None,
+	records: Iterable[str],
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a refused (non-capacity) AI engine fallback.
+
+	``run_refs`` stays empty: the evidence is the fixed-vocabulary fallback
+	records of the reporting job, never a log, so no untrusted text reaches
+	the heal prompt and no run provenance is needed.
+	"""
+	now = now or _utc_now()
+	if not _ENGINE_ROLE_RE.match(role or ""):
+		raise ValueError("role must be an upper-case engine role")
+	if not _ENGINE_REASON_RE.match(reason or "") or reason in ENGINE_FALLBACK_CAPACITY_REASONS:
+		raise ValueError("reason must be a non-capacity fallback reason token")
+	kept: list[str] = []
+	for line in records:
+		fields = str(line).rstrip("\n").split("\t")
+		if len(fields) != 7 or fields[0] != "v1" or not fields[1].isdigit():
+			continue
+		if not (_ENGINE_ROLE_RE.match(fields[2]) and _ENGINE_REASON_RE.match(fields[3])):
+			continue
+		if fields[4] not in ("capacity", "non_capacity") or fields[5] not in ("codex", "refused") or fields[6] not in ("capacity", "always"):
+			continue
+		kept.append(" ".join(fields))
+		if len(kept) >= ENGINE_FALLBACK_MAX_RECORDS:
+			break
+	run_number = _positive_int(run_id)
+	evidence = "\n".join(["AI engine fallback records (v1 epoch role reason class action policy):", *kept])
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "engine_fallback",
+		"issue_number": None,
+		"issue_title": f"AI engine fallback refused for {role} ({reason})",
+		"issue_url": None,
+		"label": None,
+		"labels": [],
+		"run_refs": [],
+		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
+		"source_gen": None,
+		"source_root": None,
+		"issue_excerpt": "",
+		"comments_excerpt": "",
+		"workflow_name": single_line(workflow_name, 200),
+		"head_branch": None,
+		"head_sha": None,
+		"conclusion": "failure",
+		"failure_reason": ENGINE_FALLBACK_FAILURE_REASON,
+		"failure_evidence": sanitize_text(evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_streak": 1,
+		"engine_role": role,
+		"engine_reason": reason,
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or (f"https://github.com/{repo}/actions/runs/{run_number}" if run_number else None),
+		"reported_at": _iso(now),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -1300,6 +1403,21 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		if failure_reason is None:
 			raise ValueError("failure_reason is missing or malformed for autofix_failure reports")
 		failure_streak = failure_streak or 1
+	elif kind == "engine_fallback":
+		engine_role = payload.get("engine_role")
+		engine_reason = payload.get("engine_reason")
+		if not (isinstance(engine_role, str) and _ENGINE_ROLE_RE.match(engine_role)):
+			raise ValueError("engine_role is missing or malformed for engine_fallback reports")
+		if not (isinstance(engine_reason, str) and _ENGINE_REASON_RE.match(engine_reason)):
+			raise ValueError("engine_reason is missing or malformed for engine_fallback reports")
+		if engine_reason in ENGINE_FALLBACK_CAPACITY_REASONS:
+			raise ValueError("engine_fallback reports cover non-capacity reasons only")
+		if payload.get("run_refs"):
+			raise ValueError("engine_fallback reports carry no run references")
+		issue_number = None
+		failure_reason = ENGINE_FALLBACK_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "phase_failure":
 		if issue_number is None:
 			raise ValueError("issue_number is required for phase_failure reports")
@@ -1381,12 +1499,14 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"failure_reason": failure_reason,
 		# Runtime log tails can carry Basic headers or encoded PATs; redact here
 		# so they reach neither disk nor the diagnosis prompt (#6463).
-		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind == "autofix_failure" else "",
+		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind in ("autofix_failure", "engine_fallback") else "",
 		"failure_streak": failure_streak,
 		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if kind == "engine_fallback":
+		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"]})
 	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
 		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
 		normalized["issue_author_association"] = _scope_author_association(payload.get("issue_author_association"))
@@ -2848,6 +2968,15 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
 
 
+def _canonical_failure_marker(body: str) -> re.Match[str] | None:
+	"""Return the comment's trailing standalone failure marker, if any.
+
+	``body`` must already be sanitized. A marker anywhere else in the body is
+	ignored (see ``_FAILURE_MARKER_TRAILING_RE``).
+	"""
+	return _FAILURE_MARKER_TRAILING_RE.search(body)
+
+
 def _marker_fields(match: re.Match[str] | None) -> dict[str, str]:
 	fields: dict[str, str] = {}
 	if match is None:
@@ -3023,7 +3152,9 @@ def verify_run_provenance(
 				if not isinstance(comment, dict) or _comment_author(comment) != trusted_login.strip().lower():
 					continue
 				body = sanitize_text(comment.get("body"))
-				if any(_marker_fields(pattern.search(body)).get("run") == run_id for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE)):
+				if _marker_fields(_canonical_failure_marker(body)).get("run") == run_id or any(
+					_marker_fields(match).get("run") == run_id for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body)
+				):
 					linked = True
 					break
 				if body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and any(item["run_id"] == run_id for item in extract_run_refs([body], repo)):
@@ -3071,7 +3202,7 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 	for comment in comments:
 		if not isinstance(comment, dict) or _comment_author(comment) != author:
 			continue
-		fields = _marker_fields(_FAILURE_MARKER_RE.search(sanitize_text(comment.get("body"))))
+		fields = _marker_fields(_canonical_failure_marker(sanitize_text(comment.get("body"))))
 		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 			continue
 		if support and fields.get("support", "").lower() != support:
@@ -3106,8 +3237,9 @@ def count_identical_failures(
 	A trusted marker with a different ``fp``, a failure comment without a
 	marker, or an editor summary ends the scan; the summary a post-editor
 	failure of the same run posted first does not (same pairing rule as
-	``count_autofix_failure_streak``). Markers for another head or from another
-	author are skipped. ``cap_applied`` reports whether a trusted
+	``count_autofix_failure_streak``). Markers for another head are skipped;
+	comments from another author are skipped entirely, so their text (a failure
+	or summary prefix without a marker) never ends the scan either. ``cap_applied`` reports whether a trusted
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
@@ -3153,7 +3285,7 @@ def count_identical_failures(
 			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body))
 		):
 			result["cap_applied"] = True
-		for failure_fields in (_marker_fields(match) for match in _FAILURE_MARKER_RE.finditer(body)):
+		for failure_fields in (_marker_fields(match) for match in (_canonical_failure_marker(body),) if match is not None):
 			recorded = failure_fields.get("support", "").lower()
 			# Outage markers never count (#6633), so they must not spend a
 			# re-arm slot either: the resolver never ran under that support.
@@ -3164,11 +3296,21 @@ def count_identical_failures(
 	seen_runs: set[str] = set()
 	skip_paired_summary = False
 	for comment in reversed(ordered):
+		if _comment_author(comment) != author:
+			# Security-pass finding support-version-failure-marker-shadowing:
+			# any comment not written by the pipeline identity is skipped
+			# without ending the scan, including one that merely carries
+			# failure / editor-summary text and no marker. Otherwise a PR
+			# commenter could reset the identical-failure count and defeat the
+			# cap. Every failure and summary comment is posted as that identity.
+			continue
 		body = sanitize_text(comment.get("body"))
-		match = _FAILURE_MARKER_RE.search(body)
+		# A trusted comment whose only marker is not the trailing line is
+		# treated as unmarked below, never parsed for its forged fields.
+		match = _canonical_failure_marker(body)
 		if match is not None:
 			fields = _marker_fields(match)
-			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+			if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 				continue
 			if support and fields.get("support", "").lower() != support:
 				continue
@@ -3236,7 +3378,7 @@ def count_identical_failures(
 def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> str:
 	"""Return the reason of the newest trusted failure marker for ``head_sha``.
 
-	Same trust rules as ``count_identical_failures`` (author, head, valid
+	Same trust rules as ``count_identical_failures`` (author, trailing marker, head, valid
 	``fp``, and ``support`` when given), but ``provider_unavailable`` markers
 	are not skipped. The force_rb_judge host-only conflict skip (issue #6743)
 	uses it so a newer failure with any other reason keeps the conflict steps.
@@ -3248,7 +3390,8 @@ def newest_trusted_failure_reason(comments: Iterable[dict[str, Any]], *, head_sh
 	if not head or not author:
 		return ""
 	for comment in reversed([comment for comment in comments if isinstance(comment, dict)]):
-		match = _FAILURE_MARKER_RE.search(sanitize_text(comment.get("body")))
+		# Only the trailing standalone marker counts, as in count_identical_failures.
+		match = _canonical_failure_marker(sanitize_text(comment.get("body")))
 		if match is None or _comment_author(comment) != author:
 			continue
 		fields = _marker_fields(match)
@@ -3308,7 +3451,7 @@ def _non_retryable_host_only_paths(comments: list[dict[str, Any]], *, head_sha: 
 		if _non_retryable_comment_author(comment) != author:
 			continue
 		body = sanitize_text(comment.get("body"))
-		fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
+		fields = _marker_fields(_canonical_failure_marker(body))
 		if fields.get("head", "").lower() != head_sha:
 			continue
 		match = _FIRST_ERROR_LINE_RE.search(body)
@@ -3382,6 +3525,205 @@ def non_retryable_route(payload: dict[str, Any], *, comments: Iterable[dict[str,
 	return result
 
 
+# ---------------------------------------------------------------------------
+# Non-retryable failure backfill (issue #7291)
+# ---------------------------------------------------------------------------
+
+# A scheduled pass (scripts/workflow_failure_heal_non_retryable_backfill.sh)
+# re-sends a non-retryable review/autofix failure the intake never diagnosed
+# (a run from before #6756, or a lost dispatch). It posts this marker after a
+# confirmed dispatch so a report the intake rejects is sent only once. Trusted
+# only when written by the pass's own (GH_PAT) account.
+NON_RETRYABLE_BACKFILL_MARKER_TAG = "ai:workflow-heal-non-retryable-backfill:v1"
+_NON_RETRYABLE_BACKFILL_MARKER_RE = re.compile(r"<!--\s*" + re.escape(NON_RETRYABLE_BACKFILL_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES = 60
+_BACKFILL_RUN_ID_RE = re.compile(r"^[0-9]{1,20}$")
+# Backfill-local, own-line marker patterns built from the public tags: a marker
+# quoted inline in PR-influenced text (a "First error" code span) must not pick
+# the run, and the selector does not depend on shared private regexes.
+_BACKFILL_FAILURE_MARKER_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+_BACKFILL_FAILURE_CAP_MARKER_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
+
+
+def render_non_retryable_backfill_marker(pr_number: Any, head_sha: str, reason: str, run_id: Any) -> str:
+	return (
+		f"<!-- {NON_RETRYABLE_BACKFILL_MARKER_TAG} pr={safe_token(pr_number, 20)} head={safe_token(head_sha, 40).lower()} "
+		f"reason={safe_token(reason)} run={safe_token(run_id, 20)} -->"
+	)
+
+
+def render_non_retryable_backfill_comment(pr_number: Any, head_sha: str, reason: str, run_id: Any) -> str:
+	"""PR comment the backfill posts after a confirmed dispatch, ending with its marker.
+
+	The text carries no autofix failure/success comment prefix, so failure
+	streaks and the identical-failure cap do not count it.
+	"""
+	head = safe_token(head_sha, 40).lower()
+	return "\n".join(
+		[
+			f"Workflow failure heal backfill: sent the earlier non-retryable failure (`{safe_token(reason)}`, run {safe_token(run_id, 20)}, head `{head[:12]}`) "
+			"to the workflow failure heal intake, which had not diagnosed it. The intake verifies the run and posts its diagnosis here.",
+			"",
+			render_non_retryable_backfill_marker(pr_number, head_sha, reason, run_id),
+		]
+	)
+
+
+def _comment_created_at(comment: dict[str, Any]) -> datetime | None:
+	return _parse_iso(comment.get("created_at") or comment.get("createdAt"))
+
+
+def select_non_retryable_backfill_candidate(
+	comments: Iterable[Any],
+	*,
+	pr_number: Any,
+	head_sha: str,
+	author_login: str,
+	now: datetime,
+	min_age_minutes: int = DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES,
+) -> dict[str, Any]:
+	"""Decide whether a PR carries a non-retryable failure the intake never diagnosed.
+
+	``comments`` is the PR's issue-comment list, oldest first. Only comments by
+	``author_login`` (the trusted pipeline account) are read, so another
+	author's marker can neither nominate nor suppress a report. Scanning from
+	the newest trusted comment: provider-outage markers and comments, failure
+	markers for another head and cap markers are skipped; an editor summary
+	before any current-head failure marker means a later run got further
+	(``superseded``); the first ``review-autofix-failure:v1`` marker for the
+	head decides. It must name a non-retryable reason, carry a 64-hex ``fp``
+	and a numeric ``run``, have no trusted diagnosis marker for the same pr,
+	head and reason, no trusted backfill marker for the same run, and be at
+	least ``min_age_minutes`` old (an unreadable time counts as too recent).
+	"""
+	pr = str(pr_number or "").strip()
+	head = str(head_sha or "").strip().lower()
+	author = str(author_login or "").strip().lower()
+	result: dict[str, Any] = {"eligible": False, "reason": "", "pr": pr, "head": head, "failure_reason": "", "fp": "", "run": "", "support": ""}
+	if not pr.isdigit() or not is_valid_sha(head) or not author:
+		result["reason"] = "missing_inputs"
+		return result
+	trusted = [comment for comment in comments if isinstance(comment, dict) and _comment_author(comment) == author]
+	deciding: tuple[dict[str, Any], dict[str, str]] | None = None
+	for comment in reversed(trusted):
+		body = sanitize_text(comment.get("body"))
+		match = _BACKFILL_FAILURE_MARKER_RE.search(body)
+		if match is not None:
+			fields = _marker_fields(match)
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON or fields.get("head", "").lower() != head:
+				continue
+			deciding = (comment, fields)
+			break
+		if PROVIDER_UNAVAILABLE_COMMENT_MARKER in body or _BACKFILL_FAILURE_CAP_MARKER_RE.search(body):
+			continue
+		if any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+			result["reason"] = "superseded"
+			return result
+	if deciding is None:
+		result["reason"] = "no_current_head_marker"
+		return result
+	comment, fields = deciding
+	failure_reason = fields.get("reason", "")
+	result["failure_reason"] = failure_reason
+	if failure_reason not in NON_RETRYABLE_FAILURE_REASONS:
+		result["reason"] = "retryable"
+		return result
+	fp = fields.get("fp", "")
+	run = fields.get("run", "")
+	if not _FP_HEX_RE.match(fp) or not _BACKFILL_RUN_ID_RE.match(run):
+		result["reason"] = "marker_run_missing"
+		return result
+	result.update({"fp": fp, "run": run, "support": _normalized_support_sha(fields.get("support"))})
+	for other in trusted:
+		body = sanitize_text(other.get("body"))
+		for diag in _NON_RETRYABLE_MARKER_RE.finditer(body):
+			diag_fields = _marker_fields(diag)
+			if diag_fields.get("pr") == pr and diag_fields.get("head", "").lower() == head and diag_fields.get("reason") == failure_reason:
+				result["reason"] = "already_diagnosed"
+				return result
+		for sent in _NON_RETRYABLE_BACKFILL_MARKER_RE.finditer(body):
+			sent_fields = _marker_fields(sent)
+			if (
+				sent_fields.get("pr") == pr
+				and sent_fields.get("head", "").lower() == head
+				and sent_fields.get("reason") == failure_reason
+				and sent_fields.get("run") == run
+			):
+				result["reason"] = "already_backfilled"
+				return result
+	created = _comment_created_at(comment)
+	try:
+		min_age = max(0, int(min_age_minutes))
+	except (TypeError, ValueError):
+		min_age = DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES
+	if created is None or (now - created).total_seconds() < min_age * 60:
+		result["reason"] = "too_recent"
+		return result
+	result["eligible"] = True
+	result["reason"] = "eligible"
+	return result
+
+
+def _graphql_comment_to_rest(node: Any) -> dict[str, Any] | None:
+	if not isinstance(node, dict):
+		return None
+	author = node.get("author") if isinstance(node.get("author"), dict) else {}
+	return {
+		"id": node.get("databaseId"),
+		"body": node.get("body") if isinstance(node.get("body"), str) else "",
+		"created_at": node.get("createdAt") if isinstance(node.get("createdAt"), str) else "",
+		"user": {"login": author.get("login") if isinstance(author.get("login"), str) else ""},
+	}
+
+
+def non_retryable_backfill_candidates(
+	pr_nodes: Iterable[Any],
+	*,
+	author_login: str,
+	now: datetime,
+	min_age_minutes: int = DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES,
+) -> dict[str, Any]:
+	"""Run the selector over GraphQL open-PR nodes (``number``, ``isCrossRepository``,
+	``headRefOid``, ``comments.nodes``). Each candidate carries its comments in
+	the REST shape the autofix reporter reads."""
+	candidates: list[dict[str, Any]] = []
+	skipped: list[dict[str, Any]] = []
+	for node in pr_nodes:
+		if not isinstance(node, dict):
+			continue
+		pr = safe_token(node.get("number"), 20)
+		if not pr.isdigit():
+			continue
+		if node.get("isCrossRepository") is not False:
+			skipped.append({"pr": pr, "reason": "cross_repository"})
+			continue
+		head = str(node.get("headRefOid") or "").strip().lower()
+		if not is_valid_sha(head):
+			skipped.append({"pr": pr, "reason": "invalid_head"})
+			continue
+		comment_block = node.get("comments") if isinstance(node.get("comments"), dict) else {}
+		raw_nodes = comment_block.get("nodes") if isinstance(comment_block.get("nodes"), list) else []
+		comments = [item for item in (_graphql_comment_to_rest(raw) for raw in raw_nodes) if item is not None]
+		decision = select_non_retryable_backfill_candidate(
+			comments, pr_number=pr, head_sha=head, author_login=author_login, now=now, min_age_minutes=min_age_minutes,
+		)
+		if not decision["eligible"]:
+			skipped.append({"pr": pr, "reason": decision["reason"]})
+			continue
+		candidates.append(
+			{
+				"pr": pr,
+				"head": head,
+				"failure_reason": decision["failure_reason"],
+				"fp": decision["fp"],
+				"run": decision["run"],
+				"support": decision["support"],
+				"comments": comments,
+			}
+		)
+	return {"candidates": candidates, "skipped": skipped}
+
+
 # Reason-specific remediation text: only the host-only stop is a host-executed
 # path; an unsupported path is a symlink or a name the sandbox cannot carry,
 # and missing support is a workflow-support defect, not a PR defect.
@@ -3438,7 +3780,7 @@ def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, truste
 		body = sanitize_text(comment.get("body"))
 		if _NON_RETRYABLE_MARKER_RE.search(body):
 			return True
-		if _FAILURE_MARKER_RE.search(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
+		if _canonical_failure_marker(body) or any(marker in body for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS):
 			return False
 	return False
 
@@ -3651,7 +3993,7 @@ def parse_classification(markdown: str) -> str:
 	return "inconclusive"
 
 
-DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap",)
+DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap", ENGINE_FALLBACK_FAILURE_REASON)
 
 
 def is_deterministic_failure(payload: dict[str, Any], gen: int) -> bool:
@@ -3688,6 +4030,9 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 			lines.append(f"- **Consecutive failed {phase} runs on this issue:** {payload.get('failure_streak') or 1}")
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
+	if kind == "engine_fallback":
+		lines.append(f"- **Engine role:** `{payload.get('engine_role')}`")
+		lines.append(f"- **Refused fallback reason:** `{payload.get('engine_reason')}` (non-capacity; AI_ENGINE_FALLBACK_POLICY=capacity)")
 	if payload.get("workflow_name"):
 		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
@@ -3716,6 +4061,8 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
+	if payload.get("source_kind") == "engine_fallback":
+		return f"Workflow heal: AI engine fallback refused for {payload.get('engine_role')} ({payload.get('engine_reason')})"
 	if payload.get("source_kind") == "phase_failure":
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
@@ -4161,6 +4508,33 @@ def _cmd_build_phase_payload(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_build_engine_fallback_payload(args: argparse.Namespace) -> int:
+	try:
+		records = Path(args.records_file).read_text(encoding="utf-8", errors="replace").splitlines() if args.records_file else []
+	except OSError:
+		records = []
+	payload = build_engine_fallback_payload(
+		repo=args.repo,
+		role=args.role,
+		reason=args.reason,
+		workflow_name=args.workflow_name,
+		run_id=args.run_id,
+		wrapper_sha=args.wrapper_sha or None,
+		reporter_run_url=args.reporter_run_url or None,
+		records=[line for line in records if f"\t{args.role}\t{args.reason}\t" in line],
+	)
+	validate_payload(payload)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_engine_fallback_fingerprint(args: argparse.Namespace) -> int:
+	if not _ENGINE_ROLE_RE.match(args.role) or not _ENGINE_REASON_RE.match(args.reason):
+		raise ValueError("invalid engine role or reason")
+	print(engine_fallback_fingerprint(args.role, args.reason))
+	return 0
+
+
 def _read_path_list(path: str | None) -> list[str]:
 	"""One repo-relative path per line; a missing or unreadable file is an empty list."""
 	if not path:
@@ -4206,7 +4580,10 @@ def _cmd_autofix_failure_streak(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json)
 	except (OSError, json.JSONDecodeError):
 		comments = []
-	sys.stdout.write(str(count_autofix_failure_streak(comments if isinstance(comments, list) else [])) + "\n")
+	streak = count_autofix_failure_streak(
+		comments if isinstance(comments, list) else [], author_login=getattr(args, "author_login", "") or None
+	)
+	sys.stdout.write(str(streak) + "\n")
 	return 0
 
 
@@ -4342,6 +4719,38 @@ def _cmd_non_retryable_route(args: argparse.Namespace) -> int:
 			decision, pr_number=payload.get("issue_number"), head_sha=str(payload.get("head_sha") or ""), intake_run_url=args.intake_run_url,
 		)
 	_write_json(decision)
+	return 0
+
+
+def _cmd_non_retryable_backfill_candidates(args: argparse.Namespace) -> int:
+	empty = {"candidates": [], "skipped": []}
+	if not is_valid_repo_slug(args.repo):
+		sys.stderr.write("detail=invalid_repo\n")
+		_write_json(empty)
+		return 0
+	try:
+		nodes = _load_json_file(args.prs_json)
+	except (OSError, ValueError):
+		nodes = None
+	if isinstance(nodes, dict) and isinstance(nodes.get("nodes"), list):
+		nodes = nodes["nodes"]
+	if not isinstance(nodes, list):
+		sys.stderr.write("detail=prs_json_unreadable\n")
+		_write_json(empty)
+		return 0
+	now = _parse_iso(args.now) if args.now else datetime.now(timezone.utc)
+	if now is None:
+		sys.stderr.write("detail=invalid_now\n")
+		_write_json(empty)
+		return 0
+	_write_json(non_retryable_backfill_candidates(nodes, author_login=args.author_login, now=now, min_age_minutes=args.min_age_minutes))
+	return 0
+
+
+def _cmd_non_retryable_backfill_comment(args: argparse.Namespace) -> int:
+	if not str(args.pr).isdigit() or not is_valid_sha(str(args.head).lower()) or args.reason not in NON_RETRYABLE_FAILURE_REASONS or not _BACKFILL_RUN_ID_RE.match(str(args.run)):
+		raise ValueError("invalid backfill marker fields")
+	sys.stdout.write(render_non_retryable_backfill_comment(args.pr, args.head, args.reason, args.run) + "\n")
 	return 0
 
 
@@ -4868,6 +5277,22 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comment-author", required=True)
 	p.set_defaults(func=_cmd_build_phase_payload)
 
+	p = sub.add_parser("build-engine-fallback-payload", help="Build the payload for a refused (non-capacity) AI engine fallback")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--role", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--run-id", default="")
+	p.add_argument("--wrapper-sha", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--records-file", default="")
+	p.set_defaults(func=_cmd_build_engine_fallback_payload)
+
+	p = sub.add_parser("engine-fallback-fingerprint", help="Print the dedup fingerprint of a refused AI engine fallback (role, reason)")
+	p.add_argument("--role", required=True)
+	p.add_argument("--reason", required=True)
+	p.set_defaults(func=_cmd_engine_fallback_fingerprint)
+
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--base-changed-files", default="")
@@ -4879,6 +5304,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)
+	p.add_argument("--author-login", default="", help="pipeline login; other authors' comments are skipped (empty: legacy, every author)")
 	p.set_defaults(func=_cmd_autofix_failure_streak)
 
 	p = sub.add_parser("autofix-failure-fingerprint", help="Print fp= / degraded= / reason= (and marker= with --head-sha) for a review/autofix failure")
@@ -4917,6 +5343,21 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--trusted-login", required=True)
 	p.add_argument("--intake-run-url", default="")
 	p.set_defaults(func=_cmd_non_retryable_route)
+
+	p = sub.add_parser("non-retryable-backfill-candidates", help="Pick open PRs whose trusted current-head failure marker is non-retryable and was never diagnosed (issue #7291); prints JSON")
+	p.add_argument("--prs-json", required=True, help="GraphQL open-PR nodes with their last comments")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--author-login", required=True)
+	p.add_argument("--min-age-minutes", type=int, default=DEFAULT_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES)
+	p.add_argument("--now", default="", help="ISO time for tests; default now (UTC)")
+	p.set_defaults(func=_cmd_non_retryable_backfill_candidates)
+
+	p = sub.add_parser("non-retryable-backfill-comment", help="Render the PR comment the backfill posts after a confirmed dispatch")
+	p.add_argument("--pr", required=True)
+	p.add_argument("--head", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--run", required=True)
+	p.set_defaults(func=_cmd_non_retryable_backfill_comment)
 
 	p = sub.add_parser("non-retryable-label-suppressed", help="Print true when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker")
 	p.add_argument("--comments-json", required=True)
