@@ -272,6 +272,17 @@ Copy this block when adding a new entry:
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
 
+### `scripts/ai_engine_fallback_report.sh`
+
+- **Introduced in:** #6705 (2026-10-07), plan item 3e of `docs/plans/unattended-claude-pipeline-completion-plan.md` (Refs #6664)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `git grep -n ai_engine_fallback_report.sh .github/workflows` returns no callers.
+  - `git grep -n AI_ENGINE_FALLBACK_POLICY scripts/ai_engine.sh` returns no matches (the fallback policy was removed).
+  - `gh issue list --repo shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search engine_fallback_refused` returns no issues.
+- **Owner:** @shubhodeep1
+
 ### `workflow-templates/.claude/hooks/prepush_affected_tests.py`
 
 - **Introduced in:** PR for #7137 (2026-10-11)

@@ -284,9 +284,18 @@ if args[0] == "label" and len(args) >= 3 and args[1] in ("create", "edit"):
 		"repo": first_value("--repo"),
 	})
 	save()
+	if args[1] == "create" and os.environ.get("MOCK_GH_LABEL_CREATE_EXISTS") == "true":
+		sys.stderr.write(f'label with name "{args[2]}" already exists; use `--force` to update its color and description\n')
+		sys.exit(1)
 	sys.exit(0)
 
 if args[0] == "issue" and len(args) >= 3 and args[1] == "edit":
+	transient_failures = int(os.environ.get("MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES") or "0")
+	if int(state.get("issue_edit_transient_failures_seen", 0)) < transient_failures:
+		state["issue_edit_transient_failures_seen"] = int(state.get("issue_edit_transient_failures_seen", 0)) + 1
+		save()
+		sys.stderr.write("HTTP 502: Bad Gateway\n")
+		sys.exit(1)
 	if os.environ.get("MOCK_GH_ISSUE_EDIT_FAILURE") == "true":
 		save()
 		sys.exit(1)
@@ -1520,8 +1529,9 @@ def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 
 	for block in (stage_block, preflight_block):
 		assert 'wf_source="shubhodeep1/coding-workflows"' in block
-		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
-		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
+		assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in block
+		assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in block
+		assert '${{ github.repository }}' not in block
 
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
@@ -2546,6 +2556,9 @@ def _run_guard_handler_case(
 	staged_support_auto_release_safe: bool = False,
 	mock_issue_edit_failure: bool = False,
 	guard_overrides: dict[str, str] | None = None,
+	with_gh_helpers: bool = False,
+	issue_edit_transient_failures: int = 0,
+	mock_label_create_exists: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -2560,6 +2573,8 @@ def _run_guard_handler_case(
 	shutil.copy2(repository_helper, runtime_helper)
 	repository_helper.unlink()
 	assert not repository_helper.exists(), "test setup must simulate fetched-support cleanup"
+	if with_gh_helpers:
+		shutil.copy2(REPO_ROOT / "scripts" / "gh_helpers.sh", runtime_dir / "gh_helpers.sh")
 
 	_install_mock_gh(bin_dir)
 	_install_guard_mock_curl(bin_dir)
@@ -2599,6 +2614,8 @@ def _run_guard_handler_case(
 			"SSB_FILES": "scripts/helper.sh",
 			"SSB_AUTO_RELEASE_SAFE": "true" if staged_support_auto_release_safe else "",
 			"MOCK_GH_ISSUE_EDIT_FAILURE": "true" if mock_issue_edit_failure else "false",
+			"MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES": str(issue_edit_transient_failures),
+			"MOCK_GH_LABEL_CREATE_EXISTS": "true" if mock_label_create_exists else "false",
 		},
 		cwd=repo_dir,
 	)
@@ -2748,6 +2765,114 @@ def test_staged_support_guard_marks_only_auto_release_safe_conflicts() -> None:
 		)
 		assert proc.returncode != 0
 		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
+
+
+def test_guard_handler_retries_transient_destructive_latch_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_destructive_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			destructive_reason="canonical-source",
+			with_gh_helpers=True,
+			issue_edit_transient_failures=1,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert "gh_helpers.sh not available" not in output
+		assert gh_state["issue_edit_transient_failures_seen"] == 1
+		# The retried call is the combined add+remove edit, not the add-only fallback.
+		assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"]
+		assert "ai:destructive-blocked" in gh_state["issue_labels"]
+		assert "ai:implementing" not in gh_state["issue_labels"]
+		assert gh_state["label_creates"] == [{"name": "ai:destructive-blocked", "repo": "owner/consumer"}]
+		assert "Confirmed ai:destructive-blocked is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_retries_transient_needs_human_latch_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_staged_") as td:
+		proc, gh_state, curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			staged_support_auto_release_safe=True,
+			with_gh_helpers=True,
+			issue_edit_transient_failures=1,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert gh_state["issue_edit_transient_failures_seen"] == 1
+		assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"]
+		assert gh_state["issue_labels"] == ["ai:needs-human"]
+		assert "Confirmed ai:needs-human is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
+		assert "Confirmed ai:needs-human latch" in " ".join(curl_calls[0])
+
+
+def test_guard_handler_scope_latch_with_gh_helpers() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_scope_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["issue_labels"] == ["ai:scope-blocked"]
+		assert "Confirmed ai:scope-blocked is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_existing_label_edits_without_retrying_create() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_label_exists_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+			mock_label_create_exists=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		# One raw create; the "already exists" reply goes straight to the edit, never to a create retry.
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["label_edits"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert "gh command failed" not in output
+		assert "Could not ensure the ai:scope-blocked label exists" not in output
+		assert "Confirmed ai:scope-blocked is latched" in output
+
+
+def test_guard_handler_fails_open_without_gh_helpers() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_no_helpers_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			destructive_reason="canonical-source",
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert "gh_helpers.sh not available beside the handler" in output
+		assert gh_state["issue_labels"] == ["ai:destructive-blocked"]
+		assert "Confirmed ai:destructive-blocked is latched" in output
+
+
+def test_guard_handler_gh_retry_wiring_contract() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	handler = _implement_guard_handler_text()
+	assert 'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
+	assert stage_block.index('install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
+		'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"'
+	)
+	assert 'GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"' in handler
+	assert 'source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry' in handler
+	assert "::warning::implement_handle_guard_block: gh_helpers.sh not available beside the handler" in handler
+	assert handler.count("gh_retry gh issue view") == 3
+	assert handler.count("guard_block_gh gh issue edit") == 6
+	assert "gh_retry gh issue comment" not in handler
+	assert "guard_block_gh gh issue comment" not in handler
 
 
 def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
