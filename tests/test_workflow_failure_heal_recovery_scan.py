@@ -53,11 +53,23 @@ if "user" in rest:
 	if state.get("user_fail"):
 		fail()
 	out(state["login"])
+if rest and rest[0] == "graphql" and any("issue(number" in a for a in args):
+	number = int(next(a for a in args if a.startswith("number="))[len("number="):])
+	node = next((n for n in state.get("nodes", []) if n["number"] == number), None)
+	if node is None or state.get("issue_read_fail"):
+		fail()
+	issue = state.get("fresh", {}).get(str(number), {})
+	out({"data": {"repository": {"issue": {"state": issue.get("state", "OPEN"), "body": issue.get("body", node["body"]),
+		"lastEditedAt": issue.get("lastEditedAt", node.get("lastEditedAt"))}}}})
 if rest and rest[0] == "graphql":
 	if state.get("list_fail"):
 		fail()
 	out({"data": {"repository": {"issues": {"nodes": state.get("nodes", [])}}}})
 path = next((a for a in rest if a.startswith("repos/")), "")
+if path.endswith("/actions/workflows/workflow-failure-heal-intake.yml/runs"):
+	if state.get("runs_fail"):
+		fail()
+	out({"workflow_runs": state.get("runs", [])})
 if path.endswith("/comments") and any(a.startswith("body=@") for a in args):
 	body = open(next(a for a in args if a.startswith("body=@"))[len("body=@"):]).read()
 	state.setdefault("posted", []).append({"path": path, "body": body})
@@ -163,6 +175,34 @@ def test_list_only_counts_markerless_issues_by_the_pipeline_login() -> None:
 		assert not [call for call in state["calls"] if "/comments" in " ".join(call)]
 
 
+def test_list_only_drops_exhausted_issues_and_skips_while_an_intake_is_active() -> None:
+	exhausted = _heal_issue(31)
+	exhausted["comments"] = {"nodes": [{"body": c["body"], "author": {"login": c["user"]["login"]}} for c in (_scan_comment(), _scan_comment(), _scan_comment())]}
+	two = _heal_issue(32)
+	two["comments"] = {"nodes": [{"body": c["body"], "author": {"login": c["user"]["login"]}} for c in (_scan_comment(), _scan_comment(author="mallory"))]}
+	with tempfile.TemporaryDirectory(prefix="heal-scan-list-exhausted-") as tmp_name:
+		result, _, output, _, _ = _run(Path(tmp_name), _state([exhausted, two]), args=("--list-only",))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.read_text(encoding="utf-8") == "count=1\n"
+	with tempfile.TemporaryDirectory(prefix="heal-scan-list-exhausted-only-") as tmp_name:
+		result, state, output, _, _ = _run(Path(tmp_name), _state([exhausted]), args=("--list-only",))
+		assert output.read_text(encoding="utf-8") == "count=0\n"
+		assert not [call for call in state["calls"] if any("/runs" in a for a in call)]
+	busy_cases = (
+		({"runs": [{"id": 4242, "status": "in_progress"}, {"id": 7, "status": "queued"}]}, "reason=intake_busy active_runs=1", "count=0\n"),
+		({"runs": [{"id": 4242, "status": "in_progress"}, {"id": 7, "status": "completed"}]}, "reason=listed count=1", "count=1\n"),
+		({"runs_fail": True}, "reason=runs_unavailable", "count=0\n"),
+	)
+	for extra, expected_log, expected_output in busy_cases:
+		with tempfile.TemporaryDirectory(prefix="heal-scan-list-busy-") as tmp_name:
+			state = _state([_heal_issue(31)])
+			state.update(extra)
+			result, _, output, _, _ = _run(Path(tmp_name), state, args=("--list-only",))
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert expected_log in result.stdout, (extra, result.stdout)
+			assert output.read_text(encoding="utf-8") == expected_output, extra
+
+
 def test_gates_skip_without_api_calls() -> None:
 	cases = [
 		({"GITHUB_EVENT_NAME": "workflow_dispatch"}, "reason=not_scheduled", False),
@@ -238,9 +278,27 @@ def test_scan_records_permanent_skips_and_honours_the_per_tick_cap() -> None:
 		result, state, _, intake_env, _ = _run(Path(tmp_name), _state([edited, _heal_issue(32)]))
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "heal_scope_recovery outcome=skip reason=issue_edited issue=31" in result.stdout
-		# The permanent skip used the one slot of this tick: #32 waits.
-		assert not intake_env.exists()
-		assert [post["path"] for post in state["posted"]] == [f"repos/{SELF_REPO}/issues/31/comments"]
+		# The permanent skip ran no intake, so it does not take the tick's
+		# one slot: #32 is replayed in the same run.
+		assert intake_env.exists()
+		assert "WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE=32" in intake_env.read_text(encoding="utf-8")
+		assert [post["path"] for post in state["posted"]] == [f"repos/{SELF_REPO}/issues/31/comments", f"repos/{SELF_REPO}/issues/32/comments"]
+	# An edit after the list snapshot is seen by the per-candidate re-read.
+	with tempfile.TemporaryDirectory(prefix="heal-scan-fresh-edit-") as tmp_name:
+		state = _state([_heal_issue(31)])
+		state["fresh"] = {"31": {"lastEditedAt": "2026-10-13T00:00:00Z"}}
+		result, state, _, intake_env, _ = _run(Path(tmp_name), state)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "reason=issue_edited issue=31" in result.stdout and not intake_env.exists()
+		assert not [call for call in state["calls"] if any(a.endswith("/pulls/4174") for a in call)]
+	# A closed issue or a failed re-read is skipped without a marker.
+	for fresh_state, expected in (({"fresh": {"31": {"state": "CLOSED"}}}, "reason=issue_closed"), ({"issue_read_fail": True}, "reason=issue_unavailable")):
+		with tempfile.TemporaryDirectory(prefix="heal-scan-fresh-") as tmp_name:
+			state = _state([_heal_issue(31)])
+			state.update(fresh_state)
+			result, state, _, intake_env, _ = _run(Path(tmp_name), state)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"{expected} issue=31" in result.stdout and not intake_env.exists() and "posted" not in state
 	with tempfile.TemporaryDirectory(prefix="heal-scan-two-") as tmp_name:
 		result, state, _, _, _ = _run(Path(tmp_name), _state([_heal_issue(31), _heal_issue(32)]), env={"HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK": "9"})
 		assert result.returncode == 0, result.stderr + result.stdout

@@ -41,11 +41,13 @@
 #   WORKFLOW_HEAL_PY                       helper (default scripts/workflow_failure_heal.py)
 #   RUNTIME_DIR                            scratch directory (default /tmp/workflow-heal-recovery-scan-<run>)
 #
-# GitHub API cost per run (CLAUDE.md §14): one /user read and one GraphQL
-# issue list; per examined candidate one paginated comment read, then one PR
-# read and one paginated PR comment read, plus the intake's normal reads. The
-# REST issue list has no lastEditedAt, which the reconstruct step needs, so
-# the list is a GraphQL query. Every read failure skips (fail closed, nothing
+# GitHub API cost per run (CLAUDE.md §14): one /user read and one to four
+# GraphQL issue-list pages (with each issue's last 30 comments, so exhausted
+# issues are dropped without a read); --list-only adds one workflow-runs read
+# when there are candidates. Per examined candidate one paginated comment
+# read and one GraphQL issue read, then one PR read and one paginated PR
+# comment read, plus the intake's normal reads. REST has no lastEditedAt,
+# which the reconstruct step needs, so the issue reads are GraphQL. Every read failure skips (fail closed, nothing
 # filed); the next hourly run retries.
 
 set -euo pipefail
@@ -98,6 +100,8 @@ MAX_ATTEMPTS="$(_bounded_int "${HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS:-}" 3 1 20
 # Candidates examined per run (each costs one comment read), so exhausted
 # issues cannot make one tick read every heal issue.
 MAX_EXAMINED=20
+# shellcheck disable=SC2016  # GraphQL variables, not shell expansions.
+ISSUE_QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){state body lastEditedAt}}}'
 
 # --- Gates -------------------------------------------------------------------
 
@@ -142,22 +146,69 @@ fi
 
 LIST_FILE="${RUNTIME_DIR}/recovery_scan_list.json"
 CANDIDATES_FILE="${RUNTIME_DIR}/recovery_scan_candidates.json"
+NODES_FILE="${RUNTIME_DIR}/recovery_scan_nodes.json"
+# The list is paged (at most LIST_MAX_PAGES pages of 50) and carries each
+# issue's last 30 comments, so an issue whose visible scan markers already
+# reach MAX_ATTEMPTS is dropped here: it costs no comment read and never keeps
+# the count above zero or takes a slot from a later candidate. A marker outside
+# the last 30 comments only undercounts, and the per-candidate paginated read
+# below still decides.
+LIST_MAX_PAGES=4
 # shellcheck disable=SC2016  # GraphQL variables, not shell expansions.
-LIST_QUERY='query($owner:String!,$name:String!,$login:String!){repository(owner:$owner,name:$name){issues(first:50,states:OPEN,labels:["ai:workflow-heal"],filterBy:{createdBy:$login},orderBy:{field:CREATED_AT,direction:ASC}){nodes{number title body lastEditedAt url author{login}}}}}'
-if ! gh_retry gh api graphql -f query="${LIST_QUERY}" -f owner="${SELF_REPO%%/*}" -f name="${SELF_REPO#*/}" -f login="${LOGIN}" > "${LIST_FILE}" 2>/dev/null \
-	|| ! jq -e '.data.repository.issues.nodes | type == "array"' "${LIST_FILE}" >/dev/null 2>&1; then
-	log "heal_scope_recovery outcome=skip reason=list_unavailable stage=scan"
-	_write_count 0
-	exit 0
-fi
-jq --arg login "${LOGIN}" '[.data.repository.issues.nodes[]
+LIST_QUERY='query($owner:String!,$name:String!,$login:String!,$after:String){repository(owner:$owner,name:$name){issues(first:50,after:$after,states:OPEN,labels:["ai:workflow-heal"],filterBy:{createdBy:$login},orderBy:{field:CREATED_AT,direction:ASC}){pageInfo{hasNextPage endCursor} nodes{number title body lastEditedAt url author{login} comments(last:30){nodes{body author{login}}}}}}}'
+printf '[]' > "${NODES_FILE}"
+LIST_CURSOR=""
+LIST_PAGE=0
+while :; do
+	LIST_PAGE=$((LIST_PAGE + 1))
+	LIST_ARGS=(-f query="${LIST_QUERY}" -f owner="${SELF_REPO%%/*}" -f name="${SELF_REPO#*/}" -f login="${LOGIN}")
+	[ -z "${LIST_CURSOR}" ] || LIST_ARGS+=(-f after="${LIST_CURSOR}")
+	if ! gh_retry gh api graphql "${LIST_ARGS[@]}" > "${LIST_FILE}" 2>/dev/null \
+		|| ! jq -e '.data.repository.issues.nodes | type == "array"' "${LIST_FILE}" >/dev/null 2>&1; then
+		log "heal_scope_recovery outcome=skip reason=list_unavailable stage=scan"
+		_write_count 0
+		exit 0
+	fi
+	jq -s '.[0] + (.[1].data.repository.issues.nodes // [])' "${NODES_FILE}" "${LIST_FILE}" > "${NODES_FILE}.next" && mv "${NODES_FILE}.next" "${NODES_FILE}"
+	LIST_CURSOR="$(jq -r 'if .data.repository.issues.pageInfo.hasNextPage == true then (.data.repository.issues.pageInfo.endCursor // "") else "" end' "${LIST_FILE}")"
+	[ -n "${LIST_CURSOR}" ] || break
+	if [ "${LIST_PAGE}" -ge "${LIST_MAX_PAGES}" ]; then
+		log "heal_scope_recovery outcome=scan reason=list_truncated pages=${LIST_PAGE}"
+		break
+	fi
+done
+jq --arg login "${LOGIN}" --argjson max "${MAX_ATTEMPTS}" '[.[]
 	| select(type == "object" and (.number | type == "number"))
 	| select(((.author.login // "") | ascii_downcase) == ($login | ascii_downcase))
 	| select((.body // "") | contains("ai:workflow-heal-scope") | not)
+	| select(([(.comments.nodes // [])[]
+		| select(type == "object" and ((.author.login // "") | ascii_downcase) == ($login | ascii_downcase))
+		| (.body // "") | sub("\\s+$"; "") | split("\n") | (last // "") | gsub("^\\s+|\\s+$"; "")
+		| select(test("^<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason=[a-z][a-z0-9_]{0,59} run=[0-9]{1,20} -->$"))] | length) < $max)
 	| {number, title: (.title // ""), body: (.body // ""), author: (.author.login // ""), last_edited_at: .lastEditedAt, html_url: (.url // "")}]' \
-	"${LIST_FILE}" > "${CANDIDATES_FILE}"
+	"${NODES_FILE}" > "${CANDIDATES_FILE}"
 COUNT="$(jq 'length' "${CANDIDATES_FILE}")"
 log "heal_scope_recovery outcome=scan reason=listed count=${COUNT}"
+if [ "${LIST_ONLY}" = "true" ] && [ "${COUNT}" -gt 0 ]; then
+	# The recovery-scan job joins the shared intake concurrency group, and a
+	# newly queued member replaces the group's pending one. Skip this tick
+	# while another intake run is active, so a scan queued now cannot displace
+	# a report waiting behind it; the next hourly run retries. §14 audit: no
+	# existing call in this script lists workflow runs; one GET of the newest
+	# 100 runs of this workflow. A failed read also skips (fail closed).
+	RUNS_FILE="${RUNTIME_DIR}/recovery_scan_runs.json"
+	ACTIVE_RUNS=""
+	if gh_retry gh api --method GET "repos/${SELF_REPO}/actions/workflows/workflow-failure-heal-intake.yml/runs" -F per_page=100 > "${RUNS_FILE}" 2>/dev/null; then
+		ACTIVE_RUNS="$(jq --arg self "${RUN_ID}" '[.workflow_runs[]? | select(.status != "completed" and ((.id | tostring) != $self))] | length' "${RUNS_FILE}" 2>/dev/null || true)"
+	fi
+	if ! [[ "${ACTIVE_RUNS}" =~ ^[0-9]+$ ]]; then
+		log "heal_scope_recovery outcome=skip reason=runs_unavailable stage=scan"
+		COUNT=0
+	elif [ "${ACTIVE_RUNS}" -gt 0 ]; then
+		log "heal_scope_recovery outcome=skip reason=intake_busy active_runs=${ACTIVE_RUNS} stage=scan"
+		COUNT=0
+	fi
+fi
 if [ "${LIST_ONLY}" = "true" ]; then
 	_write_count "${COUNT}"
 	exit 0
@@ -232,6 +283,21 @@ while IFS= read -r -u 3 candidate; do
 		log "heal_scope_recovery outcome=attempts_exhausted reason=attempts_exhausted issue=${NUMBER} attempts=${ATTEMPTS} max=${MAX_ATTEMPTS}"
 		continue
 	fi
+	# Re-read the issue right before it is rebuilt: the list snapshot can be
+	# an earlier intake run old, and the never-edited check needs the current
+	# lastEditedAt (REST has no such field). A failed read is transient.
+	FRESH_FILE="${WORK}/issue_fresh.json"
+	if ! gh_retry gh api graphql -f query="${ISSUE_QUERY}" -f owner="${SELF_REPO%%/*}" -f name="${SELF_REPO#*/}" -F number="${NUMBER}" > "${FRESH_FILE}" 2>/dev/null \
+		|| ! jq -e '.data.repository.issue | type == "object"' "${FRESH_FILE}" >/dev/null 2>&1; then
+		log "heal_scope_recovery outcome=skip reason=issue_unavailable issue=${NUMBER}"
+		continue
+	fi
+	if [ "$(jq -r '.data.repository.issue.state // ""' "${FRESH_FILE}")" != "OPEN" ]; then
+		log "heal_scope_recovery outcome=skip reason=issue_closed issue=${NUMBER}"
+		continue
+	fi
+	jq -s '.[0] + {body: (.[1].data.repository.issue.body // ""), last_edited_at: .[1].data.repository.issue.lastEditedAt}' \
+		"${ISSUE_FILE}" "${FRESH_FILE}" > "${ISSUE_FILE}.fresh" && mv "${ISSUE_FILE}.fresh" "${ISSUE_FILE}"
 	PULL_FILE="${WORK}/pull.json"
 	PULL_COMMENTS_FILE="${WORK}/pull_comments.json"
 	printf '{}' > "${PULL_FILE}"
@@ -239,9 +305,11 @@ while IFS= read -r -u 3 candidate; do
 	SOURCE="$(jq -r '(.body // "") | capture("<!--\\s*workflow-failure-heal:source=(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)\\s*-->") | "\(.repo) \(.n)"' "${ISSUE_FILE}" 2>/dev/null | head -n 1 || true)"
 	SOURCE_REPO="${SOURCE% *}"
 	SOURCE_NUMBER="${SOURCE#* }"
-	# The PR is read only for an autofix heal issue with a parseable source;
-	# anything else reaches reconstruct with an empty PR, which names the skip.
+	# The PR is read only for an unedited autofix heal issue with a parseable
+	# source; anything else reaches reconstruct with an empty PR, which names
+	# the skip (an edited body never chooses which repository is read).
 	if [[ "${SOURCE_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && [[ "${SOURCE_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+		&& jq -e '.last_edited_at == null' "${ISSUE_FILE}" >/dev/null 2>&1 \
 		&& jq -e '(.body // "") | contains("- **Consecutive failed review runs on this PR:** ")' "${ISSUE_FILE}" >/dev/null 2>&1; then
 		if ! gh_retry gh api --method GET "repos/${SOURCE_REPO}/pulls/${SOURCE_NUMBER}" > "${PULL_FILE}" 2>/dev/null \
 			|| ! jq -e 'type == "object"' "${PULL_FILE}" >/dev/null 2>&1 \
@@ -266,7 +334,8 @@ while IFS= read -r -u 3 candidate; do
 		log "heal_scope_recovery outcome=skip reason=${SKIP:-unknown} issue=${NUMBER}"
 		if python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import workflow_failure_heal as h; sys.exit(0 if sys.argv[2] in h.HEAL_SCOPE_RECOVERY_SCAN_PERMANENT_REASONS else 1)' \
 			"$(dirname "${HEAL_PY}")" "${SKIP}" 2>/dev/null; then
-			PROCESSED=$((PROCESSED + 1))
+			# No intake ran, so the skip does not take this tick's slot from a
+			# later candidate; MAX_EXAMINED still bounds the marker writes.
 			_post_attempt_marker "${NUMBER}" "${SKIP}" "${ATTEMPTS}"
 		fi
 		continue

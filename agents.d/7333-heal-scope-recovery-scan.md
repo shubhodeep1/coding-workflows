@@ -3,12 +3,19 @@ Heal-scope recovery scan (#7333, activation gaps of PR #7325 for #7082):
 `workflow-failure-heal-intake.yml` also runs on `schedule` (`41 * * * *`).
 Its `recovery-candidates` job (no shared lock, `issues: read`) runs
 `scripts/workflow_failure_heal_recovery_scan.sh --list-only`, which lists, in
-one GraphQL query, open `ai:workflow-heal` issues in this repository written by
-the token's own `/user` login whose body has no `ai:workflow-heal-scope`
-marker. Only when that count is above zero does the `recovery-scan` job run,
-holding the job-level `workflow-failure-heal-intake` concurrency group (a
-schedule run's workflow-level group is unique, so a pending scan never
-replaces a pending report). For at most `HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK`
+up to four GraphQL pages of 50, open `ai:workflow-heal` issues in this
+repository written by the token's own `/user` login whose body has no
+`ai:workflow-heal-scope` marker, dropping those whose last 30 comments already
+hold `HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS` scan markers. Only when that count
+is above zero, and no other run of this workflow is active (one runs read;
+`reason=intake_busy` / `reason=runs_unavailable` write `count=0`), does the
+`recovery-scan` job run, holding the job-level `workflow-failure-heal-intake`
+concurrency group. A newly queued member of a group replaces its pending one,
+so the busy check keeps a scan from displacing a waiting report (a report
+queued in the seconds between the check and the job start can still be
+displaced). Each candidate's body and `lastEditedAt` are re-read (GraphQL)
+right before it is rebuilt, and its source PR is read only while the issue is
+unedited. For at most `HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK`
 issues (default 1, clamped 1-2) the scan rebuilds the `autofix_failure`
 report from the issue's never-edited body (`workflow_failure_heal.py
 heal-scope-recovery reconstruct`: pipeline author, `lastEditedAt` null,
@@ -32,7 +39,8 @@ A failed attempt, or a permanent reconstruct skip (`HEAL_SCOPE_RECOVERY_SCAN_PER
 leaves `<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason=<r> run=<id> -->`
 (trusted only from the pipeline login, on the comment's last line); after
 `HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS` (default 3) the issue is skipped
-(`outcome=attempts_exhausted`) and one WARNING was sent. Other heal kinds log
+(`outcome=attempts_exhausted`) and one WARNING was sent. A permanent skip
+runs no intake, so it does not use the run's per-tick slot. Other heal kinds log
 `reason=kind_unsupported` and still need a fresh verified report.
 `HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off with recovery.
 
@@ -48,5 +56,7 @@ recovery on every exit path and keeps the exit code. When no eligible
 markerless heal issue matches, the intake exits right after
 `_heal_scope_recovery_evaluate` (`heal_scope_recovery outcome=skip
 reason=not_eligible_non_retryable`) with today's PR-side outcome and no
-occurrence or heal issue. The host-only stop and unauthenticated reports are
+occurrence or heal issue. A deferred report whose heal-issue list cannot be
+read logs `heal_scope_recovery outcome=skip reason=heal_issue_list_failed` and
+exits 0 with the same PR-side outcome; the hourly scan retries recovery. The host-only stop and unauthenticated reports are
 never deferred.

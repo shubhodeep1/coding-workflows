@@ -966,12 +966,23 @@ fi
 
 # --- Dedup / lineage / budget ----------------------------------------------
 
+# A deferred non-retryable report (#7333) whose heal-issue list cannot be read
+# skips recovery (the hourly recovery scan retries it) and ends with today's
+# PR-side outcome through the EXIT trap, instead of a red run.
+_heal_issue_list_failed_deferred_exit()
+{
+	[ "${NON_RETRYABLE_RECOVERY_DEFERRED}" = "true" ] || return 0
+	log "heal_scope_recovery outcome=skip reason=heal_issue_list_failed source=${SOURCE_LABEL} fp=${FP}"
+	exit 0
+}
+
 SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
 if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
 	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
+	_heal_issue_list_failed_deferred_exit
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 	exit 1
@@ -983,6 +994,7 @@ if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
 		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
+		_heal_issue_list_failed_deferred_exit
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 		exit 1

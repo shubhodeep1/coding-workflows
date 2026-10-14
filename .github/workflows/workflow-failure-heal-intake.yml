@@ -65,7 +65,9 @@ permissions:
 # Serialise every intake so the fingerprint dedup and the open-issue / per-day
 # budgets are evaluated against a consistent issue list. A schedule run gets
 # its own group (a pending scan must not replace a pending report); its
-# recovery-scan job joins the shared group at job level.
+# recovery-scan job joins the shared group at job level, and runs only when
+# recovery-candidates saw no other active intake run, because a newly queued
+# group member replaces the pending one.
 concurrency:
   group: ${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
   cancel-in-progress: false
@@ -405,10 +407,49 @@ jobs:
           source scripts/codex_helpers.sh
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
+      # Same engine selection as the intake job: the scan runs the unchanged
+      # intake, whose WORKFLOW_HEAL diagnosis defaults to Claude.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -uo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ] && [ ! -L scripts/ai_engine.sh ]; then
+            # shellcheck source=/dev/null
+            if source scripts/ai_engine.sh; then
+              engine="$(ai_engine_for_role WORKFLOW_HEAL || echo codex)"
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; the heal diagnosis stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run heal-scope recovery scan
         env:
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_recovery_scan.sh

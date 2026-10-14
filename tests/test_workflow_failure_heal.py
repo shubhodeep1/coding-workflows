@@ -7659,7 +7659,10 @@ def test_intake_verified_sandbox_report_without_eligible_issue_keeps_todays_outc
 		assert "composed_issue" not in state and "issues_created" not in state
 		assert [c["path"] for c in state["comments_posted"]] == [NR_PR_COMMENTS]
 		assert _nr_label_edits(state) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]]
-		# A host-only report is never deferred.
+	# A host-only report is never deferred. The intake deletes the identity
+	# file it read, so this run needs a fresh one.
+	with tempfile.TemporaryDirectory(prefix="heal-gap2-host-only-") as tmp_name:
+		env = _verified_autofix_identity(Path(tmp_name))
 		host_payload = _recovery_autofix_payload(failure_reason=HOST_ONLY_REASON, reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500")
 		result, state, _ = _run_intake(host_payload, _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=env)
 		assert result.returncode == 0, result.stderr + result.stdout
