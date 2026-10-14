@@ -548,7 +548,9 @@ jobs:
       # has no id-token, so no report identity is attached. Fail-open.
       - name: Backfill non-retryable autofix failure reports
         continue-on-error: true
-        if: vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false' && vars.WORKFLOW_HEAL_ENABLED != 'false'
+        # !cancelled(): this pass is independent of the enumerate step, so a
+        # failed dispatch tick does not also skip the backfill.
+        if: ${{ !cancelled() && vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false' && vars.WORKFLOW_HEAL_ENABLED != 'false' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
