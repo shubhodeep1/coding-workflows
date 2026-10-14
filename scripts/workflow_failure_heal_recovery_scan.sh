@@ -276,7 +276,18 @@ while IFS= read -r -u 3 candidate; do
 	ATTEMPTS="$(jq -r '.scan_attempts // 0' "${CHECK_FILE}")"
 	[[ "${ATTEMPTS}" =~ ^[0-9]+$ ]] || ATTEMPTS=0
 	if [ "$(jq -r '.eligible // false' "${CHECK_FILE}")" != "true" ]; then
-		log "heal_scope_recovery outcome=skip reason=$(jq -r '.reason // "not_eligible"' "${CHECK_FILE}" | tr -cd 'a-z_' | head -c 40) issue=${NUMBER}"
+		CHECK_REASON="$(jq -r '.reason // "not_eligible"' "${CHECK_FILE}" | tr -cd 'a-z_' | head -c 40)"
+		if [ "${CHECK_REASON}" = "already_replaced" ]; then
+			# A finalize whose close failed left this issue open with a trusted
+			# recovery marker; close it so it leaves the candidate list.
+			CLOSE_STATE="failed"
+			if gh_retry gh issue close "${NUMBER}" --repo "${SELF_REPO}" --reason "not planned" >/dev/null 2>&1; then
+				CLOSE_STATE="done"
+			fi
+			log "heal_scope_recovery outcome=skip reason=already_replaced issue=${NUMBER} close=${CLOSE_STATE}"
+			continue
+		fi
+		log "heal_scope_recovery outcome=skip reason=${CHECK_REASON} issue=${NUMBER}"
 		continue
 	fi
 	if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
@@ -362,9 +373,22 @@ while IFS= read -r -u 3 candidate; do
 	if [ "${INTAKE_RC}" -ne 0 ]; then
 		INTAKE_FAILURES=$((INTAKE_FAILURES + 1))
 	fi
-	REASON="$(grep -E '^WORKFLOW_HEAL (heal_scope_recovery outcome=skip|skip|report_auth=rejected|error) reason=' "${INTAKE_LOG}" | tail -n 1 \
-		| sed -n 's/.* reason=\([a-z0-9_]*\).*/\1/p' || true)"
+	# The intake ends a replay that recovered nothing with a generic
+	# `reason=not_recovered` line; the specific reason logged before it wins.
+	REASON="$(grep -E '^WORKFLOW_HEAL (heal_scope_recovery outcome=(skip|no_replacement)|skip|report_auth=rejected|error) reason=' "${INTAKE_LOG}" \
+		| grep -v ' reason=not_recovered ' | tail -n 1 | sed -n 's/.* reason=\([a-z0-9_]*\).*/\1/p' || true)"
+	if [ -z "${REASON}" ] && grep -q ' reason=not_recovered ' "${INTAKE_LOG}"; then
+		REASON="not_recovered"
+	fi
 	[ -n "${REASON}" ] || REASON="intake_failed"
+	case "${REASON}" in
+		budget_budget_exhausted|budget_failed|comments_unavailable|identity_unavailable|issue_record_missing)
+			# A cap or read failure that clears on its own: no attempt is
+			# recorded, so it cannot retire the issue; the next run retries.
+			log "heal_scope_recovery outcome=deferred reason=${REASON} issue=${NUMBER} attempts=${ATTEMPTS} max=${MAX_ATTEMPTS}"
+			continue
+			;;
+	esac
 	_post_attempt_marker "${NUMBER}" "${REASON}" "${ATTEMPTS}"
 done 3< <(jq -c '.[]' "${CANDIDATES_FILE}")
 

@@ -42,6 +42,12 @@ leaves `<!-- ai:heal-scope-recovery-scan:v1 outcome=failed reason=<r> run=<id> -
 (`outcome=attempts_exhausted`) and one WARNING was sent. A permanent skip
 runs no intake, so it does not use the run's per-tick slot. Other heal kinds log
 `reason=kind_unsupported` and still need a fresh verified report.
+The scan records the intake's specific skip reason, not its final
+`reason=not_recovered` line. `budget_budget_exhausted`, `budget_failed`,
+`comments_unavailable`, `identity_unavailable` and `issue_record_missing` clear
+on their own: they log `outcome=deferred` and post no attempt marker. An open
+issue that already carries a trusted recovery marker (a failed close after
+`outcome=replaced`) is closed by the scan (`reason=already_replaced close=done|failed`).
 `HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off with recovery.
 
 Non-retryable reports and recovery (#7333 gap 2): a verified (OIDC)

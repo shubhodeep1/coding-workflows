@@ -46,6 +46,9 @@ def fail():
 	save()
 	sys.stderr.write("HTTP 500\n")
 	sys.exit(1)
+if args[:2] == ["issue", "close"]:
+	state.setdefault("closed", []).append(args[2:])
+	out("")
 if args[:1] != ["api"]:
 	fail()
 rest = [a for a in args[1:] if a not in ("--method", "GET", "--paginate")]
@@ -316,3 +319,34 @@ def test_scan_records_permanent_skips_and_honours_the_per_tick_cap() -> None:
 		result, _, _, _, _ = _run(Path(tmp_name), _state([_heal_issue(31)]), intake_output="WORKFLOW_HEAL error reason=scope_marker_unverified", intake_rc=1)
 		assert result.returncode == 1
 		assert "attempt_failed reason=scope_marker_unverified" in result.stdout
+
+
+def test_scan_defers_transient_reasons_and_reports_the_specific_one() -> None:
+	not_recovered = "WORKFLOW_HEAL heal_scope_recovery outcome=skip reason=not_recovered issue=31 fp=x"
+	with tempfile.TemporaryDirectory(prefix="heal-scan-transient-") as tmp_name:
+		output = "WORKFLOW_HEAL heal_scope_recovery outcome=skip reason=budget_budget_exhausted issue=31 repo=x fp=x\n" + not_recovered
+		result, state, _, _, _ = _run(Path(tmp_name), _state([_heal_issue(31)]), intake_output=output)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "heal_scope_recovery outcome=deferred reason=budget_budget_exhausted issue=31 attempts=0 max=3" in result.stdout
+		assert "posted" not in state
+	# A permanent reason logged before the generic line is the one recorded.
+	with tempfile.TemporaryDirectory(prefix="heal-scan-specific-") as tmp_name:
+		output = "WORKFLOW_HEAL heal_scope_recovery outcome=skip reason=budget_escalate issue=31 repo=x fp=x\n" + not_recovered
+		result, state, _, _, _ = _run(Path(tmp_name), _state([_heal_issue(31)]), intake_output=output)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "attempt_failed reason=budget_escalate issue=31" in result.stdout
+		assert len(state["posted"]) == 1
+	with tempfile.TemporaryDirectory(prefix="heal-scan-generic-") as tmp_name:
+		result, state, _, _, _ = _run(Path(tmp_name), _state([_heal_issue(31)]), intake_output=not_recovered)
+		assert "attempt_failed reason=not_recovered issue=31" in result.stdout
+
+
+def test_scan_closes_an_issue_already_replaced() -> None:
+	comments_path = f"repos/{SELF_REPO}/issues/31/comments"
+	marker = {"id": 2, "body": "replaced\n\n" + heal.render_heal_scope_recovery_marker(901, SELF_REPO), "user": {"login": LOGIN}}
+	with tempfile.TemporaryDirectory(prefix="heal-scan-replaced-") as tmp_name:
+		result, state, _, intake_env, _ = _run(Path(tmp_name), _state([_heal_issue(31)], {comments_path: [marker]}))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "heal_scope_recovery outcome=skip reason=already_replaced issue=31 close=done" in result.stdout
+		assert state["closed"] == [["31", "--repo", SELF_REPO, "--reason", "not planned"]]
+		assert not intake_env.exists() and "posted" not in state
