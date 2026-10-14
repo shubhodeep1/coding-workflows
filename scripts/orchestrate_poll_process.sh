@@ -3076,6 +3076,9 @@ post_tracking_comment() {
   # count instead of posting again (Q141). Commands (a leading `/`) always
   # post: an edit would not trigger their workflow.
   local recent_file="" repeat_json repeat_id repeat_count repeat_body_file response_file posted_id
+  # Resolve the login in this shell so the result is cached for later calls
+  # (_tracking_comment_recent_file runs in a command substitution).
+  unblock_trusted_login >/dev/null || true
   if [[ ! "${comment_body}" =~ ^[[:space:]]*/ ]] && recent_file="$(_tracking_comment_recent_file)"; then
     repeat_body_file="$(mktemp "${TMPDIR:-/tmp}/comment_repeat_body.XXXXXX")"
     printf '%s' "${comment_body}" > "${repeat_body_file}"
@@ -3364,7 +3367,7 @@ post_state_comment() {
 # Logs: STATE_PRUNE tracking_issue=<n> deleted=<n> failed=<n> remaining=<n> outcome=done|budget_exhausted|skip [reason=]
 prune_state_comment_chains() {
   local refresh="${1:-}" raw_file
-  local enabled max_deletes base plan_file done_file tried_file comments_file plan_json ids id deleted=0 failed=0 used remaining
+  local enabled max_deletes base plan_file done_file tried_file deleted_file comments_file plan_json ids id deleted=0 failed=0 used remaining
   enabled="$(printf '%s' "${ORCH_STATE_PRUNE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
   case "${enabled}" in
     false|0|no|off) return 0 ;;
@@ -3385,11 +3388,15 @@ prune_state_comment_chains() {
   base="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/state_prune_${TRACKING_NUM}"
   plan_file="${base}.plan"
   done_file="${base}.done"
-  # Ids already tried before a refresh: still skipped, but outside the new budget.
+  # Ids deleted before a refresh: still skipped, but outside the new budget.
+  # Only successful deletes carry over, so a failed DELETE (the comment still
+  # exists) is retried by the cap-time refresh.
   tried_file="${base}.tried"
+  deleted_file="${base}.deleted"
   if [ "${refresh}" = "refresh" ]; then
     rm -f "${plan_file}"
-    cat "${done_file}" >> "${tried_file}" 2>/dev/null || true
+    cat "${deleted_file}" >> "${tried_file}" 2>/dev/null || true
+    : > "${deleted_file}"
     : > "${done_file}"
   fi
   if [ ! -s "${plan_file}" ]; then
@@ -3436,6 +3443,7 @@ prune_state_comment_chains() {
     used=$((used + 1))
     if gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" >/dev/null 2>&1; then
       deleted=$((deleted + 1))
+      printf '%s\n' "${id}" >> "${deleted_file}"
     else
       failed=$((failed + 1))
     fi

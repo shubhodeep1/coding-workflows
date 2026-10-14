@@ -151,6 +151,12 @@ gh_retry() {
 			return 1
 		fi
 	fi
+	if [ "${method}" = "DELETE" ] && [[ " ${MOCK_DELETE_FAIL_ONCE:-} " == *" ${endpoint##*/} "* ]] \
+		&& ! grep -qxF "${endpoint##*/}" "${MOCK_DIR}/delete_failed" 2>/dev/null; then
+		echo "${endpoint##*/}" >> "${MOCK_DIR}/delete_failed"
+		echo "DELETE ${endpoint} failed" >> "${MOCK_DIR}/calls"
+		return 1
+	fi
 	echo "${method} ${endpoint}" >> "${MOCK_DIR}/calls"
 	if [ -n "${input}" ]; then cp "${input}" "${MOCK_DIR}/last_${method}_body.json"; fi
 	local next
@@ -319,6 +325,18 @@ def test_cap_prune_does_not_retry_ids_deleted_earlier_in_the_run(tmp_path: Path)
 	result, mock = _run_poller_functions(tmp_path, script, _three_old_chains(), MOCK_REFRESH_FAILS="1")
 	assert result.returncode == 0, result.stderr
 	assert _calls(mock) == [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)] + ["GET refresh"]
+
+
+def test_cap_prune_retries_ids_whose_delete_failed_earlier_in_the_run(tmp_path: Path) -> None:
+	# The DELETE of 11 failed in the earlier prune, so the comment still exists;
+	# the cap-time refresh must try it again while skipping the deleted ones.
+	script = "prune_state_comment_chains\nprune_state_comment_chains refresh\n"
+	result, mock = _run_poller_functions(tmp_path, script, _three_old_chains(), MOCK_REFRESH_FAILS="1",
+		MOCK_DELETE_FAIL_ONCE="11")
+	assert result.returncode == 0, result.stderr
+	assert _calls(mock) == ["DELETE repos/o/r/issues/comments/10", "DELETE repos/o/r/issues/comments/11 failed",
+		"DELETE repos/o/r/issues/comments/20", "DELETE repos/o/r/issues/comments/21", "GET refresh",
+		"DELETE repos/o/r/issues/comments/11"]
 
 
 def test_direct_tracking_posts_do_not_end_the_run() -> None:
