@@ -3306,9 +3306,12 @@ def test_judge_holds_while_unmet_and_resumes_once_met(tmp_path: Path) -> None:
 	assert "op=hold hold=item_closed ref=50 outcome=met" in result.stdout, result.stdout
 	assert [c["body"] for c in state["comments"]] == ["/answer waited for #50 closed"]
 	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=50 done -->")
-	# A failed read never resumes and never ends the hold.
+	# A failed read never resumes and never ends the hold; it refreshes the
+	# open hold so the scan's retry interval applies.
 	result, state = _judge(tmp_path, ISSUE, comments=[hold], issues={"50": {}})
-	assert "reason=hold_check_unavailable" in result.stdout and state["comments"] == [] and state["patched"] == []
+	assert "reason=hold_check_unavailable" in result.stdout and state["comments"] == []
+	assert [p[0] for p in state["patched"]] == ["repos/o/r/issues/comments/321"]
+	assert state["patched"][0][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=50 -->")
 	# A failed resume keeps the hold open for the next run.
 	result, state = _judge(tmp_path, ISSUE, comments=[hold], issues={"50": {"state": "closed"}}, FAKE_GH_FAIL_RESUME="1")
 	assert "outcome=skip reason=followup_failed" in result.stdout and state["patched"] == []

@@ -1275,6 +1275,11 @@ unblock_main()
 				unknown)
 					# A condition that stays unreadable still ends at the hold's lifetime.
 					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
+						# Refresh the open hold so the scan (keyed on the marker's
+						# updatedAt) waits UNBLOCK_JUDGE_RETRY_HOURS before re-dispatching.
+						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the condition could not be read this time, so the unblock judge checks again later. This hold uses no round. Last checked ${now}.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" || true
 						unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_check_unavailable"
 						return 0
 					fi
