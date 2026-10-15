@@ -9,15 +9,18 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 ORCHESTRATE_YML = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 STABLE_YML = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
-FRAGMENT = REPO_ROOT / "agents.d" / "7355-dead-values-cleanup.md"
 
 LOG_KEY = "BRANCH_REBUILD_THRESHOLD_DECISION"
 
@@ -83,10 +86,16 @@ def test_bait_injection_drops_blob_content() -> None:
     assert "WAVE_COUNT" in STABLE_YML.read_text(encoding="utf-8")
 
 
-def test_agents_fragment_registers_log_prefix() -> None:
-    text = FRAGMENT.read_text(encoding="utf-8")
-    marker = '<!-- agents: section="Stable log prefixes (contractual)" -->'
-    assert marker in text
-    tail = text.split(marker, 1)[1]
-    assert f"- `{LOG_KEY}`" in tail
-    assert f"LOG_PREFIX.name={LOG_KEY}" in tail
+def test_agents_registers_log_prefix() -> None:
+    # Read through agents_text() so the check holds whether the entry is still
+    # a pending agents.d/ fragment or already folded into agents.md.
+    text = agents_text()
+    section = re.search(
+        r"^## Stable log prefixes \(contractual\)\n(.*?)(?=^## |\Z)",
+        text,
+        re.M | re.S,
+    )
+    assert section, "Stable log prefixes section not found in agents.md"
+    body = section.group(1)
+    assert f"- `{LOG_KEY}`" in body
+    assert f"LOG_PREFIX.name={LOG_KEY}" in body
