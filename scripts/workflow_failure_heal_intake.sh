@@ -1885,11 +1885,12 @@ _git_fetch_consumer_scope_ref()
 # The raw report is checked too: validate-payload drops malformed or foreign
 # refs, and a report whose claimed runs were all dropped is a fault, not a
 # run-less report. A heal-scope recovery replacement keeps its documented
-# CRITICAL refusal (#7323).
+# CRITICAL refusal (#7323). A missing jq or unreadable payload prints
+# "unknown", which is not "0", so the report keeps the refusal (fail closed).
 _heal_report_claimed_no_runs()
 {
 	[ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
-		&& [ "$(jq -r '(.run_refs // []) | length' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
+		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
 }
 
