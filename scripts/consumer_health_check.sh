@@ -166,6 +166,7 @@ python3 "${CHECK_PY}" evaluate --consumers-json "${CONSUMERS_FILE}" --snapshot-d
 # retries it (issues already opened are deduplicated by the open-issue read).
 write_failures=0
 enabled=0
+enable_failed_msgs=()
 while IFS=$'\t' read -r repo workflow_id path; do
 	[ -n "${repo}" ] || continue
 	if gh_retry gh api -X PUT "repos/${repo}/actions/workflows/${workflow_id}/enable" >/dev/null 2>&1; then
@@ -176,7 +177,7 @@ while IFS=$'\t' read -r repo workflow_id path; do
 		# repo, missing scope) would otherwise rerun the check and re-page on
 		# every tick. The next day's check retries it.
 		log "enable repo=${repo} workflow=${path} outcome=failed"
-		tg_send_msg "Consumer check: could not switch ${path} back on in ${repo} after GitHub disabled it for inactivity." "WARNING" >/dev/null || true
+		enable_failed_msgs+=("Consumer check: could not switch ${path} back on in ${repo} after GitHub disabled it for inactivity.")
 	fi
 done < <(jq -r '.enable[] | [.repo, (.workflow_id|tostring), .path] | @tsv' "${WORK}/result.json")
 
@@ -245,6 +246,13 @@ while IFS=$'\t' read -r number repo problem; do
 done < <(jq -r '.close[] | [(.number|tostring), .repo, .problem] | @tsv' "${WORK}/result.json")
 
 log "outcome=done repos=$(jq -r .repos "${WORK}/result.json") problems=$(jq -r '.problems | length' "${WORK}/result.json") opened=${opened} closed=${closed} enabled=${enabled} write_failures=${write_failures}"
+# Page failed enables only on a run that records the day, so a retry tick
+# caused by another failed write does not re-send the same WARNING.
+if [ "${write_failures}" -eq 0 ] && [ "${#enable_failed_msgs[@]}" -gt 0 ]; then
+	for msg in "${enable_failed_msgs[@]}"; do
+		tg_send_msg "${msg}" "WARNING" >/dev/null || true
+	done
+fi
 if [ "${write_failures}" -gt 0 ]; then
 	echo "::warning::CONSUMER_HEALTH ${write_failures} write(s) failed; the day is retried on the next tick."
 	exit 1
