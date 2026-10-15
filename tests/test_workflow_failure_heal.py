@@ -1857,7 +1857,7 @@ def _with_binding_fixtures(payload: dict, state: dict) -> dict:
 	return state
 
 
-def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None, scope_marker_guard: bool = False) -> tuple[subprocess.CompletedProcess[str], dict, str]:
+def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str | None] | None = None, setup_git=None, scope_marker_guard: bool = False) -> tuple[subprocess.CompletedProcess[str], dict, str]:
 	with tempfile.TemporaryDirectory(prefix="heal-intake-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage(tmp, with_codex=True)
@@ -1909,7 +1909,12 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 		# pre-filing marker guard (#7059, default on in the script) is off here
 		# unless a test asks for it; routing coverage stays unchanged.
 		env["WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED"] = "true" if scope_marker_guard else "false"
-		env.update(extra_env or {})
+		# A None value removes the variable from the intake's environment.
+		for env_key, env_value in (extra_env or {}).items():
+			if env_value is None:
+				env.pop(env_key, None)
+			else:
+				env[env_key] = env_value
 		# The diagnosis agent runs through scripts/codex_isolated_exec.sh; the
 		# fake docker runs the mock codex in the fake container.
 		env = enable_fake_isolation(tmp / "bin", work / "scripts", env)
@@ -2785,13 +2790,15 @@ def test_heal_intake_workflow_passes_scope_guard_flag_default_on() -> None:
 
 def test_intake_scope_guard_is_on_when_unset_or_empty() -> None:
 	# Q150: an empty value (what an unset repository variable gives the script
-	# through the workflow default) files the issue once its marker verifies.
+	# through the workflow default) and an unset variable (None removes it from
+	# the environment) both file the issue once its marker verifies.
 	payload = _self_repo_autofix_payload() | {"script_ref": "stable", "crash_file": "scripts/safe.py", "changed_files": ["scripts/safe.py"]}
-	result, state, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_prepare_scope_support, extra_env={"HEAL_INTAKE_SCOPE_GUARD_ENABLED": ""})
-	assert result.returncode == 0, result.stderr + result.stdout
-	assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout
-	assert "scope_guard_disabled" not in result.stdout
-	assert len(state["issues_created"]) == 1
+	for switch in ("", None):
+		result, state, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_prepare_scope_support, extra_env={"HEAL_INTAKE_SCOPE_GUARD_ENABLED": switch})
+		assert result.returncode == 0, repr(switch) + result.stderr + result.stdout
+		assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout
+		assert "scope_guard_disabled" not in result.stdout
+		assert len(state["issues_created"]) == 1
 
 
 def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Path) -> None:
