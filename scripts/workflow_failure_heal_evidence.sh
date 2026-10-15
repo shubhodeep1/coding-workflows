@@ -33,6 +33,8 @@ if [ "${status}" = edited ]; then
 				| PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify-edits --input-json /dev/stdin)" || stub scope_unverified
 			status="$(printf '%s' "${verification}" | jq -r .status)"
 			;;
+		false) ;;
+		*) echo "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" ;;
 	esac
 fi
 [ "${status}" = verified ] || stub scope_unverified

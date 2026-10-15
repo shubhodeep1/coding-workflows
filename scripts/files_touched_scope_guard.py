@@ -893,8 +893,9 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					token = normalize_path(_plan_path_token(raw.strip()))
 					# Also keep nested tokens _plan_grant_path rejects (an
 					# extensionless `docs/guide`) so the scope check sees them.
-					if "/" in token and (token.endswith("/") or any(char in token for char in _GLOB_CHARS)
-						or ("`" not in token and not _plan_grant_path(token))):
+					# Glob and directory tokens count at the root too (`*.py`).
+					if token and (token.endswith("/") or any(char in token for char in _GLOB_CHARS)
+						or ("/" in token and "`" not in token and not _plan_grant_path(token))):
 						loose.append(token)
 			candidates: list[str] = []
 			for path in files + protected + loose:

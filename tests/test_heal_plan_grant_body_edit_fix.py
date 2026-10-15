@@ -143,6 +143,12 @@ def test_gate_holds_extensionless_nested_path(tmp_path: Path) -> None:
 	assert "docs/guide" in record["denied_paths"]
 
 
+def test_gate_holds_root_level_glob(tmp_path: Path) -> None:
+	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py", "*.py"))
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
+	assert "*.py" in record["denied_paths"]
+
+
 def test_gate_respects_allow_workflow_edits(tmp_path: Path) -> None:
 	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py"), allow_edits="false")
 	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "workflow_edits_disabled"
