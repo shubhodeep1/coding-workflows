@@ -1,0 +1,6 @@
+<!-- agents: section="Review pipeline consolidator + ledger contract" -->
+- `scripts/review_untrusted_workspace.py` reads each file up to 8 MiB (`MAX_FILE`; it was 2 MiB). `snapshot` fails closed on a larger tracked file, except when `REVIEW_SNAPSHOT_SKIP_OVERSIZED=1` is set (default `0`). Only `scripts/review_untrusted_sandbox.sh` sets it, for the review editor snapshot. There the file is left out of the snapshot and the baseline, and the step logs `REVIEW_ISOLATION_SNAPSHOT oversized_skipped=<n> max_file_bytes=<bytes>` with a count and no paths. The editor never sees the file, and `transfer` refuses a result that recreates it (`reason=result_conflicts_host`, or `reason=unsafe_file` when the recreated file is itself over 8 MiB, because the result read rejects it first). The heal editor (`heal_isolated_implement.sh`) and the pre-push test gate (`prepush_test_gate_run.sh`) never set the flag, so a missing file cannot turn into a false test failure there. A `snapshot` rejection now names `reason=unsafe_file` or `reason=file_changed` instead of `reason=unknown`.
+
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `REVIEW_ISOLATION_SNAPSHOT` (`scripts/review_untrusted_workspace.py snapshot`: `oversized_skipped=<n> max_file_bytes=<bytes>`)
+LOG_PREFIX.name=REVIEW_ISOLATION_SNAPSHOT

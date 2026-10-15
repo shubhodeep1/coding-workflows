@@ -16,7 +16,11 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-MAX_FILE = 2 * 1024 * 1024
+# Per-file read limit (tele-funtoken-msg-scoring keeps a 2.1 MB app.py and a
+# 3.3 MB game page). With REVIEW_SNAPSHOT_SKIP_OVERSIZED=1, which only the
+# review sandbox sets, snapshot leaves a larger tracked file out instead of
+# failing; every other caller still fails closed (default 0).
+MAX_FILE = 8 * 1024 * 1024
 MAX_README_PROMPT_BYTES = 200000
 # The README's "#### Variables" section is a long env-var reference table; it is
 # left out of prompts and replaced by README_VARIABLES_POINTER (issue #6902).
@@ -270,7 +274,7 @@ def enumerate_workspace(root, host=None, commands=None, strict=False):
 			yield name, data, mode
 
 
-def snapshot(host, workspace, manifest, host_git_dir=None):
+def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False):
 	paths = set()
 	env = git_env(manifest)
 	# A per-PR workspace has no .git of its own: list it through the checkout's
@@ -289,6 +293,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 		template_command_inventory(host)) if trusted_checkout else frozenset()
 	baseline = {}
 	total = 0
+	oversized = 0
 	for name in sorted(paths):
 		if not allowed(name, commands=commands):
 			continue
@@ -296,6 +301,13 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 			continue  # Existing tracked symlinks are not in the editor snapshot.
 		path = checked_path(host, name)
 		if not path.exists():
+			continue
+		info = path.lstat()
+		if skip_oversized and stat.S_ISREG(info.st_mode) and info.st_size > MAX_FILE:
+			# Left out of the snapshot and the baseline: the editor cannot see
+			# it, and transfer refuses a result that would recreate it
+			# ("new result conflicts with host path").
+			oversized += 1
 			continue
 		data, mode = read_regular(path)
 		total += len(data)
@@ -307,6 +319,9 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 			out.write(data)
 		os.chmod(target, mode)
 		baseline[name] = [hashlib.sha256(data).hexdigest(), mode]
+	if oversized:
+		# A count only: paths are PR-controlled and stay out of workflow logs.
+		print(f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped={oversized} max_file_bytes={MAX_FILE}", file=sys.stderr)
 	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
 	manifest.write_text(json.dumps(baseline), encoding="utf-8")
 	# A local, unauthenticated Git database supports editor diff commands.
@@ -821,7 +836,8 @@ def main():
 		if sys.argv[1] == "seed":
 			seed(host, workspace, manifest, sys.argv[5], Path(sys.argv[6]))
 		elif sys.argv[1] == "snapshot":
-			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
+			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None,
+				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1")
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:
@@ -854,7 +870,11 @@ def main():
 				"transfer rollback failed": "transfer_rollback_failed",
 				"unsafe result path": "unsafe_result_path",
 				"out of heal scope": "out_of_heal_scope",
-			}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "size_limit" if sys.argv[1] == "snapshot" and str(exc) == "snapshot size limit exceeded" else "unknown"
+			}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else {
+				"snapshot size limit exceeded": "size_limit",
+				"unsafe file type or size": "unsafe_file",
+				"file changed during read": "file_changed",
+			}.get(str(exc), "unknown") if sys.argv[1] == "snapshot" else "unknown"
 			print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
 

@@ -8657,6 +8657,69 @@ def test_review_transfer_rejects_extensionless_parent_before_writes(tmp_path):
 		assert not list(host.glob(".review-isolated-*"))
 
 
+def test_review_snapshot_skips_oversized_files_only_when_the_review_sandbox_asks(tmp_path):
+	# tele-funtoken-msg-scoring: a 2.1 MB app.py and a 3.3 MB page failed every
+	# review snapshot under the old 2 MiB limit.
+	limit = 8 * 1024 * 1024
+	files = {"a.py": b"before", "mid.html": b"m" * (3 * 1024 * 1024), "big.py": b"b" * (limit + 1)}
+	host = tmp_path / "host"
+	for name, data in files.items():
+		(host / name).parent.mkdir(parents=True, exist_ok=True)
+		(host / name).write_bytes(data)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, env=_git_clean_env(), check=True)
+	script = str(REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	base_env = {k: v for k, v in os.environ.items() if k != "REVIEW_SNAPSHOT_SKIP_OVERSIZED"}
+
+	def snapshot(name, **extra):
+		source = tmp_path / name / "source"
+		source.mkdir(parents=True)
+		manifest = tmp_path / name / "baseline.json"
+		result = subprocess.run([sys.executable, script, "snapshot", str(host), str(source), str(manifest)],
+			capture_output=True, text=True, env={**base_env, **extra})
+		return result, source, manifest
+
+	# Every other caller (heal editor, pre-push gate) still fails closed.
+	for name, extra in (("default", {}), ("off", {"REVIEW_SNAPSHOT_SKIP_OVERSIZED": "0"})):
+		result, _, _ = snapshot(name, **extra)
+		assert result.returncode == 1
+		assert result.stderr.strip().endswith("reason=unsafe_file")
+
+	result, source, manifest = snapshot("review", REVIEW_SNAPSHOT_SKIP_OVERSIZED="1")
+	assert result.returncode == 0, result.stderr
+	assert f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped=1 max_file_bytes={limit}" in result.stderr
+	assert "big.py" not in result.stderr
+	baseline = json.loads(manifest.read_text())
+	assert set(baseline) == {"a.py", "mid.html"}
+	assert not (source / "big.py").exists() and (source / "mid.html").read_bytes() == files["mid.html"]
+
+	transfer = [sys.executable, script, "transfer", str(host), str(source), str(manifest)]
+	# The editor cannot recreate a file it never saw. An oversized recreation is
+	# refused by the result read itself (reason=unsafe_file).
+	(source / "big.py").write_bytes(b"r" * (limit + 1))
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 1 and result.stderr.strip().endswith("reason=unsafe_file")
+	assert (host / "big.py").read_bytes() == files["big.py"]
+	(source / "big.py").write_bytes(b"replaced")
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 1 and result.stderr.strip().endswith("reason=result_conflicts_host")
+	assert (host / "big.py").read_bytes() == files["big.py"]
+	# Edits to the files it did see transfer as usual.
+	(source / "big.py").unlink()
+	(source / "a.py").write_bytes(b"after")
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 0, result.stderr
+	assert (host / "a.py").read_bytes() == b"after" and (host / "big.py").read_bytes() == files["big.py"]
+
+
+def test_only_the_review_sandbox_snapshot_skips_oversized_files() -> None:
+	sandbox = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert re.search(r'^\tREVIEW_SNAPSHOT_SKIP_OVERSIZED=1 PYTHONDONTWRITEBYTECODE=1 python3 "\$\{support\}/review_untrusted_workspace\.py" snapshot ', sandbox, re.M)
+	for other in ("scripts/heal_isolated_implement.sh", "scripts/prepush_test_gate_run.sh"):
+		text = (REPO_ROOT / other).read_text(encoding="utf-8")
+		assert "review_untrusted_workspace.py\" snapshot" in text and "REVIEW_SNAPSHOT_SKIP_OVERSIZED" not in text
+
+
 def test_review_transfer_rolls_back_after_mid_apply_failure(tmp_path):
 	host, source, manifest = _review_transfer_fixture(tmp_path, {"a.py": b"before", "c.py": b"delete"})
 	manifest_before = manifest.read_bytes()
