@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which steps of `tests-release-and-log-analysis` should move, and to which job, given that the run's step timings are not available to the pipeline?\nChoices:\nA. Use the timings from run 38663329196: paste the slowest steps and the per-job durations into an `/answer`, and the plan moves exactly those steps into the job with the most headroom. (RECOMMENDED)\nB. Without timings, the planner estimates step cost from what each step runs (number of test files or modules it invokes). It moves the heaviest steps (likely \"Regression tests wired by the CI wiring guard (part 1)\" and \"Release CI gate tests (stubbed gh; both release workflows)\") into `tests-heal-plan-and-validation`, which has the fewest test steps of the 20-minute jobs. Each step keeps its name and body unchanged. (RECOMMENDED)\nC. Without timings, move the heavy steps into `tests-hooks-and-orchestrator` instead.\nD. Without timings, spread the heavy steps across `tests-heal-plan-and-validation` and `tests-promote-stall-and-review`.\nQ2: How much runtime should come out of `tests-release-and-log-analysis`?\nChoices:\nA. Enough that the source job and the receiving job are both estimated at about 12 minutes or less (60% of the 20-minute timeout), safely below the 15-minute `CI_BUDGET_JOB_WARN_RATIO` (0.75) threshold that opened this issue. (RECOMMENDED)\nB. Just enough to get under the 15-minute warning threshold, moving as few steps as possible.\nC. Roughly balance the four 20-minute test jobs.\n**Note:** C combined with Q1:A needs timings for every job, not just this one.",
+  "fingerprint": "2f0371076e56820482c50437d59f7b73707a00b05826e7a9cf657dd59cf3f4f7",
+  "lineage": {
+    "issue_number": 7406,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38665468186",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38665468186",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261015012913_a5b07999a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7406,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38665468186"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7406 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-15T01:29:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
