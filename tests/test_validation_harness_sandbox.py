@@ -1388,6 +1388,14 @@ def test_the_namespace_masks_the_user_manager_sockets_before_the_drop(tmp_path: 
 	assert launcher.index('find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock"') < launcher.index(': > "$1"')
 
 
+def test_both_socket_rechecks_stat_each_entry() -> None:
+	# Runs even where the real bind-mount tests below skip: plain `-type s`
+	# trusts the directory entry and lists masked sockets (#7355).
+	launcher = _function_body("as_sandbox_in_pidns")
+	assert '-ignore_readdir_race ! -type l -xtype s ! -path "$2/docker.sock" -print -quit' in launcher
+	assert '! -type l -xtype s ! -path "${rt}/docker.sock" -print -quit' in _pidns_probe()
+
+
 def test_a_renamed_user_manager_socket_is_still_masked(tmp_path: Path) -> None:
 	# The sandbox user owns the runtime dir and can rename systemd/; the mask
 	# finds sockets wherever they are, not at fixed paths.
