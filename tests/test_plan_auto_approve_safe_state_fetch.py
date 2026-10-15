@@ -80,11 +80,14 @@ def _auto_approve_script() -> str:
 
 def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: bool = False,
 	gate_flag: str | None = None, login: str = "pipeline-bot", comments: list | None = None,
-	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False) -> tuple[bool, str, str]:
+	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False,
+	split_stub_rc: int | None = None, split_env_out: dict | None = None) -> tuple[bool, str, str]:
 	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
 
 	Every other API write (the hold comment) is appended to ``posts_out``;
 	issue-body PATCH calls (the Q108 pipeline plan grant) to ``patches_out``.
+	With ``split_stub_rc``, a stub scripts/plan_split_dispatch.sh exits with
+	that code and its environment lands in ``split_env_out``.
 	"""
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp_path = Path(workdir)
@@ -111,6 +114,15 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			'sleep() { :; }\n',
 			encoding="utf-8",
 		)
+		split_env_file = tmp_path / "split_env.json"
+		if split_stub_rc is not None:
+			(tmp_path / "scripts" / "plan_split_dispatch.sh").write_text(
+				"python3 -c 'import json, os, sys; json.dump({k: os.environ.get(k, \"\") for k in "
+				"(\"REPO\", \"ISSUE_NUMBER\", \"PLAN_PATH_COUNT\", \"PLAN_SPLIT_TO_PROJECT_ENABLED\")} "
+				"| {\"plan\": open(os.environ[\"PLAN_FILE\"]).read(), \"issue\": json.load(open(os.environ[\"ISSUE_JSON_FILE\"]))}, "
+				f"open(sys.argv[1], \"w\"))' {split_env_file}\nexit {split_stub_rc}\n",
+				encoding="utf-8",
+			)
 		plan_file = tmp_path / "codex_output.txt"
 		plan_file.write_text(plan_text, encoding="utf-8")
 		output_path = tmp_path / "output"
@@ -155,6 +167,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			posts_out.extend(others)
 		if patches_out is not None:
 			patches_out.extend(patches)
+		if split_env_out is not None and split_env_file.exists():
+			split_env_out.update(json.loads(split_env_file.read_text(encoding="utf-8")))
 		return posted, result.stdout, output_path.read_text(encoding="utf-8")
 
 
@@ -267,7 +281,7 @@ def test_ordinary_plan_unchanged_and_missing_plan_holds() -> None:
 def test_plan_gate_wiring_defaults_on() -> None:
 	text = _workflow_text()
 	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}" in text
-	assert "clarify_isolated_run.sh files_touched_scope_guard.py; do" in text
+	assert "clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do" in text
 	block = _step_block(text, "Auto-approve clear plan")
 	assert "--plan-auto-approval-gate" in block
 	assert 'plan_gate_reason="plan_gate_helper_unavailable"' in block
@@ -324,6 +338,50 @@ def test_old_gate_helpers_are_gone() -> None:
 	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert "_automation_path_plan_auto_approval_gate" not in poller
 	assert "automation-path-plan-extractor" not in poller
+
+_LARGE_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
+
+
+def test_too_large_plan_is_handed_to_the_split_script() -> None:
+	# Q151: a plan over the 50-file grant starts an orchestrator project
+	# instead of waiting for /approved; nothing is approved or held.
+	seen: dict = {}
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=_LARGE_PLAN, split_stub_rc=0,
+		split_env_out=seen, posts_out=posts)
+	assert not posted and posts == []
+	assert "plan_split=true" in output and "auto_approve_hold_reason" not in output
+	assert "reason=plan_too_large_for_grant outcome=split issue=123" in stdout
+	assert seen["REPO"] == "owner/repo" and seen["ISSUE_NUMBER"] == "123" and seen["PLAN_PATH_COUNT"] == "51"
+	assert seen["plan"] == _LARGE_PLAN and seen["issue"]["number"] == 123
+
+
+def test_too_large_plan_holds_when_the_split_does_not_start() -> None:
+	# The script exits 3 whenever it cannot start the project (wrapper off,
+	# old wrapper, dispatch error, ...): the plan is held exactly as before.
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=_LARGE_PLAN, split_stub_rc=3, posts_out=posts)
+	assert not posted and "plan_split=true" not in output
+	assert "auto_approve_hold_reason=plan_too_large_for_grant" in output
+	assert "reason=plan_too_large_for_grant outcome=defer" in stdout
+	assert len(posts) == 1 and "reason=plan_too_large_for_grant source=plan" in posts[0]
+	# Without the script (a support checkout that predates it) it holds too.
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=_LARGE_PLAN)
+	assert not posted and "auto_approve_hold_reason=plan_too_large_for_grant" in output
+
+
+def test_other_holds_never_reach_the_split_script() -> None:
+	seen: dict = {}
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag="false",
+		split_stub_rc=0, split_env_out=seen)
+	assert not posted and seen == {} and "plan_split=true" not in output
+
+
+def test_split_plan_sends_no_awaiting_approval_alert() -> None:
+	text = _workflow_text()
+	block = _step_block(text, "Telegram plan notification")
+	assert "steps.auto_approve.outputs.plan_split != 'true'" in block
+	assert "PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}" in _step_block(text, "Auto-approve clear plan")
 
 
 def main() -> int:

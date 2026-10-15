@@ -374,7 +374,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2482,6 +2482,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2672,6 +2673,29 @@ jobs:
               # cannot inject workflow commands or forge gate log lines.
               plan_gate_reason="$(printf '%s' "${plan_gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
               plan_gate_paths="$(printf '%s' "${plan_gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+              # Q151: a plan over the 50-file grant is handed to the
+              # orchestrator as a Claude project instead of being held. The
+              # script holds (exit 3) whenever it cannot start the project.
+              if [ "${plan_gate_decision}" != "approve" ] && [ "${plan_gate_reason}" = "plan_too_large_for_grant" ] && [ -f scripts/plan_split_dispatch.sh ]; then
+                plan_split_issue_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_split_issue.XXXXXX")"
+                printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_split_issue_file}"
+                plan_split_rc=0
+                REPO="${{ github.repository }}" ISSUE_NUMBER="${ISSUE_NUMBER}" ISSUE_JSON_FILE="${plan_split_issue_file}" \
+                  PLAN_FILE="${plan_gate_file}" RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID:-}" \
+                  PLAN_PATH_COUNT="$(printf '%s' "${plan_gate_result}" | jq -r '.plan_path_count // 0' 2>/dev/null || echo 0)" \
+                  bash scripts/plan_split_dispatch.sh || plan_split_rc=$?
+                rm -f "${plan_split_issue_file}"
+                if [ "${plan_split_rc}" -eq 0 ]; then
+                  echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=plan_too_large_for_grant outcome=split issue=${ISSUE_NUMBER}"
+                  echo "plan_split=true" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "### Plan handed to the orchestrator"
+                    echo ""
+                    echo "The plan lists more files than one pipeline grant covers (50), so it was started as an orchestrator project on the Claude engine. The issue stays open until the project completes."
+                  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                  exit 0
+                fi
+              fi
               if [ "${plan_gate_decision}" != "approve" ]; then
                 echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=${plan_gate_reason:-plan_gate_error} outcome=defer issue=${ISSUE_NUMBER} paths=${plan_gate_paths:-none}"
                 echo "auto_approve_hold_reason=${plan_gate_reason:-plan_gate_error}" >> "$GITHUB_OUTPUT"
@@ -2712,7 +2736,7 @@ jobs:
           esac
 
       - name: Telegram plan notification
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true' && steps.auto_approve.outputs.plan_split != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Hand a plan that is too large for one pipeline grant to the orchestrator (Q151).
+#
+# The plan stage's automation-path gate writes an exact files_touched grant
+# for a pipeline-authored issue only when the plan lists at most 50 files
+# (scripts/files_touched_scope_guard.py, reason plan_too_large_for_grant
+# above that). Instead of holding such a plan for a human /approved, the plan
+# stage calls this script. It starts an orchestrator project with the Claude
+# engine (Q164): the decomposer splits the plan into issues of at most 50
+# files each, in waves, on one integration branch.
+#
+# The source issue stays open (Q152): it gets ai:split-to-project instead of
+# ai:awaiting-approval and a marker comment. orchestrate.yml links the tracking
+# issue on it, and the poller closes it when the project completes.
+#
+# Environment:
+#   GH_TOKEN                          token for gh (secrets.GH_PAT)
+#   REPO                              owner/name of the repository
+#   ISSUE_NUMBER                      the source issue
+#   ISSUE_JSON_FILE                   the issue as read by the plan step
+#   PLAN_FILE                         the plan text the planner wrote
+#   PLAN_PATH_COUNT                   files the plan lists (from the gate)
+#   PLAN_SPLIT_TO_PROJECT_ENABLED     default true; false holds as before
+#   PLAN_SPLIT_MAX_DESCRIPTION_CHARS  default 60000 (dispatch input limit)
+#   RUN_URL                           this run, for the comments
+#
+# Exit status: 0 when a project was started (the caller must not hold the
+# plan), 3 when the plan should be held as before, 1 on a usage error.
+# Log prefix PLAN_SPLIT (outcome=dispatched|skipped reason=...).
+set -uo pipefail
+
+SPLIT_LABEL="ai:split-to-project"
+SOURCE_MARKER_PREFIX="<!-- ai:plan-split:v1 issue="
+# orchestrate.yml posts this when its run fails before a tracking issue
+# exists, so a later /reclarify may split the plan again.
+RELEASE_MARKER_PREFIX="<!-- ai:plan-split-released:v1 issue="
+TRACKING_MARKER_PREFIX="<!-- ai:plan-split-source:v1 issue="
+
+if [ -f scripts/gh_helpers.sh ]; then
+	# shellcheck disable=SC1091
+	source scripts/gh_helpers.sh >/dev/null 2>&1 || true
+fi
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+split_log()
+{
+	echo "PLAN_SPLIT issue=${ISSUE_NUMBER:-none} $*"
+}
+
+skip()
+{
+	split_log "outcome=skipped reason=$1${2:+ $2}"
+	exit 3
+}
+
+flag_enabled()
+{
+	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		""|1|true|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+[[ "${REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "PLAN_SPLIT usage: REPO missing" >&2; exit 1; }
+[[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || { echo "PLAN_SPLIT usage: ISSUE_NUMBER missing" >&2; exit 1; }
+[ -s "${ISSUE_JSON_FILE:-}" ] || skip issue_json_missing
+[ -s "${PLAN_FILE:-}" ] || skip plan_missing
+flag_enabled "${PLAN_SPLIT_TO_PROJECT_ENABLED:-true}" || skip disabled
+path_count="${PLAN_PATH_COUNT:-0}"
+[[ "${path_count}" =~ ^[0-9]+$ ]] || path_count=0
+max_chars="${PLAN_SPLIT_MAX_DESCRIPTION_CHARS:-60000}"
+[[ "${max_chars}" =~ ^[1-9][0-9]*$ ]] || max_chars=60000
+
+# A project's own child issue is never split again: nesting projects could
+# loop, and the decomposer already caps each child at 50 files.
+if jq -e '([.labels[]?.name] | any(. == "ai:orchestrator-managed" or . == "ai:orchestrator-tracking"))
+	or ((.body // "") | contains("Managed by: AI Orchestrator"))' "${ISSUE_JSON_FILE}" >/dev/null 2>&1; then
+	skip orchestrator_managed
+fi
+if jq -e --arg l "${SPLIT_LABEL}" '[.labels[]?.name] | index($l) != null' "${ISSUE_JSON_FILE}" >/dev/null 2>&1; then
+	skip already_split
+fi
+
+# Dedupe on a marker comment from the pipeline account, so a repeated plan
+# run (or a removed label) never starts a second project. A split marker
+# followed by a release marker (the project never started) does not count.
+pipeline_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+[ -n "${pipeline_login}" ] || skip identity_unavailable
+comments_file="$(mktemp)"
+trap 'rm -f "${comments_file}" "${comments_file}.err"' EXIT
+if ! gh_retry gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+	--jq '.[] | {login: (.user.login // ""), body: (.body // "")}' > "${comments_file}" 2>/dev/null; then
+	skip comments_unavailable
+fi
+if jq -e -s --arg login "${pipeline_login}" --arg marker "${SOURCE_MARKER_PREFIX}${ISSUE_NUMBER} " \
+	--arg release "${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->" '
+	[ .[] | select(.login == $login) | .body ] as $bodies
+	| ([ range(0; $bodies | length) | select($bodies[.] | contains($marker)) ] | max) as $split
+	| ([ range(0; $bodies | length) | select($bodies[.] | contains($release)) ] | max) as $released
+	| $split != null and ($released == null or $released < $split)' "${comments_file}" >/dev/null 2>&1; then
+	skip already_split
+fi
+
+# The library uses internal-orchestrate.yml, consumers ai-orchestrate.yml.
+# A wrapper that is missing or switched off holds the plan as before.
+wrapper=""
+for candidate in internal-orchestrate.yml ai-orchestrate.yml; do
+	state="$(gh_retry gh api "repos/${REPO}/actions/workflows/${candidate}" --jq '.state // ""' 2>/dev/null || true)"
+	if [ -n "${state}" ]; then
+		[ "${state}" = active ] || skip orchestrator_wrapper_inactive "wrapper=${candidate} state=$(printf '%s' "${state}" | tr -cd 'a-z_')"
+		wrapper="${candidate}"
+		break
+	fi
+done
+[ -n "${wrapper}" ] || skip orchestrator_wrapper_missing
+default_branch="$(gh_retry gh api "repos/${REPO}" --jq '.default_branch // ""' 2>/dev/null || true)"
+[ -n "${default_branch}" ] || skip default_branch_unavailable
+
+issue_title="$(jq -r '(.title // "") | gsub("[\\r\\n]+"; " ") | sub("\\s+$"; "")' "${ISSUE_JSON_FILE}" | cut -c1-160)"
+issue_url="https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
+# The decomposer cannot read issue comments, so the plan travels inline.
+description="$(cat <<EOF
+${issue_title:-Plan for issue #${ISSUE_NUMBER}} (split from #${ISSUE_NUMBER})
+
+This is an approved implementation plan from issue #${ISSUE_NUMBER} (${issue_url}). The plan stage wrote it, and it lists ${path_count} files, more than one issue may change (50), so it is handed to the orchestrator to be split. Treat the plan below as the authoritative, already-clarified spec: read all of it before decomposing, keep its phases and their order, and give every issue at most 50 entries in files_touched.
+
+Order the phases so that the phase which switches a behaviour on (enables a flag, wires a new path into a workflow, changes a default) comes last, after every phase it depends on.
+
+----- Plan from issue #${ISSUE_NUMBER} -----
+$(cat "${PLAN_FILE}")
+EOF
+)"
+[ "${#description}" -le "${max_chars}" ] || skip description_too_large "chars=${#description} max=${max_chars}"
+
+tracking_comment="$(cat <<EOF
+${TRACKING_MARKER_PREFIX}${ISSUE_NUMBER} -->
+## Split from #${ISSUE_NUMBER}
+
+The plan for #${ISSUE_NUMBER} lists ${path_count} files, more than one pipeline grant covers, so the plan stage started this project (${RUN_URL:-plan run}). #${ISSUE_NUMBER} stays open and is closed when this project completes. Refs #${ISSUE_NUMBER}
+EOF
+)"
+
+# No retry: a dispatch that timed out may still have started a project, and
+# a second one would implement the plan twice. A failure holds the plan.
+if ! gh workflow run "${wrapper}" --repo "${REPO}" --ref "${default_branch}" \
+	-f "project_description=${description}" -f engine=claude -f "tracking_comment=${tracking_comment}" \
+	>/dev/null 2>"${comments_file}.err"; then
+	if grep -q 'tracking_comment' "${comments_file}.err" 2>/dev/null; then
+		# A consumer whose @stable sync predates the tracking_comment input.
+		skip wrapper_without_tracking_comment "wrapper=${wrapper}"
+	fi
+	skip dispatch_failed "wrapper=${wrapper}"
+fi
+split_log "outcome=dispatched wrapper=${wrapper} paths=${path_count} chars=${#description}"
+
+# The project is running: from here on nothing holds the plan, since a human
+# /approved would implement the same work twice. Failures only warn.
+source_comment="$(cat <<EOF
+${SOURCE_MARKER_PREFIX}${ISSUE_NUMBER} wrapper=${wrapper} -->
+## Plan handed to the orchestrator
+
+This plan lists ${path_count} files, more than one pipeline grant covers (50), so instead of waiting for approval it was handed to the orchestrator as a project on the Claude engine (\`${wrapper}\`, ${RUN_URL:-plan run}). The project splits it into issues of at most 50 files, merges them on one integration branch and lands them together.
+
+The tracking issue is linked here once it exists. This issue stays open and is closed when the project completes.
+EOF
+)"
+if ! gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${source_comment}" >/dev/null 2>&1; then
+	echo "::warning::Could not post the plan-split comment on issue #${ISSUE_NUMBER}."
+fi
+if [ -f scripts/label_helpers.sh ]; then
+	# shellcheck disable=SC1091
+	source scripts/label_helpers.sh >/dev/null 2>&1 || true
+fi
+if type ensure_label_exists >/dev/null 2>&1; then
+	ensure_label_exists "${SPLIT_LABEL}" "${REPO}" >/dev/null 2>&1 || true
+fi
+if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --add-label "${SPLIT_LABEL}" \
+	--remove-label "ai:awaiting-approval" >/dev/null 2>&1; then
+	echo "::warning::Could not move issue #${ISSUE_NUMBER} from ai:awaiting-approval to ${SPLIT_LABEL}."
+fi
+if [ -f scripts/tg_helpers.sh ]; then
+	# shellcheck disable=SC1091
+	source scripts/tg_helpers.sh >/dev/null 2>&1 || true
+fi
+if type tg_send_msg >/dev/null 2>&1; then
+	tg_send_msg "Plan for issue #${ISSUE_NUMBER} lists ${path_count} files; handed to the orchestrator as a Claude project."$'\n'"Issue: ${issue_url}" "DEBUG" >/dev/null 2>&1 || true
+fi
+exit 0

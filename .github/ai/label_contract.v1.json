@@ -149,6 +149,10 @@
       "color": "b60205",
       "description": "Implementation blocked: staged files fell outside files_touched scope; human review required"
     },
+    "ai:split-to-project": {
+      "color": "a2eeef",
+      "description": "Plan too large for one grant; handed to an orchestrator project, closed when the project completes"
+    },
     "ai:closed": {
       "color": "6a737d",
       "description": "Linked PR closed without merge"

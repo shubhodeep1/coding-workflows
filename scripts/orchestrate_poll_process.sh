@@ -13918,6 +13918,55 @@ dispatch_comprehensive_release_workflow() {
   return 1
 }
 
+# close_plan_split_source_if_needed <project_status> <comments_json>
+#
+# Q152: a project the plan stage started for a plan too large for one grant
+# (scripts/plan_split_dispatch.sh) carries a trusted marker comment
+# `<!-- ai:plan-split-source:v1 issue=N -->`, posted by orchestrate.yml from
+# the tracking_comment input. When the project is complete, issue N is
+# closed as completed if it is still open and carries ai:split-to-project.
+# Runs once: the outcome is kept in .plan_split_source in the state file, so
+# a completed project costs one issue read and at most one close, ever.
+# A failed project leaves the source issue open (its own alerts cover it).
+close_plan_split_source_if_needed() {
+  local project_status="$1"
+  local comments_json="$2"
+  local source_issue source_json outcome
+
+  [ "${project_status}" = "complete" ] || return 0
+  if [ -n "$(jq -r '.plan_split_source.outcome // empty' "${STATE_FILE}" 2>/dev/null)" ]; then
+    return 0
+  fi
+  source_issue="$(printf '%s' "${comments_json}" | jq -r --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
+                  or ((.user.login // "") == "github-actions[bot]"));
+    [ .[]? | select(trusted) | (.body // "") | capture("^<!-- ai:plan-split-source:v1 issue=(?<n>[1-9][0-9]*) -->")? | .n ] | first // empty
+  ' 2>/dev/null || true)"
+  [ -n "${source_issue}" ] || return 0
+
+  if ! source_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${source_issue}" 2>/dev/null)"; then
+    echo "PLAN_SPLIT_SOURCE tracking_issue=${TRACKING_NUM} source_issue=${source_issue} outcome=deferred reason=source_lookup_failed"
+    return 0
+  fi
+  if ! printf '%s' "${source_json}" | jq -e '.state == "open"' >/dev/null 2>&1; then
+    outcome="already_closed"
+  elif ! printf '%s' "${source_json}" | jq -e '[.labels[]?.name] | index("ai:split-to-project") != null' >/dev/null 2>&1; then
+    outcome="not_split"
+  elif gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${source_issue}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+    outcome="closed"
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${source_issue}/comments" \
+      -f body="Closed: project #${TRACKING_NUM}, which implemented this plan, is complete. Refs #${TRACKING_NUM}" >/dev/null 2>&1 \
+      || echo "::warning::Closed plan-split source issue #${source_issue} but could not post the closing comment."
+  else
+    echo "PLAN_SPLIT_SOURCE tracking_issue=${TRACKING_NUM} source_issue=${source_issue} outcome=deferred reason=close_failed"
+    return 0
+  fi
+  echo "PLAN_SPLIT_SOURCE tracking_issue=${TRACKING_NUM} source_issue=${source_issue} outcome=${outcome}"
+  jq --argjson issue "${source_issue}" --arg outcome "${outcome}" '.plan_split_source = {issue: $issue, outcome: $outcome}' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+}
+
 handle_comprehensive_release_callback_if_needed() {
   local project_status="$1"
   local tracking_labels="$2"
@@ -24120,6 +24169,7 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+    close_plan_split_source_if_needed "${PROJECT_STATUS}" "${COMMENTS:-[]}"
     # Retry only a trusted, comment-backed partial verdict while its first
     # occurrence is recent. Failed writes without a marker never start an
     # unbounded expensive verification loop on completed projects.

@@ -1297,10 +1297,17 @@ def test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted() -
 	plan = "## Files likely to change\n- `scripts/v1.0`\n- `scripts/a.sh`\n"
 	code, record, body = _run_grant_cli(plan, _pipeline_meta())
 	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/v1.0"] and body is None
-	# More files than the cap: no proposal, the open-grant hold stands.
+	# More files than the cap: no proposal; the hold names the size so the
+	# plan stage can hand the plan to the orchestrator (Q151).
 	many = "## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
 	code, record, body = _run_grant_cli(many, _pipeline_meta())
-	assert record["reason"] == "open_grant_not_exact" and body is None
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and body is None
+	assert record["reason"] == guard.PIPELINE_PLAN_TOO_LARGE_REASON == "plan_too_large_for_grant"
+	assert record["plan_path_count"] == 51 and record["decision"] == "hold"
+	# Exactly at the cap the grant is still written; a repeated path counts once.
+	at_cap = "## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(50)) + "- `scripts/f0.sh`\n"
+	code, record, body = _run_grant_cli(at_cap, _pipeline_meta())
+	assert record["reason"] == "pipeline_plan_grant" and "plan_path_count" not in record and body
 
 
 # --- Flush-left files_touched lists (#7296, Q111) ---------------------------
