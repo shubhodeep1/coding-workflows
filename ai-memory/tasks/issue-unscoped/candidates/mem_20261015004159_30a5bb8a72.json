@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed: isolated harness unavailable; failure_summary=Isolated validation harness unavailable; tests were not executed (fail-closed). Reason: selfcheck probe_failed",
+  "fingerprint": "44b99e23fbc36cc74d340332f7134dada6479605e956f9e126aced74ee16caca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38660958249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38660958249",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20261015004159_30a5bb8a72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38660958249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed: isolated harness unavailable",
+  "timestamps": {
+    "created_at": "2026-10-15T00:41:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
