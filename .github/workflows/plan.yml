@@ -2640,7 +2640,7 @@ jobs:
                 if plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${plan_gate_login}" ] \
                   && plan_gate_heal_verified="$(gh_retry gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${plan_gate_heal_repo%%/*}" -f repo="${plan_gate_heal_repo#*/}" -F number="${ISSUE_NUMBER}" 2>/dev/null \
                     | jq -c --arg login "${plan_gate_login}" '.data.repository.issue as $i | {body: $i.body, last_edited_at: $i.lastEditedAt, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login}' \
-                    | PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)"; then
+                    | PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)"; then
                   plan_gate_result='{"reason":"heal_scope_unverified"}'
                   if printf '%s' "${plan_gate_heal_verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
                     && printf '%s' "${plan_gate_heal_verified}" | jq -r '.paths[]' > "${plan_gate_heal_scope}" 2>/dev/null; then

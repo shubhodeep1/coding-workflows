@@ -855,6 +855,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 # when every path the plan lists is inside them. The matcher is the one the heal
 # route's commit check uses (strict: no lockfile allowance). No body is written.
 HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
+_HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
+_HEAL_ITALIC_RE = re.compile(r"\*[A-Za-z0-9_-]+\*")
 
 
 def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
@@ -890,15 +892,25 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 				if bullet:
 					raw_tokens.append((bullet.group(1), False))
 				for raw, backticked in raw_tokens:
-					token = normalize_path(_plan_path_token(raw.strip()))
+					raw = raw.strip()
+					if not backticked:
+						if "`" in raw:
+							# Its backticked spans were read above (``**`a/b.py`**``).
+							continue
+						# A leading bold marker is markdown, not a glob (`**Files`).
+						raw = re.sub(r"^\*\*(?=[^*/])", "", raw)
+					token = normalize_path(_plan_path_token(raw))
+					if not token:
+						continue
+					globlike = token.endswith("/") or any(char in token for char in _GLOB_CHARS)
+					# A bare root-level glob (`- *.py`) counts; italic prose
+					# (`*Optional*`) or a word with prose punctuation does not.
+					if globlike and not backticked and "/" not in token \
+						and (not _HEAL_BARE_GLOB_RE.fullmatch(token) or _HEAL_ITALIC_RE.fullmatch(token)):
+						continue
 					# Also keep nested tokens _plan_grant_path rejects (an
 					# extensionless `docs/guide`) so the scope check sees them.
-					# Glob and directory tokens count at the root too (`*.py`),
-					# but only from backticked spans: a bare bullet word such as
-					# `**Files` (bold markdown) is prose, not a path.
-					if token and ((backticked or "/" in token)
-						and (token.endswith("/") or any(char in token for char in _GLOB_CHARS))
-						or ("/" in token and "`" not in token and not _plan_grant_path(token))):
+					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
 						loose.append(token)
 			candidates: list[str] = []
 			for path in files + protected + loose:
