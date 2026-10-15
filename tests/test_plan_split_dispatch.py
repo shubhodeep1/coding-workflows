@@ -24,12 +24,16 @@ case "$1 $2" in
     exit 0 ;;
   "issue edit") [ "${FAKE_EDIT_FAIL:-}" != true ] || exit 1; exit 0 ;;
 esac
-if [ "$1" = api ] && [ "$2" = --paginate ]; then printf '%s\n' "${FAKE_COMMENTS}"; exit 0; fi
+if [ "$1" = api ] && [ "$2" = --paginate ]; then
+  # FAKE_COMMENTS_AFTER answers the re-read after the split marker is posted.
+  if [ -n "${FAKE_COMMENTS_AFTER:-}" ] && [ -f "${GH_LOG}.listed" ]; then printf '%s\n' "${FAKE_COMMENTS_AFTER}"; exit 0; fi
+  : > "${GH_LOG}.listed"; printf '%s\n' "${FAKE_COMMENTS}"; exit 0
+fi
 if [ "$1" = api ]; then
   case "$2" in
     */actions/workflows/internal-orchestrate.yml) [ -n "${FAKE_INTERNAL_STATE}" ] || exit 1; echo "${FAKE_INTERNAL_STATE}"; exit 0 ;;
     */actions/workflows/ai-orchestrate.yml) [ -n "${FAKE_CONSUMER_STATE}" ] || exit 1; echo "${FAKE_CONSUMER_STATE}"; exit 0 ;;
-    */comments) [ "${FAKE_COMMENT_FAIL:-}" != true ] || exit 1; exit 0 ;;
+    */comments) [ "${FAKE_COMMENT_FAIL:-}" != true ] || exit 1; [ -z "${FAKE_MARKER_ID:-}" ] || echo "${FAKE_MARKER_ID}"; exit 0 ;;
     repos/owner/repo) echo main; exit 0 ;;
   esac
 fi
@@ -172,8 +176,26 @@ def test_rejected_dispatch_releases_the_split_and_holds() -> None:
 		assert edits[1][edits[1].index("--add-label") + 1] == "ai:awaiting-approval"
 		posts = _comment_posts(calls)
 		assert len(posts) == 2 and posts[1].startswith("<!-- ai:plan-split-released:v1 issue=123 -->")
-		# The release marker follows the label removal.
-		assert calls.index(edits[1]) < next(i for i, c in enumerate(calls) if c[-1] == "body=" + posts[1])
+		# The release marker comes before the label removal: a label removed
+		# without a release marker would leave the split blocked for good.
+		assert calls.index(edits[1]) > next(i for i, c in enumerate(calls) if c[-1] == "body=" + posts[1])
+
+
+def test_a_concurrent_split_keeps_only_the_earliest_marker() -> None:
+	# Two plan runs race past the dedupe check and both post a marker; only
+	# the run whose marker comes first since the last release dispatches.
+	other = {"id": 400, "login": "pipeline-bot", "body": "<!-- ai:plan-split:v1 issue=123 wrapper=x -->"}
+	ours = {"id": 500, "login": "pipeline-bot", "body": "<!-- ai:plan-split:v1 issue=123 wrapper=y -->"}
+	code, out, calls = _run(extra_env={"FAKE_MARKER_ID": "500",
+		"FAKE_COMMENTS_AFTER": "\n".join(json.dumps(c) for c in (other, ours))})
+	assert code == 0 and "outcome=deduplicated" in out and "first_marker=400" in out, out
+	assert _dispatches(calls) == []
+	assert any(c[:3] == ["api", "-X", "DELETE"] and c[3] == "repos/owner/repo/issues/comments/500" for c in calls)
+	# The earliest marker is ours (an older split was released): dispatch.
+	released = {"id": 300, "login": "pipeline-bot", "body": "<!-- ai:plan-split-released:v1 issue=123 -->"}
+	code, out, calls = _run(extra_env={"FAKE_MARKER_ID": "500",
+		"FAKE_COMMENTS_AFTER": "\n".join(json.dumps(c) for c in ({**other, "id": 200}, released, ours))})
+	assert code == 0 and "outcome=dispatched" in out and len(_dispatches(calls)) == 1, out
 
 
 def test_unconfirmed_dispatch_keeps_the_split() -> None:
@@ -289,8 +311,9 @@ def test_orchestrate_releases_the_source_only_before_a_tracking_issue_exists() -
 	assert release["continue-on-error"] is True
 	assert "<!-- ai:plan-split-released:v1 issue=${source_issue} -->" in release["run"]
 	assert '--remove-label "ai:split-to-project"' in release["run"]
-	# Label off before the release marker (the dispatcher checks the label first).
-	assert release["run"].index('--remove-label "ai:split-to-project"') < release["run"].index("ai:plan-split-released:v1")
+	# Release marker before the label removal (a label removed without the
+	# marker would leave the split marker blocking every /reclarify).
+	assert release["run"].index('--remove-label "ai:split-to-project"') > release["run"].index("ai:plan-split-released:v1")
 
 
 def main() -> int:

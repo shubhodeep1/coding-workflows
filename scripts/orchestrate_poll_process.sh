@@ -20271,7 +20271,9 @@ PY
     # invoking the judge (e.g. the empty-editor failure mode) never
     # escape.  ai:review-blocked is now recovered here via the
     # dispatch_rb_judge action (see execute_stall_recovery_action).
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
+    # ai:split-to-project (Q152): the orchestrator project owns the plan and
+    # close_plan_split_source_if_needed closes the issue at completion.
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 

@@ -29,8 +29,9 @@
 # and a WARNING asks a person to check), so the caller must not hold the
 # plan; 3 when the plan should be held as before, 1 on a usage error.
 # The issue is marked (label, then marker comment) before the dispatch, and
-# released (label off, then a release marker) when nothing was started.
-# Log prefix PLAN_SPLIT (outcome=dispatched|dispatch_unconfirmed|skipped reason=...).
+# released (release marker, then label off) when nothing was started. A run
+# that loses a concurrent split to another run's earlier marker exits 0 too.
+# Log prefix PLAN_SPLIT (outcome=dispatched|dispatch_unconfirmed|deduplicated|skipped reason=...).
 set -uo pipefail
 
 SPLIT_LABEL="ai:split-to-project"
@@ -69,7 +70,13 @@ flag_enabled()
 [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || { echo "PLAN_SPLIT usage: ISSUE_NUMBER missing" >&2; exit 1; }
 [ -s "${ISSUE_JSON_FILE:-}" ] || skip issue_json_missing
 [ -s "${PLAN_FILE:-}" ] || skip plan_missing
-flag_enabled "${PLAN_SPLIT_TO_PROJECT_ENABLED:-true}" || skip disabled
+if ! flag_enabled "${PLAN_SPLIT_TO_PROJECT_ENABLED:-true}"; then
+	case "$(printf '%s' "${PLAN_SPLIT_TO_PROJECT_ENABLED}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		0|false|no|off) ;;
+		*) echo "::warning::PLAN_SPLIT_TO_PROJECT_ENABLED has an unrecognised value; treating it as false and holding the plan." ;;
+	esac
+	skip disabled
+fi
 path_count="${PLAN_PATH_COUNT:-0}"
 [[ "${path_count}" =~ ^[0-9]+$ ]] || path_count=0
 max_chars="${PLAN_SPLIT_MAX_DESCRIPTION_CHARS:-60000}"
@@ -120,7 +127,7 @@ done
 default_branch="$(gh_retry gh api "repos/${REPO}" --jq '.default_branch // ""' 2>/dev/null || true)"
 [ -n "${default_branch}" ] || skip default_branch_unavailable
 
-issue_title="$(jq -r '(.title // "") | gsub("[\\r\\n]+"; " ") | sub("\\s+$"; "")' "${ISSUE_JSON_FILE}" | cut -c1-160)"
+issue_title="$(jq -r '(.title // "") | gsub("[\\r\\n]+"; " ") | sub("\\s+$"; "") | .[0:160]' "${ISSUE_JSON_FILE}")"
 issue_url="https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
 # The decomposer cannot read issue comments, so the plan travels inline.
 description="$(cat <<EOF
@@ -159,19 +166,24 @@ split_notify()
 	fi
 }
 
-# Undo the split marking when no project was started: the label comes off
-# first and the release marker follows only once it is off, so a label left
-# on the issue always means "split" and a later /reclarify never sees a
-# release marker the label check would ignore. Restores ai:awaiting-approval
-# so the plan stage's hold is what the issue shows.
+# Undo the split marking when no project was started. The release marker is
+# posted first (retried: a duplicate release marker is harmless) and the
+# label comes off after it. A label left on after a posted release marker
+# still holds the issue, and removing it by hand re-enables the split; a
+# label removed without a release marker would leave the split marker
+# blocking every later /reclarify, so that case warns with the recovery.
+# Restores ai:awaiting-approval so the plan stage's hold is what the issue
+# shows.
 release_split()
 {
-	if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "${SPLIT_LABEL}" \
+	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+		-f body="${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->"$'\n'"No orchestrator project was started for this plan ($1), so it is held for approval as before." \
+		>/dev/null 2>&1; then
+		echo "::warning::Could not post the plan-split release marker on issue #${ISSUE_NUMBER} after $1; delete its plan-split comment, if any, before commenting /reclarify."
+		split_notify "Plan split for issue #${ISSUE_NUMBER}: no project started ($1) and the release marker could not be posted. Delete its plan-split comment, if any, then comment /reclarify." "WARNING"
+	fi
+	if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "${SPLIT_LABEL}" \
 		--add-label "ai:awaiting-approval" >/dev/null 2>&1; then
-		gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
-			-f body="${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->"$'\n'"No orchestrator project was started for this plan ($1), so it is held for approval as before." \
-			>/dev/null 2>&1 || echo "::warning::Could not post the plan-split release marker on issue #${ISSUE_NUMBER}."
-	else
 		echo "::warning::Could not remove ${SPLIT_LABEL} from issue #${ISSUE_NUMBER} after $1; remove it by hand so the plan can be split again."
 	fi
 }
@@ -199,9 +211,30 @@ This plan lists ${path_count} files, more than one pipeline grant covers (50), s
 The tracking issue is linked here once it exists. This issue stays open and is closed when the project completes.
 EOF
 )"
-if ! gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${source_comment}" >/dev/null 2>&1; then
+if ! marker_id="$(gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '.id // ""' \
+	-f body="${source_comment}" 2>/dev/null)"; then
 	release_split "the plan-split comment could not be posted"
 	skip marker_failed "wrapper=${wrapper}"
+fi
+
+# The marker is the reservation: two plan runs racing past the check above
+# both post one, and only the run whose marker is the first since the last
+# release marker dispatches. The other withdraws its marker and exits 0
+# without holding, since the first run starts (or releases) the project.
+if [[ "${marker_id}" =~ ^[0-9]+$ ]] && gh_retry gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+	--jq '.[] | {id: .id, login: (.user.login // ""), body: (.body // "")}' > "${comments_file}" 2>/dev/null; then
+	first_marker_id="$(jq -r -s --arg login "${pipeline_login}" --arg marker "${SOURCE_MARKER_PREFIX}${ISSUE_NUMBER} " \
+		--arg release "${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->" '
+		[ .[] | select(.login == $login) ] as $c
+		| ([ range(0; $c | length) | select($c[.].body | contains($release)) ] | max // -1) as $rel
+		| [ range($rel + 1; $c | length) | select($c[.].body | contains($marker)) | $c[.].id ] | first // empty' \
+		"${comments_file}" 2>/dev/null || true)"
+	if [ -n "${first_marker_id}" ] && [ "${first_marker_id}" != "${marker_id}" ]; then
+		gh_retry gh api -X DELETE "repos/${REPO}/issues/comments/${marker_id}" >/dev/null 2>&1 \
+			|| echo "::warning::Could not delete the duplicate plan-split comment ${marker_id} on issue #${ISSUE_NUMBER}."
+		split_log "outcome=deduplicated reason=concurrent_split wrapper=${wrapper} first_marker=${first_marker_id}"
+		exit 0
+	fi
 fi
 
 # No retry: a dispatch that timed out may still have started a project, and
