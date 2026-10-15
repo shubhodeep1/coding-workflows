@@ -257,6 +257,19 @@ The postmortem `docs/postmortems/2026-10-10-pr-6576-orchestrate-poll-shard-1.md`
 
 What this means for operators: nothing to start by hand. The first `main` push after this lands does the work once; later pushes skip. `ci.yml` and its aggregate `lint` gate are unchanged. Remove the workflow, its helper and test once the registry entry in `docs/scripts-pending-removal.md` says so.
 
+- **A daily check now watches every consumer repository and files an issue when one goes quiet.** Consumers whose AI workflows were switched off, whose poller stopped, or whose tracking issue was filling up used to go unnoticed until someone looked.
+
+Once a day the orchestrator poller in coding-workflows runs `scripts/consumer_health_check.sh` over the repositories in `.github/ai/consumer_repos.json`. An AI workflow that GitHub switched off for inactivity is switched back on. A workflow switched off by a person, a poller with no run in 6 hours, a tracking issue with 2000 or more comments, or a repository the token cannot read each opens one `ai:consumer-health` issue here, with one Telegram WARNING. The issue closes itself when a later check no longer finds the problem.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Consumers checked | 13 (`.github/ai/consumer_repos.json`) |
+| Poller silence threshold | 6 hours (`CONSUMER_HEALTH_POLLER_SILENT_HOURS`) |
+| Tracking issue comment threshold | 2000 (`CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT`; GitHub stops at 2500) |
+| API calls per day | about 41 reads, plus writes only when something changes |
+
+What this means for operators: a paused or stuck consumer shows up as an issue in this repository within a day, without anyone checking each repository. Workflows paused on purpose, like tele-funtoken-msg-scoring's, get an issue that stays open until they are switched back on or the repository is removed from the consumer list. Set `CONSUMER_HEALTH_CHECK_ENABLED=false` to turn the check off.
+
 ### For contributors
 
 The job that runs #6576's old test code (`rerun-old`) runs on its own runner with no secrets and only `contents: read`. The `rerun` job re-validates that job's artifact and confirms each named test on a separate, clean runner, so old code cannot tamper with the `main` reruns; only `locate` and `report` see `GH_PAT`, and they run only on the default branch. Log text is neutralised before it reaches a comment or issue, so a test's output cannot forge `<!-- ai: -->` markers or workflow commands. `tests/test_pr6576_shard_followup.py` runs in the workflow's own `self-test` job on pull requests that touch these files.
@@ -1315,6 +1328,30 @@ The three roles move to `"engine": "claude"` in `.github/ai/claude_engine.json`;
 What this means for operators: to roll back, set `AI_ENGINE_VALIDATE=codex`, `AI_ENGINE_VALIDATE_SELF_HEAL=codex` or `AI_ENGINE_VALIDATION_REFRESH=codex`, or add the `ai:codex` label to the tracking issue. If the trusted engine helpers cannot be staged, the job log shows `AI_ENGINE_FALLBACK role=<ROLE> reason=engine_support_missing` and codex runs.
 
 The Claude pool broker (`tools/claude-pool-broker`) now also grants the pool to `check_failure_triage.yml`, `issue_pr_status.yml`, `validate.yml`, `validation-refresh.yml`, `workflow-failure-heal-intake.yml` and `workflow-log-analysis.yml`. The broker reads this list from its deployed code, so these workflows get no pool credential until the Worker is redeployed with `wrangler deploy` (CLAUDE.md §24.C).
+
+- **The validation harness self-check can name the probe that failed and its exit code.** When a self-check probe in `scripts/validation_harness_sandbox.sh` prints nothing usable, the failure reason was always `probe_failed`, so a failed sandbox launch could not be told apart from a failed namespace launch (project #7355 failed validation four times this way). With `VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP=true` in the validate job's environment, the reason becomes `probe_failed_plain_rc_<n>` for the first probe or `probe_failed_pidns_rc_<n>` for the probe inside the PID namespace, in both the job log and the status file. Unset, the reason stays `probe_failed`. Validation still fails closed, and probe error output is still discarded.
+
+- **The test step `Regression tests wired by the CI wiring guard (part 1)` moved from the CI job `tests-release-and-log-analysis` to `tests-heal-plan-and-validation`.** `tests-release-and-log-analysis` took 15m33s of its 20-minute timeout on `main` (run 38663329196, budget-watch issue #7406), and a job that hits its timeout turns CI red with no code fault. The heal and validation job got the step because #7387 split that job's slowest step into parallel shards, so it should have the most room.
+
+  The step runs there unchanged and under the same name. No job was added or renamed, no `timeout-minutes` changed, and the aggregate `CI / lint` check is unchanged. A failure in these tests now appears under the `tests-heal-plan-and-validation` check-run. Both jobs should now take about 12 minutes or less, but that is an estimate from test-module and subprocess counts, not a measurement; the next `budget-watch` run on `main` checks it.
+
+  What this means for operators: nothing to change; no new variable.
+
+- **The workflow failure heal intake files heal issues again, and stops paging CRITICAL for reports that name no failed run.** `HEAL_INTAKE_SCOPE_GUARD_ENABLED` now defaults to `true`.
+
+Since #6871 the intake composed each heal issue and then dropped it (`WORKFLOW_HEAL skip reason=scope_guard_disabled`) until an operator switched the gate on, so failures were diagnosed but never fixed. The gate is now on by default. A heal issue is filed only after its `ai:workflow-heal-scope:v1` marker verifies, and the existing caps still apply. A report that claimed no failed run, such as a label-only `ai:scope-blocked` report or an `engine_fallback` report, can never get a scope. It is now skipped with `WORKFLOW_HEAL skip reason=scope_unavailable_no_runs` and exit 0, instead of a CRITICAL alert and a failed intake run. A report that named runs and still has no valid scope keeps the CRITICAL refusal.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Open heal issue cap | 10 (`WORKFLOW_HEAL_MAX_OPEN_ISSUES`) |
+| New heal issues per UTC day | 20 (`WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`) |
+| Reports in the last sample that would page without this change | 10 of 11 reaching the gate (label-only reports, Oct 12-14) |
+
+What this means for operators: expect `ai:workflow-heal` issues for pipeline failures again, each with a verified scope. Set the repository variable `HEAL_INTAKE_SCOPE_GUARD_ENABLED=false` to stop filing them.
+
+- **The poller now logs whether a branch rebuild after resolver escalation passed its threshold and cooldown checks, and if not, why.** `_attempt_branch_rebuild_after_escalation` in `scripts/orchestrate_poll_process.sh` prints `BRANCH_REBUILD_THRESHOLD_DECISION tracking_issue=<n> skip_reason=<reason|none> last_rebuild_at=<ts|none>` after every threshold check, so a project waiting on the threshold or the cooldown shows the reason in its run log. `skip_reason=none` means only that those checks passed; later preflight checks can still skip the rebuild. The unused `WAVE_COUNT` value in `orchestrate.yml`'s summary step and the unused `BLOB_CONTENT` value in `test-and-mark-stable.yml` are removed. Behaviour is unchanged. Refs #7355.
+
+- **`gh_retry` no longer retries bad requests and authentication failures.** `gh_retry` and `gh_retry_to_file` in `scripts/gh_helpers.sh` now stop after one attempt when `gh` reports HTTP 400, HTTP 401, `Bad credentials` or `Requires authentication`, instead of spending the full attempt budget (5 by default, with backoff). Generic HTTP 403 is deliberately still retried: secondary rate limits and content-creation throttles also answer 403, and these loops check permanent failures before rate limits. Refs #7355.
 
 ### For contributors
 
@@ -2640,6 +2677,47 @@ The poller used to dispatch the validation wrapper with `--ref <integration bran
 A project already parked by that failure is re-dispatched once from the default branch: the last failed run used a branch other than the default branch, or, for state written before this fix, the project has a separate integration branch. The validation counters are kept, and the tracking issue gets a "🔁 Validation re-armed after stale workflow pin" comment. The pipeline handles this itself, so the Telegram notice is DEBUG and pages nobody. Set `VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED=false` to keep such projects parked until `/revalidate`. The recovery never runs while `ENABLE_VALIDATION=false`.
 
 What this means for consumer repos: validation runs use the `ai-validate.yml` on your default branch, so keep that wrapper synced. A tracking issue must carry its `Integration branch:` line, which the orchestrator writes when it creates the issue.
+
+- **Workflow failure heal now accepts review runs that were dispatched for a pull request.** Before this, the intake rejected them as a head mismatch and paged as an intake defect.
+
+A review started with `workflow_dispatch` (`AI Review [pr:N]`) runs on the default branch, so its `head_sha` is the branch tip, not the pull request head that an `autofix_failure` report carries. The provenance gate already linked such a run to the PR through its `[pr:N]` title. The evidence check in `scripts/workflow_failure_heal_intake.sh` still required the run head to equal the PR head, so it dropped the only run. With no runs left, the scope marker could not be rendered, and every such report raised two CRITICAL alerts ("refused to file an issue without a valid intake-authored scope marker" and "Workflow Failure Heal Intake workflow itself failed") instead of filing a heal issue. `verify-run` now takes `--pr-number`. For an `autofix_failure` report it accepts a `workflow_dispatch` run whose title names that PR, the same rule the provenance gate uses. Every other head mismatch is still rejected.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Reports that hit this on 2026-10-15 | 2 (`tele-funtoken-msg-scoring` #4584 and #4577, intake runs 38686057824 and 38686754997) |
+| CRITICAL alerts per affected report | 2 |
+
+What this means for operators: a dispatched review that fails now becomes a heal issue rather than an intake-defect page. When the intake does drop a run, `run_ref_rejected` now carries a `detail=` token with the reason, for example `detail=error:_run_head_mismatch`.
+
+- **Reviews no longer fail on repositories with large tracked source files.** The review sandbox now reads files up to 8 MiB (previously 2 MiB), and it leaves a larger file out of the editor workspace instead of rejecting the whole review.
+
+The review editor snapshot (`scripts/review_untrusted_workspace.py snapshot`, called by `scripts/review_untrusted_sandbox.sh`) rejected the whole review when any tracked file was over 2 MiB. On `shubhodeep1/tele-funtoken-msg-scoring` that meant every review failed, with `Review isolation snapshot or transfer rejected (ValueError) reason=unknown`, because of `ft.games/app.py` (2.1 MB) and `ft.games/templates/Game-pages/mega-fishing/mega-fishing.html` (3.3 MB). The per-file limit is now 8 MiB. In the review snapshot, a file above that is skipped and logged as `REVIEW_ISOLATION_SNAPSHOT oversized_skipped=<n>`, and the editor cannot overwrite it. The heal editor and the pre-push test gate get the higher limit but still stop on a larger file, so a missing file never shows up there as a test failure. A snapshot rejection now reports `reason=unsafe_file` or `reason=file_changed` instead of `reason=unknown`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Per-file limit | 2 MiB → 8 MiB |
+| tele-funtoken reviews that failed on 2026-10-15 | 10 |
+| tele-funtoken review snapshot after the change | 1,145 files, 33 MB (64 MiB total cap unchanged) |
+
+What this means for consumer repositories: reviews run on repositories that keep multi-megabyte source files. A file over 8 MiB is reviewed from the diff only, and its PR has to be edited by hand.
+
+- **Consumer health notices are no longer picked up as work items.** The clarify workflow now skips issues labelled `ai:consumer-health`, the same way it skips `ai:operator-step` and `ai:provider-outage` issues.
+
+The daily consumer health check files an `ai:consumer-health` issue for the operator when a consumer repository has a problem: AI workflows switched off, a silent poller, or a tracking issue near the comment cap. On its first run on 2026-10-15 it filed #7426 and #7427 for `tele-funtoken-msg-scoring`. The issue pipeline then treated both as tasks. It auto-answered and planned them, closed #7426 as "already implemented", and merged #7428 (an `agents.d` note) for #7427. Because the check only re-files a notice when no open one exists, closed notices would have come back every day with a new Telegram warning and another pipeline run. The `opened` guard in `.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml` and the consumer wrapper `workflow-templates/ai-clarify.yml` now skips the label. The notice stays open until the check sees the problem cleared and closes it.
+
+What this means for operators: each consumer problem produces one open notice and one Telegram warning, and no pipeline runs on it. To act on a notice, fix the consumer, or comment `/reclarify` on it if you want the pipeline to plan a change.
+
+- **The review-blocked judge now acts only on the pull request head it evaluated.**
+
+Previously, a push during the judge call could let the `fix` path post the head-gate success status and apply `ai:ready-to-merge` for a head the judge never saw, or let a reissue keep unjudged code as its baseline. Now `scripts/review_rb_judge.sh` compares the live PR head with the head named in the judge prompt, and skips every action before any comment, label, status or close when the head moved (`judge_skip_reason=stale_head`, log line `RB_JUDGE_STALE_HEAD pr= judged_head= live_head= action=`). When the live head cannot be read, `fix` and `close_and_reissue` are refused (`judge_skip_reason=head_unverified`), and so is a merge that open security findings convert to `fix`. Other merge actions are unchanged, because `--match-head-commit` already binds them.
+
+What this means for operators: a review-blocked PR that receives a push while the judge is running is left for a later review or judge run, and its linked issue no longer reaches `ai:ready-to-merge` from a verdict on an older head.
+
+### For contributors
+
+The live head comes from the PR read the script already makes, so no API call is added. A force-push back to an older commit counts as moved. The one exception is the head this run checked out (`INITIAL_HEAD_SHA`), sitting behind the run's own unpushed editor or `[ai-merge-resolve]` commit, because the judge runs before "Push all pending commits". A spot-fix reissue uses the evaluated head as its baseline, which removes one `gh pr view` call. When the evaluated head is the run's own unpushed commit, the reissue uses the live PR head instead, because `implement.yml` ignores a baseline that differs from the closed PR's `headRefOid`. Tests: `tests/test_review_rb_judge_head_binding.py`.
+
+- **Sandbox images include gawk.** The review sandbox (`scripts/review_sandbox/Dockerfile`) and the isolated agent container that `scripts/codex_isolated_exec.sh` builds now install `gawk`, which the review issue ledger and the consolidator parser call. Tests run inside either sandbox no longer fail on a missing binary. Refs #7355.
 
 ### For contributors
 
@@ -6318,6 +6396,10 @@ The project security pass marks a finding advisory when `git blame` shows its ci
 The reviewer consensus summariser and the behavioural-smoke synthesiser read PR-derived text. They now run OpenCode only inside the network-isolated review sandbox, including when the codex engine is selected. When the sandbox cannot be prepared, the attempt is refused with `::error::REVIEW_UTILITY_ISOLATION role=<SUMMARISER|BEHAVIOURAL_SMOKE> engine=<engine> outcome=refused reason=<reason>` instead of running on the host with the repository credentials. The summariser hard-fails after `SUMMARISER_ISOLATION_MAX_ATTEMPTS` (default `3`) consecutive refusals; smoke synthesis stays advisory and logs `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable`.
 
 What this means for operators: projects may need more security fix cycles for findings near code they deleted or changed. A review run whose sandbox is broken now fails instead of summarising on the host; the existing fingerprint cap and heal reporter handle a persistent failure. Both controls are automated, with no human gate.
+
+- **The push steps no longer write `GH_PAT` into their shell scripts.** `implement.yml` ("Push branch") and `review_autofix.yml` ("Push all pending commits") built the remote URL with `${{ secrets.GH_PAT }}`, which GitHub substitutes into the generated step script. Both now read the token from the step's existing `GH_TOKEN` environment variable and the repository from `GITHUB_REPOSITORY`; the URL and push behaviour are unchanged. `tests/test_workflow_untrusted_input_contract.py` now fails when any workflow or consumer template puts `x-access-token:${{ secrets.` into a remote URL. This fixes SEC-002 of #7357 (Refs #7355).
+
+- **The review workflow's `Free disk space` step now runs a pinned commit.** `review_autofix.yml` referenced `jlumbroso/free-disk-space@v1.3.1`, a tag the action's owner can move, in the `codex-agent` job that later holds `GH_PAT`. It is now pinned to commit `54081f138730dfa15788a46383842cd2f914a1be` (`# v1.3.1`), and `tests/test_workflow_untrusted_input_contract.py` fails if it goes back to a tag. This fixes SEC-001 of #7357 (Refs #7355).
 
 ### For contributors
 

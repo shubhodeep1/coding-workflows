@@ -1,2 +1,0 @@
-<!-- changelog: changed -->
-- **`gh_retry` no longer retries bad requests and authentication failures.** `gh_retry` and `gh_retry_to_file` in `scripts/gh_helpers.sh` now stop after one attempt when `gh` reports HTTP 400, HTTP 401, `Bad credentials` or `Requires authentication`, instead of spending the full attempt budget (5 by default, with backoff). Generic HTTP 403 is deliberately still retried: secondary rate limits and content-creation throttles also answer 403, and these loops check permanent failures before rate limits. Refs #7355.
