@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Only option A can actually be implemented from this issue. The heal implementer copies back only the files in the frozen scope (`.github/workflows/plan.yml`, `tests/**`, `changelog.d/*.md`), so option B would be refused at implement time. Option C's second half (filing a new root-cause issue) is not something the implementer can do from its sandbox, so choosing C would leave half the decision undone. I checked the checkout: `.github/actions/claude-pool-token/` still has only `action.yml`, `main.js` and `post.js`, with no `package.json`. `plan.yml:1548-1553` runs that action from `./.codex-workflow-src/...` inside the consumer workspace. So a step in `plan.yml` that writes `{\"type\":\"commonjs\"}` next to `main.js` before the action runs fixes `digital_pa#145`'s planning without weakening the refusal for any other missing-credential reason.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (lettered option A, made concrete)\n  inputs:\n    - .github/workflows/plan.yml (step \"Resolve Claude credential\", lines ~1548-1553; it has `continue-on-error: true` and `uses: ./.codex-workflow-src/.github/actions/claude-pool-token`)\n    - .github/actions/claude-pool-token/main.js (top-level `require` at lines 6-8; it writes `available=false\\nreason=script_failed\\naccounts=0\\nprobes=[]` to `GITHUB_OUTPUT` when the script exits non-zero)\n    - .github/actions/claude-pool-token/post.js and action.yml (read-only reference, not edited)\n  steps:\n    - In `plan.yml`, add one step just before \"Resolve Claude credential\", for example named \"Pin claude-pool-token action module type\", with the same `if:` condition. It is a `run:` step with no `${{ }}` expressions in its body. If `.codex-workflow-src/.github/actions/claude-pool-token` is a real directory (not a symlink) and contains no `package.json` (regular file or symlink), it writes `{\"type\":\"commonjs\"}` plus a newline to `package.json` there. If the file already exists, it leaves it alone, so a later upstream fix in the action is never overwritten. It logs one `::notice::` line saying whether it wrote the file or skipped. Give the step `continue-on-error: true` so it cannot break planning in consumers that are not ESM. Add a comment naming this heal issue and stating that the root-cause fix is a `package.json` in the action directory, after which this step becomes a no-op.\n    - Keep every existing step unchanged. Do not touch `continue-on-error` on \"Resolve Claude credential\", `AI_ENGINE_FALLBACK_POLICY`, or the classification of `no_credential`.\n    - Add a regression test, for example `tests/test_claude_pool_token_esm_parent.py`:\n      - Copy `.github/actions/claude-pool-token/` into `tmp/ws/.codex-workflow-src/.github/actions/claude-pool-token/`, and write a stub `tmp/ws/.codex-workflow-src/scripts/claude_pool_token.sh` that exits 1.\n      - Write `tmp/ws/package.json` = `{\"type\":\"module\"}`.\n      - Extract the new step's `run:` body from `plan.yml` (by step name) and run it with bash, with `tmp/ws` as the working directory.\n      - Run `node main.js` and `node post.js` with `GITHUB_OUTPUT` pointing at a temp file and `GITHUB_WORKSPACE=tmp/ws`.\n      - Assert that neither stderr contains `ReferenceError` or `require is not defined`, and that `GITHUB_OUTPUT` contains `available=false`.\n      - Add a second case that skips the pin step and asserts the `ReferenceError` appears. This reproduces the failing condition at `7feb4ef553b2`.\n      - Add a third case with an existing `package.json` in the action directory, and assert the step leaves it unchanged.\n      - Skip with a clear reason if `node` is not on PATH.\n    - Wire the test into an existing `ci.yml` step only if the CI wiring guard requires it. If `ci.yml` is outside this scope, put the test in an existing test file that CI already runs, such as a plan-workflow contract test, so `tests/test_ci_wires_every_test_file.py` does not fail.\n    - Add `changelog.d/<issue>-claude-pool-token-esm-plan.md`. It describes the `plan.yml` workaround and states that clarify, implement, review, poller judges and the other Claude roles still need the root-cause fix (`.github/actions/claude-pool-token/package.json`), which must come in a separately scoped issue.\n    - Run `wc -c .github/workflows/plan.yml` to confirm the file stays far below 480,000 bytes.\n  replaces_acceptance_criterion: The issue's suggested fix step 1 (add `.github/actions/claude-pool-token/package.json`) is replaced, for this issue only, by writing the same file at runtime from `plan.yml`. The step 3 regression test is kept but runs against that runtime-written file.\n  equivalence_argument: Node uses the nearest `package.json` above `main.js`/`post.js`. A `{\"type\":\"commonjs\"}` file in the action directory, whether committed or written just before `uses:`, takes precedence over the consumer's `\"type\": \"module\"` root `package.json`. So the plan job's credential step loads, writes its outputs, and the planner gets a real credential instead of `no_credential`. This exactly removes the cause behind `digital_pa#145`'s five failures.\n  reversibility: The step is self-contained and skips itself once the action ships its own `package.json`. A person who disagrees can delete the step without any other effect. The broader fix (committing the `package.json` to the action directory, covering every workflow) still needs a trusted person to file an issue whose `files_touched:` lists `.github/actions/claude-pool-token/package.json`, `tests/**` and `changelog.d/*`. After that fix lands, this workaround can be removed.",
+  "fingerprint": "ff8e542b650f2c9d409a8be6a97166e325196c576420007dfaa5f02fb806f12e",
+  "lineage": {
+    "issue_number": 7434,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38728098881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38728098881",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7434"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261015114203_053bdb3e31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7434,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38728098881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7434",
+  "timestamps": {
+    "created_at": "2026-10-15T11:42:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
