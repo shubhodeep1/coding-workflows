@@ -1518,6 +1518,7 @@ jobs:
       - name: Pick today's consumer health check key
         id: consumer_health_date
         if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/consumer-health-day"
@@ -1527,7 +1528,7 @@ jobs:
 
       - name: Look up today's consumer health check
         id: consumer_health_day
-        if: github.repository == 'shubhodeep1/coding-workflows'
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != ''
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -1537,7 +1538,7 @@ jobs:
 
       - name: Run daily consumer health check
         id: consumer_health
-        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_day.outputs.cache-hit != 'true'
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1550,8 +1551,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          # "Stage workflow support files" removes .codex-workflow-src-main
+          # earlier in this job, so the verified support checkout is the only source.
           src=".codex-workflow-src"
-          [ -f "${src}/scripts/consumer_health_check.sh" ] || src=".codex-workflow-src-main"
           for f in consumer_health_check.sh consumer_health_check.py; do
             if [ ! -f "${src}/scripts/${f}" ]; then
               echo "::warning::Consumer health check support file ${f} is missing; the check is skipped."
@@ -1566,7 +1568,7 @@ jobs:
             bash scripts/consumer_health_check.sh
 
       - name: Record today's consumer health check
-        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health.outcome == 'success'
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outcome == 'success'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:

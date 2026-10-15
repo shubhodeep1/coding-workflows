@@ -22,8 +22,9 @@
 # makes every decision; this script only reads and writes.
 #
 # API calls (§15): 1 /user read, 1 paginated read of this repository's open
-# ai:consumer-health issues, and per consumer at most 3 reads (workflow list,
-# newest poll run, open tracking issues): about 41 a day for 13 consumers.
+# ai:consumer-health issues, and per consumer at most 3 reads (paginated
+# workflow list, newest poll run, paginated open tracking issues; one page
+# each below 100 entries): about 41 a day for 13 consumers.
 # Writes happen only for a change: one PUT per re-enabled workflow, one issue
 # create per new problem, and one comment plus one close per cleared problem.
 #
@@ -43,8 +44,9 @@
 #   CONSUMER_HEALTH skip reason=disabled|invalid_switch
 #   CONSUMER_HEALTH enable repo=<r> workflow=<path> outcome=enabled|failed
 #   CONSUMER_HEALTH issue repo=<r> problem=<p> outcome=opened|open_failed number=<n>
-#   CONSUMER_HEALTH issue repo=<r> problem=<p> outcome=closed|close_failed number=<n>
-#   CONSUMER_HEALTH outcome=done repos=<n> problems=<n> opened=<n> closed=<n> enabled=<n>
+#   CONSUMER_HEALTH issue repo=<r> problem=<p> outcome=closed|comment_failed|close_failed number=<n>
+#   CONSUMER_HEALTH outcome=done repos=<n> problems=<n> opened=<n> closed=<n> enabled=<n> write_failures=<n>
+#     (write_failures > 0 exits 1, so the day is retried on the next tick)
 #   CONSUMER_HEALTH outcome=failed reason=<token>    (exit 1: the day is retried)
 
 set -euo pipefail
@@ -101,7 +103,10 @@ WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/consumer-health.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 
 [ -s "${TEMPLATES_FILE}" ] || fail templates_missing
-mapfile -t CONSUMERS < <(python3 "${CHECK_PY}" consumers --consumers-json "${CONSUMERS_FILE}") || fail consumers_unreadable
+# A process substitution hides the helper's exit status, so read the list
+# through a file to keep the consumers_unreadable failure observable.
+python3 "${CHECK_PY}" consumers --consumers-json "${CONSUMERS_FILE}" > "${WORK}/consumers.txt" || fail consumers_unreadable
+mapfile -t CONSUMERS < "${WORK}/consumers.txt"
 
 PIPELINE_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null)" || fail pipeline_login_unavailable
 [ -n "${PIPELINE_LOGIN}" ] || fail pipeline_login_unavailable
@@ -125,8 +130,13 @@ read_error_token()
 for repo in "${CONSUMERS[@]}"; do
 	snap="${WORK}/snapshot/${repo//\//__}"
 	mkdir -p "${snap}"
-	if ! gh_retry gh api "repos/${repo}/actions/workflows?per_page=100" > "${snap}/workflows.json" 2> "${snap}/workflows.err"; then
+	# Both listings are paginated so entries past the first 100 are checked.
+	if ! gh_retry gh api --paginate "repos/${repo}/actions/workflows?per_page=100" > "${snap}/workflows_pages.json" 2> "${snap}/workflows.err"; then
 		read_error_token "${snap}/workflows.err" > "${snap}/error"
+		continue
+	fi
+	if ! jq -s '{workflows: (map(.workflows // []) | add // [])}' "${snap}/workflows_pages.json" > "${snap}/workflows.json" 2>/dev/null; then
+		printf 'api_error' > "${snap}/error"
 		continue
 	fi
 	poll_id="$(jq -r '[.workflows[]? | select(.state == "active" and (.path | endswith("/ai-orchestrate-poll.yml")))][0].id // empty' "${snap}/workflows.json" 2>/dev/null || true)"
@@ -134,8 +144,10 @@ for repo in "${CONSUMERS[@]}"; do
 		gh_retry gh api "repos/${repo}/actions/workflows/${poll_id}/runs?per_page=1" > "${snap}/poll_runs.json" 2>/dev/null \
 			|| rm -f "${snap}/poll_runs.json"
 	fi
-	gh_retry gh api "repos/${repo}/issues?state=open&labels=ai%3Aorchestrator-tracking&per_page=100" > "${snap}/tracking.json" 2>/dev/null \
-		|| rm -f "${snap}/tracking.json"
+	if ! gh_retry gh api --paginate "repos/${repo}/issues?state=open&labels=ai%3Aorchestrator-tracking&per_page=100" > "${snap}/tracking_pages.json" 2>/dev/null \
+		|| ! jq -s 'add // []' "${snap}/tracking_pages.json" > "${snap}/tracking.json" 2>/dev/null; then
+		rm -f "${snap}/tracking.json"
+	fi
 done
 
 now_args=()
@@ -147,6 +159,10 @@ python3 "${CHECK_PY}" evaluate --consumers-json "${CONSUMERS_FILE}" --snapshot-d
 	--pipeline-login "${PIPELINE_LOGIN}" --silent-hours "${SILENT_HOURS}" --comment-limit "${COMMENT_LIMIT}" \
 	"${now_args[@]}" > "${WORK}/result.json" || fail evaluate_failed
 
+# A failed write is counted and makes the run exit 1 after the summary, so the
+# workflow does not record the day as checked and the next tick retries it
+# (issues already opened are deduplicated by the open-issue read).
+write_failures=0
 enabled=0
 while IFS=$'\t' read -r repo workflow_id path; do
 	[ -n "${repo}" ] || continue
@@ -154,6 +170,7 @@ while IFS=$'\t' read -r repo workflow_id path; do
 		enabled=$((enabled + 1))
 		log "enable repo=${repo} workflow=${path} outcome=enabled"
 	else
+		write_failures=$((write_failures + 1))
 		log "enable repo=${repo} workflow=${path} outcome=failed"
 		tg_send_msg "Consumer check: could not switch ${path} back on in ${repo} after GitHub disabled it for inactivity." "WARNING" >/dev/null || true
 	fi
@@ -198,6 +215,7 @@ while IFS=$'\t' read -r repo problem detail; do
 		tg_send_msg "Consumer check: ${repo}: $(problem_text "${problem}") (${detail}).
 Issue: https://github.com/${SELF_REPO}/issues/${number}" "WARNING" >/dev/null || true
 	else
+		write_failures=$((write_failures + 1))
 		log "issue repo=${repo} problem=${problem} outcome=open_failed number=none"
 	fi
 done < <(jq -r '.open[] | [.repo, .problem, .detail] | @tsv' "${WORK}/result.json")
@@ -205,14 +223,25 @@ done < <(jq -r '.open[] | [.repo, .problem, .detail] | @tsv' "${WORK}/result.jso
 closed=0
 while IFS=$'\t' read -r number repo problem; do
 	[ -n "${number}" ] || continue
-	gh_retry gh api -X POST "repos/${SELF_REPO}/issues/${number}/comments" \
-		-f body="The daily consumer check no longer finds this problem in ${repo}; closing." >/dev/null 2>&1 || true
+	# Close only after the explanation is posted: a closed issue is never read
+	# again, so a failed comment leaves the issue open for the retry.
+	if ! gh_retry gh api -X POST "repos/${SELF_REPO}/issues/${number}/comments" \
+		-f body="The daily consumer check no longer finds this problem in ${repo}; closing." >/dev/null 2>&1; then
+		write_failures=$((write_failures + 1))
+		log "issue repo=${repo} problem=${problem} outcome=comment_failed number=${number}"
+		continue
+	fi
 	if gh_retry gh api -X PATCH "repos/${SELF_REPO}/issues/${number}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
 		closed=$((closed + 1))
 		log "issue repo=${repo} problem=${problem} outcome=closed number=${number}"
 	else
+		write_failures=$((write_failures + 1))
 		log "issue repo=${repo} problem=${problem} outcome=close_failed number=${number}"
 	fi
 done < <(jq -r '.close[] | [(.number|tostring), .repo, .problem] | @tsv' "${WORK}/result.json")
 
-log "outcome=done repos=$(jq -r .repos "${WORK}/result.json") problems=$(jq -r '.problems | length' "${WORK}/result.json") opened=${opened} closed=${closed} enabled=${enabled}"
+log "outcome=done repos=$(jq -r .repos "${WORK}/result.json") problems=$(jq -r '.problems | length' "${WORK}/result.json") opened=${opened} closed=${closed} enabled=${enabled} write_failures=${write_failures}"
+if [ "${write_failures}" -gt 0 ]; then
+	echo "::warning::CONSUMER_HEALTH ${write_failures} write(s) failed; the day is retried on the next tick."
+	exit 1
+fi
