@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue #7449, make `test_agents_fragment_registers_log_prefix` work after the fragment is folded\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/agents_doc.py::agents_text\nScope-mode justification: The production code and the documentation are both correct. Only the test is wrong: it opens `agents.d/7355-dead-values-cleanup.md` directly, so it fails once `scripts/assemble_agents.py` folds that fragment into `agents.md` and deletes it. CI ran on the PR merge ref, where the base branch's release fold had already removed the fragment. The fix is to read through `agents_text()`, the helper `tests/agents_doc.py` provides for exactly this case. It works whether the entry is still a pending fragment or already sits in `agents.md`. The assertion stays. No new helper, dependency or interface is added. Recreating the fragment would bring back a deleted file and would break again at the next fold, so the plan does not do that.\n\nPlanning ref: `ai/issue-7444` @ `3b2a23d1b9e60d977a7d8c048c758fab6469d828` (Integration branch mismatch: false). The fix lands on the failing PR #7447's head branch.\n\n## Files likely to change\n- `tests/test_branch_rebuild_threshold_decision_log.py`\n\n## Functions or modules to implement\nIn `tests/test_branch_rebuild_threshold_decision_log.py`:\n1. Imports: add `import sys`, then `sys.path.insert(0, str(Path(__file__).resolve().parent))` and `from agents_doc import agents_text  # noqa: E402`. This is the same pattern `tests/test_orchestrate_poll_process.py:27-29` uses. Put it after the existing `from pathlib import Path` / `import pytest`.\n2. Remove the `FRAGMENT = REPO_ROOT / \"agents.d\" / \"7355-dead-values-cleanup.md\"` constant (line 20), which nothing else uses.\n3. Replace `test_agents_fragment_registers_log_prefix` (lines 86-92) with `test_agents_registers_log_prefix`:\n   - `text = agents_text()`.\n   - Find the section with `re.search(r\"^## Stable log prefixes \\(contractual\\)\\n(.*?)(?=^## |\\Z)\", text, re.M | re.S)` and assert that it matches. Once the fragment is folded its `<!-- agents: section=... -->` marker is gone, so the test anchors on the section heading instead. `fold()` appends fragment text to the end of the named section, so the entry lands before the next `## ` heading either way.\n   - Within that section's body, assert that ``f\"- `{LOG_KEY}`\"`` and `f\"LOG_PREFIX.name={LOG_KEY}\"` are both present.\n4. Leave the other four tests and their helpers unchanged.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone. The test is renamed, but `.github/workflows/ci.yml:1409` lists the test file, not the test name, so CI wiring and the `tests/test_ci_wires_every_test_file.py` guard are unaffected.\n\n## Decisions\n### D1 \u2014 Read documentation through `agents_text()` instead of the fragment path\n- Chosen: assert on `agents_text()` (pending fragments folded into `agents.md`), scoped to the `## Stable log prefixes (contractual)` section.\n- Alternatives considered: recreate `agents.d/7355-dead-values-cleanup.md`; read `agents.md` directly; skip or delete the assertion.\n- Why: `tests/agents_doc.py` is the documented reader for this purpose (CLAUDE.md \u00a730). It works before and after the fold. Recreating the fragment would duplicate entries that are already folded and would break again at the next release. Reading only `agents.md` would fail while the fragment is still pending, which is the state of this snapshot. Dropping the check would weaken the contract.\n\n### D2 \u2014 Anchor on the section heading, not the fragment marker\n- Chosen: regex on the `## Stable log prefixes (contractual)` heading, bounded by the next `## ` heading.\n- Alternatives considered: keep the `<!-- agents: section=... -->` marker split; search the whole document.\n- Why: the marker is gone once the fragment is folded. Searching the whole document would also match the prefix name in unrelated prose, for example in other sections, which makes for a weaker contract.\n\n## Security considerations\n- This is a test-only change. It adds no workflow, credential, endpoint or trust boundary. `agents_doc` loads the repo's own `scripts/assemble_agents.py` through `importlib`, which other tests already do.\n- No money handling is involved.\n\n## Risks and edge cases\n- **Conflict noted (CONFLICT DETECTION):** the triage says `agents.d/` is empty and `agents.md` already holds the folded entry. In this planning snapshot it is the other way round: `agents.d/7355-dead-values-cleanup.md` is still tracked (it holds the `BRANCH_REBUILD_THRESHOLD_DECISION` bullet and its `LOG_PREFIX.name` line), and `agents.md` does not yet contain it. The likely cause is that CI tests the PR merge ref with the base branch's release fold applied. The `agents_text()` approach passes in both states, so the plan does not depend on which one CI sees.\n- If the fragment were folded under a different section, the scoped assertion would fail correctly. That would be a real documentation defect, not a test fragility.\n- The section regex must use `re.M` so that `^## ` matches at line starts. Being the last section is not a concern: `## Stable log prefixes` is followed by other `##` sections, and `\\Z` is the fallback.\n- A fragment that fails to fold is skipped by `fold()`. The assertion would then fail, which is the intended signal, and `assemble_agents.py check` in `static-checks` reports the same problem.\n- No changelog fragment is needed: this is a test-only fix with no user-visible behaviour change.\n\n## Testing considerations\n- `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_branch_rebuild_threshold_decision_log.py`: all 5 tests should pass. The YAML tests skip if PyYAML is missing.\n- Simulate the folded state in a temporary copy, not in the working tree: run `scripts/assemble_agents.py` against a scratch copy of the repo, or point `agents_text(repo_root=...)` at a tmp dir holding the folded `agents.md` and no fragment. The rewritten assertion should still pass. Also simulate the pending state: the current tree, where the fragment exists and `agents.md` lacks the entry.\n- `ruff check tests/test_branch_rebuild_threshold_decision_log.py`: confirms the `# noqa: E402` import and that the unused `FRAGMENT` constant is gone.\n- `tests/test_ci_wires_every_test_file.py`: still passes, because the file name is unchanged.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "a4de4c840b38e685085bc7058714ea4801e16e5caa15d8dcc10fceb54d1ab206",
+  "lineage": {
+    "issue_number": 7449,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38750241754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38750241754",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7449"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261015142716_9564ff24fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7449,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38750241754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7449",
+  "timestamps": {
+    "created_at": "2026-10-15T14:27:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
