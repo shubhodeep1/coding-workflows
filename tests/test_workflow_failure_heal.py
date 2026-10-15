@@ -1666,6 +1666,9 @@ def _stage(tmp: Path, *, with_codex: bool, wrapper_pin: str | None = None) -> tu
 		"GITHUB_RUN_ID": "777",
 		"GITHUB_SERVER_URL": "https://github.com",
 		"PYTHONDONTWRITEBYTECODE": "1",
+		# The creation gate is on by default; most intake tests check the
+		# composed issue with it switched off (SCOPE_GUARD_ON turns it back on).
+		"HEAL_INTAKE_SCOPE_GUARD_ENABLED": "false",
 	}
 	return work, state_file, env
 
@@ -2707,9 +2710,10 @@ def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> No
 	assert "scripts/evil.py" not in body
 
 
-def test_intake_scope_guard_off_by_default_files_no_issue() -> None:
-	# #6871: until an operator sets HEAL_INTAKE_SCOPE_GUARD_ENABLED=true, the
-	# intake composes the heal issue and stops before creating it.
+def test_intake_scope_guard_off_files_no_issue() -> None:
+	# #6871: with HEAL_INTAKE_SCOPE_GUARD_ENABLED switched off (any value other
+	# than unset, empty or "true"; _stage sets "false"), the intake composes the
+	# heal issue and stops before creating it.
 	for extra_env in (None, {"HEAL_INTAKE_SCOPE_GUARD_ENABLED": "yes"}, {"HEAL_INTAKE_SCOPE_GUARD_ENABLED": "1"}):
 		result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
 		assert result.returncode == 0, result.stderr + result.stdout
@@ -2720,7 +2724,7 @@ def test_intake_scope_guard_off_by_default_files_no_issue() -> None:
 		# compose-issue ran before the gate.
 		assert state["composed_issue"]["body"] and heal.parse_heal_markers(state["composed_issue"]["body"])["classification"] == "workflow-defect"
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
-	assert 'SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"' in intake
+	assert 'SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-true}"' in intake
 	gate = intake[intake.index("_heal_intake_scope_guard_permits_create()\n"):intake.index("_open_issue()\n")]
 	disabled = gate[:gate.index("exit 0")]
 	assert "skip reason=scope_guard_disabled" in disabled and "CRITICAL" not in disabled
@@ -2772,9 +2776,41 @@ def test_intake_scope_guard_creates_issue_with_verified_marker() -> None:
 	assert outcome and "as a hotfix on `stable`" in outcome[0]["body"]
 
 
-def test_heal_intake_workflow_passes_scope_guard_flag_default_off() -> None:
+def test_heal_intake_workflow_passes_scope_guard_flag_default_on() -> None:
 	workflow = (REPO_ROOT / ".github/workflows/workflow-failure-heal-intake.yml").read_text(encoding="utf-8")
-	assert "HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}" in workflow
+	assert workflow.count("HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'true' }}") == 2
+	assert "HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false'" not in workflow
+
+
+def test_intake_scope_guard_is_on_when_unset_or_empty() -> None:
+	# Q150: an empty value (what an unset repository variable gives the script
+	# through the workflow default) files the issue once its marker verifies.
+	payload = _self_repo_autofix_payload() | {"script_ref": "stable", "crash_file": "scripts/safe.py", "changed_files": ["scripts/safe.py"]}
+	result, state, _ = _run_intake(payload, _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_prepare_scope_support, extra_env={"HEAL_INTAKE_SCOPE_GUARD_ENABLED": ""})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout
+	assert "scope_guard_disabled" not in result.stdout
+	assert len(state["issues_created"]) == 1
+
+
+def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Path) -> None:
+	# Q165: a label-only report names no run, so no heal scope can ever be set.
+	# Both refusals (the pre-compose marker guard and the creation gate) skip it
+	# with a log line and exit 0; neither pages CRITICAL nor fails the run.
+	for stage, marker_guard in (("marker_guard", True), ("scope_guard", False)):
+		tg_log = tmp_path / f"tg-{stage}.log"
+		result, state, _ = _run_intake(_consumer_payload(run_refs=[]), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+			extra_env=SCOPE_GUARD_ON, setup_git=_nr_tg_setup(tg_log), scope_marker_guard=marker_guard)
+		assert result.returncode == 0, stage + result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage={stage} " in result.stdout, result.stdout
+		critical = [line for line in (tg_log.read_text() if tg_log.exists() else "").splitlines() if line.startswith("CRITICAL\t")]
+		assert critical == [], critical
+		assert "issues_created" not in state
+		assert "scope_marker_unverified" not in result.stdout + result.stderr
+		assert "skip reason=scope_marker_unresolved" not in result.stdout
+	# A report that named a run still pages: there the unresolved scope is a fault.
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert intake.count("_heal_report_claimed_no_runs; then") == 2
 
 
 def test_intake_self_repo_autofix_failure_targets_source_pr_branch() -> None:
@@ -7431,7 +7467,7 @@ def test_heal_scope_recovery_no_replacement_records_occurrence() -> None:
 def test_heal_scope_recovery_wiring_is_default_on() -> None:
 	workflow = (REPO_ROOT / ".github/workflows/workflow-failure-heal-intake.yml").read_text(encoding="utf-8")
 	assert "HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}" in workflow
-	assert "HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}" in workflow
+	assert "HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'true' }}" in workflow
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
 	assert 'SCOPE_RECOVERY_SWITCH="${HEAL_SCOPE_RECOVERY_ENABLED-}"' in intake
 	assert "''|true) SCOPE_RECOVERY_ENABLED=\"true\" ;;" in intake

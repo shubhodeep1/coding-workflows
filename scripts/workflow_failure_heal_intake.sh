@@ -100,7 +100,11 @@
 #                                         inconclusive / base-self-inflicted / consumer-app-defect
 #                                         heal issues even when the
 #                                         intake-rendered scope marker is missing or invalid; default
-#                                         true refuses to file them (skip reason=scope_marker_unresolved)
+#                                         true refuses to file them (skip reason=scope_marker_unresolved,
+#                                         CRITICAL). A report that claimed no run at all (a
+#                                         label-only or engine_fallback report) can never get a
+#                                         scope, so it skips quietly instead
+#                                         (skip reason=scope_unavailable_no_runs, exit 0, no alert)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
 #                                         OIDC identity; default "false" (transition mode: they
 #                                         are accepted after the binding checks). A report that
@@ -122,15 +126,18 @@
 #                                         set by the workflow's materialize step
 #   WORKFLOW_HEAL_OIDC_JWKS_FILE          test hook: read the JWKS from this file instead of
 #                                         fetching it (default empty)
-#   HEAL_INTAKE_SCOPE_GUARD_ENABLED       default "false": the intake composes the heal issue,
-#                                         logs `skip reason=scope_guard_disabled` and creates
-#                                         no issue or outcome comment (#6798 / #6871 operator
-#                                         step pending; SELF_REPO heal labels are still ensured). Only
-#                                         "true" (any letter case) enables issue creation, and
-#                                         then only after the composed body's
+#   HEAL_INTAKE_SCOPE_GUARD_ENABLED       default "true": issue creation is enabled, and then
+#                                         only after the composed body's
 #                                         ai:workflow-heal-scope:v1 marker verifies; a missing
 #                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
-#                                         sends a CRITICAL alert and exits nonzero. Exception:
+#                                         sends a CRITICAL alert and exits nonzero, except for a
+#                                         report that claimed no run (skip
+#                                         reason=scope_unavailable_no_runs, exit 0, no alert).
+#                                         Unset, empty or "true" (any letter case) is on; any other
+#                                         value, such as "false", is off: the intake composes the heal
+#                                         issue, logs `skip reason=scope_guard_disabled` and creates
+#                                         no issue or outcome comment (SELF_REPO heal labels are
+#                                         still ensured). Exception:
 #                                         a heal-scope recovery replacement (see
 #                                         HEAL_SCOPE_RECOVERY_ENABLED) is still verified and
 #                                         created while this gate is off.
@@ -187,9 +194,9 @@ SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-
 # Only the exact value "false" disables the pre-filing scope-marker check, so
 # a typo keeps the guard on (fail closed).
 SCOPE_MARKER_GUARD_ENABLED="${WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED:-true}"
-# Heal issue creation gate (#6871): off by default, fail closed. See
-# _heal_intake_scope_guard_permits_create.
-SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"
+# Heal issue creation gate (#6871): on by default; any value other than unset,
+# empty or "true" turns it off. See _heal_intake_scope_guard_permits_create.
+SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-true}"
 # Heal-scope recovery (#7191, #7323): on by default; "false" turns it off and
 # any other value also turns it off with a warning (the value is not echoed).
 # See _heal_scope_recovery_evaluate.
@@ -1870,8 +1877,27 @@ _git_fetch_consumer_scope_ref()
 		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
 }
 
+# A report that claimed no run (a label-only report, engine_fallback) has no
+# verified run to bound a heal scope with, so its scope can never resolve.
+# Refusing it is expected, not an intake defect: skip with a log line and
+# exit 0 instead of a CRITICAL alert and a failed run. A report that claimed
+# runs keeps the CRITICAL refusal, because there an unresolved scope is a fault.
+_heal_report_claimed_no_runs()
+{
+	[ "$(jq -r '(.run_refs // []) | length' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ]
+}
+
+_heal_skip_scope_unavailable()
+{
+	log "skip reason=scope_unavailable_no_runs stage=$1 fp=${FP} classification=${CLASSIFICATION} source=${SOURCE_LABEL}"
+	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+		echo "Workflow failure heal filed no issue for ${SOURCE_LABEL}: the report names no failed run, so no heal scope can be set." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+	fi
+	exit 0
+}
+
 # Gate in front of the only heal issue-create call (#6871). With
-# HEAL_INTAKE_SCOPE_GUARD_ENABLED off (the default) it ends the intake with
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED off it ends the intake with
 # exit 0 before the issue-create writes, so no heal issue, target-repo label,
 # outcome comment or "created" alert happens (the ai:workflow-heal /
 # ai:workflow-heal-escalated labels in SELF_REPO are still ensured earlier,
@@ -1911,6 +1937,9 @@ _heal_intake_scope_guard_permits_create()
 	if [ "${scope_guard_status}" = "verified" ]; then
 		log "scope_guard outcome=verified repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
 		return 0
+	fi
+	if _heal_report_claimed_no_runs; then
+		_heal_skip_scope_unavailable scope_guard
 	fi
 	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
 	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
@@ -2015,6 +2044,9 @@ _open_issue()
 				[[ "${scope_check_status}" =~ ^[a-z_]{1,20}$ ]] || scope_check_status="unknown"
 				if [ "${scope_check_rc}" -ne 0 ] || [ "${scope_check_status}" != "valid" ]; then
 					[ "${scope_check_status}" != "valid" ] || scope_check_status="unknown"
+					if _heal_report_claimed_no_runs; then
+						_heal_skip_scope_unavailable marker_guard
+					fi
 					log "skip reason=scope_marker_unresolved fp=${FP} classification=${CLASSIFICATION} status=${scope_check_status} source=${SOURCE_LABEL}"
 					tg_send_msg "Workflow failure heal refused to file an issue without a valid intake-authored scope marker (intake defect, status ${scope_check_status}) for ${SOURCE_LABEL} (classification ${CLASSIFICATION}, fingerprint ${FP})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 					return 1
