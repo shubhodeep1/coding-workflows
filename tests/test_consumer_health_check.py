@@ -268,13 +268,20 @@ def test_the_poller_runs_the_check_once_a_day_in_this_repo_only() -> None:
 	assert "CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT: ${{ vars.CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT || '2000' }}" in step
 	assert "continue-on-error: true" in step
 	assert "bash scripts/consumer_health_check.sh" in step
+	date_step = text[text.index("- name: Pick today's consumer health check key"):]
+	date_step = date_step[:date_step.index("\n      - name:", 1)]
+	assert "continue-on-error: true" in date_step
+	# A failed date step must not save a dateless key that skips every later run.
+	assert "steps.consumer_health_date.outputs.day != ''" in step
 	lookup = text[text.index("- name: Look up today's consumer health check"):]
 	lookup = lookup[:lookup.index("\n      - name:", 1)]
 	assert "key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}" in lookup
 	assert "lookup-only: true" in lookup
+	assert "steps.consumer_health_date.outputs.day != ''" in lookup
 	save = text[text.index("- name: Record today's consumer health check"):]
 	save = save[:save.index("\n      - name:", 1)]
 	assert "steps.consumer_health.outcome == 'success'" in save
+	assert "steps.consumer_health_date.outputs.day != ''" in save
 	assert "key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}" in save
 	# The template list comes from workflow-templates/, the same set this test uses.
 	assert "workflow-templates" in step and TEMPLATES and "ai-orchestrate-poll.yml" in TEMPLATES

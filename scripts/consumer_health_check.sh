@@ -45,8 +45,10 @@
 #   CONSUMER_HEALTH enable repo=<r> workflow=<path> outcome=enabled|failed
 #   CONSUMER_HEALTH issue repo=<r> problem=<p> outcome=opened|open_failed number=<n>
 #   CONSUMER_HEALTH issue repo=<r> problem=<p> outcome=closed|comment_failed|close_failed number=<n>
+#     (comment_failed: the issue closed but its explanation comment failed)
 #   CONSUMER_HEALTH outcome=done repos=<n> problems=<n> opened=<n> closed=<n> enabled=<n> write_failures=<n>
-#     (write_failures > 0 exits 1, so the day is retried on the next tick)
+#     (a failed issue create or close counts as a write failure and exits 1, so
+#     the day is retried on the next tick; a failed enable is retried the next day)
 #   CONSUMER_HEALTH outcome=failed reason=<token>    (exit 1: the day is retried)
 
 set -euo pipefail
@@ -159,9 +161,9 @@ python3 "${CHECK_PY}" evaluate --consumers-json "${CONSUMERS_FILE}" --snapshot-d
 	--pipeline-login "${PIPELINE_LOGIN}" --silent-hours "${SILENT_HOURS}" --comment-limit "${COMMENT_LIMIT}" \
 	"${now_args[@]}" > "${WORK}/result.json" || fail evaluate_failed
 
-# A failed write is counted and makes the run exit 1 after the summary, so the
-# workflow does not record the day as checked and the next tick retries it
-# (issues already opened are deduplicated by the open-issue read).
+# A failed issue create or close is counted and makes the run exit 1 after the
+# summary, so the workflow does not record the day as checked and the next tick
+# retries it (issues already opened are deduplicated by the open-issue read).
 write_failures=0
 enabled=0
 while IFS=$'\t' read -r repo workflow_id path; do
@@ -170,7 +172,9 @@ while IFS=$'\t' read -r repo workflow_id path; do
 		enabled=$((enabled + 1))
 		log "enable repo=${repo} workflow=${path} outcome=enabled"
 	else
-		write_failures=$((write_failures + 1))
+		# Not counted as a write failure: an enable that keeps failing (archived
+		# repo, missing scope) would otherwise rerun the check and re-page on
+		# every tick. The next day's check retries it.
 		log "enable repo=${repo} workflow=${path} outcome=failed"
 		tg_send_msg "Consumer check: could not switch ${path} back on in ${repo} after GitHub disabled it for inactivity." "WARNING" >/dev/null || true
 	fi
@@ -223,20 +227,20 @@ done < <(jq -r '.open[] | [.repo, .problem, .detail] | @tsv' "${WORK}/result.jso
 closed=0
 while IFS=$'\t' read -r number repo problem; do
 	[ -n "${number}" ] || continue
-	# Close only after the explanation is posted: a closed issue is never read
-	# again, so a failed comment leaves the issue open for the retry.
-	if ! gh_retry gh api -X POST "repos/${SELF_REPO}/issues/${number}/comments" \
-		-f body="The daily consumer check no longer finds this problem in ${repo}; closing." >/dev/null 2>&1; then
-		write_failures=$((write_failures + 1))
-		log "issue repo=${repo} problem=${problem} outcome=comment_failed number=${number}"
-		continue
-	fi
-	if gh_retry gh api -X PATCH "repos/${SELF_REPO}/issues/${number}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
-		closed=$((closed + 1))
-		log "issue repo=${repo} problem=${problem} outcome=closed number=${number}"
-	else
+	# Close first, then explain: a failed close is retried on the next tick
+	# without having posted a comment, so retries never duplicate it. A failed
+	# explanation on an already-closed issue is logged but not retried.
+	if ! gh_retry gh api -X PATCH "repos/${SELF_REPO}/issues/${number}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
 		write_failures=$((write_failures + 1))
 		log "issue repo=${repo} problem=${problem} outcome=close_failed number=${number}"
+		continue
+	fi
+	closed=$((closed + 1))
+	if gh_retry gh api -X POST "repos/${SELF_REPO}/issues/${number}/comments" \
+		-f body="The daily consumer check no longer finds this problem in ${repo}; closed." >/dev/null 2>&1; then
+		log "issue repo=${repo} problem=${problem} outcome=closed number=${number}"
+	else
+		log "issue repo=${repo} problem=${problem} outcome=comment_failed number=${number}"
 	fi
 done < <(jq -r '.close[] | [(.number|tostring), .repo, .problem] | @tsv' "${WORK}/result.json")
 
