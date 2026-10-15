@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "When modifying scripts that implement workflow behavior, look for or add targeted tests alongside the implementation. Recent changes pair validation-harness and workflow-healing scripts with dedicated test files.",
+  "fingerprint": "d21de93c90b5360e3b692560d5c5d5d0810cdd1b9de5678ca890d90839149fd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38672772993",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38672772993",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7370",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7380",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7387",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7390",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7406",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7379",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7384",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7388",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7391",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7408"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261015025939_9e421ee3c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to workflow-support scripts are often paired with focused tests.",
+  "timestamps": {
+    "created_at": "2026-10-15T02:59:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
