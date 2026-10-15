@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validation_harness_sandbox.py:1454-1513 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: `_real_mount_ns` and the new real bind-mount tests skip when no mount namespace can be created (non-root runner with restricted user namespaces). A revert of the `-xtype s` fix would then go unnoticed in CI.\n  WHY: Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT and minimax_minimax-m3 rated it MAJOR, so the highest is used. The older tests fake `mount` with a regular file, so they cannot catch the regression either.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_validation_harness_sandbox.py:1454-1466 (`_real_mount_ns`) | severity=NIT | confidence=3\n  PROBLEM: The helper tries only unprivileged user-namespace unshare, or plain `unshare --mount` when already root. It never tries `sudo -n unshare --mount`, so all four new real-bind-mount tests skip on a non-root runner with restricted user namespaces.\n  WHY: With the tests skipped, CI stays green even if the `-xtype` fix is reverted. The older tests fake `mount` with a regular file and cannot catch it either. The runner's sysctl/AppArmor state is unconfirmed, so this is inferred.\n- HARDENING: tests/test_validation_harness_sandbox.py near line 1388 \u2014 add an unconditional static test asserting that `'! -type l -xtype s ! -path \"$2/docker.sock\" -print -quit'` is in `_function_body(\"as_sandbox_in_pidns\")` and that `'! -type l -xtype s ! -path \"${rt}/docker.sock\"'` is in `_pidns_probe()` (about 6 lines).\n- HARDENING: tests/test_validation_harness_sandbox.py `_real_mount_ns` \u2014 add a `[\"sudo\",\"-n\",\"unshare\",\"--mount\"]` prefix when `sudo -n true` succeeds (about 3 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- HARDENING: tests/test_validation_harness_sandbox.py near `test_the_namespace_masks_the_user_manager_sockets_before_the_drop` \u2014 add a static test asserting that the pattern `! -type l -xtype s ! -path \"$2/docker.sock\"` is present in the `find` commands in `as_sandbox_in_pidns` and the namespace probe text (about 6 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_validation_harness_sandbox.py:1454-1465, 1483-1513 (`_real_mount_ns()` and the two new tests) | severity=MAJOR | confidence=3\n  PROBLEM: The two new tests silently skip when the host cannot create a mount namespace. On Ubuntu 24.04 runners `kernel.apparmor_restrict_unprivileged_userns` gates `unshare --user --map-root-user --mount`. CI then records SKIPPED rather than FAILED, so a revert of `-xtype s` to `-type s` would still produce a green run. The existing tests at lines 1381-1445 cannot catch it either, because `FAKE_MOUNT_ACTIONS[\"mask\"]` replaces the socket with a regular file.\n  WHY: The regression makes every validation on `main` fail with `selfcheck probe_failed`. If the fix is reverted without the tests catching it, validation regresses without CI noticing.\n- HARDENING: tests/test_validation_harness_sandbox.py next to line 1387 \u2014 add a static test asserting `'! -type l -xtype s ! -path \"$2/docker.sock\" -print -quit'` is in `_function_body(\"as_sandbox_in_pidns\")` and `'! -type l -xtype s ! -path \"${rt}/docker.sock\"'` is in `_pidns_probe()` (about 5 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- HARDENING: tests/test_validation_harness_sandbox.py near `test_the_namespace_masks_the_user_manager_sockets_before_the_drop` \u2014 add assertions in the existing contract tests that the launcher recheck and the namespace probe both use `! -type l -xtype s`, since the real bind-mount tests skip when no mount namespace is available (about 6 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8194ca9bf26b44cdd507b58375b78de9b4db64697e06dd075172e5dd01c8d8b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7405,
+    "run_id": "38665383967",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38665383967",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015015430_d9826870a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7405,
+    "run_id": "38665383967"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-15T01:54:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
