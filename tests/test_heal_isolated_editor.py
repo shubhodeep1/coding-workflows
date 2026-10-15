@@ -346,6 +346,35 @@ def test_evidence_redacts_credentials_and_cannot_close_its_fence(tmp_path: Path)
 	assert not list(tmp_path.glob("heal-evidence.*"))
 
 
+def test_evidence_accepts_a_body_edited_only_by_the_pipeline(tmp_path: Path) -> None:
+	# #7444: the plan gate's grant edits the body; the evidence collector must
+	# accept the same pipeline-only edit history the implement preflight accepts.
+	if not shutil.which("jq"):
+		pytest.skip("jq is required by the evidence collector")
+	live = _heal_live_issue(_SCOPE_MARKER)
+	issue = live["data"]["repository"]["issue"]
+	issue["lastEditedAt"] = "2026-10-15T00:00:00Z"
+	issue["userContentEdits"] = {"totalCount": 1, "pageInfo": {"hasNextPage": False},
+		"nodes": [{"editor": {"login": "pipeline"}, "deletedAt": None, "diff": issue["body"]}]}
+	state = {"login": "pipeline", "live": live, "jobs": [{"id": 9001, "name": "implement", "conclusion": "failure"}], "logs": {"9001": "##[error]boom\n"}}
+	out = tmp_path / "evidence.md"
+	base_env = _fake_gh_env(tmp_path, state)
+	base_env.update(GITHUB_REPOSITORY="owner/repo", ISSUE_NUMBER="42", RUNNER_TEMP=str(tmp_path), HEAL_EVIDENCE_FILE=str(out), WORKFLOW_HEAL_PY=str(ROOT / "scripts/workflow_failure_heal.py"))
+	result = subprocess.run(["bash", str(ROOT / "scripts/workflow_failure_heal_evidence.sh")], env=base_env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=written" in result.stdout and "boom" in out.read_text()
+	issue["userContentEdits"]["nodes"][0]["editor"]["login"] = "maintainer"
+	(tmp_path / "gh-state.json").write_text(json.dumps(state))
+	result = subprocess.run(["bash", str(ROOT / "scripts/workflow_failure_heal_evidence.sh")], env=base_env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "scope_unverified" in out.read_text()
+	issue["userContentEdits"]["nodes"][0]["editor"]["login"] = "pipeline"
+	(tmp_path / "gh-state.json").write_text(json.dumps(state))
+	result = subprocess.run(["bash", str(ROOT / "scripts/workflow_failure_heal_evidence.sh")], env=dict(base_env, HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED="false"), capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "scope_unverified" in out.read_text()
+
+
 def test_preflight_scope_ignores_files_touched_in_issue_and_evidence(tmp_path: Path) -> None:
 	if not shutil.which("jq"):
 		pytest.skip("jq is required by the heal preflight")

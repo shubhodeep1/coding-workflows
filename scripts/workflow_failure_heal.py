@@ -2643,6 +2643,57 @@ def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | Non
 	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
 
 
+# Pipeline-only edits of a heal issue body (unblock fix-up #7444 for #7434).
+# The plan gate's Q108 grant (or the poller's) PATCHes the issue body, which
+# sets lastEditedAt and made verify_heal_scope report `edited` for every heal
+# issue whose plan touched an automation path. With
+# HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED on, the implement preflight reads the
+# body's edit history and accepts the scope only when every revision was
+# written by the pipeline login and carries the identical scope marker.
+HEAL_SCOPE_EDIT_DETAILS = ("edit_history_unavailable", "edit_history_redacted", "editor_untrusted", "marker_changed")
+
+
+def verify_heal_scope_pipeline_edits(*, body: str, author_login: str, labels: Iterable[str], pipeline_login: str,
+	edits: Any, edits_total: Any, edits_has_next_page: Any) -> dict[str, Any]:
+	"""verify_heal_scope for a body edited only by the pipeline login.
+
+	``edits`` are the issue body's GraphQL ``userContentEdits`` nodes
+	(``editor{login} deletedAt diff``). GitHub returns each revision's full
+	body text in ``diff``; the check requires the verified marker, exactly
+	once, in every revision. If ``diff`` ever held only a delta, the marker
+	comparison would fail and the scope would be refused (fail closed), never
+	accepted. Any incomplete, redacted or foreign history is refused.
+	"""
+	base = verify_heal_scope(body=body, author_login=author_login, last_edited_at=None, labels=labels, pipeline_login=pipeline_login)
+	if base["status"] != "verified":
+		return base
+
+	def refused(detail: str) -> dict[str, Any]:
+		return {"status": "edited", "detail": detail, "paths": [], "runs": [], "marker": ""}
+
+	if not isinstance(edits, list) or not edits or edits_has_next_page is not False \
+		or type(edits_total) is not int or edits_total != len(edits):
+		return refused("edit_history_unavailable")
+	if any(not isinstance(node, dict) for node in edits):
+		return refused("edit_history_unavailable")
+	if any(node.get("deletedAt") is not None for node in edits):
+		return refused("edit_history_redacted")
+	expected = pipeline_login.casefold()
+	for node in edits:
+		editor = node.get("editor")
+		login = editor.get("login") if isinstance(editor, dict) else None
+		if not isinstance(login, str) or not login or login.casefold() != expected:
+			return refused("editor_untrusted")
+	for node in edits:
+		diff = node.get("diff")
+		if not isinstance(diff, str) or len(re.findall(r"ai:workflow-heal-scope", diff, re.IGNORECASE)) != 1:
+			return refused("marker_changed")
+		match = HEAL_SCOPE_RE.search(diff)
+		if not match or match.group() != base["marker"]:
+			return refused("marker_changed")
+	return dict(base, pipeline_edits=len(edits))
+
+
 # Heal-scope recovery (#7191, unblock fix-up for #7082). A pipeline-authored
 # heal issue filed without an ai:workflow-heal-scope:v1 marker cannot pass the
 # implement preflight, and retrying cannot make its body verifiable. With
@@ -5145,6 +5196,13 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 		result = check_heal_scope_marker_file(args.marker_file)
 		_write_json(result)
 		return 0 if result["status"] == "valid" else 1
+	elif args.operation == "verify-edits":
+		data = _load_json_file(args.input_json)
+		if not isinstance(data, dict):
+			raise ValueError("invalid verify-edits input")
+		_write_json(verify_heal_scope_pipeline_edits(body=data.get("body") or "", author_login=data.get("author_login") or "",
+			labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or "", edits=data.get("edits"),
+			edits_total=data.get("edits_total"), edits_has_next_page=data.get("edits_has_next_page")))
 	elif args.operation == "verify":
 		data = _load_json_file(args.input_json)
 		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
@@ -5695,7 +5753,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_route)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests", "check-marker"))
+	p.add_argument("operation", choices=("render", "verify", "verify-edits", "carry", "strip", "failing-tests", "check-marker"))
 	p.add_argument("--log-files", nargs="*")
 	p.add_argument("--marker-file", default="")
 	p.add_argument("--input-json", default="")

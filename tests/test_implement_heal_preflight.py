@@ -39,6 +39,11 @@ if args[:2] == ["api", "user"]:
 		sys.exit(1)
 	print(state.get("login", "pipeline"))
 	sys.exit(0)
+if args[:2] == ["api", "graphql"] and any("userContentEdits" in arg for arg in args):
+	if state.get("edits_fail"):
+		sys.exit(1)
+	print(json.dumps(state["edits_live"]))
+	sys.exit(0)
 if args[:2] == ["api", "graphql"]:
 	if state.get("graphql_fails"):
 		sys.exit(1)
@@ -272,7 +277,9 @@ def test_invalid_issue_payload_is_refused(tmp_path: Path) -> None:
 
 @needs_jq
 def test_verify_status_is_passed_through_without_detail(tmp_path: Path) -> None:
-	result, env_file, calls = _run(tmp_path, {"live": _live_issue(edited=True)})
+	# With HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED on (the default) an edited body
+	# first gets an edit-history check (#7444); off, the status passes through.
+	result, env_file, calls = _run(tmp_path, {"live": _live_issue(edited=True)}, extra_env={"HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED": "false"})
 	_assert_refused(result, env_file, calls, "edited", None)
 
 
@@ -362,3 +369,79 @@ def test_support_without_own_repository_is_refused(tmp_path: Path) -> None:
 	decoy_sha = _make_decoy_workspace(tmp_path)
 	result, env_file, calls = _run(tmp_path, {"live": _live_issue()}, script_ref=decoy_sha)
 	_assert_refused(result, env_file, calls, "unavailable", "support_not_repository")
+
+
+# --- #7444: an edited heal body is accepted when only the pipeline edited it ---
+
+GRANT_SUFFIX = "\n---\n<!-- ai:pipeline-plan-grant:v1 -->\nfiles_touched:\n  - scripts/fix.py\n"
+
+
+def _edits_live(editors: list[str] | None = None, *, marker: str = SCOPE_MARKER) -> dict:
+	issue = _live_issue(edited=True)["data"]["repository"]["issue"]
+	body = issue["body"] + GRANT_SUFFIX
+	original = "Heal this.\n" + marker + "\n"
+	editors = editors or ["pipeline", "pipeline"]
+	nodes = [{"editor": {"login": editors[0]}, "deletedAt": None, "diff": body}]
+	nodes += [{"editor": {"login": login}, "deletedAt": None, "diff": original} for login in editors[1:]]
+	return {"data": {"repository": {"issue": dict(issue, body=body, userContentEdits={"totalCount": len(nodes), "pageInfo": {"hasNextPage": False}, "nodes": nodes})}}}
+
+
+def _edited_state(**extra) -> dict:
+	return dict({"live": _live_issue(edited=True), "edits_live": _edits_live()}, **extra)
+
+
+def _graphql_calls(calls: Path) -> list[str]:
+	return [line for line in calls.read_text().splitlines() if line.startswith("api graphql")]
+
+
+@needs_jq
+def test_pipeline_only_edits_are_accepted(tmp_path: Path) -> None:
+	sha = _make_support(tmp_path)
+	result, env_file, calls = _run(tmp_path, _edited_state(), script_ref=sha)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED issue=42 edits=2" in result.stdout
+	assert "HEAL_SCOPE_REFUSED" not in result.stdout
+	env_text = env_file.read_text()
+	assert "HEAL_ROUTE=true" in env_text
+	assert "SKIP_IMPLEMENT=true" not in env_text
+	assert (tmp_path / "heal-scope-91.txt").read_text().split() == ["scripts/fix.py", "tests/**", "changelog.d/*.md"]
+	assert len(_graphql_calls(calls)) == 2
+
+
+@needs_jq
+def test_edit_by_another_account_is_refused(tmp_path: Path) -> None:
+	result, env_file, calls = _run(tmp_path, _edited_state(edits_live=_edits_live(["pipeline", "maintainer"])))
+	_assert_refused(result, env_file, calls, "edited", "editor_untrusted")
+	assert "HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED" not in result.stdout
+
+
+@needs_jq
+def test_changed_marker_in_history_is_refused(tmp_path: Path) -> None:
+	other = SCOPE_MARKER.replace("scripts/fix.py", "scripts/other.py")
+	result, env_file, calls = _run(tmp_path, _edited_state(edits_live=_edits_live(marker=other)))
+	_assert_refused(result, env_file, calls, "edited", "marker_changed")
+
+
+@needs_jq
+def test_edit_history_read_failure_is_refused(tmp_path: Path) -> None:
+	result, env_file, calls = _run(tmp_path, _edited_state(edits_fail=True))
+	_assert_refused(result, env_file, calls, "edited", "edit_history_unavailable")
+
+
+@needs_jq
+def test_flag_off_keeps_the_edited_refusal_without_a_history_read(tmp_path: Path) -> None:
+	for value in ("false", "FALSE"):
+		result, env_file, calls = _run(tmp_path, _edited_state(), extra_env={"HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED": value})
+		_assert_refused(result, env_file, calls, "edited", None)
+		assert not any("userContentEdits" in line for line in _graphql_calls(calls))
+		calls.write_text("")
+		env_file.write_text("")
+
+
+@needs_jq
+def test_invalid_flag_warns_and_refuses(tmp_path: Path) -> None:
+	result, env_file, calls = _run(tmp_path, _edited_state(), extra_env={"HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED": "maybe"})
+	_assert_refused(result, env_file, calls, "edited", None)
+	assert "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" in result.stdout
+	assert "maybe" not in result.stdout
+	assert not any("userContentEdits" in line for line in _graphql_calls(calls))
