@@ -858,7 +858,7 @@ HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
 
 
 def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
-	issue_number: str) -> tuple[dict, int]:
+	issue_number: str, allow_workflow_edits: str = "false") -> tuple[dict, int]:
 	"""Approve a heal plan only inside its verified heal scope; every error holds."""
 	protected: list[str] = []
 	denied: list[str] = []
@@ -874,6 +874,9 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_check_unavailable", protected
 		elif protected and not _flag_enabled(flag_value):
 			decision, reason, denied = PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+		elif protected and allow_workflow_edits != "true":
+			# Same switch check_automation_paths applies at implement time.
+			decision, reason, denied = PLAN_DECISION_HOLD, "workflow_edits_disabled", protected
 		elif _plan_files_section(plan_text) is None or (not files and not protected):
 			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
 		else:
@@ -888,7 +891,10 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					raw_tokens.append(bullet.group(1))
 				for raw in raw_tokens:
 					token = normalize_path(_plan_path_token(raw.strip()))
-					if "/" in token and (token.endswith("/") or any(char in token for char in _GLOB_CHARS)):
+					# Also keep nested tokens _plan_grant_path rejects (an
+					# extensionless `docs/guide`) so the scope check sees them.
+					if "/" in token and (token.endswith("/") or any(char in token for char in _GLOB_CHARS)
+						or ("`" not in token and not _plan_grant_path(token))):
 						loose.append(token)
 			candidates: list[str] = []
 			for path in files + protected + loose:
@@ -952,7 +958,7 @@ def main(argv: list[str] | None = None) -> int:
 	args = parser.parse_args(argv)
 	if args.plan_auto_approval_gate and args.heal_scope_file:
 		record, code = run_heal_plan_scope_gate(args.plan_file, args.heal_scope_file, args.flag_enabled,
-			args.issue_number)
+			args.issue_number, args.allow_workflow_edits)
 		sys.stdout.write(json.dumps(record) + "\n")
 		return code
 	if args.plan_auto_approval_gate:

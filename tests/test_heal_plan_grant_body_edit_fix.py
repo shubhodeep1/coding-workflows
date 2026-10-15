@@ -95,7 +95,7 @@ def test_verify_edits_cli_round_trip(tmp_path: Path) -> None:
 SCOPE = "scripts/fix.py\n.github/workflows/plan.yml\ntests/**\nchangelog.d/*.md\n"
 
 
-def _gate(tmp_path: Path, plan: str, *, scope: str = SCOPE, flag: str = "true") -> tuple[dict, int, Path]:
+def _gate(tmp_path: Path, plan: str, *, scope: str = SCOPE, flag: str = "true", allow_edits: str = "true") -> tuple[dict, int, Path]:
 	plan_file = tmp_path / "plan.txt"
 	plan_file.write_text(plan, encoding="utf-8")
 	scope_file = tmp_path / "scope.txt"
@@ -103,7 +103,8 @@ def _gate(tmp_path: Path, plan: str, *, scope: str = SCOPE, flag: str = "true") 
 	grant_out = tmp_path / "grant-body.txt"
 	result = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/files_touched_scope_guard.py"),
 		"--plan-auto-approval-gate", "--plan-file", str(plan_file), "--heal-scope-file", str(scope_file),
-		"--flag-enabled", flag, "--issue-number", "42", "--pipeline-grant-body-out", str(grant_out)],
+		"--flag-enabled", flag, "--allow-workflow-edits", allow_edits, "--issue-number", "42",
+		"--pipeline-grant-body-out", str(grant_out)],
 		capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
 	return json.loads(result.stdout), result.returncode, grant_out
 
@@ -134,6 +135,19 @@ def test_gate_holds_directory_and_glob_entries(tmp_path: Path) -> None:
 	record, _, _ = _gate(tmp_path, _plan("scripts/fix.py", "tests/**"))
 	assert record["reason"] == "heal_scope_plan_out_of_scope"
 	assert "tests/**" in record["denied_paths"]
+
+
+def test_gate_holds_extensionless_nested_path(tmp_path: Path) -> None:
+	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py", "docs/guide"))
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
+	assert "docs/guide" in record["denied_paths"]
+
+
+def test_gate_respects_allow_workflow_edits(tmp_path: Path) -> None:
+	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py"), allow_edits="false")
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "workflow_edits_disabled"
+	record, code, _ = _gate(tmp_path, _plan("tests/test_fix.py", "changelog.d/1-fix.md"), allow_edits="false")
+	assert code == 0 and record["reason"] == "heal_scope_verified"
 
 
 def test_gate_holds_plan_without_files_section(tmp_path: Path) -> None:

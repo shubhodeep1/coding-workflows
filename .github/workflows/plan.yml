@@ -2641,7 +2641,7 @@ jobs:
                   plan_gate_result='{"reason":"heal_scope_unverified"}'
                   if printf '%s' "${plan_gate_heal_verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
                     && printf '%s' "${plan_gate_heal_verified}" | jq -r '.paths[]' > "${plan_gate_heal_scope}" 2>/dev/null; then
-                    plan_gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate --plan-file "${plan_gate_file}" --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" --heal-scope-file "${plan_gate_heal_scope}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true)"
+                    plan_gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate --plan-file "${plan_gate_file}" --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" --heal-scope-file "${plan_gate_heal_scope}" --allow-workflow-edits "${plan_gate_allow_edits}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true)"
                   fi
                 fi
                 rm -f "${plan_gate_heal_scope}"
