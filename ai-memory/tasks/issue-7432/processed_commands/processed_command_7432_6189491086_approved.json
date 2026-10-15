@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7432_6189491086_approved",
   "issue_number": 7432,
   "metadata": {
+    "branch": "ai/issue-7432",
+    "changed_files": [
+      ".github/actions/claude-pool-token/package.json",
+      "changelog.d/7432-claude-pool-token-commonjs.md",
+      "tests/test_claude_pool_token.py"
+    ],
+    "issue_number": 7432,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7432",
+    "pr_number": 7433,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7433",
+    "run_attempt": "1",
+    "run_id": "38717363825",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38717363825"
   },
   "run_attempt": 1,
   "run_id": "38717363825",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-15T10:05:14Z",
+  "status": "completed",
+  "timestamp": "2026-10-15T10:26:30Z",
   "workflow": "implement"
 }
