@@ -9,15 +9,18 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 ORCHESTRATE_YML = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 STABLE_YML = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
-FRAGMENT = REPO_ROOT / "agents.d" / "7355-dead-values-cleanup.md"
 
 LOG_KEY = "BRANCH_REBUILD_THRESHOLD_DECISION"
 
@@ -84,9 +87,13 @@ def test_bait_injection_drops_blob_content() -> None:
 
 
 def test_agents_fragment_registers_log_prefix() -> None:
-    text = FRAGMENT.read_text(encoding="utf-8")
-    marker = '<!-- agents: section="Stable log prefixes (contractual)" -->'
-    assert marker in text
-    tail = text.split(marker, 1)[1]
-    assert f"- `{LOG_KEY}`" in tail
-    assert f"LOG_PREFIX.name={LOG_KEY}" in tail
+    # Read agents.md with pending agents.d/ fragments folded in, so the check
+    # holds both before and after the release fold deletes the fragment.
+    text = _agents_text_with_fragments()
+    heading = "## Stable log prefixes (contractual)"
+    assert heading in text
+    section = text.split(heading, 1)[1]
+    if "\n## " in section:
+        section = section.split("\n## ", 1)[0]
+    assert f"- `{LOG_KEY}`" in section
+    assert f"LOG_PREFIX.name={LOG_KEY}" in section
