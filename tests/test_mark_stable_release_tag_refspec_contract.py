@@ -1274,19 +1274,6 @@ def test_ci_lint_job_keeps_its_check_run_name() -> None:
 	)
 
 
-def main() -> None:
-	# Failures surface via uncaught AssertionError → Python's default non-zero
-	# exit; on full success we just print and return None.
-	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-	for test in tests:
-		test()
-	print(f"{len(tests)} passed")
-
-
-if __name__ == "__main__":
-	main()
-
-
 def test_full_clone_release_jobs_have_room_for_the_checkout() -> None:
 	# A 2-minute resolve-version timeout cancelled a release mid-clone after
 	# stable had already moved (test-and-mark-stable run 38717659089).
@@ -1302,3 +1289,16 @@ def test_full_clone_release_jobs_have_room_for_the_checkout() -> None:
 			)
 			if full_clone:
 				assert job.get("timeout-minutes", 360) >= 10, f"{name} jobs.{job_name}: a full clone needs timeout-minutes >= 10"
+
+
+def main() -> None:
+	# Failures surface via uncaught AssertionError → Python's default non-zero
+	# exit; on full success we just print and return None.
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+
+
+if __name__ == "__main__":
+	main()
