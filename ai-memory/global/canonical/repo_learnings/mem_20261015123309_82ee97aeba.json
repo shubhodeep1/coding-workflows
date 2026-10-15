@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "When a consumer's workflows are deliberately disabled, preserve its registration and leave the health-check machinery unchanged unless the requested scope explicitly says otherwise. The existing daily consumer health check can close the notice after an operator restores the workflows.",
+  "fingerprint": "c050361fcd99c776f611bfd5f5b1fc30af4e5904c5d5e3bbc41197ddfce54547",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38735094404",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38735094404",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7417",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7418",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7426",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7427",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7422",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7428",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7431",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7433"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261015123309_82ee97aeba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Consumer health notices do not necessarily mean a repository should be retired or its registration changed.",
+  "timestamps": {
+    "created_at": "2026-10-15T12:33:09Z",
+    "promoted_at": "2026-10-15T12:34:25Z",
+    "superseded_at": null
+  }
+}
