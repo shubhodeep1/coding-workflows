@@ -109,10 +109,10 @@ jobs:
       WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
       WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
       WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
-      # Heal issue creation gate (#6798 / #6871): 'false' (default) files no heal
-      # issue except a verified heal-scope recovery replacement (see below);
-      # 'true' files one only after its scope marker verifies.
-      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}
+      # Heal issue creation gate (#6798 / #6871): 'true' (default) files a heal
+      # issue only after its scope marker verifies; 'false' files none except a
+      # verified heal-scope recovery replacement (see below).
+      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'true' }}
       # Heal-scope recovery (#7191, #7323): on by default. A verified-identity
       # report replaces an open heal issue that has no scope marker instead of
       # recording a duplicate, also while the creation gate above is off; the
@@ -366,7 +366,7 @@ jobs:
       WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
       WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
       WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
-      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}
+      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'true' }}
       HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
       HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}
       HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}

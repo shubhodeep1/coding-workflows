@@ -783,11 +783,11 @@ switch: `WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED` (default `true`, wired in
 skip and heal issues for the other two reasons.
 
 Workflow failure heal issue creation is gated by
-`HEAL_INTAKE_SCOPE_GUARD_ENABLED` (default `false`, #6871). While it is off,
+`HEAL_INTAKE_SCOPE_GUARD_ENABLED` (default `true`, unset or empty also on, #6871). While it is off (any other value),
 the intake composes the heal issue, logs
 `WORKFLOW_HEAL skip reason=scope_guard_disabled` and files no issue or outcome
 comment (the `ai:workflow-heal` / `ai:workflow-heal-escalated` labels in this
-repository are still ensured, as for every report). When it is `true`, the composed body's
+repository are still ensured, as for every report). When it is on, the composed body's
 `ai:workflow-heal-scope:v1` marker must pass `heal-scope verify` before
 `gh issue create`; a missing or invalid marker logs
 `reason=scope_marker_unverified`, sends a CRITICAL alert and fails the run.
@@ -1083,8 +1083,8 @@ scope marker with `workflow_failure_heal.py heal-scope check-marker` (the
 implement-side parser and shape rules, 8 KiB read cap, no symlinks). A
 missing or invalid marker files nothing: it logs
 `WORKFLOW_HEAL skip reason=scope_marker_unresolved ... status=<status>`, sends
-a CRITICAL alert and fails the run, so the next report of the fingerprint
-retries. Only `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED=false` (script
+a CRITICAL alert and fails the run (a run-less report skips quietly, #7424), so
+the next report of the fingerprint retries. Only `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED=false` (script
 environment) restores filing. The conflict resolver's nameless
 `sandbox_path_unsupported` stop is now preceded by one
 `::error::Conflict resolver: conflicted path(s) cannot enter the sandbox:
