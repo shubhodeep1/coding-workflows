@@ -158,9 +158,18 @@ def test_gate_ignores_bold_prose_bullets(tmp_path: Path) -> None:
 
 def test_gate_reads_bold_backticked_bullets_once(tmp_path: Path) -> None:
 	plan = ("Implementation Plan\n\n## Files likely to change\n- **`scripts/fix.py`** — change X\n"
-		"- *Optional:* `tests/test_fix.py`\n- *Optional* note\n\n## Risks\n- none\n")
+		"- *Optional:* `tests/test_fix.py`\n\n## Risks\n- none\n")
 	record, code, _ = _gate(tmp_path, plan)
 	assert code == 0 and record["reason"] == "heal_scope_verified", record
+
+
+def test_gate_holds_bare_italic_shaped_glob(tmp_path: Path) -> None:
+	# `*foo*` is both italic markdown and a glob; the gate checks it (fail closed).
+	for word in ("*foo*", "*data-*"):
+		plan = "Implementation Plan\n\n## Files likely to change\n- `scripts/fix.py`\n- " + word + "\n\n## Risks\n- none\n"
+		record, code, _ = _gate(tmp_path, plan)
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope", record
+		assert word in record["denied_paths"]
 
 
 def test_gate_holds_bare_root_level_glob(tmp_path: Path) -> None:

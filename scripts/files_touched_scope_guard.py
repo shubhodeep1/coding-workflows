@@ -856,7 +856,6 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 # route's commit check uses (strict: no lockfile allowance). No body is written.
 HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
 _HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
-_HEAL_ITALIC_RE = re.compile(r"\*[A-Za-z0-9_-]+\*")
 
 
 def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
@@ -903,10 +902,11 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					if not token:
 						continue
 					globlike = token.endswith("/") or any(char in token for char in _GLOB_CHARS)
-					# A bare root-level glob (`- *.py`) counts; italic prose
-					# (`*Optional*`) or a word with prose punctuation does not.
+					# A bare root-level glob (`- *.py`, `- *foo*`) counts; a word
+					# with prose punctuation (`*Optional:*`) does not. An
+					# italic-shaped word is ambiguous, so it is checked (fail closed).
 					if globlike and not backticked and "/" not in token \
-						and (not _HEAL_BARE_GLOB_RE.fullmatch(token) or _HEAL_ITALIC_RE.fullmatch(token)):
+						and not _HEAL_BARE_GLOB_RE.fullmatch(token):
 						continue
 					# Also keep nested tokens _plan_grant_path rejects (an
 					# extensionless `docs/guide`) so the scope check sees them.
