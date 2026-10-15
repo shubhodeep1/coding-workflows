@@ -50,14 +50,14 @@ def test_auto_approve_step_uses_safe_issue_state_fetch() -> None:
 	assert 'if gh api "$@" > "${_tmpf}"; then' in block
 	assert '_tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1' not in block
 	assert 'if gh api "$@" > "${_tmpf}" 2>/dev/null; then' not in block
-	assert 'CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"' in block
+	assert 'CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" 2>/dev/null)"' in block
 	assert 'CURRENT_STATE="$(printf \'%s\' "${CURRENT_ISSUE_JSON}" | jq -er' in block
 	assert '.user.type == "User"' in block
 	assert '.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")' in block
 	assert '.user.type == "Bot" and .user.login == "github-actions[bot]"' in block
 	assert '|| echo "open"' not in block
 	assert (
-		'CURRENT_STATE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" '
+		'CURRENT_STATE="$(gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" '
 		'--jq \'.state // "open"\' 2>/dev/null || echo "open")"'
 	) not in block
 
@@ -68,7 +68,7 @@ def test_auto_approve_step_preserves_outputs_and_comment_payload() -> None:
 	assert 'echo "auto_approved=false" >> "$GITHUB_OUTPUT"' in block
 	assert 'if [ "${CURRENT_STATE}" = "closed" ]; then' in block
 	assert 'echo "auto_approved=true" >> "$GITHUB_OUTPUT"' in block
-	assert 'gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \\' in block
+	assert 'gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \\' in block
 	assert "-f body=$'/approved [auto-approved-by-plan]\\n\\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'" in block
 	assert 'echo "AUTO_IMPLEMENT_ON_CLEAR_PLAN disabled; skipping auto-approval comment."' in block
 
@@ -76,7 +76,10 @@ def test_auto_approve_step_preserves_outputs_and_comment_payload() -> None:
 def _auto_approve_script() -> str:
 	workflow = yaml.safe_load(_workflow_text())
 	step = next(step for step in workflow["jobs"]["plan"]["steps"] if step.get("name") == "Auto-approve clear plan")
-	return step["run"].replace("${{ github.repository }}", "owner/repo")
+	# The repository reaches the body through the step's PLAN_STEP_REPO env
+	# (no expression in the run: body); _run_auto_approve sets it.
+	assert "${{" not in step["run"]
+	return step["run"]
 
 
 def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: bool = False,
@@ -143,6 +146,7 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			env.pop(name, None)
 		env.update({
 			"GITHUB_OUTPUT": str(output_path),
+			"PLAN_STEP_REPO": "owner/repo",
 			"ISSUE_NUMBER": "123",
 			"ISSUE_RESPONSE": issue if isinstance(issue, str) else json.dumps(issue),
 			"FETCH_FAIL": str(fetch_fails).lower(),

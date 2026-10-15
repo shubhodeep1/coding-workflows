@@ -22,14 +22,14 @@ case "$1 $2" in
   "workflow run")
     [ -z "${FAKE_DISPATCH_ERROR}" ] || { echo "${FAKE_DISPATCH_ERROR}" >&2; exit 1; }
     exit 0 ;;
-  "issue edit") exit 0 ;;
+  "issue edit") [ "${FAKE_EDIT_FAIL:-}" != true ] || exit 1; exit 0 ;;
 esac
 if [ "$1" = api ] && [ "$2" = --paginate ]; then printf '%s\n' "${FAKE_COMMENTS}"; exit 0; fi
 if [ "$1" = api ]; then
   case "$2" in
     */actions/workflows/internal-orchestrate.yml) [ -n "${FAKE_INTERNAL_STATE}" ] || exit 1; echo "${FAKE_INTERNAL_STATE}"; exit 0 ;;
     */actions/workflows/ai-orchestrate.yml) [ -n "${FAKE_CONSUMER_STATE}" ] || exit 1; echo "${FAKE_CONSUMER_STATE}"; exit 0 ;;
-    */comments) exit 0 ;;
+    */comments) [ "${FAKE_COMMENT_FAIL:-}" != true ] || exit 1; exit 0 ;;
     repos/owner/repo) echo main; exit 0 ;;
   esac
 fi
@@ -144,17 +144,56 @@ def test_a_released_split_may_split_again() -> None:
 	assert code == 3 and "reason=already_split" in out
 
 
-def test_failed_dispatch_holds_and_marks_nothing() -> None:
+def _comment_posts(calls: list[list[str]]) -> list[str]:
+	return [c[-1].split("=", 1)[1] for c in calls if c[0] == "api" and c[1] == "repos/owner/repo/issues/123/comments"]
+
+
+def test_the_issue_is_marked_before_the_dispatch() -> None:
+	# The orchestrator run links (or releases) only an issue that already
+	# carries the label, so the label and marker land before the dispatch.
+	_, _, calls = _run()
+	kinds = [("edit" if c[:2] == ["issue", "edit"] else "comment" if c[:2] == ["api", "repos/owner/repo/issues/123/comments"]
+		else "dispatch" if c[:2] == ["workflow", "run"] else None) for c in calls]
+	kinds = [k for k in kinds if k]
+	assert kinds == ["edit", "comment", "dispatch"], kinds
+
+
+def test_rejected_dispatch_releases_the_split_and_holds() -> None:
 	for error, reason in (
 		("could not create workflow dispatch event: HTTP 422: Unexpected inputs provided: [\"tracking_comment\"]",
 			"wrapper_without_tracking_comment"),
-		("HTTP 500", "dispatch_failed"),
+		("could not create workflow dispatch event: HTTP 404: Not Found", "dispatch_failed"),
 	):
 		code, out, calls = _run(dispatch_error=error)
 		assert code == 3 and f"reason={reason}" in out, out
 		assert len(_dispatches(calls)) == 1  # never retried: a retry could start a second project
-		assert not any(c[0] == "api" and c[1].endswith("/comments") and "-f" in c for c in calls)
-		assert not any(c[:2] == ["issue", "edit"] for c in calls)
+		edits = [c for c in calls if c[:2] == ["issue", "edit"]]
+		assert len(edits) == 2 and edits[1][edits[1].index("--remove-label") + 1] == "ai:split-to-project"
+		assert edits[1][edits[1].index("--add-label") + 1] == "ai:awaiting-approval"
+		posts = _comment_posts(calls)
+		assert len(posts) == 2 and posts[1].startswith("<!-- ai:plan-split-released:v1 issue=123 -->")
+		# The release marker follows the label removal.
+		assert calls.index(edits[1]) < next(i for i, c in enumerate(calls) if c[-1] == "body=" + posts[1])
+
+
+def test_unconfirmed_dispatch_keeps_the_split() -> None:
+	# A failure without an HTTP 4xx status may have started a project: the
+	# label stays (no /approved, no second split) and a person is asked.
+	code, out, calls = _run(dispatch_error="Post https://api.github.com/...: net/http: timeout")
+	assert code == 0 and "outcome=dispatch_unconfirmed" in out, out
+	assert len(_dispatches(calls)) == 1
+	assert len([c for c in calls if c[:2] == ["issue", "edit"]]) == 1
+	posts = _comment_posts(calls)
+	assert len(posts) == 2 and posts[1].startswith("<!-- ai:plan-split-released:v1 issue=123 -->")
+
+
+def test_failed_marking_holds_without_dispatch() -> None:
+	code, out, calls = _run(extra_env={"FAKE_EDIT_FAIL": "true"})
+	assert code == 3 and "reason=label_failed" in out and _dispatches(calls) == [], out
+	code, out, calls = _run(extra_env={"FAKE_COMMENT_FAIL": "true"})
+	assert code == 3 and "reason=marker_failed" in out and _dispatches(calls) == [], out
+	edits = [c for c in calls if c[:2] == ["issue", "edit"]]
+	assert len(edits) == 2 and edits[1][edits[1].index("--remove-label") + 1] == "ai:split-to-project"
 
 
 # --- poller: close the source issue when the project completes (Q152) -------
@@ -250,6 +289,8 @@ def test_orchestrate_releases_the_source_only_before_a_tracking_issue_exists() -
 	assert release["continue-on-error"] is True
 	assert "<!-- ai:plan-split-released:v1 issue=${source_issue} -->" in release["run"]
 	assert '--remove-label "ai:split-to-project"' in release["run"]
+	# Label off before the release marker (the dispatcher checks the label first).
+	assert release["run"].index('--remove-label "ai:split-to-project"') < release["run"].index("ai:plan-split-released:v1")
 
 
 def main() -> int:

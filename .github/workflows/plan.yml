@@ -2485,6 +2485,9 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
+          # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
+          # (tests/test_workflow_file_size_limit.py expression guard).
+          PLAN_STEP_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2512,7 +2515,7 @@ jobs:
           # Re-check state and the original author's provenance in the same
           # live response. A closed issue (including smoke cleanup), an
           # untrusted author, or an inconclusive read cannot auto-approve.
-          if ! CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
+          if ! CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
             echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=issue_lookup_failed outcome=defer issue=${ISSUE_NUMBER}"
             exit 0
           fi
@@ -2545,7 +2548,7 @@ jobs:
             path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
             paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
             echo "automation_path_hold=true" >> "$GITHUB_OUTPUT"
-            if comments_json="$(gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
+            if comments_json="$(gh_retry gh api --paginate "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
               duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${ISSUE_NUMBER}" --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" '
                 def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
                 def event_key: [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
@@ -2593,7 +2596,7 @@ jobs:
               echo "::warning::Could not render the automation-path hold comment for issue #${ISSUE_NUMBER}."
               return 0
             fi
-            if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+            if ! gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
               echo "::warning::Could not post the automation-path hold comment for issue #${ISSUE_NUMBER}."
             fi
             if [ -f scripts/tg_helpers.sh ]; then
@@ -2601,7 +2604,7 @@ jobs:
               source scripts/tg_helpers.sh >/dev/null 2>&1 || true
             fi
             if type tg_send_msg >/dev/null 2>&1; then
-              tg_send_msg "Plan auto-approval withheld for issue #${ISSUE_NUMBER}: ${AUTOMATION_PATH_GATE_REASON} (${path_count} path(s))."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
+              tg_send_msg "Plan auto-approval withheld for issue #${ISSUE_NUMBER}: ${AUTOMATION_PATH_GATE_REASON} (${path_count} path(s))."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
             fi
             return 0
           }
@@ -2689,7 +2692,7 @@ jobs:
                 # write holds.
                 if [ "${plan_gate_decision}" = "approve" ] && printf '%s' "${plan_gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
                   if [ -s "${plan_gate_grant_body_file}" ] \
-                    && gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" -f body="$(cat "${plan_gate_grant_body_file}")" >/dev/null 2>&1; then
+                    && gh_retry gh api -X PATCH "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" -f body="$(cat "${plan_gate_grant_body_file}")" >/dev/null 2>&1; then
                     echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=written"
                   else
                     echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=failed reason=issue_body_write_failed"
@@ -2714,8 +2717,8 @@ jobs:
                 plan_split_issue_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_split_issue.XXXXXX")"
                 printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_split_issue_file}"
                 plan_split_rc=0
-                REPO="${{ github.repository }}" ISSUE_NUMBER="${ISSUE_NUMBER}" ISSUE_JSON_FILE="${plan_split_issue_file}" \
-                  PLAN_FILE="${plan_gate_file}" RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID:-}" \
+                REPO="${PLAN_STEP_REPO}" ISSUE_NUMBER="${ISSUE_NUMBER}" ISSUE_JSON_FILE="${plan_split_issue_file}" \
+                  PLAN_FILE="${plan_gate_file}" RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/actions/runs/${GITHUB_RUN_ID:-}" \
                   PLAN_PATH_COUNT="$(printf '%s' "${plan_gate_result}" | jq -r '.plan_path_count // 0' 2>/dev/null || echo 0)" \
                   bash scripts/plan_split_dispatch.sh || plan_split_rc=$?
                 rm -f "${plan_split_issue_file}"
@@ -2759,7 +2762,7 @@ jobs:
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.
               sleep 3
-              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \
                 -f body=$'/approved [auto-approved-by-plan]\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
               echo "auto_approved=true" >> "$GITHUB_OUTPUT"
               ;;

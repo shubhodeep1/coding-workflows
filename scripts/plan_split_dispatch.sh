@@ -24,9 +24,13 @@
 #   PLAN_SPLIT_MAX_DESCRIPTION_CHARS  default 60000 (dispatch input limit)
 #   RUN_URL                           this run, for the comments
 #
-# Exit status: 0 when a project was started (the caller must not hold the
-# plan), 3 when the plan should be held as before, 1 on a usage error.
-# Log prefix PLAN_SPLIT (outcome=dispatched|skipped reason=...).
+# Exit status: 0 when a project was started, or may have been (a dispatch
+# failure without an HTTP 4xx rejection; the issue keeps ai:split-to-project
+# and a WARNING asks a person to check), so the caller must not hold the
+# plan; 3 when the plan should be held as before, 1 on a usage error.
+# The issue is marked (label, then marker comment) before the dispatch, and
+# released (label off, then a release marker) when nothing was started.
+# Log prefix PLAN_SPLIT (outcome=dispatched|dispatch_unconfirmed|skipped reason=...).
 set -uo pipefail
 
 SPLIT_LABEL="ai:split-to-project"
@@ -140,49 +144,93 @@ The plan for #${ISSUE_NUMBER} lists ${path_count} files, more than one pipeline 
 EOF
 )"
 
-# No retry: a dispatch that timed out may still have started a project, and
-# a second one would implement the plan twice. A failure holds the plan.
-if ! gh workflow run "${wrapper}" --repo "${REPO}" --ref "${default_branch}" \
-	-f "project_description=${description}" -f engine=claude -f "tracking_comment=${tracking_comment}" \
-	>/dev/null 2>"${comments_file}.err"; then
-	if grep -q 'tracking_comment' "${comments_file}.err" 2>/dev/null; then
-		# A consumer whose @stable sync predates the tracking_comment input.
-		skip wrapper_without_tracking_comment "wrapper=${wrapper}"
-	fi
-	skip dispatch_failed "wrapper=${wrapper}"
-fi
-split_log "outcome=dispatched wrapper=${wrapper} paths=${path_count} chars=${#description}"
-
-# The project is running: from here on nothing holds the plan, since a human
-# /approved would implement the same work twice. Failures only warn.
-source_comment="$(cat <<EOF
-${SOURCE_MARKER_PREFIX}${ISSUE_NUMBER} wrapper=${wrapper} -->
-## Plan handed to the orchestrator
-
-This plan lists ${path_count} files, more than one pipeline grant covers (50), so instead of waiting for approval it was handed to the orchestrator as a project on the Claude engine (\`${wrapper}\`, ${RUN_URL:-plan run}). The project splits it into issues of at most 50 files, merges them on one integration branch and lands them together.
-
-The tracking issue is linked here once it exists. This issue stays open and is closed when the project completes.
-EOF
-)"
-if ! gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${source_comment}" >/dev/null 2>&1; then
-	echo "::warning::Could not post the plan-split comment on issue #${ISSUE_NUMBER}."
-fi
 if [ -f scripts/label_helpers.sh ]; then
 	# shellcheck disable=SC1091
 	source scripts/label_helpers.sh >/dev/null 2>&1 || true
-fi
-if type ensure_label_exists >/dev/null 2>&1; then
-	ensure_label_exists "${SPLIT_LABEL}" "${REPO}" >/dev/null 2>&1 || true
-fi
-if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --add-label "${SPLIT_LABEL}" \
-	--remove-label "ai:awaiting-approval" >/dev/null 2>&1; then
-	echo "::warning::Could not move issue #${ISSUE_NUMBER} from ai:awaiting-approval to ${SPLIT_LABEL}."
 fi
 if [ -f scripts/tg_helpers.sh ]; then
 	# shellcheck disable=SC1091
 	source scripts/tg_helpers.sh >/dev/null 2>&1 || true
 fi
-if type tg_send_msg >/dev/null 2>&1; then
-	tg_send_msg "Plan for issue #${ISSUE_NUMBER} lists ${path_count} files; handed to the orchestrator as a Claude project."$'\n'"Issue: ${issue_url}" "DEBUG" >/dev/null 2>&1 || true
+split_notify()
+{
+	if type tg_send_msg >/dev/null 2>&1; then
+		tg_send_msg "$1"$'\n'"Issue: ${issue_url}" "$2" >/dev/null 2>&1 || true
+	fi
+}
+
+# Undo the split marking when no project was started: the label comes off
+# first and the release marker follows only once it is off, so a label left
+# on the issue always means "split" and a later /reclarify never sees a
+# release marker the label check would ignore. Restores ai:awaiting-approval
+# so the plan stage's hold is what the issue shows.
+release_split()
+{
+	if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "${SPLIT_LABEL}" \
+		--add-label "ai:awaiting-approval" >/dev/null 2>&1; then
+		gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+			-f body="${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->"$'\n'"No orchestrator project was started for this plan ($1), so it is held for approval as before." \
+			>/dev/null 2>&1 || echo "::warning::Could not post the plan-split release marker on issue #${ISSUE_NUMBER}."
+	else
+		echo "::warning::Could not remove ${SPLIT_LABEL} from issue #${ISSUE_NUMBER} after $1; remove it by hand so the plan can be split again."
+	fi
+}
+
+# Mark the issue before the dispatch, so the orchestrator run (which links
+# its tracking issue on, or releases, only an issue carrying the label) and
+# a later plan run always see the split. A failed mark holds the plan.
+if type ensure_label_exists >/dev/null 2>&1; then
+	ensure_label_exists "${SPLIT_LABEL}" "${REPO}" >/dev/null 2>&1 || true
 fi
+if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --add-label "${SPLIT_LABEL}" \
+	--remove-label "ai:awaiting-approval" >/dev/null 2>&1; then
+	# The two label changes are separate writes; put the issue back as far
+	# as possible before holding.
+	gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "${SPLIT_LABEL}" \
+		--add-label "ai:awaiting-approval" >/dev/null 2>&1 || true
+	skip label_failed "wrapper=${wrapper}"
+fi
+source_comment="$(cat <<EOF
+${SOURCE_MARKER_PREFIX}${ISSUE_NUMBER} wrapper=${wrapper} -->
+## Plan handed to the orchestrator
+
+This plan lists ${path_count} files, more than one pipeline grant covers (50), so instead of waiting for approval it is handed to the orchestrator as a project on the Claude engine (\`${wrapper}\`, ${RUN_URL:-plan run}). The project splits it into issues of at most 50 files, merges them on one integration branch and lands them together.
+
+The tracking issue is linked here once it exists. This issue stays open and is closed when the project completes.
+EOF
+)"
+if ! gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${source_comment}" >/dev/null 2>&1; then
+	release_split "the plan-split comment could not be posted"
+	skip marker_failed "wrapper=${wrapper}"
+fi
+
+# No retry: a dispatch that timed out may still have started a project, and
+# a second one would implement the plan twice. A rejection GitHub reports
+# with an HTTP 4xx status started nothing: the split is released and the
+# plan held. Any other failure may have started a project, so the split
+# stays (no /approved, no new split) and a person is asked to check.
+if ! gh workflow run "${wrapper}" --repo "${REPO}" --ref "${default_branch}" \
+	-f "project_description=${description}" -f engine=claude -f "tracking_comment=${tracking_comment}" \
+	>/dev/null 2>"${comments_file}.err"; then
+	if grep -q 'tracking_comment' "${comments_file}.err" 2>/dev/null; then
+		# A consumer whose @stable sync predates the tracking_comment input.
+		release_split "the orchestrator wrapper has no tracking_comment input"
+		skip wrapper_without_tracking_comment "wrapper=${wrapper}"
+	fi
+	if grep -Eq 'HTTP 4[0-9][0-9]' "${comments_file}.err" 2>/dev/null; then
+		release_split "the dispatch of ${wrapper} was rejected"
+		skip dispatch_failed "wrapper=${wrapper}"
+	fi
+	split_log "outcome=dispatch_unconfirmed wrapper=${wrapper} paths=${path_count}"
+	echo "::warning::Dispatch of ${wrapper} for issue #${ISSUE_NUMBER} failed without a clear rejection; it may have started a project. The issue stays under ${SPLIT_LABEL}."
+	# The release marker lets a person re-split after removing the label;
+	# while the label stays, the label alone blocks a second project.
+	gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+		-f body="${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->"$'\n'"The dispatch of \`${wrapper}\` failed without a clear rejection, so a project may or may not have started (${RUN_URL:-plan run}). If no tracking issue is linked here, remove \`${SPLIT_LABEL}\` and comment \`/reclarify\` to plan it again." \
+		>/dev/null 2>&1 || echo "::warning::Could not post the unconfirmed-dispatch note on issue #${ISSUE_NUMBER}."
+	split_notify "Plan split for issue #${ISSUE_NUMBER}: dispatch of ${wrapper} failed without a clear rejection and may have started a project. Check its runs; if none started, remove ${SPLIT_LABEL} and comment /reclarify." "WARNING"
+	exit 0
+fi
+split_log "outcome=dispatched wrapper=${wrapper} paths=${path_count} chars=${#description}"
+split_notify "Plan for issue #${ISSUE_NUMBER} lists ${path_count} files; handed to the orchestrator as a Claude project." "DEBUG"
 exit 0

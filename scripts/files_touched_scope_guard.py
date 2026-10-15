@@ -829,8 +829,17 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
 			plan_paths = extract_plan_file_paths(plan_text)
 			if len(plan_paths) > PIPELINE_PLAN_GRANT_MAX_PATHS:
-				decision, reason = PLAN_DECISION_HOLD, PIPELINE_PLAN_TOO_LARGE_REASON
-				plan_path_count = len(plan_paths)
+				# The open grant hid the workflow-edits switch from the check
+				# above; a plan the implement guard would refuse anyway (for
+				# example workflow_edits_disabled) keeps that reason, so it is
+				# never handed to a project whose children would be blocked.
+				status, open_denied, open_reason = check_automation_paths(protected, grant, allow_workflow_edits,
+					issue_number)
+				if status != STATUS_IN_SCOPE:
+					decision, reason, denied = PLAN_DECISION_HOLD, open_reason, open_denied or protected
+				else:
+					decision, reason = PLAN_DECISION_HOLD, PIPELINE_PLAN_TOO_LARGE_REASON
+					plan_path_count = len(plan_paths)
 			elif plan_paths:
 				proposed_body = build_pipeline_plan_grant_body(metadata.get("body") or "", plan_paths)
 				proposed_grant = build_automation_grant(dict(metadata, body=proposed_body), pipeline_login,

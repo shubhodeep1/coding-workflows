@@ -1609,9 +1609,11 @@ jobs:
             exit 0
           fi
           run_url="${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID:-}"
-          if gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}/comments" \
-              -f body="<!-- ai:plan-split-released:v1 issue=${source_issue} -->"$'\n'"The orchestrator run that was to implement this plan failed before it created a tracking issue (${run_url}), so no project is running for it. Comment \`/reclarify\` to plan it again; the plan stage may then hand it to a new project." >/dev/null 2>&1 \
-            && gh_retry gh issue edit "${source_issue}" --repo "${{ github.repository }}" --remove-label "ai:split-to-project" >/dev/null 2>&1; then
+          # Label first: plan_split_dispatch.sh checks the label before the
+          # markers, so a release marker is posted only once the label is off.
+          if gh_retry gh issue edit "${source_issue}" --repo "${{ github.repository }}" --remove-label "ai:split-to-project" >/dev/null 2>&1 \
+            && gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}/comments" \
+              -f body="<!-- ai:plan-split-released:v1 issue=${source_issue} -->"$'\n'"The orchestrator run that was to implement this plan failed before it created a tracking issue (${run_url}), so no project is running for it. Comment \`/reclarify\` to plan it again; the plan stage may then hand it to a new project." >/dev/null 2>&1; then
             echo "PLAN_SPLIT_RELEASED source_issue=${source_issue}"
           else
             echo "::warning::Could not release plan-split source issue #${source_issue}."
