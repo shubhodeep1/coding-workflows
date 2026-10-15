@@ -212,10 +212,16 @@ def test_unconfirmed_dispatch_keeps_the_split() -> None:
 def test_failed_marking_holds_without_dispatch() -> None:
 	code, out, calls = _run(extra_env={"FAKE_EDIT_FAIL": "true"})
 	assert code == 3 and "reason=label_failed" in out and _dispatches(calls) == [], out
-	code, out, calls = _run(extra_env={"FAKE_COMMENT_FAIL": "true"})
+	code, out, calls = _run(extra_env={"FAKE_COMMENT_FAIL": "true", "PLAN_SPLIT_RETRY_SLEEP_SECS": "0"})
 	assert code == 3 and "reason=marker_failed" in out and _dispatches(calls) == [], out
+	# The release marker could not be posted either (3 attempts), so the
+	# label stays on: removing it would leave a split marker with no release
+	# marker after it, blocking every later /reclarify.
 	edits = [c for c in calls if c[:2] == ["issue", "edit"]]
-	assert len(edits) == 2 and edits[1][edits[1].index("--remove-label") + 1] == "ai:split-to-project"
+	assert len(edits) == 1 and "stays on" in out
+	release_posts = [c for c in calls if c[:2] == ["api", "repos/owner/repo/issues/123/comments"]
+		and c[-1].startswith("body=<!-- ai:plan-split-released:v1 issue=123 -->")]
+	assert len(release_posts) == 3
 
 
 # --- poller: close the source issue when the project completes (Q152) -------

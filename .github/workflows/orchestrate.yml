@@ -1609,16 +1609,24 @@ jobs:
             exit 0
           fi
           run_url="${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID:-}"
-          # Marker first (retried; a duplicate is harmless), then the label: a
-          # label removed without a release marker would leave the split
-          # marker blocking every /reclarify, while a label left on after the
-          # marker only needs removing by hand.
-          if GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}/comments" \
-              -f body="<!-- ai:plan-split-released:v1 issue=${source_issue} -->"$'\n'"The orchestrator run that was to implement this plan failed before it created a tracking issue (${run_url}), so no project is running for it. Comment \`/reclarify\` to plan it again; the plan stage may then hand it to a new project." >/dev/null 2>&1 \
-            && gh_retry gh issue edit "${source_issue}" --repo "${{ github.repository }}" --remove-label "ai:split-to-project" >/dev/null 2>&1; then
+          # Marker first (up to 3 attempts; a duplicate is harmless), then the
+          # label: a label removed without a release marker would leave the
+          # split marker blocking every /reclarify, so a failed marker keeps it.
+          release_posted=false
+          for attempt in 1 2 3; do
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}/comments" \
+                -f body="<!-- ai:plan-split-released:v1 issue=${source_issue} -->"$'\n'"The orchestrator run that was to implement this plan failed before it created a tracking issue (${run_url}), so no project is running for it. Comment \`/reclarify\` to plan it again; the plan stage may then hand it to a new project." >/dev/null 2>&1; then
+              release_posted=true
+              break
+            fi
+            [ "${attempt}" -lt 3 ] && sleep 2
+          done
+          if [ "${release_posted}" != true ]; then
+            echo "::warning::Could not post the release marker on plan-split source issue #${source_issue}; delete its plan-split comment, remove ai:split-to-project and comment /reclarify."
+          elif gh_retry gh issue edit "${source_issue}" --repo "${{ github.repository }}" --remove-label "ai:split-to-project" >/dev/null 2>&1; then
             echo "PLAN_SPLIT_RELEASED source_issue=${source_issue}"
           else
-            echo "::warning::Could not release plan-split source issue #${source_issue}; if no release marker was posted, delete its plan-split comment, remove ai:split-to-project and comment /reclarify."
+            echo "::warning::Posted the release marker on plan-split source issue #${source_issue} but could not remove ai:split-to-project; remove the label by hand, then comment /reclarify."
           fi
 
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback

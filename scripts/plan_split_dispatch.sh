@@ -167,24 +167,32 @@ split_notify()
 }
 
 # Undo the split marking when no project was started. The release marker is
-# posted first (retried: a duplicate release marker is harmless) and the
-# label comes off after it. A label left on after a posted release marker
-# still holds the issue, and removing it by hand re-enables the split; a
-# label removed without a release marker would leave the split marker
-# blocking every later /reclarify, so that case warns with the recovery.
-# Restores ai:awaiting-approval so the plan stage's hold is what the issue
-# shows.
+# posted first (up to 3 attempts: a duplicate release marker is harmless)
+# and the label comes off only after it is posted. A label removed without a
+# release marker would leave the split marker blocking every later
+# /reclarify, so when the marker cannot be posted the label stays on and a
+# WARNING names the recovery. Restores ai:awaiting-approval so the plan
+# stage's hold is what the issue shows.
 release_split()
 {
-	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
-		-f body="${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->"$'\n'"No orchestrator project was started for this plan ($1), so it is held for approval as before." \
-		>/dev/null 2>&1; then
-		echo "::warning::Could not post the plan-split release marker on issue #${ISSUE_NUMBER} after $1; delete its plan-split comment, if any, before commenting /reclarify."
-		split_notify "Plan split for issue #${ISSUE_NUMBER}: no project started ($1) and the release marker could not be posted. Delete its plan-split comment, if any, then comment /reclarify." "WARNING"
+	local release_posted=false attempt
+	for attempt in 1 2 3; do
+		if gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+			-f body="${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->"$'\n'"No orchestrator project was started for this plan ($1), so it is held for approval as before." \
+			>/dev/null 2>&1; then
+			release_posted=true
+			break
+		fi
+		[ "${attempt}" -lt 3 ] && sleep "${PLAN_SPLIT_RETRY_SLEEP_SECS:-2}"
+	done
+	if [ "${release_posted}" != true ]; then
+		echo "::warning::Could not post the plan-split release marker on issue #${ISSUE_NUMBER} after $1, so ${SPLIT_LABEL} stays on; delete its plan-split comment, if any, remove ${SPLIT_LABEL}, then comment /reclarify."
+		split_notify "Plan split for issue #${ISSUE_NUMBER}: no project started ($1) and the release marker could not be posted, so ${SPLIT_LABEL} stays on. Delete its plan-split comment, if any, remove ${SPLIT_LABEL}, then comment /reclarify." "WARNING"
+		return 0
 	fi
 	if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "${SPLIT_LABEL}" \
 		--add-label "ai:awaiting-approval" >/dev/null 2>&1; then
-		echo "::warning::Could not remove ${SPLIT_LABEL} from issue #${ISSUE_NUMBER} after $1; remove it by hand so the plan can be split again."
+		echo "::warning::Could not remove ${SPLIT_LABEL} from issue #${ISSUE_NUMBER} after $1; the release marker is posted, so remove the label by hand to let the plan be split again."
 	fi
 }
 
