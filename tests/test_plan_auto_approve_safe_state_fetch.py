@@ -16,6 +16,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
+HEAL_SCRIPT = REPO_ROOT / "scripts" / "workflow_failure_heal.py"
 ORDINARY_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `src/app.py`\n- `README.md`\n"
 SECURITY_FINDING_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `scripts/security_audit.sh`\n"
 GRANTED_PLAN = (
@@ -81,7 +82,9 @@ def _auto_approve_script() -> str:
 def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: bool = False,
 	gate_flag: str | None = None, login: str = "pipeline-bot", comments: list | None = None,
 	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False,
-	split_stub_rc: int | None = None, split_env_out: dict | None = None) -> tuple[bool, str, str]:
+	graphql: dict | None = None, graphql_fails: bool = False, heal_fix_flag: str | None = None,
+	graphql_calls_out: list | None = None, split_stub_rc: int | None = None,
+	split_env_out: dict | None = None) -> tuple[bool, str, str]:
 	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
 
 	Every other API write (the hold comment) is appended to ``posts_out``;
@@ -93,6 +96,7 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		tmp_path = Path(workdir)
 		(tmp_path / "scripts").mkdir()
 		shutil.copy(GUARD_SCRIPT, tmp_path / "scripts" / "files_touched_scope_guard.py")
+		shutil.copy(HEAL_SCRIPT, tmp_path / "scripts" / "workflow_failure_heal.py")
 		(tmp_path / "scripts" / "gh_helpers.sh").write_text(
 			'gh_retry() { "$@"; }\n'
 			'_safe_gh_jq() { gh api "$@"; }\n'
@@ -102,6 +106,10 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			'    printf "%s" "${ISSUE_RESPONSE}"\n'
 			'  elif [ "$2" = "user" ]; then\n'
 			'    printf "%s\\n" "${PIPELINE_LOGIN}"\n'
+			'  elif [ "$2" = "graphql" ]; then\n'
+			'    [ "${GRAPHQL_FAIL}" = "false" ] || return 1\n'
+			'    printf "%s\\n" "$*" >> "${GRAPHQL_LOG}"\n'
+			'    printf "%s" "${GRAPHQL_RESPONSE}"\n'
 			'  elif [ "$2" = "-X" ] && [ "$3" = "PATCH" ]; then\n'
 			'    [ "${PATCH_FAIL}" = "false" ] || return 1\n'
 			'    printf "%s\\n<<END>>\\n" "$*" >> "${PATCH_LOG}"\n'
@@ -128,9 +136,10 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		output_path = tmp_path / "output"
 		post_log = tmp_path / "posts"
 		patch_log = tmp_path / "patches"
+		graphql_log = tmp_path / "graphql"
 		env = os.environ.copy()
 		for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
-			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY"):
+			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"):
 			env.pop(name, None)
 		env.update({
 			"GITHUB_OUTPUT": str(output_path),
@@ -140,6 +149,9 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			"POST_LOG": str(post_log),
 			"PATCH_LOG": str(patch_log),
 			"PATCH_FAIL": str(patch_fails).lower(),
+			"GRAPHQL_LOG": str(graphql_log),
+			"GRAPHQL_FAIL": str(graphql_fails).lower(),
+			"GRAPHQL_RESPONSE": json.dumps(graphql or {}),
 			"COMMENTS_RESPONSE": json.dumps(comments or []),
 			"PIPELINE_LOGIN": login,
 			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
@@ -148,6 +160,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		})
 		if gate_flag is not None:
 			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = gate_flag
+		if heal_fix_flag is not None:
+			env["HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"] = heal_fix_flag
 		result = subprocess.run(["bash", "-c", _auto_approve_script()], cwd=tmp_path, env=env, text=True,
 			capture_output=True, check=True)
 		posts = [entry for entry in (post_log.read_text(encoding="utf-8") if post_log.exists() else "").split("\n<<END>>\n")
@@ -167,6 +181,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			posts_out.extend(others)
 		if patches_out is not None:
 			patches_out.extend(patches)
+		if graphql_calls_out is not None and graphql_log.exists():
+			graphql_calls_out.extend(graphql_log.read_text(encoding="utf-8").splitlines())
 		if split_env_out is not None and split_env_file.exists():
 			split_env_out.update(json.loads(split_env_file.read_text(encoding="utf-8")))
 		return posted, result.stdout, output_path.read_text(encoding="utf-8")
@@ -382,6 +398,87 @@ def test_split_plan_sends_no_awaiting_approval_alert() -> None:
 	block = _step_block(text, "Telegram plan notification")
 	assert "steps.auto_approve.outputs.plan_split != 'true'" in block
 	assert "PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}" in _step_block(text, "Auto-approve clear plan")
+
+
+# --- #7444: workflow-heal issues are never body-patched by the plan gate ---
+
+HEAL_MARKER = ("<!-- ai:workflow-heal-scope:v1 paths=scripts/security_audit.sh,.github/workflows/security-audit.yml,"
+	"tests/**,changelog.d/*.md runs=owner/repo:500 -->")
+HEAL_BODY = "Heal this failure.\n" + HEAL_MARKER + "\n"
+HEAL_PLAN = ("Implementation Plan\n\n### 1. Files likely to change\n"
+	"- `scripts/security_audit.sh`\n- `.github/workflows/security-audit.yml`\n- `tests/test_security_audit.py`\n")
+_HEAL_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "login": "pipeline-bot"},
+	"author_association": "OWNER", "body": HEAL_BODY, "labels": [{"name": "ai:workflow-heal"}]}
+
+
+def _heal_graphql(*, edited: bool = False) -> dict:
+	return {"data": {"repository": {"issue": {"body": HEAL_BODY, "lastEditedAt": "2026-10-15T00:00:00Z" if edited else None,
+		"author": {"login": "pipeline-bot"}, "labels": {"nodes": [{"name": "ai:workflow-heal"}]}}}}}
+
+
+def test_heal_issue_in_scope_plan_is_approved_without_a_body_write() -> None:
+	patches: list[str] = []
+	calls: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=HEAL_PLAN, gate_flag="true",
+		graphql=_heal_graphql(), patches_out=patches, graphql_calls_out=calls)
+	assert posted, stdout
+	assert "auto_approved=true" in output
+	assert patches == []
+	assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=skipped reason=heal_issue" in stdout
+	assert "outcome=written" not in stdout
+	assert len(calls) == 1 and "lastEditedAt" in calls[0]
+
+
+def test_heal_issue_out_of_scope_plan_holds_without_a_body_write() -> None:
+	plan = HEAL_PLAN + "- `scripts/other.sh`\n"
+	patches: list[str] = []
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true",
+		graphql=_heal_graphql(), patches_out=patches, posts_out=posts)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=heal_scope_plan_out_of_scope" in output
+	assert "outcome=defer issue=123 paths=scripts/other.sh" in stdout
+	assert len(posts) == 1 and "verified workflow-heal scope" in posts[0]
+
+
+def test_edited_heal_issue_holds_as_unverified() -> None:
+	patches: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=HEAL_PLAN, gate_flag="true",
+		graphql=_heal_graphql(edited=True), patches_out=patches)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=heal_scope_unverified" in output
+
+
+def test_heal_issue_read_failure_holds_as_check_unavailable() -> None:
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=HEAL_PLAN, gate_flag="true",
+		graphql_fails=True, posts_out=posts)
+	assert not posted, stdout
+	assert "auto_approve_hold_reason=heal_scope_check_unavailable" in output
+	assert len(posts) == 1 and "could not run" in posts[0]
+
+
+def test_heal_fix_flag_off_keeps_the_q108_write() -> None:
+	issue = dict(_HEAL_ISSUE, body="Heal this failure. No files_touched block.")
+	patches: list[str] = []
+	calls: list[str] = []
+	posted, stdout, _ = _run_auto_approve(issue, plan_text=SECURITY_FINDING_PLAN, gate_flag="true",
+		heal_fix_flag="false", patches_out=patches, graphql_calls_out=calls)
+	assert posted, stdout
+	assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=written" in stdout
+	assert len(patches) == 1
+	assert calls == []
+
+
+def test_heal_fix_flag_wiring() -> None:
+	block = _step_block(_workflow_text(), "Auto-approve clear plan")
+	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}" in block
+	assert "--heal-scope-file" in block
+	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	preflight = _step_block(implement, "Heal route preflight")
+	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}" in preflight
 
 
 def main() -> int:

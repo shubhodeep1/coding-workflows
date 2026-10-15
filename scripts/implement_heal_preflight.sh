@@ -79,6 +79,48 @@ repo="${GITHUB_REPOSITORY#*/}"
 live="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${owner}" -f repo="${repo}" -F number="${ISSUE_NUMBER}" 2>/dev/null)" || refuse unavailable issue_read_failed
 verified="$(printf '%s' "${live}" | jq -c --arg login "${identity}" '{body: .data.repository.issue.body, last_edited_at: .data.repository.issue.lastEditedAt, author_login: .data.repository.issue.author.login, labels: [.data.repository.issue.labels.nodes[].name], pipeline_login: $login}' | PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify --input-json /dev/stdin)" || refuse unavailable scope_verify_failed
 status="$(printf '%s' "${verified}" | jq -r '.status')"
+# Unblock fix-up #7444 (for #7434): the plan gate's pipeline grant (Q108) or the
+# poller's PATCH edits the heal issue body, which sets lastEditedAt and made
+# every such issue `edited`. With HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED on
+# (unset, empty or `true`), an edited body is accepted only when its whole edit
+# history was written by the pipeline login and every revision carries the
+# identical scope marker. Anything else, including a failed read, still
+# refuses with reason=edited and a fixed-word detail.
+heal_edit_fix_enabled()
+{
+	local value
+	value="$(printf '%s' "${HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	case "${value}" in
+		''|true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off"
+			return 1
+			;;
+	esac
+}
+if [ "${status}" = edited ] && heal_edit_fix_enabled; then
+	# §14: REST exposes no edit history, and the read above does not request it,
+	# so issues that are not edited keep their single read. Re-reading the body
+	# in this call binds the verified body to the same history snapshot.
+	edits_live="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}} userContentEdits(first:100){totalCount pageInfo{hasNextPage} nodes{editor{login} deletedAt diff}}}}}' -f owner="${owner}" -f repo="${repo}" -F number="${ISSUE_NUMBER}" 2>/dev/null)" || refuse edited edit_history_unavailable
+	edits_verified="$(printf '%s' "${edits_live}" | jq -c --arg login "${identity}" '.data.repository.issue as $i | {body: $i.body, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login, edits: $i.userContentEdits.nodes, edits_total: $i.userContentEdits.totalCount, edits_has_next_page: $i.userContentEdits.pageInfo.hasNextPage}' | PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify-edits --input-json /dev/stdin)" || refuse edited edit_history_unavailable
+	edits_status="$(printf '%s' "${edits_verified}" | jq -r '.status // ""' 2>/dev/null)" || refuse edited edit_history_unavailable
+	if [ "${edits_status}" = verified ]; then
+		edits_count="$(printf '%s' "${edits_verified}" | jq -r '.pipeline_edits // ""' 2>/dev/null || true)"
+		[[ "${edits_count}" =~ ^[0-9]+$ ]] || refuse edited edit_history_unavailable
+		verified="${edits_verified}"
+		status=verified
+		echo "HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED issue=${ISSUE_NUMBER} edits=${edits_count}"
+	else
+		edits_detail="$(printf '%s' "${edits_verified}" | jq -r '.detail // ""' 2>/dev/null || true)"
+		case "${edits_detail}" in
+			edit_history_unavailable|edit_history_redacted|editor_untrusted|marker_changed) ;;
+			*) edits_detail=unknown ;;
+		esac
+		refuse edited "${edits_detail}"
+	fi
+fi
 [ "${status}" = verified ] || refuse "${status}"
 
 scope_file="${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt"
