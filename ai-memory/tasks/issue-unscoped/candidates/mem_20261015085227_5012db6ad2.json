@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:358-386 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: An editor-recreated file larger than MAX_FILE (8 MiB) is reported as reason=unsafe_file instead of the documented reason=result_conflicts_host, because transfer() calls enumerate_workspace() (line 358) before the host-conflict check (lines 383-385) and read_regular() (lines 191-194) rejects the oversized file first.\n  WHY: The log diagnostic disagrees with the documented contract (PR description, agents.d fragment, new test), and the test only covers the small-content case. Both reviewers rated it NIT, mapped here to low, so there is no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:lines 306-311 (snapshot skip), 358 (transfer calls enumerate_workspace), 191-194 (read_regular rejects oversized), 859-877 (error mapping) | severity=NIT | confidence=5\n  PROBLEM: The PR description, the agents.d fragment and the new test document transfer rejecting an editor-recreated oversized file with reason=result_conflicts_host. In practice transfer() calls enumerate_workspace() (line 358) before the host-conflict check (lines 384-385). enumerate_workspace() reads every file via read_regular(), which raises ValueError(\"unsafe file type or size\") for any regular file over MAX_FILE (8 MiB). main() catches that at line 873, and the first mapping (lines 859-872) returns reason=unsafe_file for transfer + ValueError. The new test only covers the small-content case (b\"replaced\").\n  WHY: The diagnostic in the workflow log differs from the documented contract. The behavioral impact is small, since recreating the file with >8 MiB content is an adversarial or buggy-editor scenario, but the documentation/code mismatch is real.\n- HARDENING_SUGGESTIONS: scripts/review_untrusted_workspace.py lines 358-386, transfer() loop\n  PROBLEM: The documented result_conflicts_host contract only holds for small content. Recreating the file with >8 MiB content reports reason=unsafe_file.\n  WHY: Aligning the two would remove the documentation/log mismatch. Suggested fix: before calling enumerate_workspace(), detect results whose path matches an oversized host file excluded from the snapshot and raise _rejection(\"new result conflicts with host path\", \"result_conflicts_host\"). Alternatively, tighten the agents.d entry to note reason=unsafe_file for that edge case. Estimated lines changed: ~6. HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_workspace.py:Lines 358 and 383-385 | severity=NIT | confidence=5\n  PROBLEM: Recreating a skipped file at its original size, when it exceeds MAX_FILE, reports reason=unsafe_file rather than the documented reason=result_conflicts_host.\n  WHY: read_regular() rejects files larger than MAX_FILE at lines 191-194, so transfer() never reaches the host-path conflict check at lines 383-385. The current test recreates the file with small content and does not cover this case.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "928e66b164bb3d1c4393228111798c3fff39ed4dfb0882aba3451f3159988594",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7429,
+    "run_id": "38706206207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38706206207",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015085227_5012db6ad2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7429,
+    "run_id": "38706206207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-15T08:52:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
