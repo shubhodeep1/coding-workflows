@@ -1683,6 +1683,7 @@ def _selfcheck_env(tmp: Path, *, plain_rc: int = 0, plain_out: str = "", pidns_r
 		({"flag": "true", "plain_rc": 125}, "probe_failed_plain_rc_125"),
 		({"flag": "true", "plain_out": "ok", "pidns_rc": 126}, "probe_failed_pidns_rc_126"),
 		({"flag": "true", "plain_out": "Bad Output!", "plain_rc": 0}, "probe_failed_plain_rc_0"),
+		({"flag": "true", "plain_out": "ok", "pidns_out": "Bad Output!", "pidns_rc": 3}, "probe_failed_pidns_rc_3"),
 		({"flag": "true", "plain_out": "proc_environ_readable", "plain_rc": 1}, "proc_environ_readable"),
 		({"flag": "TRUE", "plain_rc": 125}, "probe_failed_plain_rc_125"),
 		({"plain_rc": 125}, "probe_failed"),
