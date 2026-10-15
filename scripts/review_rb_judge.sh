@@ -1890,6 +1890,14 @@ _guard_pr_merged="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '(.merged_at != nu
 if [ "${_guard_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
 fi
+# BUG-001 (analysis/workflow-optimization-2026-09-18.md): keep the live
+# head SHA from the same response (no extra API call) so the judge never
+# acts on a head it did not evaluate. Lowercased and validated as 40 hex;
+# anything else counts as unreadable.
+RB_LIVE_HEAD_SHA="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '.head.sha // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+if ! [[ "${RB_LIVE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+  RB_LIVE_HEAD_SHA=""
+fi
 unset _guard_pr_meta _guard_pr_merged
 
 if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
@@ -1910,12 +1918,60 @@ Leaving the linked issue in ai:review-blocked for operator review. Rerun the jud
   exit 0
 fi
 
+# BUG-001 (analysis/workflow-optimization-2026-09-18.md): bind every
+# action to the head the judge evaluated (RB_JUDGED_HEAD_SHA, embedded in
+# the judge prompt). A push during the judge call must not let the `fix`
+# no-change path post the head-gate success status / ai:ready-to-merge for
+# an unjudged head, nor let close_and_reissue act on it. A moved head skips
+# every action (stale_head) before any comment, label, status or close.
+# An unreadable live head refuses fix and close_and_reissue fail-closed
+# (head_unverified); merge actions keep their behaviour because their
+# `gh pr merge --match-head-commit "${RB_JUDGED_HEAD_SHA}"` already binds
+# them. judge_handled stays false so the review-blocked fallback fires.
+# RB_JUDGED_HEAD_SHA is the local checkout HEAD, which can sit ahead of the
+# live head when this run committed locally (editor or [ai-merge-resolve])
+# and the push is deferred to "Push all pending commits" after the judge.
+# That case is exempt only when the live head is still the head this run
+# checked out (INITIAL_HEAD_SHA, exported via GITHUB_ENV by "Checkout PR
+# head branch") and an ancestor of the judged head. Ancestry alone cannot
+# tell it from a force-push back to an older commit during the judge call,
+# so any other differing live head (or an unset INITIAL_HEAD_SHA) is stale.
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+  RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA:-}"
+  RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA_LC,,}"
+  RB_INITIAL_HEAD_SHA_LC="${INITIAL_HEAD_SHA:-}"
+  RB_INITIAL_HEAD_SHA_LC="${RB_INITIAL_HEAD_SHA_LC,,}"
+  if [ -n "${RB_LIVE_HEAD_SHA}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA_LC}" ] \
+    && ! { [[ "${RB_JUDGED_HEAD_SHA_LC}" =~ ^[0-9a-f]{40}$ ]] \
+      && [ "${RB_LIVE_HEAD_SHA}" = "${RB_INITIAL_HEAD_SHA_LC}" ] \
+      && git merge-base --is-ancestor "${RB_LIVE_HEAD_SHA}" "${RB_JUDGED_HEAD_SHA_LC}" >/dev/null 2>&1; }; then
+    echo "RB_JUDGE_STALE_HEAD pr=${PR_NUMBER} judged_head=${RB_JUDGED_HEAD_SHA:-unknown} live_head=${RB_LIVE_HEAD_SHA} action=${RB_ACTION}"
+    echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    echo "judge_skip_reason=stale_head" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+  if [ -z "${RB_LIVE_HEAD_SHA}" ] && { [ "${RB_ACTION}" = "fix" ] || [ "${RB_ACTION}" = "close_and_reissue" ]; }; then
+    echo "::warning::Review-blocked judge: could not read the live head of PR #${PR_NUMBER}; refusing ${RB_ACTION} (judge_skip_reason=head_unverified)."
+    echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    echo "judge_skip_reason=head_unverified" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+fi
+
 RB_SECURITY_ORIGINAL_ACTION=""
 RB_SECURITY_FORCED_FIX="false"
 RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block "${RB_ACTION}" "${IS_FINAL}")"
 case "${RB_SECURITY_SEVERITY_DECISION}" in
   allow) ;;
   convert_fix)
+    # BUG-001: a merge converted to fix loses its --match-head-commit
+    # binding, so it needs the same unreadable-head refusal as a judge fix.
+    if [ -z "${RB_LIVE_HEAD_SHA}" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+      echo "::warning::Review-blocked judge: could not read the live head of PR #${PR_NUMBER}; refusing security-converted fix of ${RB_ACTION} (judge_skip_reason=head_unverified)."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=head_unverified" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
     RB_SECURITY_ORIGINAL_ACTION="${RB_ACTION}"
     RB_ACTION="fix"
     RB_SECURITY_FORCED_FIX="true"
@@ -2999,8 +3055,16 @@ print(m.group(1) if m else "")
           RB_EFFECTIVE_REISSUE_MODE="redo"
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else
-          RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
-          RB_HEAD_SHA="$(printf '%s' "${RB_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+          # BUG-001: the baseline is the head the judge evaluated, not a
+          # live re-read that may have moved during the judge call.
+          RB_HEAD_SHA="$(printf '%s' "${RB_JUDGED_HEAD_SHA:-}" | tr '[:upper:]' '[:lower:]')"
+          # A live head that differs here passed the stale-head guard only as
+          # this run's checked-out head behind an unpushed local commit, which
+          # the closed PR never carried; implement.yml ignores a baseline that
+          # differs from the closed PR's headRefOid, so use the live head.
+          if [ -n "${RB_LIVE_HEAD_SHA:-}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_HEAD_SHA}" ]; then
+            RB_HEAD_SHA="${RB_LIVE_HEAD_SHA}"
+          fi
           if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             RB_EFFECTIVE_REISSUE_MODE="redo"
             RB_SPOT_FIX_REASON="head_ref_unavailable"

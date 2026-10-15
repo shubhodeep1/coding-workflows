@@ -1240,6 +1240,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
 
       - name: Review consolidator reject-verifier contract test
         run: |
@@ -1399,6 +1400,7 @@ jobs:
             tests/test_ai_memory_sync_reference_files.py \
             tests/test_ai_memory_workflow_log_analysis_cache.py \
             tests/test_assemble_changelog.py \
+            tests/test_branch_rebuild_threshold_decision_log.py \
             tests/test_changelog_fragment_contract.py \
             tests/test_codex_heartbeat.py \
             tests/test_codex_isolated_exec_claude_contract.py \
@@ -1469,14 +1471,16 @@ jobs:
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
         # the per-run file-list cache (one GET /pulls/{n}/files per distinct
         # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence and gh_retry's per-attempt stdout buffering (#5495)
-        # in scripts/gh_helpers.sh.
+        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
+        # the non-retryable HTTP 400/401 classification in
+        # scripts/gh_helpers.sh.
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_review_merge_train.py \
             tests/test_gh_helpers_parse_reset_header.py \
             tests/test_gh_retry_stdout_isolation.py \
+            tests/test_gh_retry_permanent_auth_failures.py \
             tests/test_gh_api_retry.py \
             tests/test_gh_api_retry_py.py
 

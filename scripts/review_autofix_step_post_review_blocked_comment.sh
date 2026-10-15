@@ -48,6 +48,14 @@ case "${JUDGE_SKIP_REASON:-}" in
     BODY_HEADING="AI review/autofix — judge could not resolve PR head SHA"
     BODY_DETAIL="The review-blocked judge could not resolve the PR head SHA from the GitHub PR JSON and refused the merge to avoid landing unjudged code. Stall recovery will re-fire the judge. If this recurs, the GitHub PR API may be returning a partial payload — check the workflow run log."
     ;;
+  stale_head)
+    BODY_HEADING="AI review/autofix — PR head moved during the judge call"
+    BODY_DETAIL="A commit was pushed to this PR while the review-blocked judge was running, so the judge took no action on the head it had not evaluated. The push starts a new review run; stall recovery re-fires the judge if the PR stays blocked. No action is required."
+    ;;
+  head_unverified)
+    BODY_HEADING="AI review/autofix — judge could not read the PR head"
+    BODY_DETAIL="The review-blocked judge could not read the live PR head SHA and refused its fix or close-and-reissue action rather than act on an unverified head. This is usually transient; stall recovery will re-fire the judge."
+    ;;
   sync_merge_failed)
     BODY_HEADING="AI review/autofix — judge approved merge but \`gh pr merge\` failed"
     BODY_DETAIL="The review-blocked judge approved this PR and all check-runs had settled, but the synchronous \`gh pr merge --squash\` call failed. Typical causes: branch-protection rules, a merge queue requirement, missing permissions on the GH token, GitHub returning 422, or a concurrent push that changed HEAD. Stall recovery will re-fire the judge; the operator may need to merge manually if the underlying cause is permission/policy."

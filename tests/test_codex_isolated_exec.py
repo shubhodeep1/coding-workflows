@@ -651,3 +651,19 @@ def test_claude_engine_build_failure_stays_single_attempt(sandbox, claude_engine
 	assert "CODEX_ISOLATION unavailable engine=claude reason=image_build_failed" in proc.stderr
 	assert len(builds_of(sandbox)) == 1
 	assert claude_records(claude_engine) == []
+
+
+# --- gawk in the generated image context (issue #7359) -------------------------------
+
+@pytest.mark.parametrize("engine", ["codex", "claude"])
+def test_image_context_installs_gawk(tmp_path, engine):
+	out = tmp_path / engine
+	out.mkdir()
+	subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "image-context", "--engine", engine, "--out", str(out)],
+		check=True,
+	)
+	(apt_line,) = [line for line in (out / "Dockerfile").read_text().splitlines() if "apt-get install" in line]
+	tokens = apt_line.split()
+	for package in ("gawk", "ripgrep", "build-essential"):
+		assert package in tokens, apt_line
