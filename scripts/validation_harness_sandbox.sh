@@ -789,27 +789,55 @@ fi
 printf 'ok\n'
 PIDNS_PROBE
 
+# Reason for a selfcheck probe whose output is empty or malformed (the launch
+# itself failed). With VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP
+# set to `true` (any letter case) it names the pass and the launcher's exit
+# code: probe_failed_<plain|pidns>_rc_<n>. Unset or any other value keeps the
+# plain probe_failed. The placeholder gates only this reason text; it comes
+# from the unblock judge's round 1 on #7355, and the operator step is to export
+# it into the validate job's environment (validate.yml forwards no such
+# variable). Probe stderr is never read. Always returns 0.
+selfcheck_probe_failed_reason()
+{
+	local pass="$1" rc="$2" flag="${VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP:-}"
+	if [ "${flag,,}" != "true" ]; then
+		printf 'probe_failed\n'
+		return 0
+	fi
+	case "${pass}" in
+		plain|pidns) ;;
+		*) pass="unknown" ;;
+	esac
+	[[ "${rc}" =~ ^[0-9]{1,3}$ ]] || rc="unknown"
+	printf 'probe_failed_%s_rc_%s\n' "${pass}" "${rc}"
+	return 0
+}
+
 cmd_selfcheck()
 {
 	validate_config selfcheck
 	require_sudo selfcheck
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail selfcheck sandbox_user_missing
-	local caller_pid="${1:-${PPID}}" home verdict host_ns
+	local caller_pid="${1:-${PPID}}" home verdict host_ns probe_out probe_rc
 	home="$(sandbox_home)"
 	build_sandbox_env "${home}" "${home}/work" "$(sandbox_docker_host)"
-	verdict="$(as_sandbox bash -c "${SELFCHECK_PROBE}" selfcheck "${caller_pid}" \
-		"${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}" 2>/dev/null | tail -n 1 || true)"
+	probe_rc=0
+	probe_out="$(as_sandbox bash -c "${SELFCHECK_PROBE}" selfcheck "${caller_pid}" \
+		"${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}" 2>/dev/null)" || probe_rc=$?
+	verdict="$(printf '%s\n' "${probe_out}" | tail -n 1)"
 	if [ "${verdict}" != "ok" ]; then
-		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
+		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="$(selfcheck_probe_failed_reason plain "${probe_rc}")"
 		sandbox_fail selfcheck "${verdict}"
 	fi
 	# Second pass inside a PID namespace created the same way as the harness's.
 	pidns_supported selfcheck
 	host_ns="$(readlink "/proc/$$/ns/pid" 2>/dev/null || true)"
 	[ -n "${host_ns}" ] || sandbox_fail selfcheck pid_namespace_unverifiable
-	verdict="$(as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}" 2>/dev/null | tail -n 1 || true)"
+	probe_rc=0
+	probe_out="$(as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}" 2>/dev/null)" || probe_rc=$?
+	verdict="$(printf '%s\n' "${probe_out}" | tail -n 1)"
 	if [ "${verdict}" != "ok" ]; then
-		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
+		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="$(selfcheck_probe_failed_reason pidns "${probe_rc}")"
 		sandbox_fail selfcheck "${verdict}"
 	fi
 	# The harness reaches Docker; a daemon in the host PID namespace would let

@@ -1632,3 +1632,87 @@ def test_sandbox_run_rejects_a_dotdot_entry_before_staging(tmp_path: Path, relat
 	assert (tmp_path / "status").read_text().startswith("fail run entry_unsafe")
 	assert not marker.exists()
 	assert not work.exists(), "a rejected entry must not be staged"
+
+
+# #7355 unblock round 1: an empty or malformed selfcheck probe output names the
+# failing pass and the launcher's exit code, but only while the placeholder
+# VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP is `true`.
+_SELFCHECK_STDERR_MARKER = "SELFCHECK_STDERR_MARKER"
+_SELFCHECK_SUDO_STUB = f"""#!/bin/sh
+[ "$1" = -n ] || exit 1
+case "$2" in
+	true|unshare) exit 0 ;;
+	-u) [ -n "${{FAKE_PLAIN_OUT:-}}" ] && printf '%s\\n' "$FAKE_PLAIN_OUT"; echo {_SELFCHECK_STDERR_MARKER} >&2; exit "${{FAKE_PLAIN_RC:-0}}" ;;
+	sh) [ -n "${{FAKE_PIDNS_OUT:-}}" ] && printf '%s\\n' "$FAKE_PIDNS_OUT"; echo {_SELFCHECK_STDERR_MARKER} >&2; exit "${{FAKE_PIDNS_RC:-0}}" ;;
+esac
+exit 1
+"""
+
+
+def _selfcheck_env(tmp: Path, *, plain_rc: int = 0, plain_out: str = "", pidns_rc: int = 0, pidns_out: str = "", flag: str | None = None) -> dict[str, str]:
+	if subprocess.run(["id", "-u", "nobody"], capture_output=True).returncode != 0:
+		pytest.skip("needs a `nobody` account to stand in for the sandbox user")
+	if subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip() == "nobody":
+		pytest.skip("the test user must differ from the sandbox user")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	home = tmp / "home"
+	home.mkdir()
+	(bin_dir / "sudo").write_text(_SELFCHECK_SUDO_STUB, encoding="utf-8")
+	(bin_dir / "getent").write_text(f"#!/bin/sh\nprintf '%s:x:65534:65534::{home}:/bin/sh\\n' \"$2\"\n", encoding="utf-8")
+	for stub in ("sudo", "getent"):
+		(bin_dir / stub).chmod(0o755)
+	env = {
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"VALIDATION_HARNESS_SANDBOX_USER": "nobody",
+		"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(tmp / "status"),
+		"VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR": str(tmp / "state"),
+		"FAKE_PLAIN_RC": str(plain_rc),
+		"FAKE_PLAIN_OUT": plain_out,
+		"FAKE_PIDNS_RC": str(pidns_rc),
+		"FAKE_PIDNS_OUT": pidns_out,
+	}
+	if flag is not None:
+		env["VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP"] = flag
+	return env
+
+
+@pytest.mark.parametrize(
+	("kwargs", "reason"),
+	[
+		({"flag": "true", "plain_rc": 125}, "probe_failed_plain_rc_125"),
+		({"flag": "true", "plain_out": "ok", "pidns_rc": 126}, "probe_failed_pidns_rc_126"),
+		({"flag": "true", "plain_out": "Bad Output!", "plain_rc": 0}, "probe_failed_plain_rc_0"),
+		({"flag": "true", "plain_out": "proc_environ_readable", "plain_rc": 1}, "proc_environ_readable"),
+		({"flag": "TRUE", "plain_rc": 125}, "probe_failed_plain_rc_125"),
+		({"plain_rc": 125}, "probe_failed"),
+		({"plain_out": "ok", "pidns_rc": 0}, "probe_failed"),
+		({"flag": "false", "plain_rc": 125}, "probe_failed"),
+		({"flag": "yes", "plain_rc": 125}, "probe_failed"),
+		({"flag": "", "plain_out": "ok", "pidns_rc": 125}, "probe_failed"),
+	],
+)
+def test_selfcheck_probe_failure_reason_names_pass_and_rc_only_behind_the_placeholder(tmp_path: Path, kwargs: dict, reason: str) -> None:
+	env = _selfcheck_env(tmp_path, **kwargs)
+	result = _run(["selfcheck", "1"], env=env, cwd=tmp_path)
+	assert result.returncode == 3, result.stderr
+	stderr = result.stderr.decode()
+	assert f"VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=fail reason={reason}\n" in stderr
+	status = (tmp_path / "status").read_text(encoding="utf-8")
+	assert status == f"fail selfcheck {reason}\n"
+	assert _SELFCHECK_STDERR_MARKER not in stderr
+	assert _SELFCHECK_STDERR_MARKER not in status
+
+
+def test_selfcheck_probe_failed_reason_rejects_unsafe_inputs() -> None:
+	script = f'source "{HELPER}"; selfcheck_probe_failed_reason "$1" "$2"'
+	env = {"PATH": os.environ["PATH"], "VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP": "true"}
+	for args, expected in ((["plain", "7"], "probe_failed_plain_rc_7"), (["evil pass", "1"], "probe_failed_unknown_rc_1"), (["pidns", "12a"], "probe_failed_pidns_rc_unknown"), (["pidns", "1234"], "probe_failed_pidns_rc_unknown")):
+		out = subprocess.run(["bash", "-c", script, "x", *args], capture_output=True, text=True, env=env, timeout=30)
+		assert out.returncode == 0 and out.stdout.strip() == expected, (args, out)
+
+
+def test_selfcheck_probe_launches_keep_stderr_discarded() -> None:
+	selfcheck = _function_body("cmd_selfcheck")
+	assert '"${GITHUB_WORKSPACE:-}" 2>/dev/null)" || probe_rc=$?' in selfcheck
+	assert '"${caller_pid}" "${host_ns}" 2>/dev/null)" || probe_rc=$?' in selfcheck
