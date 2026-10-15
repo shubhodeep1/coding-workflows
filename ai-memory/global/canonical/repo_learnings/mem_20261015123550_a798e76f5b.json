@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "When planning a workflow or CI change, check whether a matching issue-numbered changelog fragment should accompany the implementation. Multiple merged changes in this repository included such fragments alongside workflow edits.",
+  "fingerprint": "8581872f158764a4c3d26fd5a7ccfb898549a353db9c6eec692119cb7e504b06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38735094404",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38735094404",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7417",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7418",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7426",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7427",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7422",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7428",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7431",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7433"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261015123550_a798e76f5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and CI changes commonly include a numbered changelog fragment in `changelog.d/`.",
+  "timestamps": {
+    "created_at": "2026-10-15T12:35:50Z",
+    "promoted_at": "2026-10-15T12:37:04Z",
+    "superseded_at": null
+  }
+}
