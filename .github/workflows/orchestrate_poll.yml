@@ -1536,6 +1536,19 @@ jobs:
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
           lookup-only: true
 
+      # A run that keeps failing pages once a day: the script writes
+      # failure_alerted=true after its WARNING, and this entry suppresses the
+      # page on later retry ticks of the same day.
+      - name: Look up today's consumer health failure alert
+        id: consumer_health_alerted
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
+          lookup-only: true
+
       - name: Run daily consumer health check
         id: consumer_health
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
@@ -1548,6 +1561,7 @@ jobs:
           CONSUMER_HEALTH_CHECK_ENABLED: ${{ vars.CONSUMER_HEALTH_CHECK_ENABLED || 'true' }}
           CONSUMER_HEALTH_POLLER_SILENT_HOURS: ${{ vars.CONSUMER_HEALTH_POLLER_SILENT_HOURS || '6' }}
           CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT: ${{ vars.CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT || '2000' }}
+          CONSUMER_HEALTH_FAILURE_ALERTED: ${{ steps.consumer_health_alerted.outputs.cache-hit == 'true' && 'true' || 'false' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -1574,6 +1588,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
+
+      - name: Record today's consumer health failure alert
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outputs.failure_alerted == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
 
       # Q99: GitHub runs the */5 cron every 25-60 minutes, so a project that
       # could take its next step now (a merged wave, a new phase) waited for

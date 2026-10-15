@@ -93,6 +93,14 @@ def test_a_silent_poller_is_reported_only_while_its_wrapper_is_active(tmp_path: 
 	never["poll_runs"] = {"total_count": 0, "workflow_runs": []}
 	result = _evaluate(tmp_path / "2", {"o/a": never})
 	assert [(p["problem"], p["detail"]) for p in result["problems"]] == [("poller_silent", "last run started never")]
+	# A run created long ago but started recently is not silent; one queued
+	# since a fresh created_at but started (run_started_at) 7 hours ago is.
+	late = _healthy(poll_age_hours=7)
+	late["poll_runs"]["workflow_runs"][0]["run_started_at"] = "2026-10-15T11:00:00Z"
+	assert _evaluate(tmp_path / "4", {"o/a": late})["problems"] == []
+	stuck = _healthy()
+	stuck["poll_runs"]["workflow_runs"][0]["run_started_at"] = "2026-10-15T05:00:00Z"
+	assert [p["problem"] for p in _evaluate(tmp_path / "5", {"o/a": stuck})["problems"]] == ["poller_silent"]
 	# A poll wrapper switched off is reported as disabled, never also as silent.
 	off = _healthy(poll_age_hours=50)
 	off["workflows"]["workflows"][0]["state"] = "disabled_manually"
@@ -283,5 +291,10 @@ def test_the_poller_runs_the_check_once_a_day_in_this_repo_only() -> None:
 	assert "steps.consumer_health.outcome == 'success'" in save
 	assert "steps.consumer_health_date.outputs.day != ''" in save
 	assert "key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}" in save
+	assert "CONSUMER_HEALTH_FAILURE_ALERTED: ${{ steps.consumer_health_alerted.outputs.cache-hit == 'true' && 'true' || 'false' }}" in step
+	alert = text[text.index("- name: Record today's consumer health failure alert"):]
+	alert = alert[:alert.index("\n      - name:", 1)]
+	assert "steps.consumer_health.outputs.failure_alerted == 'true'" in alert
+	assert "key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}" in alert
 	# The template list comes from workflow-templates/, the same set this test uses.
 	assert "workflow-templates" in step and TEMPLATES and "ai-orchestrate-poll.yml" in TEMPLATES

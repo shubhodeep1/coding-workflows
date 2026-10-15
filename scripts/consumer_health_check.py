@@ -99,7 +99,10 @@ def check_repo(repo: str, snap: Path, *, templates: set[str], now: datetime, sil
 		runs = _read_json(snap / "poll_runs.json")
 		newest = None
 		if isinstance(runs, dict) and isinstance(runs.get("workflow_runs"), list) and runs["workflow_runs"]:
-			newest = _parse_time(str(runs["workflow_runs"][0].get("created_at") or ""))
+			# The start time, as in build_state_snapshot.py: a run queued for hours
+			# has a fresh created_at but has not started.
+			run0 = runs["workflow_runs"][0] if isinstance(runs["workflow_runs"][0], dict) else {}
+			newest = _parse_time(str(run0.get("run_started_at") or run0.get("created_at") or ""))
 		if not isinstance(runs, dict):
 			problems.append({"repo": repo, "problem": "unreadable", "detail": "poll_runs_unparsable"})
 		elif newest is None or now - newest > timedelta(hours=silent_hours):

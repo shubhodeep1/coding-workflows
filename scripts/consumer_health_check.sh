@@ -39,6 +39,8 @@
 #   CONSUMER_HEALTH_CONSUMERS_FILE         default .github/ai/consumer_repos.json
 #   CONSUMER_HEALTH_TEMPLATES_FILE         required: wrapper file names, one per line
 #   CONSUMER_HEALTH_NOW                    test hook: UTC time for the check
+#   CONSUMER_HEALTH_FAILURE_ALERTED        "true" when today's failure WARNING was
+#                                          already sent (default false)
 #
 # Logs (stable prefix CONSUMER_HEALTH):
 #   CONSUMER_HEALTH skip reason=disabled|invalid_switch
@@ -255,5 +257,19 @@ if [ "${write_failures}" -eq 0 ] && [ "${#enable_failed_msgs[@]}" -gt 0 ]; then
 fi
 if [ "${write_failures}" -gt 0 ]; then
 	echo "::warning::CONSUMER_HEALTH ${write_failures} write(s) failed; the day is retried on the next tick."
+	# Page once per UTC day for a failing run: the workflow records
+	# failure_alerted=true in a date-keyed cache entry and passes it back as
+	# CONSUMER_HEALTH_FAILURE_ALERTED, so retry ticks stay quiet. Failed
+	# enables held back above go into this one message.
+	if [ "${CONSUMER_HEALTH_FAILURE_ALERTED:-false}" != "true" ]; then
+		alert="Consumer check: ${write_failures} issue write(s) failed in ${SELF_REPO}; the check retries on every poll tick today."
+		for msg in ${enable_failed_msgs[@]+"${enable_failed_msgs[@]}"}; do
+			alert="${alert}
+${msg}"
+		done
+		if tg_send_msg "${alert}" "WARNING" >/dev/null && [ -n "${GITHUB_OUTPUT:-}" ]; then
+			echo "failure_alerted=true" >> "${GITHUB_OUTPUT}"
+		fi
+	fi
 	exit 1
 fi
