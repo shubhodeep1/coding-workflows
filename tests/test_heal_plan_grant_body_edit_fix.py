@@ -149,6 +149,13 @@ def test_gate_holds_root_level_glob(tmp_path: Path) -> None:
 	assert "*.py" in record["denied_paths"]
 
 
+def test_gate_ignores_bold_prose_bullets(tmp_path: Path) -> None:
+	plan = ("Implementation Plan\n\n1. **Files likely to change**\n- `scripts/fix.py`\n"
+		"- **Note:** tests go under `tests/test_fix.py`\n\n## Risks\n- none\n")
+	record, code, _ = _gate(tmp_path, plan)
+	assert code == 0 and record["reason"] == "heal_scope_verified", record
+
+
 def test_gate_respects_allow_workflow_edits(tmp_path: Path) -> None:
 	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py"), allow_edits="false")
 	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "workflow_edits_disabled"

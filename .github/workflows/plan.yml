@@ -2563,7 +2563,7 @@ jobs:
             fi
             if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${ISSUE_NUMBER}" \
               --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg detail "${AUTOMATION_PATH_GATE_DETAIL}" \
-              --arg source "plan" --arg b64 "${paths_b64}" '
+              --arg source "plan" --arg b64 "${paths_b64}" --arg heal "${plan_gate_heal:-false}" '
                 ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
                 | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
                 | [
@@ -2582,7 +2582,7 @@ jobs:
                     (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
                     (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
                     "",
-                    (if ($reason | startswith("heal_scope_"))
+                    (if ($heal == "true" or ($reason | startswith("heal_scope_")))
                       then "To proceed, a maintainer reviews the plan and replies `/approved`. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
                       else "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way." end),
                     "",

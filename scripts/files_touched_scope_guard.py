@@ -885,16 +885,19 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			# path set it cannot name exactly.
 			loose: list[str] = []
 			for line in (_plan_files_section(plan_text) or "").splitlines():
-				raw_tokens = _PLAN_GRANT_BACKTICK_RE.findall(line)
+				raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 				bullet = _PLAN_GRANT_BULLET_RE.match(line)
 				if bullet:
-					raw_tokens.append(bullet.group(1))
-				for raw in raw_tokens:
+					raw_tokens.append((bullet.group(1), False))
+				for raw, backticked in raw_tokens:
 					token = normalize_path(_plan_path_token(raw.strip()))
 					# Also keep nested tokens _plan_grant_path rejects (an
 					# extensionless `docs/guide`) so the scope check sees them.
-					# Glob and directory tokens count at the root too (`*.py`).
-					if token and (token.endswith("/") or any(char in token for char in _GLOB_CHARS)
+					# Glob and directory tokens count at the root too (`*.py`),
+					# but only from backticked spans: a bare bullet word such as
+					# `**Files` (bold markdown) is prose, not a path.
+					if token and ((backticked or "/" in token)
+						and (token.endswith("/") or any(char in token for char in _GLOB_CHARS))
 						or ("/" in token and "`" not in token and not _plan_grant_path(token))):
 						loose.append(token)
 			candidates: list[str] = []
