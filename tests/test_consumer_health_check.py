@@ -190,6 +190,8 @@ for repo, data in state["consumers"].items():
 		state.setdefault("enabled", []).append(path)
 		done()
 if method == "POST" and path == "repos/%s/issues" % state["self"]:
+	if state.get("fail_create"):
+		done(rc=1, err="HTTP 502: Bad Gateway")
 	state.setdefault("created", []).append(fields)
 	done(str(900 + len(state["created"])))
 if method == "POST" and path.endswith("/comments"):
@@ -202,13 +204,13 @@ done(rc=1, err="HTTP 404: Not Found (unexpected %s %s)" % (method, path))
 '''
 
 
-def _run_sh(tmp: Path, consumers: dict, open_issues: list, env_extra: dict | None = None, *, fail_open_issues: bool = False) -> tuple[subprocess.CompletedProcess, dict]:
+def _run_sh(tmp: Path, consumers: dict, open_issues: list, env_extra: dict | None = None, *, fail_open_issues: bool = False, fail_create: bool = False) -> tuple[subprocess.CompletedProcess, dict]:
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	(bin_dir / "gh").write_text(FAKE_GH, encoding="utf-8")
 	(bin_dir / "gh").chmod(0o755)
 	state_path = tmp / "gh_state.json"
-	state_path.write_text(json.dumps({"login": PIPELINE, "self": SELF_REPO, "open_issues": open_issues, "consumers": consumers, "fail_open_issues": fail_open_issues}), encoding="utf-8")
+	state_path.write_text(json.dumps({"login": PIPELINE, "self": SELF_REPO, "open_issues": open_issues, "consumers": consumers, "fail_open_issues": fail_open_issues, "fail_create": fail_create}), encoding="utf-8")
 	consumers_file = tmp / "consumers.json"
 	consumers_file.write_text(json.dumps(list(consumers)), encoding="utf-8")
 	templates_file = tmp / "templates.txt"
@@ -263,6 +265,40 @@ def test_a_failed_read_of_this_repos_issues_fails_the_day(tmp_path: Path) -> Non
 	assert result.returncode == 1
 	assert "CONSUMER_HEALTH outcome=failed reason=open_issues_unavailable" in result.stdout
 	assert "created" not in state and "closed" not in state
+
+
+FAKE_CURL = """#!/usr/bin/env bash
+echo sent >> "${FAKE_CURL_LOG}"
+[ "${FAKE_CURL_FAIL:-}" = "1" ] && exit 7
+printf '{"ok":true,"result":{"message_id":7}}'
+"""
+
+
+def test_the_failure_alert_is_recorded_only_after_telegram_delivers_it(tmp_path: Path) -> None:
+	for case, curl_fail, alerted_before, expect_sent, expect_recorded in (
+		("delivered", "", "false", True, True),
+		("send_failed", "1", "false", True, False),
+		("already_alerted", "", "true", False, False),
+	):
+		sub = tmp_path / case
+		sub.mkdir()
+		fake_bin = sub / "fakecurl"
+		fake_bin.mkdir()
+		(fake_bin / "curl").write_text(FAKE_CURL, encoding="utf-8")
+		(fake_bin / "curl").chmod(0o755)
+		curl_log = sub / "curl.log"
+		output = sub / "github_output"
+		output.write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{sub / 'bin'}:{fake_bin}:{os.environ['PATH']}", "FAKE_CURL_LOG": str(curl_log), "FAKE_CURL_FAIL": curl_fail,
+			"TG_BOT_SECRET": "x", "TG_ADMIN_CHAT_ID": "1", "ALERT_MSG_LEVEL": "WARNING",
+			"GITHUB_OUTPUT": str(output), "CONSUMER_HEALTH_FAILURE_ALERTED": alerted_before,
+		}
+		result, state = _run_sh(sub, {"o/a": _healthy(poll_age_hours=9)}, [], env, fail_create=True)
+		assert result.returncode == 1, case
+		assert "write_failures=1" in result.stdout, case
+		assert curl_log.exists() == expect_sent, case
+		assert ("failure_alerted=true" in output.read_text(encoding="utf-8")) == expect_recorded, case
 
 
 def test_the_poller_runs_the_check_once_a_day_in_this_repo_only() -> None:

@@ -267,7 +267,11 @@ if [ "${write_failures}" -gt 0 ]; then
 			alert="${alert}
 ${msg}"
 		done
-		if tg_send_msg "${alert}" "WARNING" >/dev/null && [ -n "${GITHUB_OUTPUT:-}" ]; then
+		# tg_send_msg returns 0 even when it sends nothing (level filter, no
+		# secret or chat id, curl failure); only a returned message id proves
+		# delivery, so a failed send is retried on the next tick.
+		alert_msg_id="$(tg_send_msg "${alert}" "WARNING" 2>/dev/null || true)"
+		if [ -n "${alert_msg_id}" ] && [ -n "${GITHUB_OUTPUT:-}" ]; then
 			echo "failure_alerted=true" >> "${GITHUB_OUTPUT}"
 		fi
 	fi
