@@ -1920,8 +1920,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 		return result, state_after, prompt
 
 
-# HEAL_INTAKE_SCOPE_GUARD_ENABLED is off by default (#6871): the intake still
-# composes the heal issue, then logs this line and creates nothing.
+# With HEAL_INTAKE_SCOPE_GUARD_ENABLED off (#6871; _stage sets "false", the
+# shipped default is on), the intake still composes the heal issue, then logs
+# this line and creates nothing.
 SCOPE_GUARD_SKIP_RE = re.compile(r"^WORKFLOW_HEAL skip reason=scope_guard_disabled repo=(\S+) labels=(\S+) ", re.MULTILINE)
 
 
@@ -2811,6 +2812,16 @@ def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Pa
 	# A report that named a run still pages: there the unresolved scope is a fault.
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
 	assert intake.count("_heal_report_claimed_no_runs; then") == 2
+	# Claimed runs that validate-payload drops (here a foreign repository) still
+	# page: the raw report named runs, so the missing scope is a fault.
+	tg_log = tmp_path / "tg-dropped.log"
+	foreign = [{"repo": "someone/else", "run_id": "500", "url": "https://github.com/someone/else/actions/runs/500"}]
+	result, state, _ = _run_intake(_consumer_payload(run_refs=foreign), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		extra_env=SCOPE_GUARD_ON, setup_git=_nr_tg_setup(tg_log), scope_marker_guard=True)
+	assert "scope_unavailable_no_runs" not in result.stdout, result.stdout
+	assert "skip reason=scope_marker_unresolved" in result.stdout, result.stdout + result.stderr
+	assert [line for line in tg_log.read_text().splitlines() if line.startswith("CRITICAL\t")]
+	assert "issues_created" not in state
 
 
 def test_intake_self_repo_autofix_failure_targets_source_pr_branch() -> None:
@@ -2845,8 +2856,8 @@ def test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is
 
 def _assert_shared_workflow_route(result, state_after) -> None:
 	assert result.returncode == 0, result.stderr + result.stdout
-	# The scope guard is off by default (#6871): the intake composes the heal
-	# issue and logs the routing, but creates no issue and posts no comment.
+	# With the scope guard off (#6871; _stage sets "false"), the intake composes
+	# the heal issue and logs the routing, but creates no issue and posts no comment.
 	created = _composed_issues(state_after)[0]
 	assert created["repo"] == SELF_REPO
 	assert TARGET_BRANCH_RE.search(created["body"]) is None

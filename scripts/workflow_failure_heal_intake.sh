@@ -1882,9 +1882,15 @@ _git_fetch_consumer_scope_ref()
 # Refusing it is expected, not an intake defect: skip with a log line and
 # exit 0 instead of a CRITICAL alert and a failed run. A report that claimed
 # runs keeps the CRITICAL refusal, because there an unresolved scope is a fault.
+# The raw report is checked too: validate-payload drops malformed or foreign
+# refs, and a report whose claimed runs were all dropped is a fault, not a
+# run-less report. A heal-scope recovery replacement keeps its documented
+# CRITICAL refusal (#7323).
 _heal_report_claimed_no_runs()
 {
-	[ "$(jq -r '(.run_refs // []) | length' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ]
+	[ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
+		&& [ "$(jq -r '(.run_refs // []) | length' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
+		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
 }
 
 _heal_skip_scope_unavailable()
