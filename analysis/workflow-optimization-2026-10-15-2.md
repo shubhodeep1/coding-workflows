@@ -599,3 +599,217 @@ The estimates below come from line counts and the line widths I saw, after remov
 | Code modularization | About 15, including `label_helpers.sh`, `gh_helpers.sh`, `workspace_init.sh`, a new `review_failure_marker_helpers.sh`, `review_autofix.yml`, `implement.yml`, `validate.yml`, `clarify.yml`, `orchestrate_poll_process.sh`, `validate_process.sh`, `review_rb_judge.sh`, 3 `review_autofix_step_*.sh` scripts, `comprehensive_test_and_release_gh_api.sh` | Large |
 | Expression size reduction | 4: `clarify.yml`, `test-and-mark-stable.yml`, `implement.yml`, `review_autofix.yml` | Small |
 | Medium/Low fixes | About 12, including `implement.yml`, `orchestrate_poll_process.sh`, `lint_pr_body_auto_close.py`, `lint-pr-body-auto-close.yml`, `comprehensive_test_and_release_gh_api.sh`, `workflow-log-analysis.yml`, `review_autofix_sweep.yml`, `review_autofix.yml`, `clarify.yml`, `gh_helpers.sh`, `test-and-mark-stable.yml`, `cancel_on_pr_close.yml` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-15)
+
+**Method.** I re-read every Deep Audit Section 2 finding (BATCH-001 to BATCH-003, API-001 to API-003) against the current code. I then looked for net-new duplicates in these places:
+- the `gh api user` identity reads across `scripts/*.sh` and `.github/workflows/*.yml`
+- the per-PR and per-issue object re-reads in `review_autofix.yml`, `implement.yml`, `plan.yml` and `clarify.yml`
+- the sweep tick in `review_autofix_sweep.yml`
+
+On "retry loop" (a RISKY_SKIP trigger): I apply it to explicit bash retry, backoff or poll loops. I do not apply it to every call routed through the `gh_retry` / `gh_api_retry` wrappers, because nearly every call in the repo goes through them.
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`:** the calls hit the same endpoint, or a strict subset of its fields. They have the same pagination, filters and token, sit in the same function or step with no mutation in between, keep the same error and retry behaviour, and do not cross a job or concurrency boundary. The implement stage may act on these directly.
+- **`NEEDS_VERIFICATION`:** the change looks correct, but static reading cannot prove every precondition. Do the listed checks before implementing.
+- **`RISKY_SKIP`:** the call is paginated, rate-limit-sensitive, auth-related, inside `orchestrate_poll_process.sh` or a race-defence path, or feeds a log key other workflows grep for. It is listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: sweep active-run snapshot, 2 workflows × 3 statuses → 3 repo-level listings**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `.github/workflows/review_autofix_sweep.yml:335-348` (status loop inside `snapshot_active_review_runs`) and `:437-439` (the per-workflow driver loop)
+- **Current call count:** 6 paginated listing calls per tick (at least 6 requests).
+- **Proposed call count:** 3 paginated calls (`status=queued|in_progress|pending` against the repo-level endpoint), filtered client-side by `.path`. The page count may rise.
+- **Endpoints:**
+  - current: `GET /repos/{o}/{r}/actions/workflows/{internal-review.yml|review_autofix.yml}/runs?status=…`
+  - proposed: `GET /repos/{o}/{r}/actions/runs?status=…`
+- **Evidence:** the same status loop runs once per workflow:
+  ```bash
+  for status in queued in_progress pending; do
+    ...
+    GH_TOKEN="${READ_TOKEN}" gh_api_retry --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+  ```
+  ```bash
+  for wf in internal-review.yml review_autofix.yml; do
+    snapshot_active_review_runs "${wf}"
+  done
+  ```
+  The jq reduce already checks `.path` for provenance (`:380`), so a repo-level listing filtered on the two workflow paths would give the same input set.
+- **Proposed fix (for manual review only):** call the status loop once against `repos/${REPOSITORY}/actions/runs`. Partition the runs by `.path` ending in `/internal-review.yml` or `/review_autofix.yml` before the existing reduce, and keep the `active_review_runs["${workflow}:…"]` key shape.
+- **Safety rationale:** it is paginated (`--paginate`). It drives the dispatch-deduplication path that protects against the PR #3895 duplicate-dispatch incident (`:322-330`). A repo-level listing also returns queued runs from every fan-out workflow, so the number of pages could exceed the 6 calls it replaces.
+- **Downstream signal:** do not auto-implement. A human must first measure the repo-level queued, in-progress and pending page counts during a busy window. They must also confirm that the per-workflow 404 handling (`:344`, `AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE`) has an equivalent, because a repo-level listing never returns 404 for a missing workflow file.
+
+**MERGE-002: post-merge validate dispatch, per-issue label reads in the PR-text fallback → one aliased GraphQL read**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/review_autofix.yml:863` (fallback issue list built with `labels: null`) and `:868-902` (the loop, with the per-issue read at `:872`)
+- **Current call count:** N, one `gh issue view --json labels` per text-referenced issue. This happens only after `closingIssuesReferences` came back empty (`:816-831`).
+- **Proposed call count:** ceil(N/50).
+- **Endpoint:** GraphQL `repository.issue…{labels}`. `gh issue view` is already GraphQL under the hood.
+- **Evidence:**
+  ```bash
+  issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc '... map({number: tonumber, labels: null})')"
+  ...
+  if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+  ```
+- **Proposed fix:**
+  - At `:863`, replace the `labels: null` construction with one aliased query, `n<N>: issueOrPullRequest(number:N){ ... on Issue { number labels(first:100){nodes{name}} } ... on PullRequest { number labels(first:100){nodes{name}} } }`. Follow the alias and batch pattern of `_cpr_fetch_pr_state_batches` (`cancel_on_pr_close.yml:157-217`).
+  - Map each result to `{number, labels:[…]}` so the existing `labels_known=true` branch in the loop is used.
+  - Keep the `:872` per-issue read only for aliases that come back null.
+  - Use `issueOrPullRequest`, not `issue`: `gh issue view` accepts PR numbers, and plain `issue(number:)` would return null for them.
+- **Safety rationale:** same step and same token. However, merging changes the error semantics: today one failed issue only `continue`s past that issue (`:879-880`), while a failed batch would affect every issue unless the per-issue fallback is kept.
+- **Downstream signal:** before implementing, verify:
+  1. The fallback keeps per-issue `continue` semantics on batch failure, either by falling back to the `:872` call per issue or by skipping with the same warning text.
+  2. `issueOrPullRequest` returns labels for both types in this repo.
+  3. N is realistically more than 1. If PR text usually references a single issue, the saving is 0, so drop the finding.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: sweep default branch, reuse the open-PR listing instead of `GET /repos/{r}` (an alternative to API-002)**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/review_autofix_sweep.yml:228-237` (the open-PR listing) and `:285` (the default-branch read)
+- **Current call count:** 1 `GET /repos/{r}` per tick that has at least one candidate.
+- **Proposed call count:** 0.
+- **Endpoints:**
+  - re-fetched: `GET /repos/{o}/{r}`
+  - already fetched: `GET /repos/{o}/{r}/pulls?state=open`
+- **Evidence:** the `/repos/{r}` read only runs after `total -eq 0` has already exited (`:273-276`). So whenever it runs, the PR listing has returned at least one PR, and each PR object carries `base.repo` (this repository). The listing's jq map drops that field:
+  ```bash
+  | jq -s '(add // []) | map(select(.draft == false) | {
+    number,
+    head_ref: .head.ref,
+  ```
+  ```bash
+  sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+  ```
+- **Proposed fix:**
+  - In the `:228-237` pipeline, also derive `sweep_default_branch` from `(add // []) | map(.base.repo.default_branch // empty) | first // ""`. The listing is a single pipe today, so this means teeing the slurped pages to a temp file and running two jq passes. Leave the per-row snapshot schema in `ci-cancelled-pr-snapshot.json` unchanged.
+  - Keep the `:286` regex check and the `default_branch_unavailable` skip. Keep the `:285` call only as the fallback when the derived value is empty.
+  - Unlike API-002's event-payload approach, this works for `schedule` triggers too.
+- **Safety rationale:** same token (`READ_TOKEN`) and same step, with no mutation in between. Failure behaviour is kept: a failed PR listing already aborts under `set -euo pipefail`, and an empty derived value falls back to today's call. The one thing static reading cannot prove is that `base.repo.default_branch` is present in list-endpoint items.
+- **Downstream signal:** verify:
+  1. `gh api repos/<r>/pulls?state=open&per_page=1 --jq '.[0].base.repo.default_branch'` returns the default branch.
+  2. Draft PRs carry the same `base.repo` field. The derivation should read from the unfiltered pages, because a tick where every PR is a draft still reaches `:285`.
+
+**REUSE-002: codex-agent `/user` reads, reuse the gate's already-exported PAT login**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/review_single_issue_security_pass.sh:369-373` (gate mode), invoked from `.github/workflows/review_autofix.yml:4132-4148`
+  - secondary candidates in the same job: `scripts/review_rb_judge_security_pass.sh:210` and `scripts/review_conflict_prepare.sh:1081-1083`
+  - source of the reusable value: `scripts/review_autofix_step_evaluate_gate.sh:334` and `:1371`, exported at `review_autofix.yml:328`
+- **Current call count:** 1 `GET /user` per security-pass gate evaluation, plus 1 each for the RB-judge marker check and the integration-sync conflict prepare, when those paths run.
+- **Proposed call count:** 0 for each, whenever the gate output is non-empty.
+- **Endpoint:** `GET /user`
+- **Evidence:** the script's own comment states the gap. The gate does export the login, and another codex-agent step already consumes it (`review_autofix.yml:5620`, `AUTOFIX_STREAK_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}`):
+  ```bash
+  # The gate job also probes /user, but its identity is not exported to this job.
+  SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+  ```
+  ```bash
+  echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+  ```
+- **Proposed fix:**
+  - Add a new step env, defaulting to empty (§8), on the "Single-issue security pass" step (`review_autofix.yml:4134-4146`), for example `SECURITY_PASS_GATE_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}`. Grep the repo first to confirm the name is unique (§10).
+  - In `review_single_issue_security_pass.sh:370`, use it when it matches `^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$`. Otherwise make the existing live call, then apply the existing `SECURITY_PASS_AUTHOR_LOGIN_FALLBACK`.
+  - Update the stale comment at `:369`.
+  - Follow `workflow_failure_heal_autofix_report.sh:216-228`, which already uses the env-first, live-fallback pattern.
+- **Safety rationale:**
+  - It crosses a job boundary (gate → codex-agent), so it fails the same-step precondition for `SAFE_TO_MERGE`.
+  - The tokens differ: the gate uses `secrets.GH_PAT` (`:576`), while the security-pass step uses `secrets.GH_PAT || github.token` (`:4135`). They resolve to the same identity only when `GH_PAT` is set.
+  - The gate fills the output only when `gate_fetch_marker_comments` ran (lazy, `:326-352`).
+  - The value authenticates trust markers, so a wrong login would let forged markers count.
+- **Downstream signal:** verify:
+  1. When `GH_PAT` is empty, the gate output is empty, so the live path and `SECURITY_PASS_AUTHOR_LOGIN_FALLBACK=github-actions[bot]` behave as today.
+  2. On "re-run failed jobs", codex-agent reuses the earlier attempt's gate outputs. Confirm that rotating `GH_PAT` to a different account between attempts is not a supported operation, or keep the live read when `github.run_attempt > 1`.
+  3. `SINGLE_ISSUE_SECURITY_PASS_ENABLED` defaults to `'false'` (`:4138`), so the saving applies only where it is enabled.
+  4. For `review_rb_judge_security_pass.sh:210` and `review_conflict_prepare.sh:1081-1083`, confirm that both run in the codex-agent job, where `needs.gate` is available, before extending the change to them.
+
+**REUSE-003: implement job, second `GET /user` in "Unblock judge bulk-delete override"**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/implement.yml:1806` ("Fetch issue metadata" step, `GH_TOKEN: ${{ secrets.GH_PAT }}` at `:1754`) and `:2137` ("Unblock judge bulk-delete override", `GH_TOKEN: ${{ secrets.GH_PAT }}` at `:2131`)
+- **Current call count:** 2 per run when an `override=bulk_delete -->` marker is present (`:2134`), otherwise 1.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /user`
+- **Evidence:** both reads are in the same `implement` job and use the same token:
+  ```bash
+  pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+  ```
+  ```bash
+  pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"
+  ```
+  The comment at `:1803-1805` only rules out the reverse direction, where the later read would feed the earlier grant.
+- **Proposed fix:**
+  - At `:1806`, after a successful read, append a validated login to `$GITHUB_ENV` under a new, grep-verified unique name such as `IMPLEMENT_PIPELINE_LOGIN`, using the `^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$` check.
+  - At `:2137`, use `${IMPLEMENT_PIPELINE_LOGIN:-}` first, then make the existing live call only when it is empty.
+  - Keep the `login_unavailable` skip.
+- **Safety rationale:** same job and same token, but different steps. That breaks the same-step precondition. The login also feeds a destructive-guard override, so a stale value matters.
+- **Downstream signal:** verify:
+  1. No step between `:1751` and `:2120` changes `GH_TOKEN` or re-authenticates `gh`.
+  2. The `:1806` step's `if: env.SKIP_IMPLEMENT != 'true'` matches `:2129`, so the env var is always set or always empty on the paths where `:2137` runs.
+  3. Writing a login, which is not a secret, to `GITHUB_ENV` is acceptable under the workflow's env-hygiene rules.
+
+**REUSE-004: plan job, second `GET /user` in "Auto-approve clear plan"**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/plan.yml:926` ("Close superseded CI-repair issue (merged PR)" step, `:868-872`, `GH_PAT`) and `:2641` ("Auto-approve clear plan" step, `:2476-2480`, `GH_PAT`)
+- **Current call count:** 2 when the plan gate returns `hold/identity_unavailable`, otherwise 1.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /user`
+- **Evidence:**
+  ```bash
+  login="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+  ```
+  ```bash
+  if printf '%s' "${plan_gate_result}" | jq -e '.decision == "hold" and .reason == "identity_unavailable"' >/dev/null 2>&1; then
+    plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+  ```
+- **Proposed fix:**
+  - At `:926`, export a validated login under a new, grep-verified unique name such as `PLAN_PIPELINE_LOGIN`.
+  - At `:2641`, use `${PLAN_PIPELINE_LOGIN:-}` before the live call. Keep the live call as the fallback.
+- **Safety rationale:** same job and token, but different steps. The `:926` read only runs when that step's conditions and helper lookup (`:916-920`) pass, so the env var is often unset.
+- **Downstream signal:** verify:
+  1. The conditions under which the `:868` step reaches `:926`. If it rarely runs, the saving is negligible, so drop the finding.
+  2. Where `plan_gate_login` is initialised before `:2636`. Confirm that seeding it before the first `run_plan_gate` gives the same decision the current hold-then-retry path reaches.
+
+**REUSE-005: intentional freshness re-reads, listed so they are not "optimised"**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:**
+  - `.github/workflows/implement.yml:1986-1992` ("Validate approval phase label") and `:2402` ("Recheck security dependency before edits"). Both re-read the issue already cached in `ISSUE_META_FILE` by `:723`, `:746` and `:1773`.
+  - `.github/workflows/review_autofix.yml:2188` ("Check PR state (defense-in-depth)") and `:5294` ("Check PR state before failure alerts"). Both re-read the PR that the gate already read (`review_autofix_step_evaluate_gate.sh:87-88`).
+- **Current call count:** 4 single-object reads per run on the relevant paths.
+- **Proposed call count:** no change.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}` and `GET /repos/{o}/{r}/pulls/{n}`
+- **Evidence:** the code documents the intent: `# Recheck just before advancing the phase. /approved must not bypass a still-open security prerequisite or a failed API read.` (`implement.yml:1984-1985`), and the step name "defense-in-depth" (`review_autofix.yml:2177`). The 2026-10-15 window's failure, run 38664219310, was a PR closing while its run was queued, which is exactly the race these re-reads defend against.
+- **Proposed fix:** none. Keep them.
+- **Safety rationale:** these calls exist to defend against TOCTOU and upstream races (PR closed or issue relabelled between steps). That is an explicit RISKY_SKIP trigger.
+- **Downstream signal:** do not merge these into earlier snapshots. Any change needs a human to confirm that the race window it closes no longer exists.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+I checked three live-fallback reads whose results are always consumed when they run: `implement.yml:2035`, `plan.yml:2857` and `review_autofix.yml:4433`. None is dead. `implement.yml:2035` is unreachable in practice, because `:1992` has just written a non-empty REST issue object to `ISSUE_META_FILE`. It costs 0 calls, so there is nothing to save. Its comment at `:2023` ("fetched in 'Fetch issue metadata'") is stale, which is a Deep Audit documentation item, not an API saving.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — It is in `orchestrate_poll_process.sh` and paginated (`:58`). Additional detail:
+  - GraphQL reports the bot author as `login: "github-actions"` with `__typename: "Bot"`, not `github-actions[bot]`. The `.user.login == "github-actions[bot]"` filters at `:62` and `:72` therefore need a mapping, or replay will silently stop. [verify]
+  - `.id` comparisons (`:72`, `:77`, `:87`) need `databaseId`.
+  - `:51` might reuse `UNBLOCK_TRUSTED_LOGIN` if it is resolved earlier in the same tick. [verify ordering]
+- BATCH-002: RISKY_SKIP — It is in `orchestrate_poll_process.sh` (`:6794`). Additional detail: REST `issues/{n}` returns a state for a PR number, but GraphQL `issue(number:)` returns null. Use `issueOrPullRequest`, or a blocker that is a PR becomes `unknown` and defers forever.
+- BATCH-003: RISKY_SKIP — It is in `orchestrate_poll_process.sh` and paginated (`:9069`). Additional detail:
+  - `_fetch_pr_json` (`:2215-2219`) is a plain REST read with no cache.
+  - GraphQL `state` is `OPEN|CLOSED|MERGED` in upper case, while `_jq_field … 'open|closed|merged'` (`:9057`) matches lower case. Lower-case it, or every PR becomes "unable to fetch state".
+  - Check whether `evaluate_sync_superseded_by_main` (`:9005`) runs after `STALL_MANAGED_LINKED_PR_CACHE` is populated (`:27542`) before extending `_fetch_linked_pr_status_graphql` (`:18083`).
+- API-001: RISKY_SKIP — It is in `orchestrate_poll_process.sh` (`:14508-14621`). Additional detail:
+  - `gh issue edit` makes its own GraphQL lookup before mutating, so each extra removal costs at least 2 calls.
+  - The harness-error branch (`:14512`, `:14519`) can fold its add of `ai:harness-broken` into the same edit.
+  - Verify that `ai:validate-failed` is not already in the phase contract's `.remove` list for `ai:validation-failed`.
+- API-002: NEEDS_VERIFICATION — The event-payload approach depends on whether `schedule` payloads carry `repository`. REUSE-001 is a trigger-independent alternative with zero calls.
+- API-003: RISKY_SKIP — The call is `--paginate` under `gh_api_retry` in the dispatch-deduplication snapshot (`review_autofix_sweep.yml:340`). Skipping later statuses after a 404 is probably safe, but it touches the `AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE` log path, so a human should confirm a 404 is deterministic per workflow within a tick.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 6 | MERGE-002, REUSE-001, REUSE-002, REUSE-003, REUSE-004, API-002 (cross-ref) |
+| RISKY_SKIP | 7 | MERGE-001, REUSE-005, BATCH-001 (cross-ref), BATCH-002 (cross-ref), BATCH-003 (cross-ref), API-001 (cross-ref), API-003 (cross-ref) |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass. Every net-new candidate crosses a step or job boundary, changes per-item error semantics, or feeds a trust or race-defence decision. Once their verification steps pass, the best-value candidates are, in order: REUSE-002 (when `SINGLE_ISSUE_SECURITY_PASS_ENABLED=true`), REUSE-001, REUSE-003 and REUSE-004.
