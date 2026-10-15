@@ -5,13 +5,33 @@
   "entry_id": "processed_command_7444_6192693819_approved",
   "issue_number": 7444,
   "metadata": {
+    "branch": "ai/issue-7444",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/plan.yml",
+      "README.md",
+      "agents.d/7444-heal-plan-grant-body-edit-fix.md",
+      "changelog.d/7444-heal-plan-grant-body-edit-fix.md",
+      "scripts/files_touched_scope_guard.py",
+      "scripts/implement_heal_preflight.sh",
+      "scripts/workflow_failure_heal.py",
+      "tests/test_heal_plan_grant_body_edit_fix.py",
+      "tests/test_implement_heal_preflight.py",
+      "tests/test_plan_auto_approve_safe_state_fetch.py"
+    ],
+    "issue_number": 7444,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7444",
+    "pr_number": 7447,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7447",
+    "run_attempt": "1",
+    "run_id": "38739360437",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38739360437"
   },
   "run_attempt": 1,
   "run_id": "38739360437",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-15T13:05:36Z",
+  "status": "completed",
+  "timestamp": "2026-10-15T13:34:46Z",
   "workflow": "implement"
 }
