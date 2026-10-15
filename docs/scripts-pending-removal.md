@@ -338,3 +338,14 @@ Copy this block when adding a new entry:
   - `gh issue list -R shubhodeep1/coding-workflows --state open --search "ai:pr6576-shard-followup-defect in:body"` returns no issues.
   - `gh api 'repos/shubhodeep1/coding-workflows/actions/workflows/pr6576-shard-followup.yml/runs?status=in_progress&per_page=1' --jq .total_count` returns `0`.
 - **Owner:** @shubhodeep1
+
+### `scripts/consumer_health_check.sh` + `scripts/consumer_health_check.py` (daily step in `.github/workflows/orchestrate_poll.yml`)
+
+- **Introduced in:** #7415 (2026-10-15)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh api 'repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai%3Aconsumer-health&per_page=100' --jq length` returns `0` (no consumer problem is still being tracked), or a replacement check owns those issues.
+  - `rg -n 'consumer_health_check' .github/workflows scripts --glob '!scripts/consumer_health_check.*'` lists only the four `orchestrate_poll.yml` steps, so they are removed together with the scripts.
+  - A replacement that watches the same four signals (inactivity-disabled wrappers, manually disabled wrappers, silent pollers, tracking issues near the comment cap) is wired into the scheduler and has run green for 7 days.
+- **Owner:** @shubhodeep1
