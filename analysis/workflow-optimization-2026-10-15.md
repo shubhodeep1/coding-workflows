@@ -750,3 +750,243 @@ All counts below are estimates from block line counts multiplied by observed ave
 | Code modularization | `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/review_collect_pr_metadata.sh`, `scripts/review_autofix_step_mark_ready_to_merge.sh`, `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh`, new `scripts/stage_support_files.sh`, `.github/workflows/{review_autofix,issue_pr_status,orchestrate_poll,validate,implement,security-audit,orchestrate_clarify_respond}.yml`, new `.github/actions/bootstrap-gh-api-retry/` (DUP-001…007) | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/review_autofix.yml` (EXPR-001…005, DEBT-001) | Small |
 | Medium/Low fixes | `.github/workflows/internal-review.yml`, `.github/workflows/validate.yml`, `.github/workflows/sync_ai_labels.yml`, `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/orchestrate_force_tick.sh`, `scripts/label_helpers.sh` (BUG-003…008, SEC-001, CONSIST-*, SHELL-*, DEAD-*, DEBT-002) | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-15)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`** means every precondition was proved by reading the code. Both reads hit the same data with the same auth and no pagination. They sit in one function or step with no write between them. Error handling, retry behaviour, log keys and cache contracts stay the same. The implement stage may act on these directly.
+- **`NEEDS_VERIFICATION`** means the saving is real, but at least one precondition can't be proved from the code alone. Run the listed verification steps before changing anything.
+- **`RISKY_SKIP`** means at least one hard trigger applies: a retry or backoff loop, pagination, a stall-recovery judge, `orchestrate_poll_process.sh`, a race or freshness guard, or a change to log keys that other code greps. These findings are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** MERGE-001
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `scripts/orchestrate_force_tick.sh:57-67` (`_force_tick_fetch_pull_request_json`)
+  - `scripts/orchestrate_force_tick.sh:103-115` (`_force_tick_fetch_issue_body`)
+  - `scripts/orchestrate_force_tick.sh:274-296` (the two lookup blocks)
+  - Caller: `.github/workflows/implement.yml:5935-5940`
+- **Current / proposed call count:** 2 → 1 per force tick when `--issue` is an issue number. Today that is a guaranteed 404 on `pulls/{issue}`, then `issues/{issue}`.
+- **Endpoints:** `GET /repos/{o}/{r}/pulls/{n}`, then `GET /repos/{o}/{r}/issues/{n}`. Proposed: one `POST /graphql` with `repository.issueOrPullRequest(number:)`.
+- **Evidence:** `implement.yml:5937` passes `--issue "${ISSUE_NUMBER}"`, which is an issue, and no `--tracking-issue`. The script always tries the PR endpoint first:
+  ```bash
+  if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
+  	pr_json=""
+  	if ! pr_json="$(_force_tick_fetch_pull_request_json "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+  		pr_lookup_failed="true"
+  ```
+  For an issue number, `pulls/{n}` returns 404. The script then falls through to `issues/{n}` at line 288, so the first call is always wasted.
+- **Proposed fix:** Replace the two lookups with one GraphQL helper. It selects `__typename`, plus `... on PullRequest { body headRefName baseRefName }` and `... on Issue { body }`. Feed the PR fields to `_force_tick_extract_tracking_issue_from_pull_request_json` (same field shape as the REST `head.ref`/`base.ref`/`body`). Feed the issue body to `_force_tick_extract_tracking_issue`. Follow the single-call, fail-open shape of `_fetch_linked_issue_bodies_graphql` (`scripts/review_collect_pr_metadata.sh:76-181`). Alternative with no API calls: have `implement.yml` pass `--tracking-issue` if the step already knows it.
+- **Safety rationale:** The merge changes error handling. The `pr_lookup_failed` / `issue_lookup_failed` pair drives the warning at lines 299-300, a GraphQL error differs from a REST 404, and the test mock (`tests/test_orchestrate_force_tick.py:90-116`) emulates only REST endpoints.
+- **Downstream signal (verify first):**
+  1. Check whether the `implement.yml` "Force orchestrate poll after implementation PR" step (5928-5940) already has the tracking issue in env or a file. If so, prefer passing `--tracking-issue` (0 lookup calls).
+  2. If GraphQL is used, make sure a total GraphQL failure still produces the "lookup failed" warning at lines 299-300.
+  3. Extend the gh mock in `tests/test_orchestrate_force_tick.py` to answer `api graphql`. Re-run `test_force_tick_warns_when_tracking_issue_lookups_fail` and `test_force_tick_resolves_tracking_issue_from_pr_branch_refs`.
+
+---
+
+- **ID:** MERGE-002
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/review_enable_auto_merge.sh:154-170` (paginated PR labels read)
+  - `scripts/review_enable_auto_merge.sh:221-228` (full PR read)
+  - `scripts/review_enable_auto_merge.sh:91-109` (`reviewed_head_is_current_for_labels`, called at 112 and 158)
+- **Current / proposed call count:**
+  - Main path: 2 → 1.
+  - e2e-smoke-test exit path: 2 (155 + 100) → 1.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}/labels?per_page=100` (`--paginate`) and `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** Both reads run at top level, one after the other. Nothing writes between them; the only step between is the `grep -qx 'e2e-smoke-test'` check. The `pulls/{n}` payload already carries `labels[]`, `head.sha`, `head.ref` and `base.ref`, which is everything read at 230, 244 and 264.
+- **Proposed fix (manual review only):** Move the line-221 read above the label guard and get labels from `.labels[].name`. Reuse its `head.sha` in place of the separate freshness read at line 100.
+- **Safety rationale:** Line 155 paginates (a hard trigger). It was added on purpose for PRs with more than 30 labels (comment at 144-153, Copilot review #3 on PR #1823), and it is a fail-closed race guard against the e2e gate (comment at 120-143). Merging also changes which `::warning::` text appears on failure.
+- **Downstream signal (do not auto-implement):** A human must confirm that the `labels` array embedded in `GET /pulls/{n}` is never truncated below GitHub's 100-labels-per-issue cap. They must also keep both fail-closed exits and their warning texts.
+
+---
+
+- **ID:** MERGE-003
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/unblock_judge.sh:1075-1091` (`issues/{ITEM}` → `item.json`)
+  - `scripts/unblock_judge.sh:1110-1117` (`pulls/{ITEM}` when `ITEM_KIND=pr`)
+- **Current / proposed call count:** 2 → 1 for PR items only.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}` and `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** For a PR item, the issue read only sets `ITEM_KIND="pr"` through `.pull_request` (line 1087) and supplies labels and body. Then line 1113 fetches the same PR again for `head.sha`, `head.ref`, `user.login`, `author_association`, `head.repo.full_name` and `base.ref`.
+- **Proposed fix (manual review only):** Fetch `pulls/{n}` once for PR items and build the `item.json` fields from it. The labels, body, state and `user` fields are shared.
+- **Safety rationale:** `unblock_judge.sh` is a stall-recovery judge, which is a hard trigger. `item.json` is also passed whole to `check_triage_resolution.py` (line 336), so its REST issue shape is a contract. The fresh re-read at 1604-1612 is a deliberate race guard (#6557) and must stay.
+- **Downstream signal (do not auto-implement):** This needs a human to review the `item.json` consumers (`check_triage_resolution.py`, the trust checks at 929-933) before any shape change. Low value: it saves one call only on PR-kind items.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** REUSE-001
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - Gate fetch: `scripts/review_autofix_step_evaluate_gate.sh:187-207` (call at 190-196; output at 1362)
+  - Hand-off: `.github/workflows/review_autofix.yml:318`, `:723`
+  - Re-fetch: `.github/workflows/review_autofix.yml:810-829` (call at 816-822)
+- **Current / proposed call count:** 2 → 1 GraphQL calls for every merged PR whose closing references are empty but whose title or body is not. If the title and body are also empty, the job is already skipped through `post_merge_validate_context_definitely_empty` (line 716).
+- **Endpoint:** `POST /graphql`, `pullRequest.closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } }`. The query string and `--jq` are identical at both sites.
+- **Evidence:**
+  - The gate records whether its fetch succeeded (`post_merge_linked_issues_cache_known="true"`, line 198), but exports only the array.
+  - Downstream, `[]` from a successful fetch looks exactly like `[]` from the default value (line 30). So the job repeats the same query:
+    ```bash
+    issue_nodes_json="$(normalize_post_merge_issue_nodes_json "${POST_MERGE_LINKED_ISSUES_JSON:-[]}")"
+    ...
+    if [ "${issue_nodes_json}" = "[]" ]; then
+      if issue_nodes_json_live="$(gh_retry gh api graphql \
+    ```
+- **Proposed fix:**
+  1. In the gate script, also print `post_merge_linked_issues_cache_known=${post_merge_linked_issues_cache_known:-false}` to `GITHUB_OUTPUT` next to line 1362. Initialise it to `false` before the `if` at 187, because the variable is currently set only inside it.
+  2. Add the gate output at `review_autofix.yml:318`. In the job env, add a new non-colliding name, `POST_MERGE_LINKED_ISSUES_CACHE_KNOWN` (no existing `POST_MERGE_*` env uses it).
+  3. Wrap 816-828 with `if [ "${POST_MERGE_LINKED_ISSUES_CACHE_KNOWN:-false}" != "true" ]`. The live `gh_retry` re-fetch stays the fallback when the gate's single unretried `gh api` failed.
+- **Safety rationale:** The calls are in different jobs (`gate` → `post-merge-validate-dispatch`), so they are not in the same step. GitHub silently drops a job output that looks like a secret, so the fallback path must survive an empty or missing new output.
+- **Downstream signal (verify first):**
+  1. Confirm that a missing or dropped `post_merge_linked_issues_cache_known` output evaluates to not-`true`. The re-fetch must then still run (fail-open).
+  2. Run `wc -c .github/workflows/review_autofix.yml` after the 2-line edit to check the 480,000-byte guard (§24).
+  3. Re-run the review_autofix gate and post-merge contract tests.
+
+---
+
+- **ID:** REUSE-002
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files / lines:**
+  - `scripts/orchestrate_force_tick.sh:274-284` (`pulls/{n}` read, kept in `pr_json`)
+  - `scripts/orchestrate_force_tick.sh:286-296` (`issues/{n}` body re-read)
+  - `scripts/orchestrate_force_tick.sh:69-101` and `:43-55` (the two extractors)
+  - Callers passing a PR number with no `--tracking-issue`: `.github/workflows/review_autofix.yml:986-991`, `:4533-4538`, `:5404-5409`
+- **Current / proposed call count:** 2 → 1 for every force tick on a PR whose head/base ref is not `orchestrator/project-N` and whose body has no `Tracking issue: #N` line (every non-orchestrated PR).
+- **Endpoints:** `GET /repos/{o}/{r}/pulls/{n}` (kept). `GET /repos/{o}/{r}/issues/{n}` with `--jq '.body'` (removed on this path).
+- **Evidence:**
+  - A PR's issue body and PR body are the same stored field.
+  - The PR extractor already searched that body with the same regex the issue extractor uses:
+    ```python
+    body_re = re.compile(r"(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)")   # line 85
+    match = re.search(r"(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)", body, re.MULTILINE)   # line 51
+    ```
+    `re.MULTILINE` has no effect without `^`/`$`.
+  - Whenever the `pulls/{n}` read succeeded and found no tracking issue, the second call at line 288 re-reads the same body and returns the same empty result.
+- **Proposed fix:**
+  - Initialise `pr_json=""` next to `pr_lookup_failed="false"` (line 227); this reuses the existing name and adds no new identifier.
+  - Change the guard at line 286 to:
+    ```bash
+    if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ] && { [ "${pr_lookup_failed}" = "true" ] || [ -z "${pr_json}" ]; }; then
+    ```
+  - When `pulls/{n}` failed (the issue-number case, or a transient error), the `issues/{n}` fallback still runs exactly as today.
+- **Safety rationale:** This meets the `SAFE_TO_MERGE` preconditions:
+  - **Same data and scope:** the dropped call reads a strict subset (`.body`) of data already held in `pr_json`, with the same `GH_PAT` scope and no pagination.
+  - **No intervening write:** both reads are consecutive top-level blocks of one script; only Python parsing runs between them.
+  - **Same error handling and logs:** `issue_lookup_failed` only matters when `pr_lookup_failed` is also `true` (299-300), and that path is unchanged. The log text stays the same.
+  - **No retry loop, no poller code, no cache contract:** `orchestrate_poll.yml:1582-1587` passes `--tracking-issue`, so it never reaches either lookup.
+- **Downstream signal (implement directive):** In `scripts/orchestrate_force_tick.sh`, initialise `pr_json=""` at line 227 and skip the `_force_tick_fetch_issue_body` block (286-296) unless `pr_lookup_failed=true` or `pr_json` is empty. Then add a case to `tests/test_orchestrate_force_tick.py`: a PR mock with no tracking ref or body must produce no `issues/` call.
+
+---
+
+- **ID:** REUSE-003
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `scripts/review_rb_judge.sh` runs in the codex-agent job (`review_autofix.yml:4327`), after `review_collect_pr_metadata.sh` (`review_autofix.yml:2610`) has already written:
+  - `PR_PAYLOAD_FILE` (`review_collect_pr_metadata.sh:218`)
+  - `LINKED_ISSUES_RAW_FILE` (`:339-351`)
+  - `PR_DIFF_FILE` (`:509`)
+
+  The judge then re-reads the same data:
+  - `review_rb_judge.sh:1071`: `pulls/{n}`, the same data as `PR_PAYLOAD_FILE`
+  - `:1096-1100`: GraphQL `closingIssuesReferences` plus `baseRefName`, overlapping `LINKED_ISSUES_RAW_FILE` and `PR_META_FILE.baseRefName`
+  - `:1120-1122`: a single-attempt `pulls/{n}` re-read that fires only when the `gh_retry` read at 1071 produced no title or body. In effect it is an extra retry, not a new source.
+  - `:1236-1239`: `pulls/{n}` with `Accept: application/vnd.github.diff`, the same data as `PR_DIFF_FILE`
+- **Current / proposed call count:** 4 → 1–2 per judge run (theoretical).
+- **Endpoints:** `GET /pulls/{n}` (JSON and diff media types), `POST /graphql`.
+- **Evidence:** All three artefacts are on disk in `RUNTIME_DIR` for the same job.
+- **Safety rationale:** This is a stall-recovery judge (hard trigger). The editor or the conflict resolver may have pushed between metadata collection and the judge. The script also documents race-motivated fresh reads (`:1878-1888`, the merged-state re-fetch). The labels page size differs (`first:100` plus `pageInfo` here, `first:50` in the cached file).
+- **Downstream signal (do not auto-implement):** A human must decide whether each re-read guards freshness. At minimum, the 1071 merged-state read and the 1888 guard must stay live. The 1120-1122 re-read could only be dropped after confirming that removing this extra attempt is acceptable when `gh_retry` is exhausted.
+
+---
+
+- **ID:** REUSE-004
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `.github/workflows/issue_pr_status.yml:356-361` (closing refs with `labels(first: 50)`)
+  - `.github/workflows/issue_pr_status.yml:469-510` (`ORCH_ALIAS_FRAGMENT` batch with `labels(first: 50)`)
+  - `.github/workflows/issue_pr_status.yml:627` → `scripts/label_helpers.sh:219-220` (per-issue paginated `GET /issues/{n}/labels`), then PUT at 247-249
+- **Current / proposed call count:** N label GETs → 0 (theoretical). The labels are already in the batched payloads.
+- **Endpoints:** `POST /graphql` (has labels), `GET /repos/{o}/{r}/issues/{n}/labels` (paginated), `PUT /issues/{n}/labels`.
+- **Evidence:** Every issue that reaches line 627 was classified from a payload that already carried its labels.
+- **Safety rationale:** The helper's GET is the read half of a read-modify-write full-replace PUT. Feeding it a batch snapshot taken seconds earlier widens the lost-update race that Deep Audit BUG-002 documents (`ai:merged` vs `ai:ready-to-merge`). The GET is also paginated (hard trigger).
+- **Downstream signal (do not auto-implement):** Do not reuse the batch labels here. Revisit only after BUG-002 replaces the PUT with POST-add plus per-label DELETE; then the pre-read may become unnecessary.
+
+---
+
+- **ID:** REUSE-005
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/validate_process.sh:3504-3508` (tracking issue `.body`)
+  - `scripts/validate_process.sh:4810-4820` (tracking issue `.state`, the "Tracker-open guard")
+- **Current / proposed call count:** 2 → 1 (theoretical).
+- **Endpoint:** `GET /repos/{o}/{r}/issues/{tracking}`, twice.
+- **Evidence:** It is the same issue resource. The first read could also capture `.state`.
+- **Safety rationale:** The two reads are separated by the whole LLM validation run (minutes). The second read is a deliberate fresh check so that no fix-up is opened against a tracker that closed during validation. Its error handling is also different: 3505 is fatal under `set -e`, while 4813 fails open.
+- **Downstream signal (do not auto-implement):** Listed so that no later pass merges these reads. Keep both.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID:** DEAD-API-001
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `scripts/review_autofix_step_mark_ready_to_merge.sh:58-63` (live `pulls/{n}` title/body fallback)
+  - Producer: `scripts/review_collect_pr_metadata.sh:218,237-243`
+  - Step gate: `.github/workflows/review_autofix.yml:4187-4209`
+- **Current / proposed call count:** 1 → 0 (believed never to fire on this path today).
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}` with `--jq '.title + " " + (.body // "")'`.
+- **Evidence:**
+  - The call fires only when `PR_META_FILE` gives a blank title+body:
+    ```bash
+    PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+    if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+      PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...
+    ```
+  - The step runs only on `success()`, excluding `CLAUDE_BRANCH_REVIEW_MODE` (line 4198).
+  - "Collect PR metadata" (`review_autofix.yml:2603-2610`) has no `continue-on-error`. On the PR path it writes `PR_META_FILE` from a successful `pulls/{n}` REST payload. That payload's title is required to be non-blank.
+  - `PR_META_FILE` lives under `/tmp` (`review_autofix_step_init_runtime_workspace.sh:9,45`), outside the workspace cleanup.
+  - Its only other writer, `review_conflict_resolve.sh:2246-2249`, rewrites `.body` only.
+  - The fallback in `review_autofix_step_mark_review_blocked_workflow_failure.sh:41-44` is **not** dead. That step runs on `failure()`, possibly before `PR_META_FILE` exists. Do not touch it.
+- **Proposed fix:** Delete lines 61-63, the inner `if` block. Keep the `PR_META_FILE` read and the extraction.
+- **Safety rationale:** Static reading shows the branch can't be reached. But the claim rests on two things outside this repo's code: GitHub's non-blank-title rule, and no future writer clearing `PR_META_FILE`. So the `SAFE_TO_MERGE` bar is not met.
+- **Downstream signal (verify first):**
+  1. Confirm the REST API rejects a blank PR title (422).
+  2. Re-grep for writers of `PR_META_FILE` (`> "${PR_META_FILE}"`, `mv … "${PR_META_FILE}"`) and confirm only the two above exist.
+  3. Confirm "Mark linked issues ready to merge" exists only in the codex-agent job, after "Collect PR metadata".
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION. I agree with the saving. The fix changes `_is_gh_permanent_failure`, which sets `gh_retry`'s retry behaviour for every caller, so the live `gh label create` stderr text must be confirmed first. Applying the matching cache change to the poller's copy (`orchestrate_poll_process.sh:3995-4050`) is RISKY_SKIP; limit auto-work to `label_helpers.sh`.
+- BATCH-001: RISKY_SKIP. The work is inside `orchestrate_poll_process.sh` (`close_merged_issues_sweep`), and `_issue_timeline_with_cross_refs_json` has a paginated REST fallback (`gh_helpers.sh:1745-1767`). It needs a human design review with `ORCH_POLL_PHASE` timing data first.
+- API-002: RISKY_SKIP (stricter than the Deep Audit's tag). Net-new detail:
+  - The full REST shape of `PR_PAYLOAD_FILE` is read by at least 8 consumers:
+    - `.state` in `review_run_reviewers.sh:460`
+    - `.labels[].name` in `review_autofix_step_detect_smoke_test.sh:50`
+    - `.head.sha` in `review_autofix.yml:2798`
+    - `.head.ref` and `.body` in `review_rb_judge.sh:1210,1363`
+    - the `head` object in `collect_pr_check_runs_context.py:120`
+    - `review_conflict_resolve.sh:681,1398,2035`
+    - `review_single_issue_security_pass.sh:320`
+  - `review_autofix.yml:2798-2806` uses it for a head-moved race check.
+  - Line 218 fails hard, while the line-267 GraphQL fails open, so folding them changes error handling.
+- BATCH-002: NEEDS_VERIFICATION. It saves N−1 calls only on the body-fallback path. A batched query must keep the per-issue "state unknown → skip" behaviour (`review_autofix.yml:879-880`) when one alias fails.
+- API-003: RISKY_SKIP. The fix rewrites inline retry and backoff loops (`review_autofix.yml:776-798`, `1113-1135`), a hard trigger. It needs manual review that sourcing `gh_helpers.sh` keeps the #5495 stdout-buffering behaviour.
+- API-004: RISKY_SKIP. The call is in `orchestrate_poll_process.sh` and needs gh's comment-then-close ordering confirmed. Splitting it adds a call (1 → 2), so it is a correctness fix, not a consolidation.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | REUSE-002 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, DEAD-API-001 |
+| RISKY_SKIP | 5 | MERGE-002, MERGE-003, REUSE-003, REUSE-004, REUSE-005 |
+
+Cross-referenced Deep Audit items (not counted above):
+- NEEDS_VERIFICATION: API-001, BATCH-002
+- RISKY_SKIP: BATCH-001, API-002, API-003, API-004
+
+### Implement-Stage Handoff
+- **REUSE-002:** in `scripts/orchestrate_force_tick.sh`, skip the `issues/{n}` body re-read when the `pulls/{n}` read already succeeded. This removes one call from every force tick on a non-orchestrated PR, across the three `review_autofix.yml` force-tick steps. Add a no-`issues/`-call case to `tests/test_orchestrate_force_tick.py`.
+
+Assumptions and gaps:
+- This was a static-only audit; no shell, git or test runs were available.
+- The "GitHub rejects blank PR titles" point (DEAD-API-001) and the dropped-secret-output behaviour (REUSE-001) come from platform knowledge, not from anything in this repo.
+- Call savings are per invocation. Without phase-level telemetry I could not turn them into totals per hour.
