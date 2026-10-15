@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix the issue recommends is outside the frozen heal scope. Where should it go?\nChoices:\n- A: Fix the action itself by adding `.github/actions/claude-pool-token/package.json` with `{\"type\": \"commonjs\"}`, plus any staging or sparse-checkout list that copies the action directory. This fixes all 16 workflows that use the action, but the scope must first be widened to include the new file, e.g. by re-filing the heal issue or recording an operator step. (RECOMMENDED)\n- B: Fix the action by renaming `main.js` and `post.js` to `main.cjs` and `post.cjs` and updating `main:` / `post:` in `action.yml`. This also fixes every caller, but it changes more files and needs the same scope widening as A.\n- C: Stay inside the current scope by adding a step to `plan.yml` that writes the CommonJS `package.json` into `.codex-workflow-src/.github/actions/claude-pool-token/` before \"Resolve Claude credential\". Only planning is fixed; clarify, implement, review and the other callers stay broken in consumers whose `package.json` sets `\"type\": \"module\"`.\nQ2: Should this issue also include the secondary change, making standalone stall recovery in `scripts/orchestrate_poll_process.sh` skip `ai:retro` and `ai:security-audit` tracker issues?\nChoices:\n- A: No. File it as a separate follow-up issue. It did not cause this failure, and it is outside the heal scope. (RECOMMENDED)\n- B: Yes. Include it here. This needs the same kind of scope widening as Q1:A/B.\nQ3: What should the regression test cover?\nChoices:\n- A: Run `main.js` and `post.js` with `node` from a temporary parent directory whose `package.json` sets `\"type\": \"module\"`. Assert there is no `ReferenceError`, and that `main.js` writes `available=` to a temporary `GITHUB_OUTPUT` (skip the test if `node` is missing). (RECOMMENDED)\n- B: A static contract test only: assert that the action directory's module type is CommonJS, via a `package.json` or `.cjs` entry points, without running Node.\n- C: Both A and B.",
+  "fingerprint": "e3a41ec6e6ae02dddade4be6491aaae9447d4c94b50399ac8dc6c93bbbaa0dea",
+  "lineage": {
+    "issue_number": 7430,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38707122921",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38707122921",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261015084323_1dbec8dc90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7430,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38707122921"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7430 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-15T08:43:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
