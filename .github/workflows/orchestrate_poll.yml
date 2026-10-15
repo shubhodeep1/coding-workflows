@@ -1511,6 +1511,68 @@ jobs:
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 
+      # Daily consumer health check (scripts/consumer_health_check.sh), this
+      # repository only. The cache entry keyed on the UTC date records that
+      # today's check succeeded, so later ticks skip it without an API call;
+      # a delayed or failed tick leaves no entry and the next tick retries.
+      - name: Pick today's consumer health check key
+        id: consumer_health_date
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/consumer-health-day"
+          day="$(date -u +%F)"
+          printf '%s\n' "${day}" > "${RUNNER_TEMP}/consumer-health-day/day.txt"
+          echo "day=${day}" >> "${GITHUB_OUTPUT}"
+
+      - name: Look up today's consumer health check
+        id: consumer_health_day
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
+          lookup-only: true
+
+      - name: Run daily consumer health check
+        id: consumer_health
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_day.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          CONSUMER_HEALTH_CHECK_ENABLED: ${{ vars.CONSUMER_HEALTH_CHECK_ENABLED || 'true' }}
+          CONSUMER_HEALTH_POLLER_SILENT_HOURS: ${{ vars.CONSUMER_HEALTH_POLLER_SILENT_HOURS || '6' }}
+          CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT: ${{ vars.CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT || '2000' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          src=".codex-workflow-src"
+          [ -f "${src}/scripts/consumer_health_check.sh" ] || src=".codex-workflow-src-main"
+          for f in consumer_health_check.sh consumer_health_check.py; do
+            if [ ! -f "${src}/scripts/${f}" ]; then
+              echo "::warning::Consumer health check support file ${f} is missing; the check is skipped."
+              exit 1
+            fi
+            install -m 0755 "${src}/scripts/${f}" "scripts/${f}"
+          done
+          templates="${RUNNER_TEMP}/consumer-health-templates.txt"
+          find "${src}/workflow-templates" -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort > "${templates}"
+          CONSUMER_HEALTH_CONSUMERS_FILE="${src}/.github/ai/consumer_repos.json" \
+            CONSUMER_HEALTH_TEMPLATES_FILE="${templates}" \
+            bash scripts/consumer_health_check.sh
+
+      - name: Record today's consumer health check
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
+
       # Q99: GitHub runs the */5 cron every 25-60 minutes, so a project that
       # could take its next step now (a merged wave, a new phase) waited for
       # the next cron run. When this tick moved a project forward
