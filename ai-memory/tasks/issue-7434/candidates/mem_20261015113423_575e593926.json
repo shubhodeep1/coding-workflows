@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The root-cause fix lives in `.github/actions/claude-pool-token/`, which this heal issue's scope does not include. How should this issue proceed?\nChoices:\nA. Stay inside the frozen scope and fix only `plan.yml`. Add a step just before \"Resolve Claude credential\" that writes `{\"type\":\"commonjs\"}` to `.codex-workflow-src/.github/actions/claude-pool-token/package.json`. Add a regression test under `tests/` that runs the action's `main.js`/`post.js` below an ESM parent `package.json` with that file in place, plus a changelog fragment. This unblocks planning for `digital_pa#145`. The other 15 workflows that use the action (clarify, implement, review, poller judges, etc.) stay broken in ESM consumers until a separate root-cause issue lands. (RECOMMENDED)\nB. Root-cause fix only. Add `.github/actions/claude-pool-token/package.json` (`{\"type\":\"commonjs\"}`) and optionally a `try/catch` in `main.js`, plus the regression test. This fixes every workflow at once, but it touches a path outside the heal scope. A trusted person must close this issue and file a replacement issue whose `files_touched:` lists `.github/actions/claude-pool-token/package.json`, `.github/actions/claude-pool-token/main.js`, `tests/**` and `changelog.d/*`. Run as it stands, this issue would be refused at implement time.\nC. Do A in this issue now, and also file a separate root-cause issue as described in B. Once that lands, a later change removes the `plan.yml` workaround.",
+  "fingerprint": "563afeef190916e92424bcfb4f5a3c1f562d5c67a5670a6603d0db60c1d0c7b6",
+  "lineage": {
+    "issue_number": 7434,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38727564233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38727564233",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261015113423_575e593926",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7434,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38727564233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7434 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-15T11:34:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
