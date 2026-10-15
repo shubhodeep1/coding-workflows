@@ -5,13 +5,23 @@
   "entry_id": "processed_command_7406_6182531767_approved",
   "issue_number": 7406,
   "metadata": {
+    "branch": "ai/issue-7406",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/7406-ci-release-job-rebalance.md"
+    ],
+    "issue_number": 7406,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7406",
+    "pr_number": 7408,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7408",
+    "run_attempt": "1",
+    "run_id": "38667723331",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38667723331"
   },
   "run_attempt": 1,
   "run_id": "38667723331",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-15T01:52:13Z",
+  "status": "completed",
+  "timestamp": "2026-10-15T02:11:46Z",
   "workflow": "implement"
 }
