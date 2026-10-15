@@ -1,6 +1,0 @@
-<!-- changelog: fixed -->
-- **The implement workflow's two largest steps no longer risk being rejected at startup.** Neither step script contains a GitHub expression any more, and a new CI test catches any step script that grows toward GitHub's limit.
-
-GitHub treats a step's `run:` script that contains any `${{ }}` expression as one expression string, and rejects it at 21,000 characters. When that happens, every run of the workflow fails before any job starts. In `.github/workflows/implement.yml`, the `Stage workflow support files` script (about 19,300 characters) and the `Preflight destructive-commit guard` script (about 19,800) were close to that limit. Both now read the repository name from the runner's `GITHUB_REPOSITORY` variable. The staging step reads `PROMPT_PRELUDE_REFACTOR_ENABLED` and `UNATTENDED_IDENTITY_REINJECT_ENABLED` from its own `env:` block, still defaulting to `false`, and writes them to `GITHUB_ENV` under the same names, so behaviour is unchanged. `tests/test_workflow_file_size_limit.py` now fails when a step script that contains `${{` reaches 18,000 characters in any workflow. Its message names the workflow, job, step and length.
-
-What this means for operators: nothing changes in how implementation runs behave. If the new test fails, move the step's `${{ }}` values into its `env:` block, or move the script into `scripts/`.

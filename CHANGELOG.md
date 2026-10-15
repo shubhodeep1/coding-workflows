@@ -172,6 +172,175 @@ The review-blocked judge's `merge` and terminal `fix` paths wait for the same re
 
 What this means for operators: a green PR can no longer land code that was never tested against the current base, a red PR no longer lands because the base has no required checks, and non-overlapping green PRs merge at the same speed as before. Set `MERGE_BASE_FRESHNESS_ENABLED=false` to restore the previous freshness behaviour.
 
+- **A CI-triage issue can now be planned and implemented on the branch of the PR whose check failed, behind `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` (on by default; `false` turns it off).** Unblock fix-up for #6815.
+
+Before this, every issue phase resolved a triage issue to the default branch: `scripts/resolve_integration_ref.sh` reads only `Integration branch:`, `Target branch:` and `Tracking issue:` lines, and the triage body is not allowed to carry them. #6815 was therefore planned on `main`, where the failing code from PR #6564 does not exist, and blocked.
+
+With the variable on, the resolver routes an issue to the PR's head branch, but only after it verifies all of these:
+- the `ai:check-triage` label and the exact four-line `check-failure-triage` marker header;
+- an OWNER, MEMBER or COLLABORATOR issue author;
+- a `Pull request:` line whose URL and number match the marker and whose branch matches the PR's head branch;
+- the live PR: open, head and base in this repository;
+- the branch itself.
+
+If any check fails, the resolver exits `3`. Clarify, plan, implement, clarify-respond and validate then fail the step with `::error::CI_TRIAGE_PR_BRANCH_ROUTING ... outcome=refused reason=<token>` instead of falling back to the default branch. Every other resolver failure keeps its default-branch fallback (since #7283, a resolver that cannot be staged, pinned or found fails the step while the variable is on), and an explicit `Integration branch:` line still wins.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Behaviour change with the variable set to `false` | none |
+| Extra GitHub API calls per phase on a routed triage issue | 2 (PR read, branch read) |
+| Fork PR branches that can be selected | 0 |
+
+What this means for operators:
+- Re-run planning for #6815 (`/reclarify` or `/answer`); set `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=false` to keep the default branch.
+- Known gap: a fix PR merged into the routed branch does not close the triage issue. Since #7283, `ci.yml` runs on PRs into that branch and the auto-merge wait requires their `lint`.
+
+- **Check-failure triage can route a fix to the failing PR's own branch (off by default).** Refs #7056, from the unblock operator step for #6856.
+
+A triage issue's fix PR always targeted the default branch, even when the failure belonged to an open PR's branch. A fix that only makes sense on that branch (#6856 needed `ai/issue-6838`) then had no `Target branch:` line to route it, and planning stayed blocked.
+
+With `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true`, `scripts/check_failure_triage.sh` adds one `Target branch: <head ref>` line to a new triage issue, above the diagnosis. It does so only when the PR it already fetched is:
+- open,
+- headed and based in this repository,
+- not headed on the default branch, and
+- on a branch whose name passes a strict check (including `git check-ref-format`).
+
+The diagnose step checks the flag and the branch name again. The final body check accepts exactly that line, once, above the first `---`. Model and log text are still neutralized, so they cannot add or change routing. Each run logs `CHECK_TRIAGE routing outcome=emit target_branch=<ref>` or `outcome=skip reason=<reason>`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New GitHub API calls | 0 (reuses the existing PR read) |
+| Routing lines a triage issue can carry | at most 1, written by the script |
+| Behaviour with the flag unset | unchanged |
+
+What this means for operators: set the repository variable to `true` to turn routing on. A triage fix PR merged into a PR branch closes its issue through the poller's close-merged sweep, which accepts a merge into the branch the issue declares.
+
+- **The unblock judge can hand a protected-path rejection to a person instead of filing a fix-up that would hit the same guard.** Off by default; turn it on with `UNBLOCK_PROTECTED_HANDOFF_ENABLED=true` (issue #7060, from the unblock judge's `operator_step` verdict on #6887).
+
+When the automation-path grant guard rejects an implementation run, any fix-up issue the unblock judge files for `descope` or `operator_step` touches the same ungranted paths and is rejected again. With the flag on, the judge reads the newest pipeline-authored guard comment on a `scope-blocked` issue (`scripts/unblock_ledger.py protected-rejection`). If it is an automation-path rejection, these two verdicts:
+- record an `ai:operator-step` entry first, so a failed write posts no hold marker; the verdict is already recorded, so the handoff is not retried with the same verdict, and the WARNING still goes out saying the handoff is incomplete;
+- post a handoff comment naming the rejected run and paths, ending in `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->`, and send a Telegram WARNING;
+- create no fix-up, remove no label and post no resume command, so the issue stays blocked.
+
+Later judge runs on that issue skip before the model with `UNBLOCK_JUDGE ... outcome=skip reason=operator_handoff_pending` and refresh the hold comment in place, so the poller does not keep re-dispatching them, until a newer guard comment appears or a person clears the block label. An issue blocked under any other stop ignores the old rejection. Without the hold, the round cap would end in the terminal close.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Fix-up issues filed against a protected-path rejection (flag on) | 0 |
+| Changes to the implement guards or `override_guard` eligibility | none |
+| New GitHub reads | 0 (the guard comments are already fetched) |
+
+What this means for operators:
+- With the flag off (the default) nothing changes.
+- The automation-path rejection is parsed separately from the scope and destructive rejections, so `override_guard` stays unavailable for it.
+- A rejection or hold marker posted by anyone other than the pipeline's `GH_PAT` login is ignored.
+
+- **Planning can now refuse an `ai:check-triage` issue that does not name its target branch, instead of planning it on the default branch.** Off by default; turn it on with the repository variable `CHECK_TRIAGE_BRANCH_GUARD_ENABLED=true`.
+
+Issue #6921 stopped in planning because its body had no standalone target-branch line, and without one the integration resolver returns nothing, so planning checks out the default branch. With the switch on, `plan.yml` blocks such an issue before the model runs. It uses the existing blocked path: the issue gets `ai:blocked`, a comment explains what to add, and a CRITICAL alert is sent. The guard reads only the resolver's outcome (the new `resolver_status` output of `Resolve integration ref`: `resolved`, `routed`, `none`, `failed` or `unavailable`) and the issue's labels. It never guesses a branch from the issue text, and a declared branch that does not exist also blocks. A branch from verified PR-head routing (`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`) passes, logged as `reason=pr_head_routed`.
+
+What this means for operators:
+- Add a standalone `Target branch: <branch>` or `Integration branch: <branch>` line to the blocked issue's body, then reply `/answer`.
+- A triage issue carries a branch line only when `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED`, `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` or `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` adds one. With none of them on, turning the switch on blocks every new triage issue until its body names a branch.
+- Log line: `CHECK_TRIAGE_BRANCH_GUARD issue=<n> enabled=<bool> check_triage=<bool> resolver_status=<token> outcome=skip|pass|blocked reason=<token>` (prefix registered in the agents.md stable log prefixes). No new GitHub API calls.
+
+- **A one-time workflow settles PR #6576's unexplained `orchestrate-poll` shard failure.** The new `.github/workflows/pr6576-shard-followup.yml` runs on the next push to `main`, fetches the failed job log, reruns the failing tests on current `main`, and posts the full result on #7072.
+
+The postmortem `docs/postmortems/2026-10-10-pr-6576-orchestrate-poll-shard-1.md` could not fetch the failed log, and most of the partition could not run without `jq` and PyYAML, so the original failure was never identified. The workflow reads #6576's recorded head from the pull request, finds its failed `orchestrate-poll (<g>)` CI jobs (including earlier attempts and earlier heads of `ai/issue-6573`), redacts their logs and extracts the failing test names with the heal intake's parser. When no log or no names are found, it reruns the `ci.yml` partition (4 groups x 4 local shards) at the recorded head instead. A test counts as reproduced only when it fails in both of two reruns on `main`, and only then is one standalone issue filed (marker `<!-- ai:pr6576-shard-followup-defect:v1 -->`). Failures seen only at the old head are recorded on #7072 and nothing is filed.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Result marker on #7072 | `<!-- ai:pr6576-shard-followup:v1 -->`, by the GH_PAT account |
+| API calls on every later `main` push | 2 (identity plus one comments page), then the run stops |
+| Logs read at most | 4 jobs, from at most 8 job listings and 3 run listings |
+| Main reruns per failing test | 2 |
+
+What this means for operators: nothing to start by hand. The first `main` push after this lands does the work once; later pushes skip. `ci.yml` and its aggregate `lint` gate are unchanged. Remove the workflow, its helper and test once the registry entry in `docs/scripts-pending-removal.md` says so.
+
+### For contributors
+
+The job that runs #6576's old test code (`rerun-old`) runs on its own runner with no secrets and only `contents: read`. The `rerun` job re-validates that job's artifact and confirms each named test on a separate, clean runner, so old code cannot tamper with the `main` reruns; only `locate` and `report` see `GH_PAT`, and they run only on the default branch. Log text is neutralised before it reaches a comment or issue, so a test's output cannot forge `<!-- ai: -->` markers or workflow commands. `tests/test_pr6576_shard_followup.py` runs in the workflow's own `self-test` job on pull requests that touch these files.
+
+- **Check-failure triage can now diagnose a CI run of a PR that has already closed, and does so once for PR #6611's failed shard run.** Activation gap of PR #7091 (#7093).
+
+`.github/workflows/check_failure_triage.yml` gains three optional inputs, `historical_run_id`, `historical_job_id` and `historical_repro_artifact_prefix`, all empty by default. Left empty, triage behaves exactly as before. When both ids are set, `scripts/check_failure_triage.sh` changes only these rules:
+
+- A closed PR is triaged instead of skipped with `pr_not_open`. The fork guard stays, and an unreadable PR head repository now fails the run.
+- The fingerprint also covers the run and job ids, and the duplicate check counts closed issues, so the same run is filed only once.
+- The base-branch gate is skipped (`base_gate outcome=bypassed reason=historical_mode`).
+- Before reading any log, the run and job are checked against this repository, the CI workflow, the PR head SHA and branch, and a failed conclusion (`historical_binding_mismatch`).
+- The job log is fetched with `GH_PAT` in the host-side collect step and redacted. Only the first shard failure, with 40 lines before and 80 after, is sent to the isolated diagnosis.
+- If the log has expired (404 or 410), the run instead reads the caller's reproduction artifacts. The host recounts every result from the raw logs and reports `reproduced`, `complete_non_reproduction` or `incomplete`. A non-reproduction counts as complete only when the failing head itself was tested (a merge-commit fallback or another SHA is `incomplete`), every group, shard and step ran, and no test was skipped for a missing `jq` or PyYAML.
+- The filed issue adds a "Historical run follow-up" section. It lists the evidence and requires a regression test, a passing affected test and `CI / lint`, and an update to the earlier triage note.
+
+The new single-use workflow `.github/workflows/check-failure-triage-historical.yml` runs on every push to `main` (and on `workflow_dispatch`) for run 37922279826 / job 113792812346. Its guard job skips once a trusted `ai:check-triage` issue with that run's fingerprint exists, or after three failed runs (dispatch bypasses the cap). When the log is gone, a credential-free `repro` job reruns the failing tree's `orchestrate-poll` CI steps for groups 0-3. It installs and checks `jq` and PyYAML first, and falls back to the merge commit if the head SHA cannot be fetched. Triage still never pushes code. The workflow is listed in `docs/scripts-pending-removal.md`.
+
+- **Interactive sessions now get a pre-push test check: `git push` asks for confirmation unless the affected tests were run for the commit being pushed.** Issue #7137 (plan phase P1 of `docs/plans/prepush-affected-test-gate-plan.md`).
+
+A new gate, `.claude/hooks/prepush_affected_tests.py`, finds the tests a change affects. It selects:
+- the changed test files;
+- tests named after the changed file (`scripts/foo.sh` → `tests/test_foo.py`);
+- test files that mention the changed file's path, name or stem, including through a shared test helper module;
+- registry guards (CI test wiring, inventory, live `.claude/` parity, workflow size, `make generate-check`, `agents.d` check);
+- `ruff` and ShellCheck on the changed files.
+
+It runs them and re-runs any failure on the merge-base, so failures that already happen on the base are reported as inherited rather than blamed on the change. After committing, run `python3 .claude/hooks/prepush_affected_tests.py stamp`. It writes a stamp for `HEAD` under `${TMPDIR:-/tmp}/claude-prepush-gate/`, outside the repository. A new `PreToolUse` hook then reads that stamp on every `git push`: a passing stamp lets the push through silently; a missing stamp, or one that records failures the change caused, asks first. The hook never runs tests itself and fails open with a warning. `CLAUDE_PREPUSH_TEST_GATE=off` turns it off.
+
+`scripts/prepush_test_gate_run.sh` is the credential-free container wrapper the AI pipelines will use: no network, read-only root, no runner environment, gate module taken from the trusted support checkout. Nothing calls it yet. The implement, review autofix, conflict resolver, heal and integration-branch gates follow in later phases (P2-P5).
+
+| The numbers that matter | Value |
+| --- | --- |
+| Measured CI misses the selector catches | 7 of 7 (pinned in `tests/test_prepush_affected_tests.py`) |
+| GitHub API calls made by the gate | 0 |
+| Default time budget / parallel shards | 15 minutes / 4 |
+
+What this means for operators: after the release, consumers' `.claude/settings.json` registers the new hook, and an interactive push without a stamp asks for confirmation. Here, the live `.claude/` copies arrive through the held `ai/sync-claude-live-copies-held` PR, which needs a human merge. Until it merges, `main` CI and the release gates report the live-copy drift.
+
+### For contributors
+
+On pull-request CI only, the live-copy parity tests now tolerate template-ahead drift the PR itself caused, or that its base already has (`tests/claude_template_drift.py`, keyed on `CLAUDE_PARITY_PR_BASE_SHA`). Pushes to `main` and both release gates stay strict.
+
+- Add `HEAL_SCOPE_RECOVERY_ENABLED` (default `true` since #7323; `false` turns it off) so the workflow failure heal intake can replace a heal issue that the pipeline filed without a scope marker, which implement refuses to run. It does not need `HEAL_INTAKE_SCOPE_GUARD_ENABLED`: a report with a verified identity that matches such an issue opens a replacement whose scope comes from the verified runs and passes the same `heal-scope verify` check. The original gets a comment pointing at the replacement and is closed as not planned; its body is not copied or edited. Later reports for the same failure are recorded on the replacement. With the variable set to `false`, nothing changes.
+
+- **A standalone issue can wait for a pull request to merge before the pipeline works on it.** A trusted issue that declares `- Depends on PR: #N` and `- Requires on main: <path> contains <text>` is held until PR #N is merged into the default branch and that file on the default branch contains the text; the poller then restarts it once with `/reclarify`.
+
+Re-issues of #7186 kept reaching planning and blocking again while PR #6667 was still a draft, because the only automatic dependency hold was the one for security follow-ups. The new helper `scripts/pr_dependency.py` is called by clarify, plan, both implement gates and the standalone stall poller. While an issue is held, clarify posts no questions, keeps only `ai:clarification` and removes `ai:blocked`; plan and implement skip it; stall recovery does nothing for it, and the unblock scan skips it, so it never spends unblock rounds. The issue author must be OWNER, MEMBER, COLLABORATOR or the pipeline account. Anything malformed, repeated, untrusted or unreadable stays held. Orchestrator-managed issues are not affected. The security follow-up hold (`- Depends on: #N`) is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| API reads per held issue per poll tick | 1 (`pulls/N`), plus 1 `contents` read once the PR has merged |
+| Release marker | `<!-- ai:pr-dependency-released:<issue> -->`, counted only from the pipeline account |
+| Log lines | `AI_PHASE_GATE_V1 ... gate=pr_dependency`, `STALL_SKIP ... reason=pr_dependency_held\|pr_dependency_released`, `UNBLOCK_SCAN ... reason=pr_dependency_held` |
+
+What this means for operators: to park follow-up work behind an open PR, put both lines in the issue body. The four feature tracks planned after #7186 (capacity tiers, MEMORY_LEARNINGS, SOFT_ERROR_ANALYZER, JUDGE_INTERIM) are not filed by this change; file them with `- Depends on PR: #6667` and `- Requires on main: scripts/ai_engine.sh contains _AI_ENGINE_EXIT_REFUSED`.
+
+- **A Claude engine run that finds the account pool out of capacity can now wait instead of falling back to codex, behind a switch that is off by default.** Set `CLAUDE_POOL_CAPACITY_WAIT_ENABLED=true` and a capacity fallback (`all_gated`, `all_usage_limit`) exits `80` instead of `75`: codex or OpenCode does not run, and the log shows `AI_ENGINE_CAPACITY_WAIT role= reason=`. The job's report step labels the work item `ai:claude-capacity-wait`, leaves one marker comment on it and one on the Claude pool capacity tracker, and sends one Telegram WARNING when it opens the tracker. The orchestrator's stall recovery skips an item with that label. This is phase 1 of the capacity-wait plan: leave the switch off until the hourly resume pass ships, because nothing re-dispatches waiting work yet. With the switch off, nothing changes.
+
+- **Non-retryable review/autofix failures that were never diagnosed are now reported automatically.** Issue #7291 (activation gap of PR #7065).
+
+A new scheduled pass, `scripts/workflow_failure_heal_non_retryable_backfill.sh`, runs in the review sweep (`review_autofix_sweep.yml`, every 30 minutes) and in the consumer `ai-review.yml` hourly schedule (new job `non-retryable-backfill`). It reads open PRs with one batched GraphQL query (at most 5 listing calls by default, plus one open-PR count call per tick and, when there are more open PRs than `WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS`, one cursor-only call per 100 PRs skipped to reach that tick's rotated window) and picks a PR whose newest current-head `review-autofix-failure:v1` marker, written by the `GH_PAT` account, names a non-retryable resolver reason and a run, is at least an hour old, and has no `ai:workflow-heal-non-retryable:v1` diagnosis yet. It sends that run through the unchanged autofix reporter, so the heal intake verifies the run and posts its usual diagnosis comment, `ai:needs-human` and WARNING. No heal issue is filed: the intake's routing, the resolver's path policy and the report-auth policy are unchanged. After a confirmed dispatch the pass posts `<!-- ai:workflow-heal-non-retryable-backfill:v1 pr= head= reason= run= -->`, so a report the intake rejects is sent only once. At most 3 reports go out per tick.
+
+What this means for operators: a PR stuck on a resolver path the sandbox refuses now gets the manual-merge diagnosis even when its original report was lost or predates #6756. Set `WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED=false` to turn the pass off. Backfilled reports carry no report identity, so an intake with `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=true` skips them. Comments by other accounts can neither trigger nor stop a report.
+
+- **The unblock judge can now hold a blocked item until something outside it happens, without spending a round.** A new `wait` verdict, and an automatic hold after an operator-step fix-up merges, replace the immediate retry that used to block again.
+
+On 13 October the judge closed #6831 and #6887 on its two-round cap even though neither had failed again on its own: #6887 needed #7066 to reach `stable`, and #6831 needed a person to edit `CLAUDE.md`. Each time, the judge resumed the item at once, it blocked for the same reason, and the second blocked round hit the cap. Now the judge can answer `wait` with a condition it checks itself: a pull request merged and on a branch, another issue or pull request closed, or an operator step done (its `_UNSET_OPERATOR_STEP` placeholder gone from the default branch, or set as a repository variable or secret). While the condition is unmet the item keeps its block, no resume command is posted and no round is counted. Once it holds, the judge posts the stop's usual resume command. When the fix-up of an `operator_step` verdict merges and its placeholder needs a person, the item now waits for that step instead of resuming.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Holds per item | at most 3, never twice on a condition already met |
+| Hold lifetime | 14 days (`UNBLOCK_JUDGE_WAIT_MAX_DAYS`), then the judge decides again |
+| Re-check interval | every `UNBLOCK_JUDGE_RETRY_HOURS` (6) from the hold's last check |
+| Off switch | `UNBLOCK_JUDGE_WAIT_ENABLED=false` |
+
+The judge also runs the check-triage resolution gate that clarify runs (#7095) on an `ai:check-triage` issue before judging it: once the pull request merged and the failure is verified fixed on the default branch, the issue is closed with evidence and no round is used. #7332 sat blocked after PR #7259 merged because only clarify ran that gate. The gate itself also failed to verify #7332: GitHub empties a run's pull-request list once the PR merges, and #7259's head had moved past the failed commit, so the gate could not tie the failed run to the PR (`run_identity_mismatch`). It now also accepts a run on the triage issue's trusted Head SHA when the run is on the PR's head branch.
+
+What this means for operators: items waiting on a promotion, another pull request or an operator step stay blocked quietly instead of being closed by the round cap, and resume on their own once the condition holds. The comment `Waiting for …` on the item says what it waits for.
+
+### For contributors
+
+The hold marker reuses the `ai:unblock-wait:v1` prefix (`hold=<kind> ref=<ref>[ done| expired]`), so the unblock scan already rate-limits held items. `scripts/unblock_ledger.py` adds `hold-marker`, `decide --wait-disabled`, and `holds_used` / `holds_met` in the decision; `scripts/unblock_actions.py` adds `hold-followup`.
+
 ### For contributors
 
 `tests/test_pr_base_freshness_gate.py` covers every outcome, the switch and each wiring point, and runs in its own `ci.yml` step. The `deterministic-skip-merge` job reads the library from the gate's verified support commit (`.codex-freshness-src`).
@@ -965,6 +1134,191 @@ What this means for operators: sessions that look up `gh api` usage no longer st
 | New kill switch | `CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED`, default `true` |
 
 What this means for operators: nothing to configure. The kill switch is defaulted inside the script and is not forwarded from a repository variable, because `review_autofix.yml` is close to the workflow file size guard.
+
+- **Workflow log analysis, the weekly retro and the other utility model roles now run on the Claude engine, with their previous engine as the fallback.** The roles `LOG_ANALYSIS`, `LOG_AUDIT`, `LOG_SUMMARY`, `RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE` now default to `claude` in `.github/ai/claude_engine.json`.
+
+| Call site | Role | Claude model | Fallback |
+| --- | --- | --- | --- |
+| `workflow-log-analysis.yml` analyze, deep-audit and API-redundancy passes | `LOG_ANALYSIS`, `LOG_AUDIT` | Opus 5.5 (`high`) | the unchanged codex command (`xhigh` stays codex-only) |
+| weekly retro narrative and consumer retro fan-out | `RETRO` | Sonnet 5.5 | the unchanged codex command |
+| unselected-run summaries (`scripts/summarize_unselected_runs.py`) | `LOG_SUMMARY` | Sonnet 5.5 | OpenRouter, for that run and the rest |
+| reviewer consensus summariser, behavioural smoke synthesiser | `SUMMARISER`, `BEHAVIOURAL_SMOKE` | Sonnet 5.5 | OpenCode in a fresh review sandbox |
+| `implement.yml` AI issue summary on the PR | `SUMMARISER` | Sonnet 5.5 | the unchanged codex command |
+
+Every Claude call runs read-only in a credential-free, network-isolated container. The log-analysis, retro and implement-summary paths use `claude_run_selected` from the trusted engine root that the workflow stages, never from a PR or integration checkout. The two review roles go only through `scripts/review_untrusted_sandbox.sh`, which now admits `SUMMARISER` and `BEHAVIOURAL_SMOKE` as read-only roles. If that sandbox cannot be prepared, or no Claude pool credential is present, they keep the unchanged read-only OpenCode command. A workflow-log-analysis dispatch from a non-default ref stays on codex, so unmerged engine support never fetches the Claude pool credential. `MATERIALITY` changes only its default: `scripts/review_agents_md_materiality.sh` still makes no model call.
+
+To roll a role back, set the repo variable `AI_ENGINE_<ROLE>=codex` or add the `ai:codex` label. The review roles read the label and `AI_ENGINE` only, because `review_autofix.yml` does not forward the per-role variable. Fallbacks log `AI_ENGINE_FALLBACK role=<ROLE> reason=<reason>`.
+
+- **A Claude-engine role now falls back to codex only when Claude is out of capacity; any other Claude failure stops the step and is reported.**
+
+`AI_ENGINE_FALLBACK_POLICY` (default `capacity`) sets when a Claude-engine role may fall back to codex. Under `capacity`, the role runs codex (or OpenCode in the review sandbox) only when every pool account is at the usage gate (`all_gated`) or every account it tried hit its usage limit (`all_usage_limit`). Any other reason makes `claude_run`, `clarify_isolated_run.sh` and `review_untrusted_sandbox.sh` exit 76 and log `::error::AI_ENGINE_FALLBACK_REFUSED role=<role> reason=<reason>`. Examples are a missing credential, no isolation support or Docker image, a rejected token or a dead relay. That exit fails the step. The security audit fails instead of rerunning on codex, and the poller's judges defer and escalate through their existing isolation path. Before this change, codex ran for every reason, with only a Telegram note. The last step of each Claude-calling job in clarify, plan, orchestrate, orchestrate_clarify_respond, orchestrate_poll, security-audit and validate sends one `workflow-failure-heal` report per refused role and reason, plus one Telegram WARNING. The heal intake opens one issue per role and reason (kind `engine_fallback`) and never files it as transient. `AI_ENGINE_FALLBACK_POLICY=always` restores the old behaviour.
+
+What this means for operators: a consumer repository with no Claude pool provisioned now fails every Claude-default role (`no_credential` is not a capacity reason). Set the repository variable `AI_ENGINE=codex` or `AI_ENGINE_FALLBACK_POLICY=always` there. Implement and review runs do not forward the repository variable yet, so they always use `capacity`.
+
+- **An exhausted unblock judge now parks the item instead of closing it.** When the unblock judge has spent every round on an issue, pull request or project, the item stays open. It gets `ai:needs-human` and one line in the repository's single needs-human digest issue, and one CRITICAL alert is sent. Before, the judge closed it with `ai:unblock-closed`. A `close` verdict the model chooses earlier still closes the item. Entries leave the digest once the item is merged or closed, or once `ai:needs-human` is removed. A failed project is re-read just before it is parked, so a project the poller resumed in the meantime is not labelled `ai:needs-human`. Set `NEEDS_HUMAN_DIGEST_ENABLED=false` to go back to closing. Refs #6664.
+
+- **The project security pass now blocks only on findings in code the project wrote.**
+
+The findings-JSON security audit runs `git blame` on each finding's cited line at the audited head. A finding whose line no commit in the project's `merge-base..head` range wrote is marked `"advisory": true` in `security_audit_findings.v1`. The orchestrator poller files these as non-blocking `ai:security` follow-ups (after the final merge, by default) instead of gating the project. They no longer enter the consolidated fix issue or count toward `MAX_SECURITY_PASS_CYCLES`, and a result that holds only advisories records the pass as `passed`. A blame failure keeps the finding blocking. `SECURITY_PASS_CLEAN` and `SECURITY_PASS_BLOCKED` gain a trailing `advisory=<n>` field.
+
+What this means for operators: projects stop spending fix cycles on vulnerabilities that already existed on the default branch. Set the repository variable `SECURITY_AUDIT_LINE_OWNERSHIP=off` to restore the previous behaviour exactly.
+
+- **Operator steps are ticked once their merge ships in `stable`.** Activation verification no longer lists promoting `main`, tagging `stable` or the consumer sync as operator steps, because the pipeline does them. Each new `ai:operator-step` entry records the merge commit it came from. When the nightly promote cycle finds that the `stable` tag includes that commit, it adds a comment with every step of the entry ticked. Entries written before this change, and entries from the unblock judge, carry no merge commit, so a person still has to close them. A failed tick only logs a warning; the promote cycle carries on. Refs #6664.
+
+- **The workflow failure heal intake no longer files a heal issue it cannot implement, and a refused conflicted path now says what kind of path it was.**
+
+Issue #6866 was filed with an empty scope marker, so implement refused it and nothing could fix it. Before filing a `workflow-defect`, `inconclusive`, `base-self-inflicted` or `consumer-app-defect` issue (all four carry the heal label that implement preflight checks), `scripts/workflow_failure_heal_intake.sh` now checks its own marker with `workflow_failure_heal.py heal-scope check-marker`, which uses the same parser and shape rules as implement. A missing or invalid marker files nothing: the intake logs `WORKFLOW_HEAL skip reason=scope_marker_unresolved`, sends a CRITICAL alert and fails the run, and the next report of the same failure retries.
+
+The conflict resolver's `sandbox_path_unsupported` failure used to name no cause. It now first prints `::error::Conflict resolver: conflicted path(s) cannot enter the sandbox: unsafe=<n> host_only=<m> categories=<...> depths=<...>`, using only fixed categories (`symlink`, `symlink_in_path`, `special_file`, `unsafe_name`, `unreadable`, `other`) and `1|2|3+` depth buckets, never a path name. Admission rules, failure reasons and the fail-closed exit are unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED` | default `true`; only `false` turns the check off |
+| Marker file read cap | 8 KiB |
+| Resolver report lines read | at most 500 |
+
+What this means for operators: an unresolved heal scope now shows up as a red intake run and a CRITICAL alert instead of a stuck heal issue, and a failed conflict resolution's First error says which class of path blocked it.
+
+- **Issue #7251 now waits for PR #6667 instead of re-running clarify and plan into the same block.** While #6667 has not merged into the default branch, the poller, clarify and plan leave #7251 alone and post nothing. After #6667 merges or closes, clarify and plan keep holding #7251 until the poller has posted its outcome comment below, so a comment or `/answer` cannot restart it first.
+
+When #6667 merges, the poller checks the default branch's `scripts/ai_engine.sh` for both plans' Phase 0 symbols (`_AI_ENGINE_EXIT_REFUSED` and `ai_engine_fallback_class`). If both are there, it restarts #7251 with one `/reclarify`. If either is missing, it posts one comment naming the missing symbol, sends one Telegram WARNING, and does not restart #7251. If #6667 is closed without merging, it labels #7251 `ai:blocked` again so the unblock judge takes it over. Each of these happens once, deduplicated by a marker comment from an owner, member or collaborator.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Off switch | `ISSUE_7251_DEPENDENCY_WAIT_ENABLED=false` (unset, empty or `true` keeps it on; any other value turns it off with a warning) |
+| Extra API calls | one GraphQL read per poll tick, and per clarify or plan run on #7251 |
+| Log lines | `STALL_SKIP issue=7251 reason=dependency_wait`, `AI_PHASE_GATE_V1 ... gate=issue_7251_dependency_wait`, `UNBLOCK_SCAN item=7251 outcome=skip reason=issue_7251_dependency_wait` |
+
+What this means for operators: nothing to do. The wait applies to #7251 in this repository only; consumer repositories and every other issue are unchanged.
+
+- **The orchestrator poller makes fewer GitHub API reads in two places, with no change in behaviour.** When it checks a project's final pull request without a cached copy, and when it re-issues an `ai:implementation-failed` issue, it now reads the object once instead of once per field.
+
+`finalize_integration_merge_if_needed` in `scripts/orchestrate_poll_process.sh` read `pulls/<n>` twice, for the state and for `merged_at`. The implementation-failed sweep read `issues/<n>` twice, for the title and the body. Each now reads once and takes both fields from that response. A failed read still leaves both fields empty, and a missing or null field still reads as the literal `null`, as before. The comment on `_clear_final_merge_ineligibility_state` now says the helper has no caller in the poller and names the two places that do the same reset inline.
+
+| The numbers that matter | Before | After |
+| --- | --- | --- |
+| REST reads per final-PR check without a cached copy | 2 | 1 |
+| REST reads per implementation-failed re-issue | 2 | 1 |
+
+Refs #7126
+
+- **Automatic approval of plans that list automation paths is now on by default, and the planner puts its file list under its own `## Files likely to change` heading.**
+
+`AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` now defaults to `true` in `plan.yml`, `orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh` and `scripts/files_touched_scope_guard.py` (an unset or empty value counts as on). A plan that lists `.github/`, `.claude/`, `scripts/`, `prompts/` or `workflow-templates/` paths is approved automatically when every one of those paths has an exact `files_touched` entry in an issue written by the pipeline account or a repository member. Plans without that grant are still held with one hold comment, now with reason `open_grant_not_exact` or the missing paths instead of `automation_path_plan_auto_approval_disabled`.
+
+The planner prompts (`prompts/mode-plan.txt`, its template and `scripts/run_plan_codex.sh`) now ask for the file list under `## Files likely to change`, with the next item under its own `##` heading. The approval gate, `plan.yml`'s template-owned path guard and the targeted file context all end the list at that heading, so paths mentioned later in the plan are not read as files to change.
+
+What this means for operators: set `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` to `false` to go back to holding every automation-path plan for a human `/approved`.
+
+- **Consumer repos now verify each release's attested manifest and receive workflow updates as a verified pull request by default.**
+
+`UPDATER_VERIFY_RELEASE_MANIFEST` and `UPDATER_PR_DELIVERY_ENABLED` now default to `true` in `.github/workflows/update_workflows.yml`. On the next sync, each consumer's `ai-update-workflows` run checks the `release-manifest.v1.json` attestation of the stable release before it writes any file. It then opens or refreshes one pull request from `auto/update-workflows-<release-sha-12>` instead of pushing to the default branch. The `verify` job compares the pull request with the attested release and enables auto-merge only after that check passes. A dry run of the verify step against v1.32.0 passed (`UPDATER_MANIFEST_VERIFY outcome=ok reason=ok tag=v1.32.0`, 53 paths).
+
+The verify job now posts its `ai-update-workflows/verify` statuses (pending, success and failure) with `GH_PAT` when the job token is refused. A consumer wrapper written before the template granted `statuses: write` would otherwise leave its first update pull request, the one that adds the permission, waiting for a human.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Consumer repos in `.github/ai/consumer_repos.json` | 13 |
+| First release that passes verification | v1.32.0 |
+
+What this means for operators: each consumer's `GH_PAT` must be able to open pull requests and enable auto-merge in that repository, and the repository must allow auto-merge. Set both variables to `false` in a consumer to go back to the unverified direct push. `UPDATER_PR_DELIVERY_ENABLED=false` alone pushes directly after verifying the manifest, and `UPDATER_VERIFY_RELEASE_MANIFEST=false` alone still opens a pull request, which then waits for a human because auto-merge needs a verified release.
+
+- **The stable-release switch's default-on setting is now documented as intentional, so activation verification no longer reports it as a gap.**
+
+`STABLE_RELEASE_ENABLED` still publishes when unset or empty, and release behaviour does not change. The fail-closed `CI / lint` check-run gate is the release safety control and runs whatever the switch says; the switch is an emergency off switch.
+
+What this means for operators: set `STABLE_RELEASE_ENABLED=false` and `AUTO_RELEASE_STABLE_ENABLED=false` to pause releases.
+
+- **Plans for pipeline-written issues that change automation paths are now approved automatically, after the pipeline writes an exact `files_touched` list from the plan into the issue.**
+
+Issues the pipeline writes itself, such as security-pass fixes, activation-gap follow-ups and unblock operator steps, usually carry no `files_touched` list. Their plans were held for a human `/approved` whenever they listed `.github/`, `.claude/`, `scripts/`, `prompts/` or `workflow-templates/` paths. On 2026-10-13 that held #7291, #7295, #7297 and #7302 with reason `open_grant_not_exact`. Now `plan.yml` and the poller's stall recovery append a `files_touched` block to such an issue before they post `/approved`. The block lists every file named in the plan's Files section, plus `tests/**`, `changelog.d/*` and `agents.d/*`. From then on that list is the issue's implement-time scope.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Companion entries always added | `tests/**`, `changelog.d/*`, `agents.d/*` |
+| Most plan files written into one block | 50 |
+| API calls per written block | 1 issue PATCH (poller: 1 extra issue read first) |
+
+What this means for operators: a plan that lists a directory or a glob, names more than 50 files, or belongs to an issue a person wrote without `files_touched` still waits for a human `/approved`. The log line `PIPELINE_PLAN_GRANT issue=<n> source=plan|poller outcome=written|failed` records every write. Setting `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED=false` turns this off along with the rest of automatic approval for automation-path plans.
+
+- **CI-triage issues for a failing pull request are now planned and implemented on that pull request's branch by default.** `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` defaults to `true`.
+
+A check that fails on an AI pull request files an `ai:check-triage` issue. With routing off, clarify, plan, implement, clarify-respond and validate checked that issue out on `main`, where the failing code does not exist, so planning blocked: #7324 (for PR #7249, branch `ai/issue-7228`) and #7332 (for PR #7259, branch `ai/issue-7257`) both stopped that way on 13 October. Routing now runs unless the variable is `false`. Every existing check still applies before a branch is used: the `ai:check-triage` label, the marker header, an OWNER/MEMBER/COLLABORATOR author, the body's PR line, an open same-repository PR with the same head branch, and the branch itself. Any failed check still exits `3` and the phase fails closed instead of using the default branch.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Workflows whose default changed | `clarify.yml`, `plan.yml`, `implement.yml`, `orchestrate_clarify_respond.yml`, `validate.yml` |
+| Values that keep routing on | unset, empty, `true`, `1`, `yes`, `on` |
+| Values that turn it off | `false`, `0`, `no`, `off`; anything else also turns it off with a `::warning::` |
+
+What this means for operators and consumer repos: after the next `@stable` sync, CI-triage issues get fixed on the failing pull request's own branch without a repository variable. To keep the old behaviour, set `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=false`. The known gap is unchanged: a fix merged into the routed branch does not close the triage issue. Since #7283, `ci.yml` runs on pull requests into that branch and the auto-merge wait requires their `lint`. With routing on, a resolver that cannot be staged, pinned or found now also fails the phase when the variable is unset.
+
+Two exceptions keep the default on safe. Clarify still runs on the default branch when the triage issue's pull request has already merged or closed, so the existing check-triage resolution gate (#7095) can close the issue with evidence; plan and implement still refuse it. While routing is on, clarify, plan and clarify-respond now stop on a rate-limited resolver (exit `75`) instead of using the default branch, as implement and validate already did.
+
+- **CLAUDE.md §21.D now states that the merged-PR guard never answers a push from its cache.** Refs #6831.
+
+§21.D (API-call budget) used to say cached data may satisfy an allow, which read as if a `git push` could pass on a PR state up to 300 seconds old. Both `pr_merge_status_guard.py` copies already refuse that: a `git push` or an MCP push always takes PR state from a live lookup, reuses only a snapshot from a live lookup in the same hook run, and follows §21.C when that lookup fails. The section now says so, and only a bare `git commit` may still be allowed from the cache. The guard itself is unchanged. This finishes the operator step recorded by #7297, so its `PR_MERGE_GUARD_DOC_SYNC_UNSET_OPERATOR_STEP` placeholder note is removed before it was ever released.
+
+What this means for consumer repos: the next `@stable` sync brings the corrected §21.D text. Nothing to configure.
+
+- **Six slow test steps moved from the CI job `tests-hooks-and-orchestrator` to `tests-heal-plan-and-validation`.** The hooks job took 15m09s of its 20-minute timeout on `main` (run 38508333607, budget-watch issue #7366), and a job that hits its timeout turns CI red with no code fault. The heal job had the most room. These steps now run there, unchanged and under the same names:
+  - `Activation verification tests (port P4)`
+  - `Unblock judge and scan tests (replace-claude-sessions Phase 7)`
+  - `Orchestrator judges on the Claude engine tests (Phase 5c)`
+  - `Validation harness sandbox tests`
+  - `Validation shell-quoting and credential-scrub tests`
+  - `Check-failure triage workflow security tests`
+
+  No job was added or renamed, no `timeout-minutes` changed, and the aggregate `CI / lint` check is unchanged. A failure in one of these tests now appears under the `tests-heal-plan-and-validation` check-run.
+
+  What this means for operators: nothing to change; no new variable.
+
+- **When every Claude pool account is at its usage gate, AI work now waits and resumes on its own instead of falling back to codex or OpenCode.** The Claude capacity wait is on by default (`CLAUDE_POOL_CAPACITY_WAIT_ENABLED`; consumers on the `core` install profile keep it off, and setting the variable to `false` restores the fallback). Every Claude call site now stops on a capacity wait without running codex. Clarify, plan, implement, clarify-respond and validate record the wait on the issue and the capacity tracker; implement returns the issue to `ai:awaiting-approval`. A review pauses with "AI review paused — Claude pool at capacity", which does not count toward the identical-failure cap and adds no `ai:review-blocked` label. Once an hour the orchestrator poll checks the pool. When an account is usable again it re-dispatches waiting reviews, replays the waiting issue's command (tagged `[auto-requeued-by-capacity-wait]`), re-runs waiting workflow runs, and closes the tracker with one "capacity back" alert. Until then, the hourly pool alert lists the waiting items and the earliest reset time.
+
+- **The test step `Regression tests wired by the CI wiring guard (part 1)` moved from the CI job `static-checks` to `tests-release-and-log-analysis`.** `static-checks` took 15m18s of its 15-minute timeout on `main` (run 38562929820, budget-watch issue #7382), and a job that hits its timeout turns CI red with no code fault. The release and log-analysis job had the most room. The step runs there unchanged and under the same name.
+
+  No job was added or renamed, no `timeout-minutes` changed, and the aggregate `CI / lint` check is unchanged. A failure in these tests now appears under the `tests-release-and-log-analysis` check-run.
+
+  What this means for operators: nothing to change; no new variable.
+
+- **Three slow test steps moved from the CI job `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`.** The heal job took 15m19s of its 20-minute timeout on `main` (run 38564033998, budget-watch issue #7383), and a job that hits its timeout turns CI red with no code fault. The release job is the only one with measured headroom (535-604s). These steps now run there, unchanged and under the same names:
+  - `Orchestrator judges on the Claude engine tests (Phase 5c)`
+  - `Validation harness sandbox tests`
+  - `Check-failure triage workflow security tests`
+
+  Step timings were not readable when this was planned, so the steps were picked as the heal job's most subprocess-heavy ones. No job was added or renamed, no `timeout-minutes` changed, and the aggregate `CI / lint` check is unchanged. A failure in one of these tests now appears under the `tests-release-and-log-analysis` check-run.
+
+  What this means for operators: nothing to change; no new variable.
+
+- **The CI step `Workflow failure heal contract and driver tests` now runs its largest test module in four parallel shards.** The job `tests-heal-plan-and-validation` took 15m12s of its 20-minute timeout on `main` (run 38584572151, budget-watch issue #7387), and a job that hits its timeout turns CI red with no code fault. Almost all of that time is this step, and almost all of the step is `tests/test_workflow_failure_heal.py` (297 tests).
+
+  The first attempt moved the step unchanged to `tests-promote-stall-and-review`. In this PR's CI run (38602731355) that job had already used 12.8 minutes when the step started and was cancelled at its 20-minute timeout with the step half done. No test job had room for the whole step, so it stays in `tests-heal-plan-and-validation` under the same name, and the module is split by test function across four local `pytest` processes, the way the `orchestrate-poll` step runs its largest module. Each test builds its own temp directories, so the shards share no state. Every collected test function runs exactly once, parametrized cases stay in one shard, and a failing shard fails the step and prints its last 40 log lines outside the collapsed log groups. The other heal and provider-outage test files still run as before.
+
+  No job was added or renamed, no `timeout-minutes` changed, and the aggregate `CI / lint` check is unchanged.
+
+  What this means for operators: nothing to change; no new variable.
+
+- **The workflow failure heal, check-failure triage, activation verification and unblock judge agents now run on the Claude engine by default.** `WORKFLOW_HEAL`, `CHECK_TRIAGE`, `ACTIVATION_VERIFY` and `UNBLOCK_JUDGE` use Opus 5.5 in the same credential-free, network-isolated container as before. When Claude is unavailable they run their unchanged isolated codex command, and `AI_ENGINE_<ROLE>=codex` (or the `ai:codex` label) keeps a role on codex.
+
+The four roles move to `"engine": "claude"` in `.github/ai/claude_engine.json`; profiles are unchanged. The heal intake and the activation verifier call `claude_run_selected` from their trusted support directory, with the codex command line unchanged after `--`; without the engine helper they log `AI_ENGINE_FALLBACK reason=engine_support_missing` and run codex. Triage stays in the `scripts/clarify_isolated_run.sh` container and uses its Claude branch (the helper now accepts the `CHECK_TRIAGE` role); exit 75 reruns the unchanged three-argument codex call, and missing isolation still files the raw-context issue. The triage job stages the engine files into its trusted support directory, gains `id-token: write` (both callers already grant it) and keeps the pool action directory until job end so its token cleanup runs. `workflow-failure-heal-intake.yml`, `check_failure_triage.yml` and the `activation-verify` job of `issue_pr_status.yml` install the Claude CLI and fetch the pool only when the role resolves to Claude; the poller also fetches it when `ACTIVATION_VERIFY` resolves to Claude. `internal-issue-pr-status.yml` grants `id-token: write`. PR-mode activation verification passes the merged PR's labels to the engine selector, and project mode reads the tracking issue's labels (one call per completed project, no labels if the read fails), so an `ai:codex` label keeps the role on codex. Triage reads the PR's labels from the payload it already fetches, in both its engine preflight and its diagnosis, so the two choose the same engine. Consumer PR-mode activation verification stays on codex until the consumer's `ai-issue-pr-status.yml` grants `id-token: write`: when the pool step reports `oidc_unavailable`, the verifier is forced onto codex instead of being refused under `AI_ENGINE_FALLBACK_POLICY=capacity`. The unblock judge's code is unchanged.
+
+- **The validation agents now run on the Claude engine by default.** Discover and diagnose (`VALIDATE`), self-heal (`VALIDATE_SELF_HEAL`) and the daily refresh's manifest discovery (`VALIDATION_REFRESH`) use Opus 5.5 in the same credential-free, network-isolated container. When Claude is unavailable, they run codex.
+
+The three roles move to `"engine": "claude"` in `.github/ai/claude_engine.json`; model and profile are unchanged. A new `claude_run_selected` helper in `scripts/ai_engine.sh` picks the engine for each call. On codex, or when Claude is unavailable (exit 75), it runs the caller's existing codex command line unchanged. The Claude run is read-only, like every codex validate attempt, so workspace hooks, write guards and the `UNVERIFIED` validator behaviour do not change. `validate.yml` copies the engine helpers from its verified support clone into `${RUNNER_TEMP}/claude-engine-support` (`CLAUDE_ENGINE_SUPPORT_DIR`); the checkout being validated never supplies them. It reads the tracking issue's labels once for `AI_ENGINE_LABELS`, then installs the pinned CLI and fetches the Claude pool, but only when a validate role resolves to Claude. `validation-refresh.yml` does the same from its own checkout.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Roles moved to Claude | 3 (`VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`) |
+| Extra GitHub API calls per validate run | at most 1 (tracking issue labels) |
+| Codex command line when a role resolves to codex | unchanged |
+
+What this means for operators: to roll back, set `AI_ENGINE_VALIDATE=codex`, `AI_ENGINE_VALIDATE_SELF_HEAL=codex` or `AI_ENGINE_VALIDATION_REFRESH=codex`, or add the `ai:codex` label to the tracking issue. If the trusted engine helpers cannot be staged, the job log shows `AI_ENGINE_FALLBACK role=<ROLE> reason=engine_support_missing` and codex runs.
+
+The Claude pool broker (`tools/claude-pool-broker`) now also grants the pool to `check_failure_triage.yml`, `issue_pr_status.yml`, `validate.yml`, `validation-refresh.yml`, `workflow-failure-heal-intake.yml` and `workflow-log-analysis.yml`. The broker reads this list from its deployed code, so these workflows get no pool credential until the Worker is redeployed with `wrangler deploy` (CLAUDE.md §24.C).
+
+### For contributors
+
+`ai_engine_stage_support <source_root> <dest_root>` copies the fixed list of engine support files, and refuses missing files and symlinks. Callers source `ai_engine.sh` only from that root. `discover_manifest_via_codex` takes an optional `engine_resolver`. Refs #6664. Tests: `tests/test_claude_engine_utility_roles.py`, `tests/test_ai_engine.py`, `tests/test_claude_engine.py`.
 
 ### For contributors
 
@@ -2235,6 +2589,352 @@ Both release paths already ran `scripts/release_ci_gate.sh` (issue #6797), which
 | `STABLE_RELEASE_ENABLED` default | on (unset publishes) |
 
 What this means for operators: while `STABLE_RELEASE_ENABLED` is `false` (or any value other than unset, empty or `true`, which also logs a warning), every gate run still validates and runs the CI check but publishes nothing. It pushes no changelog, creates no tags or GitHub Release, sends no consumer dispatch and does not sync to `main`. It logs `STABLE_RELEASE_DISABLED` instead. The new step reads check-runs with the release job's existing `checks: read` permission. While publishing is off, set `AUTO_RELEASE_STABLE_ENABLED=false` as well. Otherwise `auto-release-stable.yml` re-runs the full gate on the same tip every 6 hours.
+
+- **A check-triage issue whose failure is already fixed on the default branch is now closed with evidence instead of looping on clarification.** Issue #7095 (re-issued from #6945).
+
+#6945 was filed for a failed `CI` run on PR #6938. By the time it reached clarify, #6938 had merged and #6941 had merged the test correction the triage named. Clarify still asked for `/answer` again and again, and the issue ended up blocked.
+
+The clarify route step now runs `scripts/check_triage_resolution.py gate` for a trusted `ai:check-triage` issue before any question is posted. The issue is closed only when GitHub confirms all of the following:
+- the linked PR merged from this repository;
+- the failing check passes on the default branch tip, or for a failed CI run, the newest completed default-branch push run succeeded and every failed job name (matrix suffix included) succeeded in it;
+- that commit contains the PR's merge commit (compare API `ahead` or `identical`).
+
+The gate then posts one evidence comment, adds `ai:closed` and closes the issue as completed. It never writes to the PR and never posts `/answer`. Any other conclusion (`neutral`, `skipped`, pending, failed) or any read error keeps the normal fix path, and the gate posts the failing job's traceback once (redacted, with routing keys and markers neutralized). A failed check is never treated as passed, and security-pass behaviour is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API calls for issues without `ai:check-triage` | 0 |
+| Reads for a check-triage issue | about 7, plus up to 3 job logs when unverified |
+| Markers trusted only from the pipeline account | 2 (`ai:check-triage-resolved:v1`, `ai:check-triage-traceback:v1`) |
+
+What this means for operators:
+- Nothing to configure; `CHECK_TRIAGE_RESOLVED_GATE_ENABLED=false` turns the gate off.
+- The gate runs when clarify starts (a new issue or `/reclarify`). A triage issue whose PR merges later is closed on its next `/reclarify`.
+- If verification succeeds but a write fails, the clarify run fails (no `/answer` is posted), and a rerun finishes the close.
+
+- **The review sweep now re-runs a PR's CI once when a runner shut down mid-job.** Issue #7109, from PR #6682's run 38090075498: the `static-checks` runner received a shutdown signal during ShellCheck, the `lint` aggregate failed with it, and nothing re-ran the run because the sweep only recovered `cancelled` and `startup_failure` runs.
+
+`scripts/ci_cancelled_rerun.py` now also considers a current-head `failure` run that passes every existing guard (attempt 1 only, no active run, current head). It reads the run's attempt-1 jobs and each failed job's check-run annotations, and re-runs the failed jobs only when every failed job carries the annotation `The runner has received a shutdown signal` and no other failure annotation except `The operation was canceled.` (a failed step's exit-code annotation means the job also failed for real), with the `lint` aggregate accepted only when the jobs it names are such jobs or cancelled ones; successful siblings of a matrix job it names are ignored. The decision is logged as `CI_CANCELLED_RERUN … action=rerun reason=runner_shutdown`. A real failure still logs `reason=other_conclusion`; unreadable, malformed or over-cap evidence logs `reason=runner_shutdown_unverified` and re-runs nothing. Classification costs one jobs read plus at most 10 annotation reads per run and runs for at most 5 runs per tick, so the sweep job now holds `checks: read`. A step that prints the shutdown text itself can earn its head one re-run of the same workflow, which an empty push already allows; the existing one-retry-per-head rule still applies. `CI_CANCELLED_AUTO_RERUN_ENABLED=false` turns it off with the rest of the recovery.
+
+- **A cancelled required check now blocks merges.** A newer re-run of the same check replaces the cancelled one.
+
+`scripts/pr_checks_lib.sh` checks the check-runs on a PR's head before the orchestrator, the review-blocked judge and the auto-merge paths merge. It counted `cancelled` as passing. On a branch without protection, as on this repository's `main`, a PR whose CI aggregate job `lint` was cancelled could therefore merge. The gate now accepts only `success`, `neutral` and `skipped`. A required check that ended `cancelled`, `timed_out`, `action_required`, `failure` or `startup_failure` blocks.
+
+Re-running a job adds a new check-run with the same name on the same commit. A cancelled check-run now blocks only while it is the newest check-run of its name, so a cancelled run that a later run replaced does not block. The CI aggregate check `lint` shares its name with jobs in two PR-body lint workflows that run again on every PR body edit, so a cancelled `lint` is replaced only by a re-run in the same Actions run (or, in the auto-merge wait, by a newer CI run). A failed or still-running check-run still blocks even when a newer run of the same name exists, because a check-run does not say which workflow produced it and different workflows can share a job name. A cancelled required check with nothing newer counts as finished, so the auto-merge wait refuses at once instead of waiting out its budget, unless another check on the head is still running.
+
+The noop-suspicious force-merge fallback in the poller (Gate D) had its own check-runs query. That query blocked on failed advisory checks and ignored required checks that were still running. Gate D now calls the shared gate, so both paths apply the same rules. It pages once per PR head, like the other force-merge gates, and waits without paging while a check is still running or the check-runs could not be read.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Conclusions that pass | `success`, `neutral`, `skipped` |
+| Check-runs a newer same-name run can replace | cancelled ones only |
+| Runs that can replace a cancelled `lint` | a re-run in the same Actions run, or a newer CI run in the auto-merge wait |
+| Extra API calls | 1 branch-protection read per Gate D check (noop retry-cap path only) |
+
+What this means for operators: re-run a cancelled required check to unblock its PR. If the newest `review / gate` run on a head was cancelled, the merge waits for the next review run on that head.
+
+- **The orchestrator now dispatches runtime validation from the default branch's wrapper.** A stale validation wrapper on an integration branch can no longer fail every validation run, and projects it already parked recover once on their own.
+
+The poller used to dispatch the validation wrapper with `--ref <integration branch>`, so GitHub ran the integration branch's copy of `ai-validate.yml`. That copy keeps whatever `validate.yml` pin the branch had when it was cut, and the poller deliberately does not sync `main` into a branch while it is validating. A stale pin then failed every re-dispatch with `raw_status=harness_error`, as on binance-blessings#249. The poller now sends no `--ref`. GitHub runs the default branch's wrapper, and `validate.yml` still checks out the integration branch it resolves from the `tracking_issue` input.
+
+A project already parked by that failure is re-dispatched once from the default branch: the last failed run used a branch other than the default branch, or, for state written before this fix, the project has a separate integration branch. The validation counters are kept, and the tracking issue gets a "🔁 Validation re-armed after stale workflow pin" comment. The pipeline handles this itself, so the Telegram notice is DEBUG and pages nobody. Set `VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED=false` to keep such projects parked until `/revalidate`. The recovery never runs while `ENABLE_VALIDATION=false`.
+
+What this means for consumer repos: validation runs use the `ai-validate.yml` on your default branch, so keep that wrapper synced. A tracking issue must carry its `Integration branch:` line, which the orchestrator writes when it creates the issue.
+
+### For contributors
+
+The recovery block sits right after the `/revalidate` block in `scripts/orchestrate_poll_process.sh`, so an operator `/revalidate` on the same tick wins. It fires at most once per project: the state flag `validation_stale_pin_recovered_ref` (default-branch SHA) and a `<!-- validation-stale-pin-recovery:<sha> -->` comment by the pipeline login both stop it. Nothing is dispatched until the failure labels are confirmed removed and the state flag is written: a label that is still present, a failed state write or an unreadable default-branch head skips the recovery for that tick (`reason=label_write_failed` / `state_write_failed` / `default_sha_unavailable`). Each decision logs `VALIDATION_STALE_PIN_RECOVERY tracking_issue=<N> outcome=recovered|skip reason=<r>`. New state fields: `validation_last_dispatch_workflow_ref`, `validation_last_run_head_branch`, `validation_last_run_id`.
+
+- **A freshness update now skips review only for the exact commit GitHub produced, and remaining base overlap never merges without CI.** Two security-pass findings in the #7084 freshness-sync path are closed with automated controls; no human step is added.
+
+After an accepted `update-branch`, `_pr_base_fresh_for_merge` (`scripts/pr_checks_lib.sh`) now waits for the new head, checks that it is GitHub's signed two-parent merge of the approved head with the base tip the freshness check saw, and only then posts the marker, which gains `base=<base tip> merge=<update commit>`. The review gate (`scripts/review_head_gate.sh freshness-sync`) skips the reviewer panel only when the head is that recorded `merge` commit with parents `[from, base]`. A branch reset to the approved head followed by a GitHub conflict-resolver merge produces a different commit and is reviewed normally (`freshness-sync-signed-merge-review-bypass`). Legacy markers without the new fields never skip (`reason=unbound_marker`).
+
+`MERGE_BASE_FRESHNESS_MAX_SYNCS` no longer lets a PR merge over remaining overlap (`merge-base-sync-cap-proceeds-on-overlap`). Past the threshold each further update still happens and logs `::warning::MERGE_BASE_FRESHNESS ... action=update reason=max_syncs_exceeded`, so the merge waits for CI on a commit bound to the current head and base.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra reads per accepted update | at most 5 PR reads and 1 commit read |
+| Updates after which a warning is logged | `MERGE_BASE_FRESHNESS_MAX_SYNCS` (default 2) |
+| Merges allowed over remaining overlap | 0 |
+
+What this means for operators: a PR whose base keeps changing the same files now keeps updating, one CI run each, until the base is quiet for one CI cycle. When the update commit cannot be observed or verified, or the base gained more than 250 commits, no marker is posted (`MERGE_BASE_SYNC_MARKER ... outcome=skipped reason=<token>`) and the next run reviews in full. `MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS` (default 5, 1-20) and `MERGE_BASE_SYNC_HEAD_POLL_SECONDS` (default 3, 1-30) tune the wait for the new head.
+
+### For contributors
+
+The fallback `_pr_base_fresh_for_merge` stubs in `scripts/review_enable_auto_merge.sh`, `scripts/review_rb_judge.sh`, `scripts/orchestrate_poll_process.sh` and the `deterministic-skip-merge` job now defer (`outcome=unknown reason=library_unavailable`) instead of letting a merge proceed unchecked. Refs #6664. Tests: `tests/test_pr_base_freshness_gate.py`, `tests/test_review_head_gate.py`.
+
+- **The implement workflow's two largest steps no longer risk being rejected at startup.** Neither step script contains a GitHub expression any more, and a new CI test catches any step script that grows toward GitHub's limit.
+
+GitHub treats a step's `run:` script that contains any `${{ }}` expression as one expression string, and rejects it at 21,000 characters. When that happens, every run of the workflow fails before any job starts. In `.github/workflows/implement.yml`, the `Stage workflow support files` script (about 19,300 characters) and the `Preflight destructive-commit guard` script (about 19,800) were close to that limit. Both now read the repository name from the runner's `GITHUB_REPOSITORY` variable. The staging step reads `PROMPT_PRELUDE_REFACTOR_ENABLED` and `UNATTENDED_IDENTITY_REINJECT_ENABLED` from its own `env:` block, still defaulting to `false`, and writes them to `GITHUB_ENV` under the same names, so behaviour is unchanged. `tests/test_workflow_file_size_limit.py` now fails when a step script that contains `${{` reaches 18,000 characters in any workflow. Its message names the workflow, job, step and length.
+
+What this means for operators: nothing changes in how implementation runs behave. If the new test fails, move the step's `${{ }}` values into its `env:` block, or move the script into `scripts/`.
+
+- **Implement's guard-block handler now retries its safety labels on transient GitHub errors.** A 5xx, network error or rate limit no longer leaves `ai:needs-human`, `ai:scope-blocked` or `ai:destructive-blocked` unapplied with only an "unknown latch state" warning.
+
+`scripts/implement_handle_guard_block.sh` applied those labels and read them back with single raw `gh` calls. `implement.yml` ran it from a `${RUNTIME_DIR}` copy with no helpers beside it. The `Stage workflow support files` step now also copies `scripts/gh_helpers.sh` into `${RUNTIME_DIR}`, and the handler sources it. The label add and remove, the verification read and label creation go through `gh_retry`. A label that already exists is still accepted on the first attempt, without retries. The rejection comment is still posted once, so a retry cannot duplicate it. When `gh_helpers.sh` is missing or fails to load, the handler logs a `::warning::` and runs the raw calls as before.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Attempts per label write or read | up to 5 (`GH_RETRY_MAX_ATTEMPTS`) |
+| Attempts per rejection comment | 1 |
+
+What this means for operators: a guard rejection during a brief GitHub outage now ends with the latch label confirmed. The order of writes, the latch-status lines, the markers and the exit codes are unchanged.
+
+- **Standalone stall recovery now also runs when no orchestrator project is open.** A standalone plan held for automation paths is approved once its issue grants them, even with no tracking issue open.
+
+Activation verification of PR #6849 found that `orchestrate_poll.yml` ran standalone stall recovery only inside the full poller, which runs only while a tracking issue is open. A new step, "Run standalone stall recovery without active projects", runs on the other ticks with `STANDALONE_RECOVERY_SWEEP_ONLY=true` and the full poller's settings. A failure in that step does not stop the latch-release and unblock-scan steps that follow it. It applies the `.github/ai/concurrency_caps.yml` limits as the full poller does, and the OpenCode CLI is installed on those ticks too, so a stall judge running on OpenCode can start. The other gap in that report, passing `--origin-repo` to the plan-step and poller grant checks, was already fixed on `main`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Idle-tick recovery cadence | every poll tick (5 minutes) |
+| Turn it off | `ENABLE_STANDALONE_STALL_RECOVERY=false` |
+
+What this means for operators: idle ticks now also install the OpenCode CLI, and in a repository whose stall judge runs on Claude they also install the Claude CLI and probe the account pool. Set `ENABLE_STALL_JUDGE=false` or `ENABLE_STANDALONE_STALL_RECOVERY=false` to avoid that cost.
+
+- **The standalone PR conflict sweep and the no-op recovery sweep now run on every poll tick, including ticks with no open orchestrator project.** Their stuck-PR alerts also no longer go silent when the only open project is the release gate's smoke fixture.
+
+PR #7156 added two once-per-head alerts for standalone PRs: one after repeated merge-conflict resolution attempts, and one when the no-op force-merge fallback stops at a gate. Both sweeps ran only inside the main poller, and `orchestrate_poll.yml` runs that poller only when an `ai:orchestrator-tracking` issue is open. In a repository with no active project, a conflicted or stuck standalone PR was therefore never swept and never alerted. When every open tracking issue was a smoke fixture, the workflow also set `ALERT_MSG_LEVEL=SILENT`, which silenced the same alerts for real PRs.
+
+On ticks with no tracking issue, a new step, "Run standalone PR sweeps without active projects", now runs `scripts/orchestrate_poll_process.sh` with `STANDALONE_PR_SWEEP_ONLY=true`. That mode runs only the two sweeps. Ticks with projects keep running the sweeps inline, so each tick sweeps once. The new step honours `ALLOW_WORKFLOW_EDITS`, and the poll workflow now also stages `scripts/validate_editor_audit.sh`, which the no-op sweep needs before it can fall back to a force-merge.
+
+Both sweeps now page at `STANDALONE_SWEEP_ALERT_MSG_LEVEL`, which the workflow sets from `vars.ALERT_MSG_LEVEL` (default `WARNING`). The level then goes back to the poller's own setting. An empty value keeps the poller level, and a value that is not a known level is ignored with a warning.
+
+What this means for operators: standalone PRs are swept every 5 minutes whether or not a project is open, at the cost of one sweep's GitHub API reads per idle tick. A consumer whose pinned support commit predates this change logs a warning and skips the new step until its next sync.
+
+- **Standalone stall recovery now runs when no orchestrator project is active.** Before, a repository with no open `ai:orchestrator-tracking` issue never ran it, so stalled standalone issues stayed stuck.
+
+On those ticks the poller toolchain steps were skipped, so the "Run standalone stall recovery without active projects" step had no installed tools to run with. `.github/workflows/orchestrate_poll.yml` now installs the toolchain on no-project ticks. The step runs the poller with `STANDALONE_RECOVERY_SWEEP_ONLY=true`, which runs only standalone stall recovery, and it runs only when the API key check and support staging succeeded. The latch release and unblock scan still run if recovery fails. They do not run if the tracking-issue lookup failed.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Kill switch | `ENABLE_STANDALONE_STALL_RECOVERY=false` (default `true`) |
+| Extra GitHub API calls per idle 5-minute tick | about 10 |
+
+What this means for operators: idle ticks now install the poller toolchain and make recovery's usual API calls. Set `ENABLE_STANDALONE_STALL_RECOVERY=false` to turn both off. The merged-issue close sweep still runs only while a project is active.
+
+- **Plan, clarify-respond, check-failure triage, the unblock judge and the Claude engine smoke also get the clarify sandbox base image from a mirror first.** A Docker Hub rate limit no longer fails them while a mirror is reachable, as it already no longer failed clarify.
+
+The mirror pre-seed added for clarify in heal #6985 (PR #7200) now lives in `scripts/clarify_base_image_preseed.sh`. `scripts/clarify_isolated_run.sh` first tries the prebuilt sandbox image from GHCR, which needs no base image, and runs the helper before any local build of the sandbox image, including the local build `scripts/sandbox_image.sh` falls back to when a pulled image fails its label check. Every caller of that script therefore seeds the base image whenever it builds locally. Clarify's "Pre-seed clarify sandbox base image" step keeps its name and now calls the same helper. The log line and its fields are unchanged; a support tree without the helper logs `CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `CLARIFY_BASE_IMAGE_MIRRORS` | unset: `public.ecr.aws/docker/library mirror.gcr.io/library`; set but empty: no mirrors |
+| `CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS` | default `300` per mirror pull; values outside 30-1800 fall back to `300` |
+| Extra wait before the model starts when the prebuilt image and every mirror fail | at most 2 × 60 s of prebuilt pulls (`SANDBOX_IMAGE_PULL_TIMEOUT_SECS`) plus 2 × 300 s of mirror pulls with the defaults, per image build; in clarify the "Pre-seed clarify sandbox base image" step tries the mirrors once more first, so up to 4 × 300 s of mirror pulls |
+
+What this means for operators: nothing needs configuring. The repository variables `CLARIFY_BASE_IMAGE_MIRRORS` and `CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS` still apply to clarify's step; the other callers use the helper's defaults. The helper uses no credentials and never fails a run.
+
+### For contributors
+
+CI's "Clarify sandbox base image pre-seed tests (#6985)" step now runs `tests/test_clarify_sandbox_base_image_preseed.py` with `TMPDIR` set to the runner temp directory, because its fake `docker` must be executable. The helper is staged with the other clarify isolation support files in `clarify.yml`, `plan.yml`, `orchestrate_clarify_respond.yml` and `check_failure_triage.yml` (including the triage trusted-support copy). The GHCR image build in `scripts/sandbox_images_publish.sh` and the implement and review sandboxes (`scripts/codex_isolated_exec.sh`, `scripts/review_sandbox/Dockerfile`) still pull from Docker Hub.
+
+- **Planning closes a CI-repair issue whose pull request already merged with the failing check green.**
+
+Issue #7185 asked the pipeline to repair CI on PR #6976 after that PR had merged with CI passing, and planning proposed edits to the PR's former head branch. Before the planning model runs, `plan.yml` now checks check-failure triage issues (label `ai:check-triage`) and pipeline re-issues that trace back to one. If the pull request merged and the named check passed on its final head, the issue gets one comment naming the PR and check, the `ai:closed` label, and is closed as not planned. If the pull request merged but the check did not pass, planning goes ahead against the PR's base branch, with the merged-PR facts in the planner's context. Any read failure, untrusted author or unclear lineage plans as usual (#7216).
+
+| The numbers that matter | Value |
+| --- | --- |
+| `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` default | `true` |
+| Re-issue hops followed / issues read, at most | 4 / 8 |
+| API reads per qualifying issue | 1 identity, up to 8 issues, 1 PR, 1 or 2 check reads |
+
+What this means for operators: nothing to set. Reopening a closed issue alone does not help, because the next planning run closes it again; to plan it anyway, set `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED=false` first, then reopen it.
+
+- **A fix PR routed to a failing PR's branch now waits for its own CI before it merges, and a resolver that cannot be staged no longer sends routed work to the default branch.** Activation verification of PR #7050 found both gaps.
+
+Pull-request CI ran only for PRs into `main`, `stable` and `orchestrator/project-*`, and the auto-merge wait required `lint` only for those bases. A fix PR into a failing PR's `ai/issue-<n>` head could therefore merge with no CI run of its own. `ci.yml` now runs pull-request CI for every base, and `scripts/pr_checks_lib.sh` requires `lint` for every base in this repository. Those PRs also get the template live-copy preparation before the parity tests, and check-failure triage does not file an issue for a failing PR into an `ai/issue-<n>` branch, which has no push CI to compare with (`CHECK_TRIAGE skip reason=routed_head_base`).
+
+The "Resolve integration ref" step in `plan.yml`, `clarify.yml`, `implement.yml`, `orchestrate_clarify_respond.yml` and `validate.yml` fell back to the default branch when it could not stage, pin or find the resolver, even with CI-triage routing on. With `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` on, the step now fails instead, and the unpinned main fallback clone counts as a pinning failure.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Pull-request CI bases | every branch (push CI unchanged) |
+| Log line | `INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=stage_failed\|pin_failed\|script_missing` |
+| Routing flag default | `false` (fallback unchanged) |
+
+What this means for operators: with routing on, a GitHub clone failure now fails the phase run instead of planning or implementing on the default branch. Re-run the phase once GitHub recovers. PRs into feature branches now get a CI run.
+
+- **Stalled standalone issues are now recovered in repositories with no open orchestrator project.** Before this, when no `ai:orchestrator-tracking` issue was open, only the sweep-only recovery step (#7183) ran, so the full poller and the sweeps after its loop never ran there (issue #7284, an activation gap found on PR #7044).
+
+The poll workflow started its full poller, which holds standalone stall recovery, only when a tracking issue was open. Now, when no tracking issue is open, the `Find active tracking issues` step asks GitHub one batched question: how many open issues carry a pipeline phase label, or have a standalone stall-state or clarification-questions marker in their comments. If any do, the full poller runs. Its tracking loop has nothing to do, and the steps after it run as usual:
+- standalone stall recovery;
+- the staged-support latch release and the unblock scan;
+- the close-merged sweep and the standalone conflict sweep.
+
+If the probe fails or returns something unexpected, the poller runs anyway and the step logs a warning. Each outcome is logged as `STANDALONE_STALL_PROBE`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API calls on a tick with no open tracking issue | 1 GraphQL request |
+| Extra calls on a tick with an open tracking issue | 0 |
+| New settings | none |
+
+What this means for operators:
+- `ENABLE_STANDALONE_STALL_RECOVERY=false` turns the probe off, and the poller then stays idle when no tracking issue is open, as before.
+- In a repository with candidate standalone issues, every tick now does the full setup, including the `OPENROUTER_API_KEY` check. A missing key now fails the run instead of being silently skipped.
+
+- **A merged unblock fix-up no longer resumes an issue straight into the automation-path guard that blocked it.** Applies only with `UNBLOCK_PROTECTED_HANDOFF_ENABLED=true` (issue #7287, an activation gap of PR #7066 seen on #6887).
+
+The protected-path handoff (#7060) was checked only after the judge's fix-up wait. When a `descope` or `operator_step` fix-up filed before the handoff existed merged, the judge posted the issue's resume command (`/approved`, `/answer` or `/reclarify`), and the next implementation run hit the same automation-path rejection. Now, before that resume, the judge reads the newest pipeline-authored guard comment on a `scope-blocked` issue. If it is still an automation-path rejection, the judge first re-checks the grant: when the issue's `files_touched` now grants every rejected path, it resumes the issue and marks the fix-up wait done (`outcome=followup_regrant`); if that resume fails, the wait stays open (`reason=followup_regrant_failed`). A later run that finds that re-grant marker already posted retries the resume instead of handing the issue to an operator (`op=regrant outcome=resume_retry reason=already_regranted`). Otherwise, if a pipeline-authored `descope` / `operator_step` verdict was recorded after the rejection, the judge:
+- records an `ai:operator-step` entry under its own key (`unblock-handoff-<n>`, so the original verdict's entry and placeholder stay in place), posts the handoff comment ending in `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->` and sends a WARNING (`scripts/unblock_actions.py followup-handoff`);
+- marks the fix-up wait done and logs `UNBLOCK_JUDGE ... outcome=followup_handoff fixup=<N> run=<r>`;
+- removes no label and posts no resume command, so the issue stays blocked for a person.
+
+If a hold marker already exists, the wait is marked done and the run logs `outcome=skip reason=operator_handoff_pending` with `fixup=`. If a write fails, the wait stays open and the next judge run retries the handoff (`reason=followup_handoff_failed`); the WARNING says so.
+
+What this means for operators:
+- With the flag off (the default) nothing changes.
+- A fix-up that followed a different verdict (for example `retry_budget`), or an issue whose newest guard comment is not an automation-path rejection, still resumes as before.
+- Verdict, rejection and hold markers count only when posted by the pipeline's `GH_PAT` login. The handoff itself adds no GitHub reads; the grant re-check that runs first reads each source issue a re-issue names (one read per source issue, at most 8), as the existing re-grant check does.
+
+- **A PR whose CI fails after an update from its base branch now goes back to review and autofix instead of sitting with red CI.**
+
+When the merge-base freshness gate updates an approved PR from its base, the resulting head skips the reviewers and only waits for CI before merging (#7084). If that CI failed, the merge was refused and nothing ran review or autofix on the PR again. PR #7153, the security-pass fix for orchestrator project #6664, sat that way from 2026-10-11. The `deterministic-skip-merge` job in `.github/workflows/review_autofix.yml` now runs `scripts/review_freshness_ci_failed.sh`. It marks the head with a PR comment and dispatches the PR's review workflow, and `scripts/review_head_gate.sh` reviews a marked head normally, so autofix sees the failing checks. The new repository variable `FRESHNESS_CI_FAILED_REDISPATCH_ENABLED` is on by default; set it to `false` to turn it off.
+
+What this means for operators: an approved PR no longer stalls silently after a base update breaks its CI; it gets another autofix round like any other PR with failing checks.
+
+- **The project security pass now audits the integration head's own files.** In this repository the poller's checkout of the integration branch can carry the default branch's copies of `scripts/` and `prompts/`, restored over the tree after a forced checkout. The audit read those copies while its diff came from the integration branch, so project #6664 kept re-reporting two findings its branch had already fixed.
+
+`run_security_pass_inline` (`scripts/orchestrate_poll_process.sh`) now checks the audited head out into a clean detached worktree under `RUNTIME_DIR` and runs the audit there. The exhaustion judge reads the same worktree. Every script that runs still comes from the poller's trusted support root, so no branch-written code runs on the runner. The false-positive exclusion catalog also comes from the support root, never from the audited branch. The worktree must match the audited head and be clean; otherwise the pass fails closed (`engine_unavailable`). The worktree is removed when the pass returns. `SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED=false` turns this off (default `true`). Logs `SECURITY_PASS_AUDIT_TREE`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API calls | 0 |
+| Extra local worktrees per audit | 1 |
+
+- **The check-triage resolution gate now posts the failing job's traceback for coloured Actions logs.** Issue #7302 (from the activation check of PR #7097).
+
+`scripts/check_triage_resolution.py` read Actions job logs without `--allow-escape-sequences`. Actions logs carry ANSI colour codes, and `gh` refuses such a response without that option, so the read failed, was skipped, and the `ai:check-triage-traceback:v1` comment was never posted on an unverified `ai:check-triage` issue. Both job-log reads now pass the option. The log text is still filtered and redacted before it is posted, and the gate's verdict, markers and API calls are unchanged.
+
+- **A `files_touched:` list written flush with its key is now read as the issue's allowlist instead of being rejected as malformed.**
+
+The orchestrator judge wrote #7296's list as `files_touched:` followed by `- scripts/...` lines at the same indent. That is valid YAML, but the plan gate held it with `malformed_allowlist`, and the implement-time guard would have granted none of its `scripts/` paths. `scripts/files_touched_scope_guard.py` and `scripts/review_reject_verify.sh` now read that form. The unblock judge extends such a list at the same indent. The judge prompt (`prompts/mode-judge.txt`) now asks for the two-space form.
+
+What this means for operators: issues with a flush list, such as #7296, get their exact grant on the next gate check. Paths the list does not name, such as `.github/workflows/ci.yml` in #7296's plan, still need a human `/approved`.
+
+- **The orchestrator's wave judge now reviews the integration branch's own scripts instead of the poller's copies.**
+
+When the judge's checkout of an integration branch hit local changes, the poller force-checked it out and then copied its own `scripts/`, `prompts/` and `.github/ai/` over the result. In this repository that happened on every tick: the "Stage workflow support files" step of `.github/workflows/orchestrate_poll.yml` installs each support script with mode `0755`, and `scripts/pr_checks_lib.sh` is tracked as `0644`. The judge then saw `main`'s code next to the branch's tests and changelog fragments, decided the script changes were lost, and filed restore issues for project #7126 (#7296, #7306, #7307). Each of them closed or merged without restoring anything, because the code was already there. The fallback now keeps every file the target branch tracks, removes files the branch deleted (except support files the poller staged and still runs later in the tick), and restores only support files the branch does not have. Each forced checkout logs `JUDGE_CONTEXT_CHECKOUT tracking=<n> outcome=forced kept_target=<count> removed_stale=<count>`. The project security pass still keeps the poller's own support files, because it runs `scripts/security_audit.sh` from that checkout with the poller's credentials; after a plain or a forced checkout it copies those files again from the verified support checkout, so a script another project's branch left in the tree earlier in the same tick is not run, and logs `outcome=forced_overlay_kept` or `outcome=plain` with `reason=trusted_support trusted_refreshed=<count>`. Support files the branch does not track are copied back after a plain checkout too. If a support file cannot be replaced (a failed copy, or a symlink from the branch in the way), or no verified support checkout is available, the security pass stops with `engine_unavailable` and logs `outcome=trusted_refresh_failed`.
+
+What this means for operators: a project whose judge kept asking to restore code that is already on its integration branch should stop doing so after this ships.
+
+- **On poll ticks with no open tracking issue, the standalone stall recovery step now gets the same settings as the step for active projects.** The step now passes `NEEDS_HUMAN_DIGEST_ENABLED`, `AI_ENGINE_ACTIVATION_VERIFY`, `SECURITY_AUDIT_LINE_OWNERSHIP`, `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` and `SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED` to the poller. Before, a repository variable that set one of these was ignored on those ticks, the script default applied, and the workflow contract test that compares the two steps' environments failed on PR #6667. Refs #6664.
+
+- **Heal issues filed without a scope marker are now replaced automatically.** Issue #7323 (unblock operator step for #7082).
+
+Implement refuses a heal issue that the pipeline filed without an `ai:workflow-heal-scope:v1` marker, and retrying cannot fix its body. The recovery added in #7191 could replace such an issue, but it was off by default and also needed `HEAL_INTAKE_SCOPE_GUARD_ENABLED`, which is off by default too, so it never ran. `HEAL_SCOPE_RECOVERY_ENABLED` now defaults to `true` and no longer needs the creation gate: the next authenticated report whose fingerprint matches such an issue files a replacement, closes the original as "not planned" and points it at the replacement. The replacement is created only when its scope marker passes the same `heal-scope verify` check; otherwise nothing is filed, the run fails with a CRITICAL alert and the original stays open. `HEAL_SCOPE_RECOVERY_ENABLED=false` turns recovery off; any other value also turns it off with a warning. Ordinary heal issues are still filed only with `HEAL_INTAKE_SCOPE_GUARD_ENABLED=true`.
+
+- **A standalone issue released from a pull-request dependency hold now gets its clarification questions answered automatically.**
+
+When the standalone poller saw that a held issue's `- Depends on PR: #N` condition was met, it posted `/reclarify` with `<!-- ai:pr-dependency-released:<n> -->`. The clarify workflow (`.github/workflows/clarify.yml`) treated that comment as a person asking to answer the questions themselves: the questions comment got the human-answer marker, standalone auto-decide was skipped, and `orchestrate_clarify_respond.yml` left the issue waiting for a person. Where the pipeline account has no OWNER, MEMBER or COLLABORATOR association, the clarify job did not start at all. The "Decide clarify route" step now reads the `GH_PAT` login once (one `GET /user`, only for a comment that is exactly this issue's release marker) and, when the comment's author is that login, restarts clarify as an automated run (`is_automated_release=true`, `is_forced_reclarify=false`, log `AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency_release reason=verified outcome=restart`). The job predicate in `clarify.yml`, `internal-clarify.yml` and `workflow-templates/ai-clarify.yml` also admits the marker from an account without a trusted association, and such a comment runs in its own concurrency group per comment, so it cannot cancel a running clarify. A comment from any other author, or a failed identity read, is not a release: a trusted author's comment stays an ordinary `/reclarify`, and an untrusted author's comment is skipped with no label writes and no automatic `/answer` (`reason=untrusted_comment_author`), and no AI-memory run events are recorded for it, including when the run fails before the route is decided. If a release run fails and the poller replays it (`/reclarify [auto-requeued-by-poller]`), the replay is still treated as a release, after one read confirms that its source comment is this issue's release marker from the `GH_PAT` login (`reason=verified_replay`). The `ai-clarify.yml` examples in `README.md` now include the new predicate clause.
+
+What this means for operators: issues released by the poller go on to planning without anyone answering their questions. The other gap reported for PR #7249, `_AI_ENGINE_EXIT_REFUSED` missing from `scripts/ai_engine.sh` on `main`, is unchanged here; it lands with PR #6667, and issues that require it stay held until then.
+
+- **Heal issues filed without a scope marker are now recovered on a schedule, and a non-retryable report no longer skips recovery.** Issue #7333 (activation gaps of PR #7325 for #7082).
+
+PR #7325 let an authenticated report replace a pipeline-authored heal issue that has no `ai:workflow-heal-scope:v1` marker, but nothing revisited such an issue on its own, and a report with a non-retryable sandbox reason (as for #7082) stopped before the recovery check. The heal intake workflow now also runs hourly: `scripts/workflow_failure_heal_recovery_scan.sh` lists open, pipeline-authored heal issues without a scope marker, rebuilds the review/autofix failure report from the issue's own never-edited body, and runs the unchanged intake on it. The intake still binds the pull request, verifies the failed runs, recomputes the fingerprint and requires it to match the issue, and creates the replacement only after its scope marker passes `heal-scope verify`; a replay posts nothing on the source pull request. A failed attempt leaves one marker comment on the heal issue; after three, the scan stops and sends one WARNING. Issues that have used up their attempts are dropped from the list, and a scan is skipped for the hour while another intake run is active, so it cannot replace a report waiting for the shared lock. The scan uses the same AI engine selection as a normal intake. A cap or failed read that clears on its own does not count as an attempt, and an issue already replaced but left open is closed.
+
+A verified report with `conflict_resolver_sandbox_path_unsupported` or `conflict_resolver_sandbox_support_missing` now first gets the recovery check, then the unchanged non-retryable handling on the pull request (diagnosis comment, `ai:needs-human`, WARNING). With no matching heal issue the outcome is the same as before. The host-only stop is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Scan schedule | hourly (`41 * * * *`) |
+| `HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK` | default `1`, at most `2` |
+| `HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS` | default `3` |
+
+What this means for operators: #7082-style heal issues are replaced without a person relabelling or redispatching anything. `HEAL_SCOPE_RECOVERY_ENABLED=false` turns the scan off together with recovery.
+
+- **coding-workflows' own `.claude/` now carries the pre-push test gate from #7146, which turns `main` CI green again.** Refs #7137.
+
+#7146 added `workflow-templates/.claude/hooks/prepush_affected_tests.py` and its Bash hook entry in `workflow-templates/.claude/settings.json`, but the live copies under `.claude/` never followed. The `Sync live .claude copies` run for that merge (run 38364113936) built its sync branch and failed at the push, so `test_template_copies_are_identical`, `test_live_copies_match_their_templates` and the settings check in `tests/test_session_start_extract_repo_slug.py` failed on `main` and on every pull request from 07:40 UTC on 13 October. This change copies both files byte for byte.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Files copied | `.claude/hooks/prepush_affected_tests.py`, `.claude/settings.json` |
+| CI jobs fixed | `tests-hooks-and-orchestrator`, `tests-release-and-log-analysis`, `lint` (roll-up) |
+
+What this means for interactive sessions in this repository: a `git push` now asks for confirmation unless `python3 .claude/hooks/prepush_affected_tests.py stamp` recorded a passing run for the pushed commit. `CLAUDE_PREPUSH_TEST_GATE=off` turns the check off. Consumer repos already receive the template copy and are unaffected.
+
+- **The `.claude` live-copy sync can refresh an existing sync branch again.** Refs #7137.
+
+`Sync live .claude copies` rebuilt its branch from the pushed `main` commit and force-pushed it. The repository ruleset refuses non-fast-forward pushes and branch deletion on every branch, so once `ai/sync-claude-live-copies-held` existed (since 9 October), every later sync of a held change failed at the push. Run 38364113936 for #7146 failed that way, and `main` CI stayed red until the copy was made by hand. The refresh commit now has two parents, the old branch tip and the pushed `main` commit: the push fast-forwards, and the pull request still shows only the copied live files. A failed push now logs git's own error text.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Script | `scripts/sync_claude_live_copies.py` |
+| New log lines | `CLAUDE_LIVE_SYNC fast_forward branch= previous= after=`, `error reason=push_failed branch= detail=` |
+
+What this means for operators: template changes to `workflow-templates/.claude/` reach this repository's own `.claude/` through the sync PR again, including held ones, without anyone deleting the old sync branch.
+
+- **Claude-engine runs are now told they have no web tools, and planners take outside facts from the issue instead of trying to look them up.**
+
+The plan and clarify prompts said "Web search IS available", which is true for Codex runs but not for Claude ones: `scripts/claude_anthropic_relay.py` refuses provider web search and web fetch (#6494). On 14 October a Claude planner blocked #7357 for a human because it could not verify the commit SHA of `jlumbroso/free-disk-space` v1.3.1. Every Claude run now gets an "Engine capabilities" note in its system instructions, saying web search and web fetch are unavailable and that outside facts come only from the task text and the repository. The plan and clarify prompts (`prompts/mode-plan.txt`, `prompts/mode-clarify.txt`, the inline clarify prompt in `.github/workflows/clarify.yml` and `scripts/run_plan_codex.sh`) now say web search exists only on Codex runs, use a fact the issue states as verified as given, and ask for a missing one instead of guessing. The orchestrator's decomposition prompt (`prompts/mode-orchestrate.txt`) asks the issue writer to put verified outside facts in the issue body, with how each was verified.
+
+What this means for operators: a Claude-engine plan no longer stalls trying a web lookup it cannot make. When an issue needs an outside value, put it in the issue (or answer the clarification) and the planner uses it.
+
+### For contributors
+
+`_ai_engine_instructions_file` in `scripts/ai_engine.sh` now prints a copy of the trusted `unattended_system_instructions.md` under `RUNNER_TEMP` with `AI_ENGINE_CLAUDE_NO_WEB_NOTE` appended. It is used by `claude_run`, by the Claude branch of `scripts/clarify_isolated_run.sh` and by the Claude roles in `scripts/review_untrusted_sandbox.sh`. If reading the original fails, it prints the original path as well. If the copy cannot be written it prints the original path, so the run still starts. Codex runs are unchanged.
+
+- **A project no longer reads as failed after the unblock judge re-issues one of its wave issues.** The replacement now takes the original's place in the wave instead of sitting next to the closed original.
+
+On 14 October the unblock judge re-issued #7357, a wave-1 issue of project #7355, as #7367 and closed #7357. The poller added #7367 to the wave but kept the closed #7357 there too. So the completion status turned `failed`, a CRITICAL "wave PR(s) closed without merge" alert went out, and the end-of-wave judge could no longer be skipped, even though #7367 was already done. Now a re-issue takes over the original's wave entry: same local id and dependents, new issue number, status `pending`, the same way stall recovery's `close_and_reissue` already does it. A re-issue filed before this fix is repaired on the next poll: the original entry is marked `skipped` with `unblock_superseded_by` set to its replacement. A failed project resumes after that repair only when no validation, security-pass or integration failure also stopped it and it is not parked for a person (`ai:blocked` or `ai:needs-human` on the tracking issue). A re-issued security finding keeps its original open, so its replacement is still added next to it, and fix-up and descope requests are unchanged.
+
+What this means for operators: a project whose blocked issue the unblock judge re-issues keeps going without a false failure alert. Project #7355 clears on the first poll after this merges.
+
+### For contributors
+
+`handle_unblock_judge_project_hooks` treats a trusted fix-up request as a re-issue when its title starts with `Re-issue of #<item>:` (written by `scripts/unblock_actions.py`) and its body has no `<!-- ai:security-finding:` marker. A re-issue no longer posts the "Waiting for fix-up" marker on the closed original. `UNBLOCK_PROJECT ... outcome=filed` gains `retarget=true|false`, and the repair logs `outcome=superseded`.
+
+- **Tracking issues no longer fill up to GitHub's 2500-comment cap, and a capped issue no longer stops the poller.**
+
+tele-funtoken-msg-scoring#3928 reached 2500 comments on 24 September. After that every poll failed posting the judge verdict and stopped, which also stalled the repo's other projects, and its AI workflows were switched off on 28 September. The 2500 comments were 1791 state snapshots (every state write posts a new chain and none were removed), 447 `tg_cleanup` markers (the marker lookup read the oldest 30 comments, so it never found the existing marker), 163 identical "Integration self-healing resolved" comments and 99 others. The poller now deletes its own superseded state chains after each write and, when a write meets the cap, deletes first and retries once. A repeat of one of the pipeline's newest 20 comments updates that comment's `Repeated N times, last … UTC` line instead of posting again. The Telegram markers are found on the issue's newest page, and the comment-cap error is no longer retried or fatal.
+
+| The numbers that matter | Value |
+| --- | --- |
+| State chains kept | newest, the one just written, and the newest whose status is not `failed` |
+| Deletes per tracking issue per poll run | 50 (`ORCH_STATE_PRUNE_MAX_DELETES`) |
+| Window for repeated comments | the pipeline's newest 20 comments, state and marker-only comments excluded |
+| tele-funtoken-msg-scoring#3928 | 1779 of its 1791 state comments become deletable; the newest state is unchanged |
+
+What this means for operators: a long-running project keeps a short, readable tracking issue and cannot lock itself out by hitting the comment cap. An issue already at the cap recovers on its own: the first state write deletes superseded chains and goes through. `ORCH_STATE_PRUNE_ENABLED=false` turns the deletion off.
+
+### For contributors
+
+`scripts/orchestrate_state_v2.py prune-plan` lists the deletable state comments; `prune_state_comment_chains` deletes them, computing the plan once per tracking issue per run from `COMMENTS`. When a state write meets the cap it re-reads the issue's comments (one paginated read), so chains written earlier in the run are included, and the delete budget starts over. `post_tracking_comment` keeps a per-run list of the pipeline's newest 20 comments and never edits a command (a body starting with `/`). `_is_gh_permanent_failure` in `scripts/gh_helpers.sh` matches the cap message, and the judge verdict and "Project Failed" posts log a warning instead of failing the run. `scripts/tg_helpers.sh` reads the issue's comment count and then its last page (`_tg_newest_comments_json`).
+
+- **A heal issue the unblock judge re-issued now keeps its lineage, and a heal issue whose failure was already fixed elsewhere closes itself.** #7082 sat waiting for a person after two unblock rounds, although the same failure on drhyg_ecommerce_automation#66 had already been fixed through the re-issue #7059 (PR #7065).
+
+The workflow failure heal intake now records a new report on the open re-issue of a closed heal issue in the same lineage, instead of filing another generation (`HEAL_REISSUE_DEDUPE_ENABLED`, on by default). Before judging a blocked `ai:workflow-heal` issue, the unblock judge looks for a sibling with the same source and failure reason that closed with an `ai/issue-<N>` pull request merged after the issue was filed; a fix that merged earlier did not hold, so the issue is judged as before. If it finds one, it closes the issue as completed with a link, without using a round (`UNBLOCK_HEAL_ALREADY_FIXED_ENABLED`, on by default). The hourly heal-scope recovery scan can now rebuild a heal issue whose body names no failed run, using the run from the pipeline's own newest matching occurrence comment. Before, every such issue ended in `runs_missing`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra reads per intake report with a closed lineage issue | 1 search per repository (at most 2) |
+| Extra reads per blocked heal issue the judge sees | heal issue list, 1 search, at most 3 pull-request reads |
+| Re-issue chain followed | up to 5 steps |
+
+What this means for operators: a heal failure that the pipeline already fixed through a re-issue no longer reaches the needs-human digest. Set either variable to `false` to restore the old behaviour.
+
+- **The wave-dispatch fingerprint gate no longer blocks a project when the merge resolver correctly combines two edits to the same line.** Project #7355 stopped before wave 3 because issue #7358 (PR #7365) and a back-merge of `main` (#7376) both edited the regex line in `_is_gh_permanent_failure`, and the `[ai-merge-resolve]` commit kept both edits on one line.
+
+`scripts/verify_integration_fingerprints.py` used to treat any change to a captured line made by a resolver commit as "sub-issue intent silently reverted". It now accepts such a change only when the line still contains the sub-issue's whole line, with nothing removed, and everything the resolver added comes from the other merge side's edit of that same line, which is itself kept whole. The gate logs `FINGERPRINT_RESOLVER_UNION_MERGE_V1` when it does. A resolver that dropped, changed or invented text still blocks the wave as before.
+
+What this means for operators: a project whose sub-issue and `main` touch the same line no longer waits for the integration judge or a person when the resolver merged both sides correctly.
+
+- **Validation runs again: the PID-namespace launch no longer refuses every start with `selfcheck probe_failed`.** Since #7349 shipped, every validation on `main` failed closed before running a test ("Isolated validation harness unavailable … selfcheck probe_failed"), which blocked project #7355 after its last wave merged.
+
+Before dropping to the sandbox user, the namespace launch in `scripts/validation_harness_sandbox.sh` bind-mounts `/dev/null` over every socket in the sandbox user's runtime dir, then lists the sockets again and refuses to start if any is left. That second listing used `find -type s`, which reads the type from the directory entry. A bind mount does not change that entry, so the masked rootlesskit `api.sock` and containerd sockets were still listed, and the launch exited 125 with no output on every run. The namespace self-check probe had the same check and would have failed with `user_manager_reachable`. Both now use `! -type l -xtype s`, which stats each entry. A socket left unmasked still stops the launch.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Validation runs on `main` that failed this way | 4 (runs 38646893482, 38649799512, 38652432980, 38660958249) |
+| Last passing validation | run 38502066227, before #7360 |
+
+What this means for operators: validation of orchestrator projects and the nightly harness self-test runs tests again with no setting to change. The `VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP` notice for #7355 needs no action.
+
+### For contributors
+
+The existing launch tests fake `mount` by replacing the socket with a regular file, which also changes the directory entry, so they could not catch this. `tests/test_validation_harness_sandbox.py` now also runs the real launch script and the real probe under a real bind mount in a private mount namespace. These tests skip on hosts that cannot create one.
 
 ### For contributors
 
@@ -5610,6 +6310,158 @@ What this means for consumer repos: the guard and its template copy reach you on
 - **Branch deletions and default-branch pushes in interactive sessions wait for an operator to add a confirmation prompt.** The `claude/*` push allow rules still let `git push` delete a branch (`--delete`, `-d`, `:branch`) or write the default branch through an extra refspec (`git push origin claude/x +main`) without asking, and a repository whose default branch is not `main` / `master`, or cannot be resolved, gets no prompt at all. The fix belongs in the merged-PR guard hook `.claude/hooks/pr_merge_status_guard.py`, which the pipeline's editors cannot write, so an `agents.md` note (fragment `agents.d/7254-push-destination-guard-operator-step.md`) records the step behind the `PUSH_DESTINATION_GUARD_UNSET_OPERATOR_STEP` placeholder. Nothing reads the placeholder, so no setting changes, and the hook, its template, `.claude/settings.json` and CI are untouched.
 
 What this means for operators: in a trusted checkout, edit `workflow-templates/.claude/hooks/pr_merge_status_guard.py` and `.claude/hooks/pr_merge_status_guard.py` identically so that `git push` asks for every branch deletion, for any refspec that writes the default branch (including `+` and multi-refspec pushes), and for any destination outside `claude/*` when the default branch cannot be resolved. Add tests to `tests/test_pr_merge_status_guard.py`, update the §21.E note in `CLAUDE.md` and `workflow-templates/CLAUDE.md`, then remove that `agents.md` note (or its `agents.d/` fragment, if it has not been folded in yet). Refs #7220.
+
+- **A deleted guard no longer turns a project security finding into an advisory, and two review helpers no longer fall back to OpenCode on the host.**
+
+The project security pass marks a finding advisory when `git blame` shows its cited line predates the project. A pre-project line now stays blocking when the project deleted (or binary-changed) lines in the same file, added lines within `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` (default `40`) lines of it, or deleted lines in another file that the finding names, that the cited file mentions by module name, whose pre-project text mentions the cited module, or that an unchanged source file such as a router or registry names together with the cited module. Each case logs `security-audit: line_ownership_blocking finding=<id> reason=deleted_lines_in_file|changed_hunk_within_window|references_file_with_deletions|cited_file_references_module_with_deletions|module_with_deletions_references_cited_file|shared_referrer_links_module_with_deletions`, and a failed diff or module-reference read keeps the finding blocking.
+
+The reviewer consensus summariser and the behavioural-smoke synthesiser read PR-derived text. They now run OpenCode only inside the network-isolated review sandbox, including when the codex engine is selected. When the sandbox cannot be prepared, the attempt is refused with `::error::REVIEW_UTILITY_ISOLATION role=<SUMMARISER|BEHAVIOURAL_SMOKE> engine=<engine> outcome=refused reason=<reason>` instead of running on the host with the repository credentials. The summariser hard-fails after `SUMMARISER_ISOLATION_MAX_ATTEMPTS` (default `3`) consecutive refusals; smoke synthesis stays advisory and logs `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable`.
+
+What this means for operators: projects may need more security fix cycles for findings near code they deleted or changed. A review run whose sandbox is broken now fails instead of summarising on the host; the existing fingerprint cap and heal reporter handle a persistent failure. Both controls are automated, with no human gate.
+
+### For contributors
+
+The reviewer panel and the interim judge still run OpenCode on the host with the read-only reviewer agent; they have no sandbox role yet. Refs #6664. Tests: `tests/test_security_audit_workflow_contract.py`, `tests/test_summarize_reviewer_consensus_prompt.py`, `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, `tests/test_review_synthesise_smoke.py`, `tests/test_claude_engine_utility_roles.py`.
+
+- **Automatic plan approval no longer approves plans that change workflow automation.** Issue #6769 (from the #6766 unblock step).
+
+A plan that lists `.github/`, `.claude/`, `scripts/`, `prompts/` or `workflow-templates/` paths is no longer approved automatically by `plan.yml` or by the poller's stall recovery (`auto_approve`, and `retrigger_implement` before the first approval). The new repository variable `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` defaults to `true`; set to `false`, it holds every such plan for a human `/approved`. When on, a plan is approved only when every protected path it lists has an exact `files_touched` entry in an issue written by the pipeline account or a repository member; a pipeline-authored issue without `files_touched` (for example a security finding) still needs a human. Plans that touch no protected path are approved as before.
+
+Each hold logs `AI_PHASE_GATE_V1 ... gate=auto_approve reason=<reason> outcome=defer issue=<n> paths=<missing paths>`, plan.yml also writes the paths to the job summary and posts one hold comment on the issue that names them, with a WARNING alert, and the poller logs `STALL_SKIP ... reason=automation_path_plan_hold`, posts the same hold comment once, and does not count a recovery attempt. The implement-time automation-path guard is unchanged, and the issue GraphQL batch the poller already makes now also reads the issue author (no new API call).
+
+What this means for operators: plans whose automation paths are all granted by an exact `files_touched` list are still approved automatically; other plans that touch `scripts/` or `.github/` wait for a hand `/approved`.
+
+- **Synthesised behavioural smoke tests no longer run with pipeline credentials.** A test the review synthesiser writes (`validation/tests/synth_round_*.sh`) is model output shaped by the PR and restored from a PR-scoped cache, and validation used to run it on the host with `GH_TOKEN` and `OPENROUTER_API_KEY` in its environment. `scripts/validate_driver.sh` now runs each one in a `python:3.12-slim` container. The container has no network, a read-only root and no capabilities. It gets only `HOME`, `TMPDIR` and `BEHAVIOURAL_SMOKE_SANDBOXED=1`, and a `git archive` of `HEAD` with no `.git`. If Docker, the image or the `git archive` source snapshot is unavailable, or the snapshot does not fully unpack inside the container, the test is reported as TAP `ok ... # SKIP` and is never run on the host.
+
+The wrapper the synthesiser writes now runs its body only when `BEHAVIOURAL_SMOKE_SANDBOXED=1`, so an older driver reports it instead of running it. `scripts/validate_process.sh` copies only files named `synth_round_<n>_<slug>.sh` and `synth_round_<n>_manifest.json`, and never a symlink, so a poisoned manifest cannot plant a host-run test or overwrite the canary. It also starts the whole validation harness without `GH_TOKEN`, `GITHUB_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`, `CHECK_TRIAGE_ISSUES_TOKEN` or the Actions OIDC request variables.
+
+- **Line ownership in the project security pass marks fewer findings advisory.** A finding on a line older than the project now stays blocking in six more cases:
+  - the project added lines anywhere in the cited file (`reason=added_lines_in_file`), because an override appended far from the line can still change how it runs;
+  - a file that links the cited module to a module that lost lines exists only at the head, such as a router the project added (module references are now read at both base and head);
+  - a file the project changed, other than documentation or tests, names the cited module at the head (`reason=changed_file_references_cited_module`);
+  - a chain of files naming each other's modules links the cited module to a source file that lost lines through a common referrer, such as an app that imports a middleware that imports the guard module (`reason=transitive_reference_links_module_with_deletions`); a search that needs more than 4 hops or 32 module names cannot rule the link out and also keeps the finding blocking (`line_ownership_unknown reason=reference_search_limit`);
+  - the cited file and a source file that lost lines both name a third module of the repository, such as a shared registry the deleted guard populated (`reason=shared_dependency_links_module_with_deletions`);
+  - the cited module, a module that lost lines, or a third module both of them name, has a one-letter name such as `x.py`, which cannot be searched reliably (`line_ownership_unknown reason=module_name_too_short`).
+
+`SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` is still accepted, but it now only picks the logged reason (`changed_hunk_within_window` or `added_lines_in_file`).
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra `git grep` calls per module stem | 1 (head, alongside base) |
+| Most module names searched per finding by the reference-chain check | 32 |
+| Default synthesised-test timeout (`VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS`) | 300 s |
+| Extra `git ls-tree` calls per audit (shared-dependency check) | 2 (base and head) |
+| Extra GitHub API calls | 0 |
+
+What this means for operators: more findings block, so projects may spend more security-pass fix cycles; the cycle budget and the exhaustion judge still bound them. Synthesised smoke tests no longer reach compose services or the network. They were already advisory and never changed the validation result. On a runner without Docker or the `python:3.12-slim` image they are skipped, and `BEHAVIOURAL_SMOKE_SANDBOX ... outcome=skipped` in the validation log says why. Harness tests that are not synthesised still run on the host; only their environment credentials were removed.
+
+### For contributors
+
+New stable log prefix `BEHAVIOURAL_SMOKE_SANDBOX`. Findings `smoke-synth-credentialed-test-exec`, `security-pass-deleted-guard-advisory` and `security-pass-distant-override-advisory`; Refs #6664. Tests: `tests/test_security_audit_workflow_contract.py`, `tests/test_review_synthesise_smoke.py`, `tests/test_validate_driver_synthesised_filter.py`.
+
+- **Synthesised smoke tests and the interim judge are now isolated in every path.** The wrapper the review synthesiser writes runs its model-written body only when four checks pass: `BEHAVIOURAL_SMOKE_SANDBOXED=1`, the script runs from the sandbox mount `/synth/test.sh`, the only network interface is `lo`, and no pipeline credential variable is set. Before, the environment flag alone was enough, and a host test could set it. A failed check is logged as `reason=not_sandboxed detail=env|path|network|credentials` and the body does not run. The synthesiser also drops a body that names a pipeline credential or starts a network client such as `curl`, `wget`, `nc` or `/dev/tcp/`.
+
+`scripts/validate_driver.sh` clears an inherited `BEHAVIOURAL_SMOKE_SANDBOXED` and never picks a `synth_round_*.sh` file as the host-run canary. The fallback runner that `scripts/validate_process.sh` generates has no sandbox, so it now reports synthesised tests as `# SKIP` (`BEHAVIOURAL_SMOKE_SANDBOX ... reason=fallback_driver`) instead of running them on the host. Materialising tests from the review cache now accepts only names for the manifest's own round. It never overwrites a different file and never follows a symlink, so a poisoned manifest cannot replace `00_canary.sh`. The harness launch now also drops `ACTIONS_RUNTIME_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, and every other variable with a credential-shaped name, such as `*_TOKEN`, `*_SECRET`, `*_API_KEY` or `GH_*`.
+
+The interim judge (`JUDGE_INTERIM_ENABLED`, off by default) used to run OpenCode on the host with the credential-bearing checkout as its workspace. It now runs only in the review sandbox, in the new read-only `JUDGE_INTERIM` role. If the sandbox is unavailable, the run logs `REVIEW_UTILITY_ISOLATION role=JUDGE_INTERIM ... outcome=refused` and `JUDGE_INTERIM_PASS_FAIL reason=isolation_unavailable`, and review continues without the interim verdict.
+
+What this means for operators: a project validation harness that read a credential-shaped variable inherited from the workflow no longer sees it; give such fixtures a `VALIDATION_TEST_*` name instead. The reviewer panel (`scripts/review_run_reviewers.sh`) still runs OpenCode on the host and is left for a follow-up. Refs #6664.
+
+### For contributors
+
+Tests: `tests/test_review_synthesise_smoke.py`, `tests/test_validate_driver_synthesised_filter.py`, `tests/test_review_judge_interim_round_trip.py`, `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, `tests/test_review_sandbox_claude_roles.py`, `tests/test_claude_engine_utility_roles.py`.
+
+- **Synthesised smoke tests, the validation harness and the review utility models can no longer bypass their isolation.** Security-pass fix cycle 4 for project #6664 closes the paths that still reached the host:
+  - The validation driver and its fallback runner now recognise a synthesised test by a `synth_round_*.sh` name in any letter case, or by the generated-wrapper marker, so a renamed copy still runs only in the sandbox, or is skipped.
+  - `validate_process.sh` regenerates `validation/validate.sh` just before launch and runs it only when it matches the canonical wrapper byte for byte. A freehand, self-healed or committed `validate.sh` is refused as a harness error instead of being run. The `scripts/validate_driver.sh` that wrapper runs must also match the copy present before any model phase ran; a changed driver is refused, and a driver that appeared later is ignored in favour of the built-in fallback runner.
+  - The harness environment now also drops `*_KEY`, `*_PASSWORD`, `*_PASSWD`, `*_CREDENTIAL(S)`, `*_COOKIE`, `GIT_CONFIG_*`, `GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_AUTH_SOCK`, `ACTIONS_RUNTIME_*`, `ACTIONS_CACHE_*`, `ACTIONS_RESULTS_*` and `CLAUDE_*`. The generated smoke wrapper refuses to run its body while any variable matching the same policy is set.
+  - The synthesised-test materializer refuses a symlinked `.ai` and any git-tracked file under `.ai/review_runtime`. It also reads cache files without following symlinks (1 MiB cap) and writes through a no-follow descriptor of `validation/tests`.
+  - The consensus summariser, smoke synthesiser and interim judge load their helpers from their own directory when `SUPPORT_SCRIPTS_DIR` is unset or relative, never from the PR checkout.
+
+What this means for operators: a project test that read a host variable now matched by these patterns (for example `DB_PASSWORD`) must get it from `validation/validate.env` instead. Refs #6664.
+
+- Reject `.ai/validate.yml` values that could run shell commands before template validation tests are rendered. Quotes, `$`, backticks, backslashes, control characters and non-scalar YAML values in `slots`, `entry` and other rendered fields now stop the run as a harness error that names the field. Previously such a value, for example `slots.project_name: "$(...)"`, ran on the runner when the validation tests executed, through either the validation driver or the fallback runner. The scheduled validation refresh, which renders consumer manifests without going through that step, now applies the same check before rendering and reports the repository red with `manifest_shell_safety_failed`. `custom_tests`, `skip_tests`, `env_overrides`, `health_check`, `services` and `port` are unchanged; manifests with such characters in other fields must be corrected or regenerated.
+
+- **Validation of an orchestrator integration branch now runs the default branch's credential scrub, sandbox and harness driver, not the branch's own copies.**
+
+Validation in this repository checks out the project's integration branch and used that checkout's `validate_process.sh`, `validate_driver.sh` (the per-test credential scrub), `validation_harness_sandbox.sh` (the isolation boundary) and the renderer's slot schema (the `project_name` allowlist). `validate_process.sh` runs on the host, where the GitHub token and the model key are available. A project PR that weakened one of these files therefore took effect in that project's own validation run. These four files now come from the same verified support commit as the validation templates and the renderer, and the support step fails if a trusted copy is missing. Consumer repositories and validation runs with an explicit `target_ref` already staged them from a trusted copy and are unchanged.
+
+The shell-quoting, credential-scrub and sandbox regression tests now also run in CI and in both release gates (`test-and-mark-stable.yml` and `mark-stable.yml`). Before this, a release could ship a regression in any of them.
+
+What this means for operators: a branch that changes one of these four files is validated with the default branch's copy until it merges. Its PR CI still tests the branch's copy. The run log names each replaced file with `VALIDATE_TRUSTED_SUPPORT_OVERRIDE` and the total with `VALIDATE_TRUSTED_SUPPORT staged=<n>`.
+
+- **Automated merges now merge only the commit that was checked, and wait when base freshness cannot be verified.** Three findings from the project security pass (Refs #6664) are fixed.
+
+The orchestrator poller's merges used to call `gh pr merge` without naming a commit. A PR author could push after the poller checked the head and before it merged, and on a base without branch protection the new, unchecked commit merged. Every poller merge (the final integration merge, standalone stall `attempt_merge`, the backward-scan, the ready-to-merge loop, the review-blocked merge, force-merge and no-fix paths, and the noop-suspicious force-merge) now passes `--match-head-commit` with the head SHA its check-runs and freshness gates evaluated. GitHub refuses the merge when the head moved, and the next poll tick checks the new head. A head that cannot be resolved never reaches `gh`, and a moved head on the final merge does not use up the final-merge attempt budget.
+
+The merge-base freshness gate (`_pr_base_fresh_for_merge` in `scripts/pr_checks_lib.sh`) used to let a merge go ahead when the compare or PR-files read failed. It now defers the merge in that case (`MERGE_BASE_FRESHNESS ... outcome=unknown action=defer`) without requesting a branch update; the next poll tick, review sweep or review round retries. This covers every caller: the poller, the review auto-merge step, the review-blocked judge and the `deterministic-skip-merge` job. Their deferral logs now say `reason=base_freshness_unknown` instead of claiming the base moved.
+
+Review/autofix failure markers (`review-autofix-failure:v1`) are read only from the comment's last line, where the pipeline writes them. An older marker quoted earlier in the comment, for example inside an echoed "First error" line, can no longer hide the real marker, slip past the identical-failure cap, or link an unrelated run to a heal report. The cap comment's "First error" lookup in `review_autofix.yml` uses the same rule.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New log key | `ORCH_MERGE_HEAD_BOUND pr=<n> head_sha=<sha> mode=auto\|sync outcome=enabled\|merged\|failed\|refused` |
+| New freshness action | `action=defer` for `outcome=unknown` |
+| New judge skip reason | `judge_skip_reason=base_freshness_unknown` |
+
+What this means for operators: during a GitHub API outage, merges wait instead of going ahead; `MERGE_BASE_FRESHNESS_ENABLED=false` remains the kill switch for the freshness gate.
+
+- **Failure streaks now count only the pipeline's own comments.** This fixes the last open findings from the project security pass (Refs #6664).
+
+The identical-failure cap already skips comments from other authors. The streak counter that decides when a failed review/autofix run is reported to workflow failure heal (`autofix-failure-streak` in `scripts/workflow_failure_heal.py`) did not: a PR commenter posting text that starts like a failure comment or an editor summary could raise or reset the reported streak. It now takes an optional `--author-login`. When that login is set, comments from any other author neither count nor end the streak. `scripts/workflow_failure_heal_autofix_report.sh` passes the login it already receives (`AUTOFIX_FAILURE_MARKER_AUTHOR`) whenever the staged helper supports the flag. Without a login, or with an older staged helper, the count works as before. Both report log lines gain `streak_author_filter=on|off`.
+
+The other findings from the same pass (head-bound poller merges, freshness deferral, and reading the failure marker only from the comment's last line) were already fixed by #6988. A contract test fails CI if any poller `gh pr merge` call loses its `--match-head-commit` binding.
+
+What this means for operators: nothing to change; no new variable.
+
+- **The failure-streak count no longer trusts other people's comments when it cannot tell who wrote them.** This completes the streak part of the project security pass (Refs #6664).
+
+`scripts/workflow_failure_heal_autofix_report.sh` decides when a failed review/autofix run is reported to workflow failure heal. It counted every PR comment that looked like a failure or an editor summary whenever it had no pipeline login, so a PR commenter could raise the streak to force heal dispatches or end it to hide failures. It now takes the login from the identical-failure cap (`AUTOFIX_FAILURE_MARKER_AUTHOR`), then from the gate's resolved login (`AUTOFIX_STREAK_AUTHOR_LOGIN`, which the "Report autofix failure to workflow failure heal" step now passes), then from one `gh api user` read when there are PR comments to count. A login that is not a valid GitHub login is ignored. Without a usable login, or with a staged helper that has no author filter, the streak counts only the current run and the reporter logs `warn reason=streak_author_login_unavailable` (or `streak_author_filter_unavailable`). #7018 described this as working as before; it now fails closed.
+
+The other findings from the same pass were already fixed on the integration branch: every poller merge is bound to its checked head (#6988), an unknown merge-base freshness result defers the merge, and failure markers are read only from a trusted comment's last line.
+
+What this means for operators: nothing to change. `AUTOFIX_STREAK_AUTHOR_LOGIN` is optional and defaults to empty.
+
+- **The poller's noop-suspicious force-merge acts only on pipeline-written evidence and merges only the head it checked.** Refs #7126 (security-pass fix cycle 1).
+
+The sweep that force-merges a PR after three "Editor no-op suspicious" warnings could be driven by anyone who can comment on a PR or push a commit. A fork PR with three pasted warnings, a pasted editor summary and an `[ai-autofix]` commit message could reach `gh pr merge --squash --auto` under the poller's token. Now:
+
+- Fork PRs are skipped. The sweep reads `isCrossRepository` and `headRepositoryOwner` from the open-PR list it already loads, and checks `head.repo.full_name` again before merging. A missing field skips the PR.
+- Warnings and the editor summary count only when the pipeline's own account posted them. If that account cannot be resolved, the sweep neither re-dispatches nor merges.
+- A productive commit needs the `[ai-autofix]` / `[judge-fix]` prefix and the pipeline's git identity (`codex-bot <codex@users.noreply.github.com>`) as author or committer. Anyone who can push can set those fields, so before merging the sweep also requires that a push by the pipeline's own account carried that commit. It checks this with one read of the branch's repository activity, which records who pushed. If that read fails, the sweep waits for the next sweep without paging. If no pipeline push carried the commit, it pages once and does not merge. Only the newest 100 activity records are read; when that page is full, the alert says older activity was not read.
+- Gate D uses the same required-checks rule as review auto-merge. The named CI check (`lint` here) must exist on the head and have succeeded. The poller does not receive a consumer's `AUTO_MERGE_REQUIRED_CI_CHECK` repository variable, so in a consumer repository Gate D requires no named check and applies only the required check-run filter. A queued CI run, a pending check, or a CI workflow-run listing that could not be read waits for the next sweep without paging. A head with no check-runs at all pages once and is not merged. Under the allow-all sentinel (`ORCH_FINAL_MERGE_REQUIRED_CHECKS=""`) the shared gate reads the check-runs and evaluates only the named CI check, when one is configured, then returns before it counts the runs or checks any other run's outcome, so when no named CI check is configured nothing shows that any check ran: Gate D then pages once (`reason=no_check_runs_verified`) and leaves the PR for a person instead of force-merging.
+- The newest pipeline noop warning must name the head being merged in its `review-autofix-failure:v1` marker, so the audited review belongs to that head. A warning for an older head waits for the next sweep; a warning with no head marker pages once and is not merged.
+- The head read before the comments and commits must still be the PR's head, and `gh pr merge` gets `--match-head-commit`, so a push after the gates ran is not merged.
+
+The poller's other merge sites now also pass `--match-head-commit` with the head their checks were read for: stall-recovery `attempt_merge`, the backward scan, ready-to-merge, the review-blocked judge's merge, final-retry fix and no-fix paths, and the final integration merge. A site whose head SHA is missing skips the merge for that tick.
+
+What this means for operators: nothing to configure. Every control is automated and fails closed. A PR the fallback skips stays open for the normal review path or a person.
+
+- **The orchestrator security pass audits the integration branch's own files, not the default branch's support scripts.** Refs #7126 (security-pass fix cycle 2).
+
+Before the security pass runs, it replaces every `scripts/` and `prompts/` file in its checkout with the verified copy from the default branch, so the audit never runs code the audited branch supplied. The audit then read that same checkout. The model saw the default branch's `scripts/` and `prompts/` beside the integration branch's changelog fragments and diff. Two things followed: fixes made on the integration branch to those directories were reported again as still missing, and a defect the branch added there was never audited.
+
+Now the pass checks the integration head out into a separate, clean, detached worktree under the runner's temporary directory and audits that tree. The audit engine, its prompt and its false-positive exclusion list still come from the verified support copy, by absolute path, so a branch cannot supply its own exclusion list to hide a finding. The worktree is removed after the audit, whether it passed or failed. If the worktree cannot be created, is not at the expected commit, or is not clean, the pass fails closed as `engine_unavailable` and retries on the next tick. The log line `SECURITY_PASS_AUDIT_TREE` records each step.
+
+What this means for operators: nothing to configure. Projects whose security pass kept reporting findings already fixed in `scripts/` or `prompts/` get an accurate audit on their next pass.
+
+- **Consumer workflow syncs are signed, verified and delivered through a pull request.** Each `stable` release now builds `sync-manifest.json` (the release commit, a sha256 for every file the consumer updater checks out, and the consumer paths it may write), attests it with GitHub's Sigstore build provenance before any tag is pushed, and uploads it to the GitHub Release. This closes the gaps the activation check of #7125 found (#7128).
+
+Before any fetched code runs, the consumer updater (`update_workflows.yml`) finds the `vX.Y.Z` tag at the fetched `stable` commit, downloads that release's manifest, and runs `gh attestation verify`. The attestation must come from `test-and-mark-stable.yml` or `mark-stable.yml` on `refs/heads/stable`, and on a GitHub-hosted runner. The updater then requires the manifest's commit, version and file hashes to match the checkout exactly. Every staged path must match the signed allowlist, or nothing is committed (`ERR_SYNC_PATH_NOT_ALLOWED`). Telegram helpers now come from the verified checkout instead of a second fetch from `stable`.
+
+With `UPDATER_PR_DELIVERY_ENABLED=false`, changes are delivered through a pull request from `ai-sync/stable`. The updater enables auto-merge on it, or merges it directly when auto-merge is unavailable. In that mode the new input `update_via_pull_request: false` restores the direct push. With `UPDATER_PR_DELIVERY_ENABLED=true` (the default) the input is ignored and the verified `auto/update-workflows-*` pull request is used. The review gate skips the reviewer panel for an `ai-sync/stable` PR whose changed paths are all in the allowlist (`AUTOFIX_GATE_WORKFLOW_SYNC_SKIP`), and it never merges, labels or approves such a PR.
+
+What this means for operators: a consumer whose branch protection blocks the merge gets an open sync PR to merge by hand (`awaiting_merge`, linked in the Telegram alert and the run summary). Setting `AI_WORKFLOW_AUTO_UPDATE_ENABLED=false` now stops the consumer's sync job entirely, and a sync can no longer erase that hold. A failed verification (`ERR_SYNC_MANIFEST_*`) changes nothing in the consumer. Its alert is sent only when `ALERT_MSG_LEVEL` is `DEBUG`, `WARNING` or `ERROR`.
+
+- **Generated validation tests now run in their own PID namespace and can no longer see the runner's processes.** The validation harness sandbox already ran tests as a separate user with an allowlisted environment, but in the runner's PID namespace, so a test could list every runner process and read its command line. `scripts/validation_harness_sandbox.sh` now starts the harness, and a second self-check probe, inside a new PID and mount namespace created by root (`unshare --pid --fork --mount-proc --propagation private --kill-child`) before dropping to the sandbox user. The sandbox user's rootless Docker daemon now starts in its own PID namespace too (rootlesskit `--pidns`), so a test cannot list runner processes by starting a `--pid=host` container. `selfcheck` fails closed with `docker_pid_namespace_shared` when that daemon runs in the runner's PID namespace. Inside the harness namespace, every socket in the sandbox user's runtime directory except `docker.sock` is hidden, including the systemd user manager's (used by the opt-in `auto` cgroup mode) wherever a test moved it, so a test cannot use `systemd-run --user` to start commands outside it; `selfcheck` fails with `user_manager_reachable` when such a socket is still reachable.
+
+  If a runner cannot create the namespace, `provision`, `selfcheck` and `run` fail closed with `reason=pid_namespace_unavailable` and the validation reports `harness_error`; tests never run without it. Cleanup now kills only the `unshare` process root recorded in the root-owned `VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR` (default `/run/ai-validation-harness`), after checking it is still that process, and no longer reads the process-group file the sandbox user writes. New failure reasons: `pid_namespace_launch_failed`, `pidns_state_dir_failed`, `invalid_pidns_state_dir`, `pid_namespace_shared`, `caller_pid_visible`, `host_init_visible`, `pid_namespace_unverifiable`, `docker_pid_namespace_shared` and `user_manager_reachable`. `VALIDATION_HARNESS_SANDBOX_PIDNS_STATE_DIR` must have at least two path components, and an existing directory is used only if it is already root-owned with mode 0700; it is never chmodded or chowned.
+
+- **The validation refresh runner no longer passes its credentials to the subprocesses that work on a consumer clone.** Issue #7351 (security-pass advisory `validation-refresh-consumer-test-credential-exposure`, Refs #6664). `scripts/validation_refresh_runner.py` already ran consumer self-tests only in the harness sandbox; it now also blanks `GH_TOKEN`, `GITHUB_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`, `CHECK_TRIAGE_ISSUES_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` for render, lint and the sandbox `provision`, `checked-run` and `cleanup` calls (`REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES`). Codex discovery keeps `OPENROUTER_API_KEY` for its host-side broker. No configuration change is needed.
+
+- **Containers started by generated validation tests can no longer run processes in the runner's PID namespace through a systemd user manager.** The validation harness sandbox defaulted to `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=auto`, which starts a systemd user manager for the sandbox user. A container started through the sandbox's Docker daemon could reach that manager and have it list runner processes and their command lines. The default is now `cgroupfs`, which starts no user manager and releases one left by an earlier run (`reason=systemd_user_session_released`). `selfcheck` now fails closed with `reason=user_manager_reachable_from_container` (the validation reports `harness_error`) while a user manager, its bus daemon, its user bus or a socket under `/run/user/<uid>/systemd` exists for the sandbox user. An unrecognized mode value is now treated as `cgroupfs` and logged as `cgroup_mode_unrecognized_using_cgroupfs`, not `cgroup_mode_unrecognized_using_auto`.
+
+  `auto` is still accepted but now only works on hosts where no systemd user manager starts for the sandbox user; elsewhere every validation fails at `selfcheck`. To go back to the default, unset the variable or set it to `cgroupfs`. In `cgroupfs` mode container resource limits are dropped, as they already were whenever `auto` fell back to cgroupfs.
 
 ### For contributors
 
