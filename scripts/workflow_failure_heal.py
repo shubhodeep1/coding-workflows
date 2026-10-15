@@ -5027,7 +5027,20 @@ def select_evidence_jobs(jobs: dict[str, Any], *, kind: str, limit: int) -> list
 	return []
 
 
-def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False) -> dict[str, Any]:
+def _autofix_dispatch_run_for_pr(run_json: dict[str, Any], *, kind: str, pr_number: int) -> bool:
+	"""True for a review run dispatched for PR ``pr_number``.
+
+	A dispatched review (`AI Review [pr:N]`) runs on the default branch, so its
+	``head_sha`` is never the PR head; its title binds it to the PR instead,
+	the same rule `verify_run_provenance` applies.
+	"""
+	if kind != "autofix_failure" or pr_number < 1 or run_json.get("event") != "workflow_dispatch":
+		return False
+	match = _PR_RUN_NAME_RE.search(str(run_json.get("display_title") or ""))
+	return bool(match and match.group("n") == str(pr_number))
+
+
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False, pr_number: int = 0) -> dict[str, Any]:
 	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
 		raise ValueError("run identity mismatch")
 	# A phase reporter dispatches while its own run is still in progress; the
@@ -5035,7 +5048,7 @@ def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str 
 	pending = allow_pending and run_json.get("conclusion") is None and run_json.get("status") in ("queued", "in_progress", "pending")
 	if not pending and run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
 		raise ValueError("run not completed with expected conclusion")
-	if head_sha and run_json.get("head_sha") != head_sha:
+	if head_sha and run_json.get("head_sha") != head_sha and not _autofix_dispatch_run_for_pr(run_json, kind=kind, pr_number=pr_number):
 		raise ValueError("run head mismatch")
 	path = run_json.get("path") or ""
 	paths = [path] if isinstance(path, str) and _safe_heal_path(path) else []
@@ -5053,7 +5066,7 @@ def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_run(args: argparse.Namespace) -> int:
-	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending))
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending, pr_number=args.pr_number))
 	return 0
 
 
@@ -5674,6 +5687,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--kind", default="issue")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--allow-pending", action="store_true")
+	p.add_argument("--pr-number", type=int, default=0, help="autofix_failure: the PR a dispatched review run must name in its title")
 	p.set_defaults(func=_cmd_verify_run)
 
 	p = sub.add_parser("heal-route")

@@ -747,11 +747,17 @@ while IFS=$'\t' read -r run_id run_url; do
 	if [ -n "${PENDING_CURRENT_RUN}" ] && [ "${run_id}" = "${PENDING_CURRENT_RUN}" ]; then
 		verify_pending_args=(--allow-pending)
 	fi
+	# A review dispatched for the PR runs on the default branch, so its head is
+	# not the PR head; verify-run binds it by its `[pr:N]` title instead.
+	verify_pr_args=()
+	if [ "${SOURCE_KIND}" = autofix_failure ] && [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+		verify_pr_args=(--pr-number "${ISSUE_NUMBER}")
+	fi
 	if [ "${run_info_ready}" != true ] \
-		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" \
-			--head-sha "$({ [ "${SOURCE_KIND}" = autofix_failure ] || [ "${SOURCE_KIND}" = workflow_run ]; } && printf '%s' "${HEAD_SHA}" || true)" > "${RUN_INFO_FILE}.verified" 2>/dev/null \
+		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" "${verify_pr_args[@]}" \
+			--head-sha "$({ [ "${SOURCE_KIND}" = autofix_failure ] || [ "${SOURCE_KIND}" = workflow_run ]; } && printf '%s' "${HEAD_SHA}" || true)" > "${RUN_INFO_FILE}.verified" 2> "${RUN_INFO_FILE}.verify_error" \
 		|| ! jq -e --argjson id "${run_id}" '.run_id == $id' "${RUN_INFO_FILE}.verified" >/dev/null; then
-		log "run_ref_rejected run=${run_id} reason=unverified"
+		log "run_ref_rejected run=${run_id} reason=unverified detail=$(tail -n 1 "${RUN_INFO_FILE}.verify_error" 2>/dev/null | head -c 120 | tr -d '\r\n' | tr -c 'A-Za-z0-9_.:-' '_' || true)"
 		continue
 	fi
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
