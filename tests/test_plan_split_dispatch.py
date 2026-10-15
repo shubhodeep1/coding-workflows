@@ -224,6 +224,18 @@ def test_failed_marking_holds_without_dispatch() -> None:
 	assert len(release_posts) == 3
 
 
+def test_failed_marker_never_releases_a_concurrent_split() -> None:
+	# Another plan run posted its split marker and dispatched; this run's
+	# marker POST failed. Releasing would clear that run's label, so it exits
+	# 0 without a release marker or label removal.
+	other = {"id": 400, "login": "pipeline-bot", "body": "<!-- ai:plan-split:v1 issue=123 wrapper=x -->"}
+	code, out, calls = _run(extra_env={"FAKE_COMMENT_FAIL": "true", "PLAN_SPLIT_RETRY_SLEEP_SECS": "0",
+		"FAKE_COMMENTS_AFTER": json.dumps(other)})
+	assert code == 0 and "outcome=deduplicated reason=concurrent_split_marker_failed" in out, out
+	assert _dispatches(calls) == [] and len([c for c in calls if c[:2] == ["issue", "edit"]]) == 1
+	assert not any(c[-1].startswith("body=<!-- ai:plan-split-released:v1") for c in calls)
+
+
 # --- poller: close the source issue when the project completes (Q152) -------
 
 POLLER = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")

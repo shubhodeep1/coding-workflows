@@ -221,6 +221,21 @@ EOF
 )"
 if ! marker_id="$(gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '.id // ""' \
 	-f body="${source_comment}" 2>/dev/null)"; then
+	# A concurrent plan run may hold the split (its marker posted since the
+	# last release marker); releasing here would clear its reservation and
+	# label, so this run leaves the issue to it. An unreadable listing falls
+	# back to the release, as no other reservation could be seen.
+	if gh_retry gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+		--jq '.[] | {id: .id, login: (.user.login // ""), body: (.body // "")}' > "${comments_file}" 2>/dev/null \
+		&& jq -e -s --arg login "${pipeline_login}" --arg marker "${SOURCE_MARKER_PREFIX}${ISSUE_NUMBER} " \
+			--arg release "${RELEASE_MARKER_PREFIX}${ISSUE_NUMBER} -->" '
+			[ .[] | select(.login == $login) ] as $c
+			| ([ range(0; $c | length) | select($c[.].body | contains($release)) ] | max // -1) as $rel
+			| [ range($rel + 1; $c | length) | select($c[.].body | contains($marker)) ] | length > 0' \
+			"${comments_file}" >/dev/null 2>&1; then
+		split_log "outcome=deduplicated reason=concurrent_split_marker_failed wrapper=${wrapper}"
+		exit 0
+	fi
 	release_split "the plan-split comment could not be posted"
 	skip marker_failed "wrapper=${wrapper}"
 fi
