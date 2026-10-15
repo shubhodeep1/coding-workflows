@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agents_doc import agents_text  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -86,16 +86,14 @@ def test_bait_injection_drops_blob_content() -> None:
     assert "WAVE_COUNT" in STABLE_YML.read_text(encoding="utf-8")
 
 
-def test_agents_registers_log_prefix() -> None:
-    # Read through agents_text() so the check holds whether the entry is still
-    # a pending agents.d/ fragment or already folded into agents.md.
-    text = agents_text()
-    section = re.search(
-        r"^## Stable log prefixes \(contractual\)\n(.*?)(?=^## |\Z)",
-        text,
-        re.M | re.S,
-    )
-    assert section, "Stable log prefixes section not found in agents.md"
-    body = section.group(1)
-    assert f"- `{LOG_KEY}`" in body
-    assert f"LOG_PREFIX.name={LOG_KEY}" in body
+def test_agents_fragment_registers_log_prefix() -> None:
+    # Read agents.md with pending agents.d/ fragments folded in, so the check
+    # holds both before and after the release fold deletes the fragment.
+    text = _agents_text_with_fragments()
+    heading = "## Stable log prefixes (contractual)"
+    assert heading in text
+    section = text.split(heading, 1)[1]
+    if "\n## " in section:
+        section = section.split("\n## ", 1)[0]
+    assert f"- `{LOG_KEY}`" in section
+    assert f"LOG_PREFIX.name={LOG_KEY}" in section

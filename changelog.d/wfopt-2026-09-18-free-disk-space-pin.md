@@ -1,2 +1,0 @@
-<!-- changelog: security -->
-- **The review workflow's `Free disk space` step now runs a pinned commit.** `review_autofix.yml` referenced `jlumbroso/free-disk-space@v1.3.1`, a tag the action's owner can move, in the `codex-agent` job that later holds `GH_PAT`. It is now pinned to commit `54081f138730dfa15788a46383842cd2f914a1be` (`# v1.3.1`), and `tests/test_workflow_untrusted_input_contract.py` fails if it goes back to a tag. This fixes SEC-001 of #7357 (Refs #7355).
