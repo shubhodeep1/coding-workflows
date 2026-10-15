@@ -1388,6 +1388,14 @@ def test_the_namespace_masks_the_user_manager_sockets_before_the_drop(tmp_path: 
 	assert launcher.index('find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock"') < launcher.index(': > "$1"')
 
 
+def test_both_socket_rechecks_stat_each_entry() -> None:
+	# Runs even where the real bind-mount tests below skip: plain `-type s`
+	# trusts the directory entry and lists masked sockets (#7355).
+	launcher = _function_body("as_sandbox_in_pidns")
+	assert '-ignore_readdir_race ! -type l -xtype s ! -path "$2/docker.sock" -print -quit' in launcher
+	assert '! -type l -xtype s ! -path "${rt}/docker.sock" -print -quit' in _pidns_probe()
+
+
 def test_a_renamed_user_manager_socket_is_still_masked(tmp_path: Path) -> None:
 	# The sandbox user owns the runtime dir and can rename systemd/; the mask
 	# finds sockets wherever they are, not at fixed paths.
@@ -1443,6 +1451,74 @@ def test_a_symlinked_user_manager_socket_stops_the_launch(tmp_path: Path) -> Non
 	assert rc == "rc=125"
 	assert mounts == []
 	assert not (tmp_path / "started").exists(), "no launch marker means run fails with pid_namespace_launch_failed"
+
+
+# The fake `mount` above replaces the socket with a regular file, which also
+# changes its directory entry. A real bind mount leaves the entry's type as
+# "socket", and `find -type s` trusts that type, so the recheck refused every
+# launch and selfcheck failed with probe_failed (#7355). These run the real
+# launcher and probe text under a real bind mount in a private mount
+# namespace, and skip when the host cannot create one.
+def _real_mount_ns() -> list[str] | None:
+	prefixes = [["unshare", "--user", "--map-root-user", "--mount"]]
+	if os.geteuid() == 0:
+		prefixes.append(["unshare", "--mount"])
+	for prefix in prefixes:
+		with tempfile.TemporaryDirectory() as scratch:
+			probe = subprocess.run([*prefix, "--pid", "--fork", "--mount-proc", "--", "sh", "-c",
+				': > "$1" && mount --bind /dev/null "$1"', "probe", str(Path(scratch) / "f")],
+				capture_output=True, timeout=30)
+		if probe.returncode == 0:
+			return [*prefix, "--pid", "--fork", "--mount-proc", "--"]
+	return None
+
+
+def _launcher_scripts() -> tuple[str, str]:
+	launcher = _function_body("as_sandbox_in_pidns")
+	inner = re.search(r"\tsh -c '(for s in [^']*)' started ", launcher)
+	mask = re.search(r"'(for s do \[ -e \"\$s\" \] \|\| continue; mount [^']*)'", launcher)
+	assert inner is not None and mask is not None
+	return inner.group(1), mask.group(1)
+
+
+def _real_runtime(tmp: Path) -> Path:
+	runtime = tmp / "rt"
+	for name in ("docker.sock", "dockerd-rootless/api.sock", "docker/containerd/containerd.sock", "systemd/private", "bus"):
+		_mksock(runtime / name)
+	return runtime
+
+
+@pytest.mark.parametrize("mask_works, expected_rc", [(True, 0), (False, 125)])
+def test_the_launch_recheck_sees_through_a_real_bind_mount(tmp_path: Path, mask_works: bool, expected_rc: int) -> None:
+	ns = _real_mount_ns()
+	if ns is None:
+		pytest.skip("cannot create a mount namespace on this host")
+	inner, mask = _launcher_scripts()
+	if not mask_works:
+		mask = "true"
+	runtime = _real_runtime(tmp_path)
+	started = tmp_path / "started"
+	result = subprocess.run([*ns, "sh", "-c", inner, "started", str(started), str(runtime), mask, "true"],
+		capture_output=True, text=True, timeout=60)
+	assert result.returncode == expected_rc, result.stderr
+	assert started.exists() is mask_works
+
+
+@pytest.mark.parametrize("masked, expected", [(True, "ok"), (False, "user_manager_reachable")])
+def test_the_namespace_probe_sees_through_a_real_bind_mount(tmp_path: Path, masked: bool, expected: str) -> None:
+	ns = _real_mount_ns()
+	if ns is None:
+		pytest.skip("cannot create a mount namespace on this host")
+	runtime = _real_runtime(tmp_path)
+	probe = _pidns_probe()
+	anchor = 'rt="/run/user/$(id -u)"'
+	assert anchor in probe
+	probe = probe.replace(anchor, f'rt="{runtime}"')
+	targets = [str(runtime / name) for name in ("dockerd-rootless/api.sock", "docker/containerd/containerd.sock", "systemd/private", "bus")]
+	setup = 'for s do mount --bind /dev/null "$s" || exit 99; done' if masked else "true"
+	result = subprocess.run([*ns, "sh", "-c", f'{setup}; exec bash -c "$PROBE" probe "" "pid:[0]"', "setup", *targets],
+		capture_output=True, text=True, timeout=60, env={**os.environ, "PROBE": probe})
+	assert result.stdout.strip().splitlines()[-1] == expected, result.stdout + result.stderr
 
 
 # --- fallback runner isolation (#7350, finding validation-fallback-parent-credential-exposure) ---
