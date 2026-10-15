@@ -1035,6 +1035,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py
 
+      - name: Daily consumer health check tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_consumer_health_check.py
+
       - name: Validation shell-quoting and credential-scrub tests
         run: |
           set -euo pipefail

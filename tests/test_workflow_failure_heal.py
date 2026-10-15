@@ -101,6 +101,49 @@ def test_heal_run_verification_and_successful_review_job_fallback() -> None:
 		raise AssertionError("foreign run was trusted")
 
 
+def test_verify_run_binds_a_dispatched_review_run_by_its_pr_title() -> None:
+	# A review dispatched for a PR runs on the default branch: its head is the
+	# branch tip, not the PR head the report carries.
+	run = {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A,
+		"display_title": "AI Review [pr:4174]", "conclusion": "failure", "path": ".github/workflows/ai-review.yml"}
+	assert heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174)["run_id"] == 500
+	rejected = (
+		{"pr_number": 0},
+		{"pr_number": 4175},
+		{"pr_number": 4174, "run": dict(run, display_title="AI Review [pr:41745]")},
+		{"pr_number": 4174, "run": dict(run, display_title="AI Review")},
+		{"pr_number": 4174, "run": dict(run, event="pull_request")},
+		{"pr_number": 4174, "kind": "workflow_run"},
+	)
+	for case in rejected:
+		try:
+			heal.verify_run(case.get("run", run), repo=CONSUMER_REPO, kind=case.get("kind", "autofix_failure"), head_sha=SHA_B, pr_number=case["pr_number"])
+		except ValueError as exc:
+			assert str(exc) == "run head mismatch"
+		else:
+			raise AssertionError(f"head mismatch accepted: {case}")
+
+
+def test_autofix_intake_verifies_a_review_run_dispatched_for_the_pr() -> None:
+	# tele-funtoken-msg-scoring#4584: the review run was dispatched on main, so
+	# its head_sha is main's tip while the report carries the PR head.
+	payload = _autofix_payload()
+	dispatched = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A, "head_branch": "main",
+		"display_title": "AI Review [pr:4174]", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [],
+	}
+	assert payload["head_sha"] == SHA_B != SHA_A
+	jobs = {"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+	result, _, prompt = _run_intake(payload, _intake_state(jobs=jobs, run_details={"500": dispatched}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "run_ref_rejected" not in result.stdout and "runs=1" in result.stdout
+	# A pull_request run on another head is still rejected, and the log says why.
+	stale = dict(dispatched, event="pull_request", display_title="AI Review", pull_requests=[{"number": 4174}])
+	result, _, _ = _run_intake(payload, _intake_state(jobs=jobs, run_details={"500": stale}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
+
+
 def test_verify_run_accepts_pending_run_only_when_allowed() -> None:
 	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "in_progress", "conclusion": None, "path": ".github/workflows/internal-plan.yml"}
 	assert heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", allow_pending=True)["run_id"] == 500
