@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the canary smoke edit (Refs #7397, local ID `canary-a`)\n\nPlanning ref: `orchestrator/project-7397` at `2b7eab2b525d161414d01fb47c97efdc06ae1f15`. Integration branch mismatch: false.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: This is a one-file data edit to an existing smoke canary. No helper, pattern or new code is involved. The issue limits the change to `tests/e2e_smoke_canary.txt`, so the scope stays exactly there.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a plain text edit.\n\nThe file currently has three lines:\n1. `status: ok`\n2. `run_id: 26151428977`\n3. `updated-by: ai-pipeline`\n\nIt ends with a single newline.\n\nSteps:\n1. Leave line 1 as it is. It already reads exactly `status: ok`.\n2. Replace line 2 with `decompose-run: 38660755875`.\n3. Keep line 3 (`updated-by: ai-pipeline`) unchanged. The issue says to replace lines 1 and 2 and to add nothing else. It does not say to delete other lines, so the safest choice is to leave existing content alone.\n4. Keep exactly one trailing newline at the end of the file.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Keep the existing third line\n- Chosen: replace only line 2 and leave line 3 as it is.\n- Alternatives considered: shorten the file to two lines.\n- Why: The issue only asks for lines 1 and 2 to be replaced, and none of the acceptance checks look past line 2. Deleting a line is a change the issue did not ask for.\n\n## Security considerations\nNo trust boundary is touched. The edit is static test data with no code, secrets or endpoints.\n\n## Risks and edge cases\n- Line 1 must stay byte-exact: no stray whitespace and no CRLF line ending.\n- Assumption: line 3 is kept. If the orchestrator expects a two-line file, it would show up as a review note; none of the stated acceptance criteria would fail.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` should print `decompose-run: 38660755875`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n- No changelog fragment, `agents.d` change or test changes are needed, as the issue states.\n\n## Pre-execution self-check\nThe plan meets every acceptance criterion and stays inside the issue's scope.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "0bf24417586ca08406946dedd228f9465e5b401f5fecf04fc1b1accd24790e2e",
+  "lineage": {
+    "issue_number": 7398,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38661527364",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38661527364",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7398"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261015005038_ac3f544137",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7398,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38661527364"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7398",
+  "timestamps": {
+    "created_at": "2026-10-15T00:50:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
