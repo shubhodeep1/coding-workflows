@@ -49,6 +49,11 @@ Inputs:
                           pipeline_plan_grant; the record then has
                           pipeline_grant_body: true and the caller must write
                           the body at PATH to the issue first.
+  --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
+                          --flag-enabled VALUE --issue-number NUMBER
+                          Workflow-heal plans (#7444): approve only when every
+                          path the plan lists is inside the verified heal
+                          scope (one path per line). Never writes a grant.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
@@ -842,6 +847,66 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
 
 
+# Workflow-heal plans (unblock fix-up #7444 for #7434). A heal issue's scope is
+# its intake-written ai:workflow-heal-scope:v1 marker, and the implement
+# preflight refuses a body that was edited. So plan.yml never writes a Q108
+# grant into a heal issue: it verifies the live marker (workflow_failure_heal.py
+# heal-scope verify), passes the verified paths here, and this gate approves only
+# when every path the plan lists is inside them. The matcher is the one the heal
+# route's commit check uses (strict: no lockfile allowance). No body is written.
+HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
+
+
+def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
+	issue_number: str) -> tuple[dict, int]:
+	"""Approve a heal plan only inside its verified heal scope; every error holds."""
+	protected: list[str] = []
+	denied: list[str] = []
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		files = extract_plan_file_paths(plan_text)
+		if not scope:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_check_unavailable", protected
+		elif protected and not _flag_enabled(flag_value):
+			decision, reason, denied = PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+		elif _plan_files_section(plan_text) is None or (not files and not protected):
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
+		else:
+			# extract_plan_file_paths drops directory and glob tokens, so read
+			# them back from the Files section: a heal plan never approves a
+			# path set it cannot name exactly.
+			loose: list[str] = []
+			for line in (_plan_files_section(plan_text) or "").splitlines():
+				raw_tokens = _PLAN_GRANT_BACKTICK_RE.findall(line)
+				bullet = _PLAN_GRANT_BULLET_RE.match(line)
+				if bullet:
+					raw_tokens.append(bullet.group(1))
+				for raw in raw_tokens:
+					token = normalize_path(_plan_path_token(raw.strip()))
+					if "/" in token and (token.endswith("/") or any(char in token for char in _GLOB_CHARS)):
+						loose.append(token)
+			candidates: list[str] = []
+			for path in files + protected + loose:
+				if path not in candidates:
+					candidates.append(path)
+			denied = [path for path in candidates if path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+				or not path_in_scope(path, scope, allow_lockfiles=False)]
+			if denied:
+				decision, reason = PLAN_DECISION_HOLD, "heal_scope_plan_out_of_scope"
+			else:
+				decision, reason = PLAN_DECISION_APPROVE, HEAL_PLAN_APPROVE_REASON
+	except (OSError, UnicodeDecodeError, ValueError, TypeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
 def _read_text_file(path: str) -> str:
 	try:
 		with open(path, encoding="utf-8") as handle:
@@ -882,7 +947,14 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--flag-enabled", default="true")
 	parser.add_argument("--pipeline-grant-body-out", default="",
 		help="plan gate: write the proposed pipeline plan grant body here (Q108)")
+	parser.add_argument("--heal-scope-file", default="",
+		help="plan gate: verified workflow-heal scope paths; approve only inside them, never write a grant (#7444)")
 	args = parser.parse_args(argv)
+	if args.plan_auto_approval_gate and args.heal_scope_file:
+		record, code = run_heal_plan_scope_gate(args.plan_file, args.heal_scope_file, args.flag_enabled,
+			args.issue_number)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
 	if args.plan_auto_approval_gate:
 		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
 			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo,

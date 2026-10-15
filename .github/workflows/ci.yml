@@ -1061,6 +1061,7 @@ jobs:
             tests/test_codex_thread_reuse_review.py \
             tests/test_family_python_mongo_flask.py \
             tests/test_family_python_repo_checks.py \
+            tests/test_heal_plan_grant_body_edit_fix.py \
             tests/test_implement_heal_preflight.py \
             tests/test_implement_pr_body_tracking_refs.py \
             tests/test_orchestrate_final_merge_required_checks_gate.py \

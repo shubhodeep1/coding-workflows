@@ -2479,6 +2479,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -2567,8 +2568,10 @@ jobs:
                 | [
                     (if $reason == "automation_path_plan_auto_approval_disabled"
                       then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
-                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "pipeline_plan_grant_write_failed"))
+                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "pipeline_plan_grant_write_failed", "heal_scope_check_unavailable"))
                       then "**Automatic approval withheld: the automation-path grant check could not run.**"
+                      elif ($reason | IN("heal_scope_unverified", "heal_scope_plan_out_of_scope", "heal_scope_plan_paths_missing"))
+                      then "**Automatic approval withheld: the plan is not inside the verified workflow-heal scope.**"
                       else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
                     "",
                     "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
@@ -2618,7 +2621,35 @@ jobs:
               case "$(printf '%s' "${ALLOW_WORKFLOW_EDITS:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
                 1|true|yes|on) plan_gate_allow_edits="true" ;;
               esac
-              if [ -f "${plan_gate_guard}" ]; then
+              # #7444: never PATCH an ai:workflow-heal body (the preflight refuses an edited
+              # one); approve only inside its verified heal scope. Every error holds.
+              plan_gate_heal="false"
+              case "$(printf '%s' "${HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+                ''|true) printf '%s' "${CURRENT_ISSUE_JSON}" | jq -e 'any(.labels[]?.name; . == "ai:workflow-heal") | not' >/dev/null 2>&1 || plan_gate_heal="true" ;;
+                false) ;;
+                *) echo "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" ;;
+              esac
+              if [ "${plan_gate_heal}" = "true" ]; then
+                plan_gate_result='{"reason":"heal_scope_check_unavailable"}'
+                plan_gate_heal_repo="${GITHUB_REPOSITORY:-}"
+                plan_gate_heal_scope="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_heal_scope.XXXXXX")"
+                # §14: REST has no lastEditedAt; one GraphQL read (the preflight's query).
+                if plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${plan_gate_login}" ] \
+                  && plan_gate_heal_verified="$(gh_retry gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${plan_gate_heal_repo%%/*}" -f repo="${plan_gate_heal_repo#*/}" -F number="${ISSUE_NUMBER}" 2>/dev/null \
+                    | jq -c --arg login "${plan_gate_login}" '.data.repository.issue as $i | {body: $i.body, last_edited_at: $i.lastEditedAt, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login}' \
+                    | PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)"; then
+                  plan_gate_result='{"reason":"heal_scope_unverified"}'
+                  if printf '%s' "${plan_gate_heal_verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
+                    && printf '%s' "${plan_gate_heal_verified}" | jq -r '.paths[]' > "${plan_gate_heal_scope}" 2>/dev/null; then
+                    plan_gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate --plan-file "${plan_gate_file}" --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" --heal-scope-file "${plan_gate_heal_scope}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true)"
+                  fi
+                fi
+                rm -f "${plan_gate_heal_scope}"
+                echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=skipped reason=heal_issue"
+                plan_gate_decision="$(printf '%s' "${plan_gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+                plan_gate_reason="$(printf '%s' "${plan_gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+                plan_gate_paths="$(printf '%s' "${plan_gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+              elif [ -f "${plan_gate_guard}" ]; then
                 plan_gate_meta_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX")"
                 plan_gate_grant_body_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_grant_body.XXXXXX")"
                 printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_gate_meta_file}"
